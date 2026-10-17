@@ -149,7 +149,7 @@ jobs:
             (Join-Path (Get-Location) "dist/huedeck-$target.sha256"),
             "$hash  huedeck-$target.zip`n")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: huedeck-${{ matrix.target }}
           # Keep every path under dist/ so the artifact root is dist/ (not the repo
@@ -173,7 +173,7 @@ jobs:
   #     - run: dotnet tool install --global wix
   #     - run: wix build packaging/wix/huedeck.wxs -o dist/huedeck-x64.msi
   #     # SignPath signing of the MSI goes here.
-  #     - uses: actions/upload-artifact@v4
+  #     - uses: actions/upload-artifact@v7
   #       with:
   #         name: huedeck-msi
   #         path: dist/huedeck-x64.msi

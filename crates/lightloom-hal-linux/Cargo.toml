@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "lightloom-hal-linux"
 description = "Lightloom HAL backends for Linux: hidraw + report-descriptor TLC split, i2c-dev, udev, hwmon (stub until M7)"
 version.workspace = true

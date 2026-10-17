@@ -90,7 +90,7 @@ mod tests {
         // Duration has nanosecond granularity, so 1/fps round-trips with a tiny error.
         assert!((FrameClock::new(0.0).fps() - MIN_FPS).abs() < 1e-6);
         assert!((FrameClock::new(1e9).fps() - MAX_FPS).abs() < 1e-3);
-        assert!((FrameClock::new(f64::NAN).fps() - 30.0).abs() < 1e-9);
+        assert!((FrameClock::new(f64::NAN).fps() - 30.0).abs() < 1e-6);
         assert!((FrameClock::new(30.0).period().as_secs_f64() - 1.0 / 30.0).abs() < 1e-9);
     }
 

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "huedeck-iobroker"
 description = "huedeck-iobroker: optional LocalSystem Windows service brokering SMBus/GPU-I2C/SuperIO through PawnIO (stub until M5)"
 version.workspace = true

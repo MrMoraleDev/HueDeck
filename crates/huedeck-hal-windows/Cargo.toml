@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "huedeck-hal-windows"
 description = "HueDeck HAL backends for Windows: hidapi (hid.dll) HID enumeration/I/O with &MI_xx / &ColNN endpoint parsing"
 version.workspace = true

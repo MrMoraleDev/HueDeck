@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "huedeck-protocol"
 description = "HueDeck wire types shared between daemon, renderer and io-broker: shm frame header, broker op enum (serde + postcard)"
 version.workspace = true

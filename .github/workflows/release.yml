@@ -1,0 +1,181 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+#
+# HueDeck release skeleton (tag-triggered).
+#
+# Status: PLACEHOLDER. The intended final shape is a cargo-dist generated workflow
+# (`cargo dist init` writes .github/workflows/release.yml and dist-workspace.toml);
+# until cargo-dist is wired in, this hand-written job builds the daemon and CLI with
+# cargo-auditable on both targets, emits a CycloneDX SBOM, and uploads the artifacts.
+#
+# NOT YET: code signing. See the "SIGNING" block below for where SignPath goes.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (dry run when empty)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Binaries that ship in the release archives (space separated).
+  HUEDECK_BINS: huedeckd huedeck
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev libusb-1.0-0-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      # cargo-auditable embeds the exact dependency tree into each binary
+      # (readable later with `cargo audit bin`); cargo-cyclonedx writes the SBOM file.
+      - name: Install cargo-auditable and cargo-cyclonedx
+        run: cargo install --locked cargo-auditable cargo-cyclonedx
+
+      - name: Build (auditable, release)
+        run: cargo auditable build --release --workspace --target ${{ matrix.target }}
+
+      - name: SBOM (CycloneDX)
+        run: >-
+          cargo cyclonedx --format json --all --target ${{ matrix.target }}
+          --override-filename huedeck-${{ matrix.target }}.cdx
+
+      # ---------------------------------------------------------------------------
+      # SIGNING (not enabled yet)
+      #
+      # Windows: Authenticode through SignPath Foundation (OSS program).
+      #   - Insert `signpath/github-action-submit-signing-request@v1` here, after the
+      #     build and before archiving, with organization-id / project-slug /
+      #     signing-policy-slug stored as repository secrets. The WiX MSI from
+      #     packaging/wix is signed the same way in the `msi` job.
+      #   - Point the signing request at the artifact uploaded below so SignPath can
+      #     verify provenance (origin verification against this workflow).
+      # Linux: detached minisign signature of the tarball + SHA256SUMS; key in a
+      #   repository secret; public key published in docs/security.md.
+      # ---------------------------------------------------------------------------
+
+      - name: Stage artifacts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -eu
+          out="dist/huedeck-${{ matrix.target }}"
+          mkdir -p "$out"
+          for b in $HUEDECK_BINS; do
+            cp "target/${{ matrix.target }}/release/$b" "$out/"
+          done
+          for f in LICENSE-APACHE LICENSE-MIT README.md \
+                   packaging/systemd/huedeckd.service packaging/udev/70-huedeck.rules.template; do
+            [ -f "$f" ] && cp "$f" "$out/"
+          done
+          cp "huedeck-${{ matrix.target }}.cdx.json" "$out/"
+          tar -C dist -czf "dist/huedeck-${{ matrix.target }}.tar.gz" "huedeck-${{ matrix.target }}"
+          (cd dist && sha256sum "huedeck-${{ matrix.target }}.tar.gz" > "huedeck-${{ matrix.target }}.sha256")
+
+      - name: Stage artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $target = "${{ matrix.target }}"
+          $out = "dist/huedeck-$target"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          foreach ($b in $env:HUEDECK_BINS.Split(" ")) {
+            Copy-Item "target/$target/release/$b.exe" $out
+          }
+          foreach ($f in "LICENSE-APACHE", "LICENSE-MIT", "README.md") {
+            if (Test-Path $f) { Copy-Item $f $out }
+          }
+          Copy-Item "huedeck-$target.cdx.json" $out
+          Compress-Archive -Path "$out/*" -DestinationPath "dist/huedeck-$target.zip" -Force
+          $hash = (Get-FileHash "dist/huedeck-$target.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  huedeck-$target.zip" | Out-File -Encoding ascii "dist/huedeck-$target.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: huedeck-${{ matrix.target }}
+          path: |
+            dist/huedeck-${{ matrix.target }}.${{ matrix.archive }}
+            dist/huedeck-${{ matrix.target }}.sha256
+            huedeck-${{ matrix.target }}.cdx.json
+          if-no-files-found: error
+
+  # Placeholder for the WiX MSI (packaging/wix). Enable once huedeck.wxs exists.
+  # msi:
+  #   needs: build
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: huedeck-x86_64-pc-windows-msvc
+  #         path: dist
+  #     - run: dotnet tool install --global wix
+  #     - run: wix build packaging/wix/huedeck.wxs -o dist/huedeck-x64.msi
+  #     # SignPath signing of the MSI goes here.
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: huedeck-msi
+  #         path: dist/huedeck-x64.msi
+
+  release:
+    name: GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Combined checksums
+        run: |
+          cd dist
+          cat ./*.sha256 > SHA256SUMS
+          ls -la
+
+      - name: Publish draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.cdx.json
+            dist/SHA256SUMS

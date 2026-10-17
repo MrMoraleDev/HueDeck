@@ -18,9 +18,17 @@ impl Rgb {
     /// Black.
     pub const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
     /// White.
-    pub const WHITE: Rgb = Rgb { r: 255, g: 255, b: 255 };
+    pub const WHITE: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
     /// The SignalRGB default pulse/forced colour `#009EDB`.
-    pub const SIGNAL_BLUE: Rgb = Rgb { r: 0x00, g: 0x9E, b: 0xDB };
+    pub const SIGNAL_BLUE: Rgb = Rgb {
+        r: 0x00,
+        g: 0x9E,
+        b: 0xDB,
+    };
 
     /// Build a colour.
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
@@ -48,7 +56,11 @@ impl Rgb {
     pub fn scaled(self, factor: f32) -> Self {
         let f = factor.clamp(0.0, 1.0);
         let s = |c: u8| (c as f32 * f).round().clamp(0.0, 255.0) as u8;
-        Self { r: s(self.r), g: s(self.g), b: s(self.b) }
+        Self {
+            r: s(self.r),
+            g: s(self.g),
+            b: s(self.b),
+        }
     }
 
     /// HSV → RGB with `h` in degrees (any value, wrapped), `s`/`v` in `0..=1`.
@@ -68,7 +80,11 @@ impl Rgb {
             _ => (c, 0.0, x),
         };
         let to8 = |f: f32| ((f + m) * 255.0).round().clamp(0.0, 255.0) as u8;
-        Self { r: to8(r), g: to8(g), b: to8(b) }
+        Self {
+            r: to8(r),
+            g: to8(g),
+            b: to8(b),
+        }
     }
 }
 
@@ -104,7 +120,10 @@ mod tests {
         assert!((effective_brightness(50, 50, 50) - 0.125).abs() < 1e-6);
         assert_eq!(effective_brightness(0, 100, 100), 0.0);
         assert_eq!(effective_brightness(200, 100, 100), 1.0);
-        assert_eq!(apply_brightness(Rgb::new(200, 100, 50), 0.5), Rgb::new(100, 50, 25));
+        assert_eq!(
+            apply_brightness(Rgb::new(200, 100, 50), 0.5),
+            Rgb::new(100, 50, 25)
+        );
         assert_eq!(apply_brightness(Rgb::WHITE, 2.0), Rgb::WHITE);
     }
 

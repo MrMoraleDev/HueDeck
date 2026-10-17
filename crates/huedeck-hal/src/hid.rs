@@ -154,7 +154,12 @@ mod tests {
 
     #[test]
     fn tuple_matching_follows_set_endpoint_rules() {
-        let t = HidEndpointTuple { interface: 1, usage: 0x0602, usage_page: 0xFF43, collection: 2 };
+        let t = HidEndpointTuple {
+            interface: 1,
+            usage: 0x0602,
+            usage_page: 0xFF43,
+            collection: 2,
+        };
         assert!(t.matches(1, 0x0602, 0xFF43, None));
         assert!(t.matches(1, 0x0602, 0xFF43, Some(2)));
         assert!(!t.matches(1, 0x0602, 0xFF43, Some(0)));

@@ -64,7 +64,11 @@ impl fmt::Display for LifecycleState {
 
 /// Command-line arguments.
 #[derive(Debug, Parser)]
-#[command(name = "huedeckd", version, about = "HueDeck daemon (open source RGB manager)")]
+#[command(
+    name = "huedeckd",
+    version,
+    about = "HueDeck daemon (open source RGB manager)"
+)]
 struct Args {
     /// Path to the configuration file (default: platform config dir / huedeck / config.toml).
     #[arg(long, env = "HUEDECK_CONFIG")]

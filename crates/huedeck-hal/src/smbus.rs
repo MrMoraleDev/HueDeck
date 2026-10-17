@@ -40,7 +40,10 @@ pub enum SmbusBusKind {
 impl SmbusBusKind {
     /// `bus.IsSystemBus()`: chipset buses (AMD or Intel or unknown chipset).
     pub fn is_system_bus(self) -> bool {
-        matches!(self, SmbusBusKind::System | SmbusBusKind::Amd | SmbusBusKind::Intel)
+        matches!(
+            self,
+            SmbusBusKind::System | SmbusBusKind::Amd | SmbusBusKind::Intel
+        )
     }
     /// `bus.IsAMDBus()`.
     pub fn is_amd_bus(self) -> bool {
@@ -103,7 +106,9 @@ pub fn validate_address(addr: u8) -> HalResult<()> {
     if (SMBUS_ADDR_MIN..=SMBUS_ADDR_MAX).contains(&addr) {
         Ok(())
     } else {
-        Err(HalError::InvalidArgument(format!("SMBus address 0x{addr:02x} outside 0x03..=0x77")))
+        Err(HalError::InvalidArgument(format!(
+            "SMBus address 0x{addr:02x} outside 0x03..=0x77"
+        )))
     }
 }
 

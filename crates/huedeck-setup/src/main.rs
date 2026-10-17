@@ -11,5 +11,8 @@
 #![forbid(unsafe_code)]
 
 fn main() {
-    println!("huedeck-setup {} (stub; the installer lands in M5)", env!("CARGO_PKG_VERSION"));
+    println!(
+        "huedeck-setup {} (stub; the installer lands in M5)",
+        env!("CARGO_PKG_VERSION")
+    );
 }

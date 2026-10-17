@@ -42,7 +42,13 @@ pub struct AudioSnapshot {
 
 impl Default for AudioSnapshot {
     fn default() -> Self {
-        Self { freq: vec![0.0; AUDIO_FREQ_BINS], level: -100.0, rawlevel: 0.0, width: 0.0, density: 0.0 }
+        Self {
+            freq: vec![0.0; AUDIO_FREQ_BINS],
+            level: -100.0,
+            rawlevel: 0.0,
+            width: 0.0,
+            density: 0.0,
+        }
     }
 }
 

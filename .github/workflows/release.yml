@@ -46,7 +46,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Manual runs may name a tag; pushes build the ref that triggered them.
           ref: ${{ inputs.tag || github.ref }}
@@ -149,7 +149,7 @@ jobs:
             (Join-Path (Get-Location) "dist/huedeck-$target.sha256"),
             "$hash  huedeck-$target.zip`n")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: huedeck-${{ matrix.target }}
           # Keep every path under dist/ so the artifact root is dist/ (not the repo
@@ -165,15 +165,15 @@ jobs:
   #   needs: build
   #   runs-on: windows-latest
   #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/download-artifact@v4
+  #     - uses: actions/checkout@v7
+  #     - uses: actions/download-artifact@v8
   #       with:
   #         name: huedeck-x86_64-pc-windows-msvc
   #         path: dist
   #     - run: dotnet tool install --global wix
   #     - run: wix build packaging/wix/huedeck.wxs -o dist/huedeck-x64.msi
   #     # SignPath signing of the MSI goes here.
-  #     - uses: actions/upload-artifact@v4
+  #     - uses: actions/upload-artifact@v7
   #       with:
   #         name: huedeck-msi
   #         path: dist/huedeck-x64.msi
@@ -188,7 +188,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -200,7 +200,7 @@ jobs:
           ls -la
 
       - name: Publish draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           generate_release_notes: true

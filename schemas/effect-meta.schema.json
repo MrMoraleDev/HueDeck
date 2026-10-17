@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://huedeck.dev/schemas/effect-meta.schema.json",
+  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "title": "HueDeck effect metadata (parsed lightscript <head> model)",
+  "description": "The control model HueDeck's effect loader produces from one lightscript HTML file: <title>, <meta description|publisher|background>, every <meta property ...> user control and every <meta meter ...> screen-meter tag (with its optional <resolution> children). The loader injects one JS global per property (var <property> = <value>), calls each on<property>Changed() once after the page scripts ran, then onEngineReady(). Attribute values in HTML are always strings; the parsed model keeps them as strings except where a numeric field is listed below.",
+  "type": "object",
+  "required": ["id", "title", "properties", "meters"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable effect id used for persistence of property values and presets (bundled: file name; marketplace-style: opaque id)."
+    },
+    "title": { "type": "string", "description": "<title> text (display name)." },
+    "description": { "type": "string", "description": "<meta description=\"...\">." },
+    "publisher": { "type": "string", "description": "<meta publisher=\"...\">." },
+    "background": {
+      "type": "boolean",
+      "default": false,
+      "description": "<meta background=\"true\"> (LCD faces only: page is composited over a background layer)."
+    },
+    "source": {
+      "type": "object",
+      "description": "Where the HTML came from.",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["file", "url", "memory"] },
+        "path": { "type": "string", "description": "Absolute file path or URL." },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Hex SHA-256 of the HTML bytes." }
+      },
+      "additionalProperties": false
+    },
+    "canvas": {
+      "type": "object",
+      "description": "Render surface size; HueDeck renders at the compatibility size 320x200 unless the page is an LCD face sized to the display.",
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "default": 320 },
+        "height": { "type": "integer", "minimum": 1, "default": 200 }
+      },
+      "additionalProperties": false
+    },
+    "properties": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/property" },
+      "description": "User controls in document order."
+    },
+    "meters": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/meter" },
+      "description": "Screen meters exposed as engine.vision.<name>."
+    },
+    "uses": {
+      "type": "object",
+      "description": "Capability flags detected from the script (engine.* references, WebGL context, meter tags).",
+      "properties": {
+        "audio": { "type": "boolean", "default": false },
+        "video": { "type": "boolean", "default": false },
+        "meters": { "type": "boolean", "default": false },
+        "engine": { "type": "boolean", "default": false },
+        "webgl": { "type": "boolean", "default": false },
+        "input": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+    "preferredLayout": { "type": "string", "description": "Layout name the effect prefers (optional)." }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "numberish": {
+      "anyOf": [
+        { "type": "number" },
+        { "type": "string", "pattern": "^\\s*[-+]?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?\\s*$" }
+      ]
+    },
+    "unit": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Normalised screen coordinate/extent in [0, 1]."
+    },
+    "range": {
+      "type": "object",
+      "description": "Inclusive lo-hi range parsed from an attribute written as \"lo-hi\" (a single value means lo == hi).",
+      "required": ["lo", "hi"],
+      "properties": {
+        "lo": { "type": "number" },
+        "hi": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "hslRanges": {
+      "type": "object",
+      "description": "Colour match window. hue 0..360, saturation and lightness 0..100.",
+      "properties": {
+        "h": { "$ref": "#/$defs/range" },
+        "s": { "$ref": "#/$defs/range" },
+        "l": { "$ref": "#/$defs/range" }
+      },
+      "additionalProperties": false
+    },
+    "property": {
+      "type": "object",
+      "required": ["property", "type"],
+      "properties": {
+        "property": {
+          "type": "string",
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "description": "Global variable name injected into the page; also the persistence key."
+        },
+        "label": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["number", "hue", "boolean", "color", "combobox", "list", "textfield", "sensor"],
+          "description": "number -> JS number; hue -> number 0..360; boolean -> JS boolean (HTML default may be \"0\"/\"1\"/\"true\"/\"false\"); color -> \"#RRGGBB\" string; combobox (alias list) -> one of values as string; textfield -> string; sensor -> sensor display name string for engine.getSensorValue()."
+        },
+        "default": {
+          "description": "Raw default attribute (string as written in HTML) or an already-coerced value.",
+          "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }]
+        },
+        "min": { "$ref": "#/$defs/numberish" },
+        "max": { "$ref": "#/$defs/numberish" },
+        "step": { "$ref": "#/$defs/numberish" },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Choices for combobox/list, split from the comma-separated values attribute."
+        },
+        "tooltip": { "type": "string" },
+        "group": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "enum": ["combobox", "list"] } }, "required": ["type"] },
+          "then": { "properties": { "values": true }, "required": ["values"] }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "region": {
+      "type": "object",
+      "description": "Normalised rectangle on the captured display: x,y top-left, width/height extents, all in [0, 1].",
+      "required": ["x", "y", "width"],
+      "properties": {
+        "x": { "$ref": "#/$defs/unit" },
+        "y": { "$ref": "#/$defs/unit" },
+        "width": { "$ref": "#/$defs/unit" },
+        "height": { "$ref": "#/$defs/unit", "description": "Optional for linear meters (defaults to a thin band)." }
+      },
+      "additionalProperties": false
+    },
+    "resolutionOverride": {
+      "type": "object",
+      "description": "A <resolution size=\"WxH\" x y width height> child: replaces the meter's region when the captured display matches size (or aspect).",
+      "required": ["region"],
+      "properties": {
+        "size": {
+          "description": "Display size this override applies to, as {width,height} or the raw \"WxH\" string.",
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["width", "height"],
+              "properties": {
+                "width": { "type": "integer", "minimum": 1 },
+                "height": { "type": "integer", "minimum": 1 }
+              },
+              "additionalProperties": false
+            },
+            { "type": "string", "pattern": "^\\d+\\s*[xX]\\s*\\d+$" }
+          ]
+        },
+        "aspect": {
+          "type": "string",
+          "pattern": "^\\d+\\s*:\\s*\\d+$",
+          "description": "Alternative selector: display aspect ratio such as \"16:9\"."
+        },
+        "region": { "$ref": "#/$defs/region" }
+      },
+      "anyOf": [
+        { "properties": { "size": true }, "required": ["size"] },
+        { "properties": { "aspect": true }, "required": ["aspect"] }
+      ],
+      "additionalProperties": false
+    },
+    "meter": {
+      "type": "object",
+      "required": ["name", "type", "region"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "description": "Exposed as engine.vision.<name> (0 until the first update)."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["linear", "area", "ocr_textmatch", "ocr_numeric", "ocr", "colormean"],
+          "description": "linear -> fill fraction 0..1 along the long axis of region; area -> fraction of matching pixels 0..1; colormean -> [h, s, l] mean colour; ocr_numeric -> integer read by OCR; ocr_textmatch -> 1 match / 0 no match / -1 unknown; ocr -> generic OCR text (engine-defined)."
+        },
+        "region": { "$ref": "#/$defs/region" },
+        "match": {
+          "$ref": "#/$defs/hslRanges",
+          "description": "Colour window (h/s/l attributes) for SDR capture."
+        },
+        "hdrMatch": {
+          "$ref": "#/$defs/hslRanges",
+          "description": "Colour window (hdr-h/hdr-s/hdr-l attributes) used when the display is in HDR mode."
+        },
+        "string": { "type": "string", "description": "Text to match (ocr_textmatch)." },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 70,
+          "description": "Minimum OCR confidence percentage."
+        },
+        "brightness": { "type": "number", "description": "Pre-processing brightness adjustment for OCR." },
+        "contrast": { "type": "number", "description": "Pre-processing contrast adjustment for OCR." },
+        "authoringResolution": {
+          "type": "object",
+          "description": "Display size the base region was authored against (default 2560x1440).",
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1, "default": 2560 },
+            "height": { "type": "integer", "minimum": 1, "default": 1440 }
+          },
+          "additionalProperties": false
+        },
+        "resolutions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/resolutionOverride" },
+          "description": "Per-display-size region overrides."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "ocr_textmatch" } }, "required": ["type"] },
+          "then": { "properties": { "string": true }, "required": ["string"] }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "id": "Solid Color.html",
+      "title": "Solid Color",
+      "description": "A single colour",
+      "publisher": "HueDeck",
+      "properties": [
+        { "property": "color", "label": "Color", "type": "color", "min": "0", "max": "360", "default": "#ff0000" }
+      ],
+      "meters": [
+        {
+          "name": "health",
+          "type": "linear",
+          "region": { "x": 0.05, "y": 0.9, "width": 0.2, "height": 0.02 },
+          "match": { "h": { "lo": 90, "hi": 140 }, "s": { "lo": 50, "hi": 100 }, "l": { "lo": 30, "hi": 70 } },
+          "resolutions": [
+            { "size": { "width": 1920, "height": 1080 }, "region": { "x": 0.04, "y": 0.91, "width": 0.2, "height": 0.02 } }
+          ]
+        }
+      ],
+      "uses": { "meters": true }
+    }
+  ]
+}

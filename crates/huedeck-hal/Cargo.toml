@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "huedeck-hal"
+description = "HueDeck hardware abstraction layer: HID/USB/serial/SMBus/hotplug/sensor/capture/audio/LampArray traits plus a mock backend for tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[features]
+default = []
+# Scripted in-memory backends and the transaction recorder used by golden tests
+# and by the plugin simulator. Always on under `cargo test`.
+mock = []
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }

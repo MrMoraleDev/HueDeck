@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lightloom.dev/schemas/layout.schema.json",
+  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "title": "Lightloom named layout",
+  "description": "A named arrangement of canvas endpoints on the 320x200 effect canvas (origin top-left, x right, y down). Each endpoint (device, subdevice, channel or component instance) is keyed by its uid: USB devices \"vid:pid:serial\", subdevices \"<deviceUid>:<subdeviceId>\", channels \"<deviceUid>:<Channel name>\", component instances their bare ComponentId UUID, SMBus devices \"I2CBUS:<addr>\", GPUs their GPU name. Per-LED sampling: canvas = position + rotate(scale * ledPosition) (rotation about the endpoint's top-left corner, applied before translation), then flipX/flipY mirror the footprint. Effective LED brightness = global x layout.brightness x endpoint.brightness (each 0-100).",
+  "type": "object",
+  "required": ["name", "endpoints"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "description": "Unique layout name (profile key)." },
+    "id": { "type": "string", "description": "Optional stable id (UUID); name is the user-facing key." },
+    "brightness": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 100,
+      "description": "Layout-level brightness multiplier (percent)."
+    },
+    "gridSize": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 4,
+      "description": "Snap grid in canvas pixels for the layout editor."
+    },
+    "canvas": {
+      "type": "object",
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "default": 320 },
+        "height": { "type": "integer", "minimum": 1, "default": 200 }
+      },
+      "additionalProperties": false
+    },
+    "endpoints": {
+      "type": "object",
+      "description": "Map endpoint uid -> placement.",
+      "propertyNames": { "minLength": 1 },
+      "additionalProperties": { "$ref": "#/$defs/placement" }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "vec2": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "placement": {
+      "type": "object",
+      "required": ["position"],
+      "properties": {
+        "position": {
+          "$ref": "#/$defs/vec2",
+          "description": "Top-left corner of the endpoint footprint in canvas pixels (may be negative or beyond the canvas; out-of-canvas LEDs sample black)."
+        },
+        "scale": {
+          "type": "object",
+          "description": "Canvas pixels per LED-grid unit on each axis (plugin DefaultScale when absent).",
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number", "exclusiveMinimum": 0 },
+            "y": { "type": "number", "exclusiveMinimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "rotation": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 359,
+          "default": 0,
+          "description": "Clockwise rotation in degrees, 0-359."
+        },
+        "flipX": { "type": "boolean", "default": false, "description": "Mirror horizontally." },
+        "flipY": { "type": "boolean", "default": false, "description": "Mirror vertically." },
+        "enabled": { "type": "boolean", "default": true, "description": "false: endpoint is not driven by the canvas (rendered black unless lightingMode is Forced)." },
+        "brightness": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 100,
+          "description": "Per-endpoint brightness (percent)."
+        },
+        "lightingMode": {
+          "type": "string",
+          "enum": ["Canvas", "Forced"],
+          "default": "Canvas",
+          "description": "Canvas: sample the effect; Forced: output forcedColor on every LED."
+        },
+        "forcedColor": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$",
+          "default": "#009bde",
+          "description": "Colour used when lightingMode is Forced."
+        },
+        "colorCorrection": {
+          "type": "object",
+          "description": "Optional per-endpoint channel balance (0-100 percent of each channel) and minimum brightness floor.",
+          "properties": {
+            "red": { "type": "integer", "minimum": 0, "maximum": 100, "default": 100 },
+            "green": { "type": "integer", "minimum": 0, "maximum": 100, "default": 100 },
+            "blue": { "type": "integer", "minimum": 0, "maximum": 100, "default": 100 },
+            "minBrightness": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "name": "Desk",
+      "brightness": 100,
+      "gridSize": 4,
+      "endpoints": {
+        "1462:7c91:": {
+          "position": { "x": 120, "y": 80 },
+          "scale": { "x": 40, "y": 40 },
+          "rotation": 0,
+          "flipX": false,
+          "flipY": false,
+          "enabled": true,
+          "brightness": 100,
+          "lightingMode": "Canvas",
+          "forcedColor": "#009bde"
+        },
+        "8d3978fc-1b2a-4c7e-9f00-123456789abc": {
+          "position": { "x": 0, "y": 180 },
+          "scale": { "x": 5, "y": 5 }
+        }
+      }
+    }
+  ]
+}

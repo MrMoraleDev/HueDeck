@@ -83,7 +83,14 @@ pub struct FrameHeader {
 impl FrameHeader {
     /// Header for an empty ring of the given size.
     pub fn new(width: u32, height: u32) -> Self {
-        Self { magic: FRAME_MAGIC, version: SHM_VERSION, width, height, seq: 0, slot_generations: [0; SLOT_COUNT] }
+        Self {
+            magic: FRAME_MAGIC,
+            version: SHM_VERSION,
+            width,
+            height,
+            seq: 0,
+            slot_generations: [0; SLOT_COUNT],
+        }
     }
 
     /// Bytes of one slot for this header's dimensions.
@@ -159,7 +166,14 @@ impl FrameHeader {
         for (i, g) in slot_generations.iter_mut().enumerate() {
             *g = u64_at(24 + i * 8);
         }
-        Ok(Self { magic, version, width: u32_at(8), height: u32_at(12), seq: u64_at(16), slot_generations })
+        Ok(Self {
+            magic,
+            version,
+            width: u32_at(8),
+            height: u32_at(12),
+            seq: u64_at(16),
+            slot_generations,
+        })
     }
 }
 
@@ -193,10 +207,16 @@ mod tests {
         assert_eq!(FrameHeader::from_bytes(&[0; 10]), Err(ShmError::TooShort(10)));
         let mut bytes = FrameHeader::new(320, 200).to_bytes();
         bytes[0] = b'X';
-        assert!(matches!(FrameHeader::from_bytes(&bytes), Err(ShmError::BadMagic(_))));
+        assert!(matches!(
+            FrameHeader::from_bytes(&bytes),
+            Err(ShmError::BadMagic(_))
+        ));
         let mut bytes = FrameHeader::new(320, 200).to_bytes();
         bytes[4] = 9;
-        assert_eq!(FrameHeader::from_bytes(&bytes), Err(ShmError::UnsupportedVersion(9)));
+        assert_eq!(
+            FrameHeader::from_bytes(&bytes),
+            Err(ShmError::UnsupportedVersion(9))
+        );
     }
 
     #[test]

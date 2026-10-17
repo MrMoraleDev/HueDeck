@@ -64,7 +64,11 @@ impl fmt::Display for LifecycleState {
 
 /// Command-line arguments.
 #[derive(Debug, Parser)]
-#[command(name = "lightloomd", version, about = "Lightloom daemon (open source RGB manager)")]
+#[command(
+    name = "lightloomd",
+    version,
+    about = "Lightloom daemon (open source RGB manager)"
+)]
 struct Args {
     /// Path to the configuration file (default: platform config dir / lightloom / config.toml).
     #[arg(long, env = "LIGHTLOOM_CONFIG")]

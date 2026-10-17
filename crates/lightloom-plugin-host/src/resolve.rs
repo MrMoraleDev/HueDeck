@@ -53,7 +53,9 @@ pub struct ModuleResolver {
 impl ModuleResolver {
     /// Resolver for plugins under `root` (should be absolute).
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: normalize(&root.into()) }
+        Self {
+            root: normalize(&root.into()),
+        }
     }
 
     /// The plugin root.
@@ -80,7 +82,9 @@ impl ModuleResolver {
             return if joined.starts_with(&self.root) {
                 Ok(ResolvedModule::File(joined))
             } else {
-                Err(ResolveError::EscapesRoot { specifier: specifier.to_string() })
+                Err(ResolveError::EscapesRoot {
+                    specifier: specifier.to_string(),
+                })
             };
         }
 
@@ -119,9 +123,18 @@ mod tests {
     fn host_modules_resolve_under_both_prefixes() {
         let r = resolver();
         let importer = Path::new("/plugins/Razer/Razer_Mouse.js");
-        assert_eq!(r.resolve(importer, "@SignalRGB/udp").unwrap(), ResolvedModule::HostShim("udp".into()));
-        assert_eq!(r.resolve(importer, "@lightloom/udp").unwrap(), ResolvedModule::HostShim("udp".into()));
-        assert_eq!(r.resolve(importer, "@SignalRGB/Errors.js").unwrap(), ResolvedModule::HostShim("Errors".into()));
+        assert_eq!(
+            r.resolve(importer, "@SignalRGB/udp").unwrap(),
+            ResolvedModule::HostShim("udp".into())
+        );
+        assert_eq!(
+            r.resolve(importer, "@lightloom/udp").unwrap(),
+            ResolvedModule::HostShim("udp".into())
+        );
+        assert_eq!(
+            r.resolve(importer, "@SignalRGB/Errors.js").unwrap(),
+            ResolvedModule::HostShim("Errors".into())
+        );
         assert_eq!(
             r.resolve(importer, "@SignalRGB/DeviceDiscovery").unwrap(),
             ResolvedModule::HostShim("DeviceDiscovery".into())
@@ -146,11 +159,15 @@ mod tests {
         );
         assert_eq!(
             r.resolve(importer, "../../../etc/passwd"),
-            Err(ResolveError::EscapesRoot { specifier: "../../../etc/passwd".into() })
+            Err(ResolveError::EscapesRoot {
+                specifier: "../../../etc/passwd".into()
+            })
         );
         assert_eq!(
             r.resolve(importer, "./a/../../../../x.js"),
-            Err(ResolveError::EscapesRoot { specifier: "./a/../../../../x.js".into() })
+            Err(ResolveError::EscapesRoot {
+                specifier: "./a/../../../../x.js".into()
+            })
         );
     }
 
@@ -158,12 +175,18 @@ mod tests {
     fn other_specifiers_are_refused() {
         let r = resolver();
         let importer = Path::new("/plugins/x.js");
-        assert_eq!(r.resolve(importer, "fs"), Err(ResolveError::Unsupported("fs".into())));
+        assert_eq!(
+            r.resolve(importer, "fs"),
+            Err(ResolveError::Unsupported("fs".into()))
+        );
         assert_eq!(
             r.resolve(importer, "https://example.com/x.js"),
             Err(ResolveError::Unsupported("https://example.com/x.js".into()))
         );
-        assert_eq!(r.resolve(importer, "/abs/x.js"), Err(ResolveError::Unsupported("/abs/x.js".into())));
+        assert_eq!(
+            r.resolve(importer, "/abs/x.js"),
+            Err(ResolveError::Unsupported("/abs/x.js".into()))
+        );
     }
 
     #[test]

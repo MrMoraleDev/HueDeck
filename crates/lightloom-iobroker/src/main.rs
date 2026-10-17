@@ -12,7 +12,9 @@
 
 #![forbid(unsafe_code)]
 
-use lightloom_protocol::broker::{BrokerError, BrokerOp, BrokerPayload, BrokerRequest, BrokerResponse, HealthReport};
+use lightloom_protocol::broker::{
+    BrokerError, BrokerOp, BrokerPayload, BrokerRequest, BrokerResponse, HealthReport,
+};
 
 /// Dispatch one request. Only `Health` is answered until the PawnIO client exists.
 fn handle(req: &BrokerRequest) -> BrokerResponse {
@@ -38,7 +40,10 @@ fn handle(req: &BrokerRequest) -> BrokerResponse {
 }
 
 fn main() {
-    println!("lightloom-iobroker {} (stub; the service lands in M5)", env!("CARGO_PKG_VERSION"));
+    println!(
+        "lightloom-iobroker {} (stub; the service lands in M5)",
+        env!("CARGO_PKG_VERSION")
+    );
     let resp = handle(&BrokerRequest::new(0, BrokerOp::Health));
     if let Ok(BrokerPayload::Health(h)) = resp.result {
         println!("protocol v{}, dry_run={}", h.protocol, h.dry_run);
@@ -58,10 +63,25 @@ mod tests {
         assert_eq!(resp.id, 7);
         assert!(matches!(resp.result, Ok(BrokerPayload::Health(_))));
 
-        let resp = handle(&BrokerRequest::new(8, BrokerOp::SmbusWriteByte { bus: 0, addr: 0x39, reg: 0, value: 1 }));
+        let resp = handle(&BrokerRequest::new(
+            8,
+            BrokerOp::SmbusWriteByte {
+                bus: 0,
+                addr: 0x39,
+                reg: 0,
+                value: 1,
+            },
+        ));
         assert_eq!(resp.result, Err(BrokerError::Unsupported));
 
-        let resp = handle(&BrokerRequest::new(9, BrokerOp::SmbusReadByte { bus: 0, addr: 0x00, reg: 0 }));
+        let resp = handle(&BrokerRequest::new(
+            9,
+            BrokerOp::SmbusReadByte {
+                bus: 0,
+                addr: 0x00,
+                reg: 0,
+            },
+        ));
         assert_eq!(resp.result, Err(BrokerError::AddressOutOfRange { addr: 0 }));
 
         let mut bad = BrokerRequest::new(10, BrokerOp::Health);

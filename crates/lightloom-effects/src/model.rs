@@ -139,13 +139,25 @@ pub struct ControlMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
     /// `min` (schema `numberish`: a number or a numeric string is accepted on input).
-    #[serde(default, deserialize_with = "numberish::deserialize", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "numberish::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub min: Option<f64>,
     /// `max`.
-    #[serde(default, deserialize_with = "numberish::deserialize", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "numberish::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max: Option<f64>,
     /// `step`.
-    #[serde(default, deserialize_with = "numberish::deserialize", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "numberish::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub step: Option<f64>,
     /// `values`, comma-separated in HTML.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -165,16 +177,20 @@ impl ControlMeta {
     pub fn default_value(&self) -> ControlValue {
         let raw = self.default.as_deref().map(str::trim);
         match self.control_type {
-            ControlType::Number | ControlType::Hue => {
-                ControlValue::Number(raw.and_then(|s| s.parse::<f64>().ok()).filter(|v| v.is_finite()).unwrap_or(0.0))
-            }
+            ControlType::Number | ControlType::Hue => ControlValue::Number(
+                raw.and_then(|s| s.parse::<f64>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.0),
+            ),
             ControlType::Boolean => ControlValue::Bool(matches!(
                 raw.map(|s| s.to_ascii_lowercase()).as_deref(),
                 Some("true") | Some("1")
             )),
             ControlType::Color => ControlValue::Text(raw.unwrap_or("#000000").to_string()),
             ControlType::Combobox => ControlValue::Text(
-                raw.map(str::to_string).or_else(|| self.values.first().cloned()).unwrap_or_default(),
+                raw.map(str::to_string)
+                    .or_else(|| self.values.first().cloned())
+                    .unwrap_or_default(),
             ),
             ControlType::Textfield | ControlType::Sensor => ControlValue::Text(raw.unwrap_or("").to_string()),
         }
@@ -249,8 +265,14 @@ impl FromStr for Range {
             .map(|(i, _)| i)
             .last()
             .ok_or_else(|| format!("range \"{s}\" needs lo-hi"))?;
-        let lo = s[..idx].trim().parse::<f64>().map_err(|e| format!("range lo: {e}"))?;
-        let hi = s[idx + 1..].trim().parse::<f64>().map_err(|e| format!("range hi: {e}"))?;
+        let lo = s[..idx]
+            .trim()
+            .parse::<f64>()
+            .map_err(|e| format!("range lo: {e}"))?;
+        let hi = s[idx + 1..]
+            .trim()
+            .parse::<f64>()
+            .map_err(|e| format!("range hi: {e}"))?;
         Ok(Range { lo, hi })
     }
 }
@@ -442,13 +464,19 @@ mod tests {
         assert_eq!(ControlValue::Number(2.5).js_literal(), "2.5");
         assert_eq!(ControlValue::Bool(true).js_literal(), "true");
         assert_eq!(ControlValue::Text("#009bde".into()).js_literal(), "\"#009bde\"");
-        assert_eq!(js_string_literal("a\"b\\c\n</script>"), "\"a\\\"b\\\\c\\n\\x3c/script>\"");
+        assert_eq!(
+            js_string_literal("a\"b\\c\n</script>"),
+            "\"a\\\"b\\\\c\\n\\x3c/script>\""
+        );
     }
 
     #[test]
     fn range_parsing() {
         assert_eq!("0-20".parse::<Range>().unwrap(), Range { lo: 0.0, hi: 20.0 });
-        assert_eq!(" 60 - 100 ".parse::<Range>().unwrap(), Range { lo: 60.0, hi: 100.0 });
+        assert_eq!(
+            " 60 - 100 ".parse::<Range>().unwrap(),
+            Range { lo: 60.0, hi: 100.0 }
+        );
         assert_eq!("-5-5".parse::<Range>().unwrap(), Range { lo: -5.0, hi: 5.0 });
         assert!("abc".parse::<Range>().is_err());
         assert!("".parse::<Range>().is_err());
@@ -471,14 +499,38 @@ mod tests {
             tooltip: None,
             group: None,
         };
-        assert_eq!(mk(ControlType::Number, Some("3")).default_value(), ControlValue::Number(3.0));
-        assert_eq!(mk(ControlType::Number, Some("x")).default_value(), ControlValue::Number(0.0));
-        assert_eq!(mk(ControlType::Boolean, Some("1")).default_value(), ControlValue::Bool(true));
-        assert_eq!(mk(ControlType::Boolean, Some("false")).default_value(), ControlValue::Bool(false));
-        assert_eq!(mk(ControlType::Boolean, None).default_value(), ControlValue::Bool(false));
-        assert_eq!(mk(ControlType::Color, None).default_value(), ControlValue::Text("#000000".into()));
-        assert_eq!(mk(ControlType::Combobox, None).default_value(), ControlValue::Text("Standard".into()));
-        assert_eq!(mk(ControlType::Number, Some("3")).js_initializer(None), "var p = 3;");
+        assert_eq!(
+            mk(ControlType::Number, Some("3")).default_value(),
+            ControlValue::Number(3.0)
+        );
+        assert_eq!(
+            mk(ControlType::Number, Some("x")).default_value(),
+            ControlValue::Number(0.0)
+        );
+        assert_eq!(
+            mk(ControlType::Boolean, Some("1")).default_value(),
+            ControlValue::Bool(true)
+        );
+        assert_eq!(
+            mk(ControlType::Boolean, Some("false")).default_value(),
+            ControlValue::Bool(false)
+        );
+        assert_eq!(
+            mk(ControlType::Boolean, None).default_value(),
+            ControlValue::Bool(false)
+        );
+        assert_eq!(
+            mk(ControlType::Color, None).default_value(),
+            ControlValue::Text("#000000".into())
+        );
+        assert_eq!(
+            mk(ControlType::Combobox, None).default_value(),
+            ControlValue::Text("Standard".into())
+        );
+        assert_eq!(
+            mk(ControlType::Number, Some("3")).js_initializer(None),
+            "var p = 3;"
+        );
         assert_eq!(mk(ControlType::Number, Some("3")).change_hook(), "onpChanged");
     }
 

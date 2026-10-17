@@ -64,7 +64,14 @@ pub const METADATA_EXPORTS: &[&str] = &[
 ];
 
 /// Exports the host calls during the device lifecycle (never at scan time).
-pub const LIFECYCLE_EXPORTS: &[&str] = &["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService"];
+pub const LIFECYCLE_EXPORTS: &[&str] = &[
+    "Validate",
+    "Initialize",
+    "Render",
+    "Shutdown",
+    "Scan",
+    "DiscoveryService",
+];
 
 /// Bare module specifiers the compat profile provides as host shims.
 pub const HOST_MODULES: &[&str] = &[
@@ -297,7 +304,9 @@ pub enum ProductIdExport {
 impl ProductIdExport {
     /// Resolve to concrete 16-bit product ids, applying the exe's acceptance rule.
     pub fn product_ids(&self) -> Result<Vec<u16>, MetaError> {
-        let to16 = |v: u32| u16::try_from(v).map_err(|_| MetaError::InvalidProductId(format!("{v:#x} exceeds 16 bits")));
+        let to16 = |v: u32| {
+            u16::try_from(v).map_err(|_| MetaError::InvalidProductId(format!("{v:#x} exceeds 16 bits")))
+        };
         match self {
             ProductIdExport::Single(v) => Ok(vec![to16(*v)?]),
             ProductIdExport::List(vs) => {
@@ -418,7 +427,12 @@ pub struct PluginMeta {
 
 impl PluginMeta {
     /// Minimal meta for tests and fixtures.
-    pub fn minimal(source_path: impl Into<PathBuf>, name: &str, vendor_id: u16, product_ids: Vec<u16>) -> Self {
+    pub fn minimal(
+        source_path: impl Into<PathBuf>,
+        name: &str,
+        vendor_id: u16,
+        product_ids: Vec<u16>,
+    ) -> Self {
         Self {
             source_path: source_path.into(),
             name: name.to_string(),
@@ -470,7 +484,11 @@ impl PluginMeta {
         }
         for (index, p) in self.led_positions.iter().enumerate() {
             if p[0] >= self.size[0] || p[1] >= self.size[1] {
-                return Err(MetaError::LedOutOfBounds { index, x: p[0], y: p[1] });
+                return Err(MetaError::LedOutOfBounds {
+                    index,
+                    x: p[0],
+                    y: p[1],
+                });
             }
         }
         Ok(())
@@ -511,14 +529,26 @@ mod tests {
     #[test]
     fn device_type_keeps_unknowns() {
         assert_eq!("Keyboard".parse::<DeviceType>().unwrap(), DeviceType::Keyboard);
-        assert_eq!("lightingcontroller".parse::<DeviceType>().unwrap(), DeviceType::LightingController);
-        assert_eq!("toaster".parse::<DeviceType>().unwrap(), DeviceType::Unknown("toaster".into()));
+        assert_eq!(
+            "lightingcontroller".parse::<DeviceType>().unwrap(),
+            DeviceType::LightingController
+        );
+        assert_eq!(
+            "toaster".parse::<DeviceType>().unwrap(),
+            DeviceType::Unknown("toaster".into())
+        );
     }
 
     #[test]
     fn product_id_shapes() {
-        assert_eq!(ProductIdExport::Single(0x7C91).product_ids().unwrap(), vec![0x7C91]);
-        assert_eq!(ProductIdExport::List(vec![0x100E, 0x1010]).product_ids().unwrap(), vec![0x100E, 0x1010]);
+        assert_eq!(
+            ProductIdExport::Single(0x7C91).product_ids().unwrap(),
+            vec![0x7C91]
+        );
+        assert_eq!(
+            ProductIdExport::List(vec![0x100E, 0x1010]).product_ids().unwrap(),
+            vec![0x100E, 0x1010]
+        );
         // Object.keys({0x0DA0: ..., 0x0DA1: ...}) → ["3488", "3489"]
         let keys = ProductIdExport::Keys(vec!["3488".into(), "3489".into()]);
         assert_eq!(keys.product_ids().unwrap(), vec![0x0DA0, 0x0DA1]);
@@ -532,9 +562,18 @@ mod tests {
         let mut m = PluginMeta::minimal("x.js", "X", 0x1462, vec![0x7C91]);
         assert!(m.validate().is_ok());
         m.led_names = vec!["A".into()];
-        assert!(matches!(m.validate(), Err(MetaError::LedCountMismatch { names: 1, positions: 0 })));
+        assert!(matches!(
+            m.validate(),
+            Err(MetaError::LedCountMismatch {
+                names: 1,
+                positions: 0
+            })
+        ));
         m.led_positions = vec![[1, 0]];
-        assert!(matches!(m.validate(), Err(MetaError::LedOutOfBounds { index: 0, .. })));
+        assert!(matches!(
+            m.validate(),
+            Err(MetaError::LedOutOfBounds { index: 0, .. })
+        ));
         m.size = [2, 1];
         assert!(m.validate().is_ok());
         m.default_scale = 0.1;

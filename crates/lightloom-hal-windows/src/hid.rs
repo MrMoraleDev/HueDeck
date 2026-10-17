@@ -70,7 +70,11 @@ impl WindowsHidBackend {
             product: d.product_string().unwrap_or("").to_string(),
             path,
             // hidapi reports -1 when the path has no MI_xx; prefer our parse when they disagree.
-            interface_number: if d.interface_number() >= 0 { d.interface_number() } else { parsed.interface_number },
+            interface_number: if d.interface_number() >= 0 {
+                d.interface_number()
+            } else {
+                parsed.interface_number
+            },
             usage_page: d.usage_page(),
             usage: d.usage(),
             collection: parsed.collection,
@@ -88,14 +92,20 @@ impl WindowsHidBackend {
         let mut groups: BTreeMap<DeviceKey, Vec<HidEndpointInfo>> = BTreeMap::new();
         for ep in endpoints {
             let key = if ep.serial.is_empty() {
-                let hint = parse_hid_path(&ep.path).instance_prefix().unwrap_or("").to_string();
+                let hint = parse_hid_path(&ep.path)
+                    .instance_prefix()
+                    .unwrap_or("")
+                    .to_string();
                 DeviceKey::new(ep.vid, ep.pid, hint)
             } else {
                 ep.key()
             };
             groups.entry(key).or_default().push(ep);
         }
-        Ok(groups.into_iter().map(|(key, endpoints)| DeviceGroup { key, endpoints }).collect())
+        Ok(groups
+            .into_iter()
+            .map(|(key, endpoints)| DeviceGroup { key, endpoints })
+            .collect())
     }
 }
 
@@ -114,7 +124,10 @@ impl HidBackend for WindowsHidBackend {
             .device_list()
             .find(|d| d.path().to_bytes() == cpath.as_bytes())
             .map(Self::info_from)
-            .unwrap_or_else(|| HidEndpointInfo { path: path.to_string(), ..Default::default() });
+            .unwrap_or_else(|| HidEndpointInfo {
+                path: path.to_string(),
+                ..Default::default()
+            });
         drop(api);
 
         // Report lengths from the descriptor (best effort).
@@ -128,8 +141,11 @@ impl HidBackend for WindowsHidBackend {
                         .filter(|c| c.usage_page == info.usage_page && c.usage == info.usage)
                         .or_else(|| desc.find(info.usage_page, info.usage));
                     if let Some(c) = tlc {
-                        info.report_lengths =
-                            ReportLengths { input: c.input_len, output: c.output_len, feature: c.feature_len };
+                        info.report_lengths = ReportLengths {
+                            input: c.input_len,
+                            output: c.output_len,
+                            feature: c.feature_len,
+                        };
                     }
                 }
                 Err(e) => tracing::debug!(path, error = %e, "report descriptor not parsed"),
@@ -174,6 +190,8 @@ impl HidHandle for WindowsHidHandle {
         // hidapi's windows-native backend does not expose HidD_GetInputReport (2.6.7);
         // TODO(M2): call HidD_GetInputReport via the `windows` crate on the raw handle.
         let _ = buf;
-        Err(HalError::Unsupported("get_input_report (HidD_GetInputReport) not wired on Windows yet"))
+        Err(HalError::Unsupported(
+            "get_input_report (HidD_GetInputReport) not wired on Windows yet",
+        ))
     }
 }

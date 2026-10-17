@@ -26,9 +26,18 @@ pub struct FrameClock {
 impl FrameClock {
     /// Clock at `fps` (clamped to `MIN_FPS..=MAX_FPS`), first tick one period from now.
     pub fn new(fps: f64) -> Self {
-        let fps = if fps.is_finite() { fps.clamp(MIN_FPS, MAX_FPS) } else { 30.0 };
+        let fps = if fps.is_finite() {
+            fps.clamp(MIN_FPS, MAX_FPS)
+        } else {
+            30.0
+        };
         let period = Duration::from_secs_f64(1.0 / fps);
-        Self { period, next: Instant::now() + period, tick: 0, spin_window: Duration::from_micros(1500) }
+        Self {
+            period,
+            next: Instant::now() + period,
+            tick: 0,
+            spin_window: Duration::from_micros(1500),
+        }
     }
 
     /// Tick period.

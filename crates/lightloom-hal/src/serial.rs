@@ -34,7 +34,13 @@ pub struct SerialConfig {
 
 impl Default for SerialConfig {
     fn default() -> Self {
-        Self { baud_rate: 9600, data_bits: 8, stop_bits: 1, parity: Parity::None, timeout_ms: 1000 }
+        Self {
+            baud_rate: 9600,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: Parity::None,
+            timeout_ms: 1000,
+        }
     }
 }
 

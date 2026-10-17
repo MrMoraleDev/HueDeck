@@ -71,7 +71,10 @@ pub struct CanvasSize {
 
 impl Default for CanvasSize {
     fn default() -> Self {
-        Self { width: CANVAS_WIDTH, height: CANVAS_HEIGHT }
+        Self {
+            width: CANVAS_WIDTH,
+            height: CANVAS_HEIGHT,
+        }
     }
 }
 
@@ -101,7 +104,12 @@ pub struct ColorCorrection {
 
 impl Default for ColorCorrection {
     fn default() -> Self {
-        Self { red: 100, green: 100, blue: 100, min_brightness: 0 }
+        Self {
+            red: 100,
+            green: 100,
+            blue: 100,
+            min_brightness: 0,
+        }
     }
 }
 
@@ -155,7 +163,10 @@ impl Placement {
     /// (scale clamped to `SCALE_MIN..=SCALE_MAX`).
     pub fn from_defaults(default_position: [f32; 2], default_scale: f32) -> Self {
         Self {
-            position: Point { x: default_position[0], y: default_position[1] },
+            position: Point {
+                x: default_position[0],
+                y: default_position[1],
+            },
             scale: Some(Scale::uniform(default_scale.clamp(SCALE_MIN, SCALE_MAX))),
             ..Default::default()
         }
@@ -241,7 +252,10 @@ impl DeviceGeometry {
         }
         for (i, p) in self.led_positions.iter().enumerate() {
             if p[0] >= self.size[0] || p[1] >= self.size[1] {
-                return Err(format!("LED {i} at [{}, {}] is outside Size [{}, {}]", p[0], p[1], self.size[0], self.size[1]));
+                return Err(format!(
+                    "LED {i} at [{}, {}] is outside Size [{}, {}]",
+                    p[0], p[1], self.size[0], self.size[1]
+                ));
             }
         }
         Ok(())
@@ -255,7 +269,10 @@ impl DeviceGeometry {
                 led_positions.push([x, y]);
             }
         }
-        Self { size: [width, height], led_positions }
+        Self {
+            size: [width, height],
+            led_positions,
+        }
     }
 }
 
@@ -271,7 +288,14 @@ mod tests {
         assert_eq!(p.brightness, 100);
         assert_eq!(p.lighting_mode, LightingMode::Canvas);
         assert_eq!(p.forced_color, "#009bde");
-        assert_eq!(Placement { rotation: -90.0, ..Default::default() }.rotation_normalized(), 270.0);
+        assert_eq!(
+            Placement {
+                rotation: -90.0,
+                ..Default::default()
+            }
+            .rotation_normalized(),
+            270.0
+        );
         assert_eq!(Placement::default().effective_scale(12.0), Scale::uniform(12.0));
         assert_eq!(p.effective_scale(12.0), Scale::uniform(SCALE_MAX));
     }
@@ -281,14 +305,31 @@ mod tests {
         let l = Layout::default();
         assert_eq!(l.snap(5.0), 4.0);
         assert_eq!(l.snap(6.0), 8.0);
-        assert_eq!(Layout { grid_size: 0, ..Default::default() }.snap(5.5), 5.5);
+        assert_eq!(
+            Layout {
+                grid_size: 0,
+                ..Default::default()
+            }
+            .snap(5.5),
+            5.5
+        );
     }
 
     #[test]
     fn geometry_validation() {
         assert!(DeviceGeometry::full_grid(3, 2).validate().is_ok());
-        assert!(DeviceGeometry { size: [0, 1], led_positions: vec![] }.validate().is_err());
-        assert!(DeviceGeometry { size: [2, 2], led_positions: vec![[2, 0]] }.validate().is_err());
+        assert!(DeviceGeometry {
+            size: [0, 1],
+            led_positions: vec![]
+        }
+        .validate()
+        .is_err());
+        assert!(DeviceGeometry {
+            size: [2, 2],
+            led_positions: vec![[2, 0]]
+        }
+        .validate()
+        .is_err());
     }
 
     /// The example object from `schemas/layout.schema.json`.
@@ -320,7 +361,13 @@ mod tests {
         let layout: Layout = serde_json::from_str(SCHEMA_EXAMPLE).unwrap();
         assert_eq!(layout.name, "Desk");
         assert_eq!(layout.grid_size, 4);
-        assert_eq!(layout.canvas, CanvasSize { width: 320, height: 200 });
+        assert_eq!(
+            layout.canvas,
+            CanvasSize {
+                width: 320,
+                height: 200
+            }
+        );
         let board = &layout.endpoints["1462:7c91:"];
         assert_eq!(board.position, Point { x: 120.0, y: 80.0 });
         assert_eq!(board.scale, Some(Scale::uniform(40.0)));
@@ -331,7 +378,17 @@ mod tests {
         let json = serde_json::to_value(&layout).unwrap();
         assert!(json.get("gridSize").is_some());
         let ep = &json["endpoints"]["1462:7c91:"];
-        for key in ["position", "scale", "rotation", "flipX", "flipY", "enabled", "brightness", "lightingMode", "forcedColor"] {
+        for key in [
+            "position",
+            "scale",
+            "rotation",
+            "flipX",
+            "flipY",
+            "enabled",
+            "brightness",
+            "lightingMode",
+            "forcedColor",
+        ] {
             assert!(ep.get(key).is_some(), "missing {key}");
         }
         assert_eq!(ep["lightingMode"], "Canvas");
@@ -341,7 +398,15 @@ mod tests {
         assert!(bare.get("scale").is_none(), "absent scale means DefaultScale()");
 
         let cc: ColorCorrection = serde_json::from_str(r#"{"red": 90, "minBrightness": 5}"#).unwrap();
-        assert_eq!(cc, ColorCorrection { red: 90, green: 100, blue: 100, min_brightness: 5 });
+        assert_eq!(
+            cc,
+            ColorCorrection {
+                red: 90,
+                green: 100,
+                blue: 100,
+                min_brightness: 5
+            }
+        );
         assert_eq!(serde_json::to_value(LightingMode::Forced).unwrap(), "Forced");
     }
 }

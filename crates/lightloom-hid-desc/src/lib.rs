@@ -186,7 +186,9 @@ impl ReportDescriptor {
 
     /// First collection with the given usage page / usage.
     pub fn find(&self, usage_page: u16, usage: u16) -> Option<&TopLevelCollection> {
-        self.collections.iter().find(|c| c.usage_page == usage_page && c.usage == usage)
+        self.collections
+            .iter()
+            .find(|c| c.usage_page == usage_page && c.usage == usage)
     }
 }
 
@@ -210,7 +212,14 @@ pub fn parse_items(bytes: &[u8]) -> Result<Vec<Item>, DescError> {
                 return Err(DescError::Truncated { offset });
             }
             let data = le_u32(&bytes[start..end.min(start + 4)]);
-            items.push(Item { offset, kind: ItemKind::Reserved, tag, size: size as u8, data, signed: data as i32 });
+            items.push(Item {
+                offset,
+                kind: ItemKind::Reserved,
+                tag,
+                size: size as u8,
+                data,
+                signed: data as i32,
+            });
             i = end;
             continue;
         }
@@ -240,7 +249,14 @@ pub fn parse_items(bytes: &[u8]) -> Result<Vec<Item>, DescError> {
             4 => data as i32,
             _ => 0,
         };
-        items.push(Item { offset, kind, tag, size: size as u8, data, signed });
+        items.push(Item {
+            offset,
+            kind,
+            tag,
+            size: size as u8,
+            data,
+            signed,
+        });
         i = end;
     }
     Ok(items)
@@ -315,7 +331,11 @@ pub fn parse(bytes: &[u8]) -> Result<ReportDescriptor, DescError> {
                     tags::COLLECTION => {
                         if depth == 0 {
                             let (page_override, usage) = local.usages.first().copied().unwrap_or((0, 0));
-                            let usage_page = if page_override != 0 { page_override } else { global.usage_page };
+                            let usage_page = if page_override != 0 {
+                                page_override
+                            } else {
+                                global.usage_page
+                            };
                             collections.push(TopLevelCollection {
                                 index: collections.len() as u16,
                                 usage_page,
@@ -511,7 +531,11 @@ mod tests {
     #[test]
     fn mouse_with_nested_physical_collection() {
         let d = parse(MOUSE).unwrap();
-        assert_eq!(d.collections.len(), 1, "nested physical collection must not count as a TLC");
+        assert_eq!(
+            d.collections.len(),
+            1,
+            "nested physical collection must not count as a TLC"
+        );
         let c = &d.collections[0];
         assert_eq!((c.usage_page, c.usage), (0x01, 0x02));
         assert_eq!(c.input_len, 4); // 3 + 5 + 16 bits = 24 → 3 + id byte
@@ -538,8 +562,22 @@ mod tests {
         bytes.extend_from_slice(CONSUMER);
         let d = parse(&bytes).unwrap();
         assert_eq!(d.collections.len(), 2);
-        assert_eq!((d.collections[0].index, d.collections[0].usage_page, d.collections[0].usage), (0, 0x01, 0x06));
-        assert_eq!((d.collections[1].index, d.collections[1].usage_page, d.collections[1].usage), (1, 0x0C, 0x01));
+        assert_eq!(
+            (
+                d.collections[0].index,
+                d.collections[0].usage_page,
+                d.collections[0].usage
+            ),
+            (0, 0x01, 0x06)
+        );
+        assert_eq!(
+            (
+                d.collections[1].index,
+                d.collections[1].usage_page,
+                d.collections[1].usage
+            ),
+            (1, 0x0C, 0x01)
+        );
         assert_eq!(d.collections[1].report_ids, vec![5]);
         assert_eq!(d.collections[1].input_len, 3);
         assert_eq!(d.collection(1).unwrap().usage, 0x01);
@@ -554,17 +592,29 @@ mod tests {
             .unwrap();
         assert_eq!(logical_min.signed, -127);
         let page = parse_items(VENDOR).unwrap()[0];
-        assert_eq!((page.kind, page.tag, page.size, page.data), (ItemKind::Global, tags::USAGE_PAGE, 2, 0xFF00));
+        assert_eq!(
+            (page.kind, page.tag, page.size, page.data),
+            (ItemKind::Global, tags::USAGE_PAGE, 2, 0xFF00)
+        );
     }
 
     #[test]
     fn errors() {
-        assert_eq!(parse_items(&[0x06, 0x00]), Err(DescError::Truncated { offset: 0 }));
+        assert_eq!(
+            parse_items(&[0x06, 0x00]),
+            Err(DescError::Truncated { offset: 0 })
+        );
         assert_eq!(parse(&[0xC0]), Err(DescError::UnbalancedEnd { offset: 0 }));
-        assert_eq!(parse(&[0x05, 0x01, 0x09, 0x06, 0xA1, 0x01]), Err(DescError::UnclosedCollections(1)));
+        assert_eq!(
+            parse(&[0x05, 0x01, 0x09, 0x06, 0xA1, 0x01]),
+            Err(DescError::UnclosedCollections(1))
+        );
         // Long item is skipped, not fatal.
         let items = parse_items(&[0xFE, 0x02, 0x10, 0xAA, 0xBB]).unwrap();
         assert_eq!(items.len(), 1);
-        assert_eq!((items[0].kind, items[0].tag, items[0].size), (ItemKind::Reserved, 0x10, 2));
+        assert_eq!(
+            (items[0].kind, items[0].tag, items[0].size),
+            (ItemKind::Reserved, 0x10, 2)
+        );
     }
 }

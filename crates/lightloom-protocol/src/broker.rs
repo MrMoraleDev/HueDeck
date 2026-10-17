@@ -252,7 +252,9 @@ impl BrokerOp {
             }
         }
         let len = match self {
-            BrokerOp::SmbusWriteBlock { data, .. } | BrokerOp::SmbusWriteBlockNoReg { data, .. } => data.len(),
+            BrokerOp::SmbusWriteBlock { data, .. } | BrokerOp::SmbusWriteBlockNoReg { data, .. } => {
+                data.len()
+            }
             BrokerOp::SmbusReadBlock { len, .. } | BrokerOp::SmbusReadBlockNoReg { len, .. } => *len as usize,
             _ => 1,
         };
@@ -265,7 +267,9 @@ impl BrokerOp {
     /// Default-deny rule for SPD EEPROM and write-protect addresses.
     pub fn touches_spd(&self) -> bool {
         self.is_write()
-            && self.addr().is_some_and(|a| SPD_EEPROM_RANGE.contains(&a) || SPD_WRITE_PROTECT_RANGE.contains(&a))
+            && self
+                .addr()
+                .is_some_and(|a| SPD_EEPROM_RANGE.contains(&a) || SPD_WRITE_PROTECT_RANGE.contains(&a))
     }
 }
 
@@ -283,7 +287,11 @@ pub struct BrokerRequest {
 impl BrokerRequest {
     /// Request with the current protocol version.
     pub fn new(id: u64, op: BrokerOp) -> Self {
-        Self { version: BROKER_PROTOCOL_VERSION, id, op }
+        Self {
+            version: BROKER_PROTOCOL_VERSION,
+            id,
+            op,
+        }
     }
 }
 
@@ -376,14 +384,50 @@ mod tests {
     fn every_op() -> Vec<BrokerOp> {
         vec![
             BrokerOp::SmbusWriteQuick { bus: 0, addr: 0x39 },
-            BrokerOp::SmbusReadByte { bus: 0, addr: 0x39, reg: 0xA0 },
-            BrokerOp::SmbusWriteByte { bus: 0, addr: 0x39, reg: 0x01, value: 0xFF },
-            BrokerOp::SmbusReadWord { bus: 1, addr: 0x5B, reg: 0x02 },
-            BrokerOp::SmbusWriteWord { bus: 1, addr: 0x5B, reg: 0x00, value: 0x80F8 },
-            BrokerOp::SmbusWriteBlock { bus: 0, addr: 0x39, reg: 0x03, data: vec![1, 2, 3, 4] },
-            BrokerOp::SmbusReadBlock { bus: 0, addr: 0x39, reg: 0x03, len: 12 },
-            BrokerOp::SmbusWriteBlockNoReg { bus: 2, addr: 0x47, data: vec![0xAB] },
-            BrokerOp::SmbusReadBlockNoReg { bus: 2, addr: 0x47, len: 4 },
+            BrokerOp::SmbusReadByte {
+                bus: 0,
+                addr: 0x39,
+                reg: 0xA0,
+            },
+            BrokerOp::SmbusWriteByte {
+                bus: 0,
+                addr: 0x39,
+                reg: 0x01,
+                value: 0xFF,
+            },
+            BrokerOp::SmbusReadWord {
+                bus: 1,
+                addr: 0x5B,
+                reg: 0x02,
+            },
+            BrokerOp::SmbusWriteWord {
+                bus: 1,
+                addr: 0x5B,
+                reg: 0x00,
+                value: 0x80F8,
+            },
+            BrokerOp::SmbusWriteBlock {
+                bus: 0,
+                addr: 0x39,
+                reg: 0x03,
+                data: vec![1, 2, 3, 4],
+            },
+            BrokerOp::SmbusReadBlock {
+                bus: 0,
+                addr: 0x39,
+                reg: 0x03,
+                len: 12,
+            },
+            BrokerOp::SmbusWriteBlockNoReg {
+                bus: 2,
+                addr: 0x47,
+                data: vec![0xAB],
+            },
+            BrokerOp::SmbusReadBlockNoReg {
+                bus: 2,
+                addr: 0x47,
+                len: 4,
+            },
             BrokerOp::SmbusReadByteNoReg { bus: 2, addr: 0x47 },
             BrokerOp::ListBuses,
             BrokerOp::Health,
@@ -424,10 +468,17 @@ mod tests {
                 uptime_secs: 42,
                 dry_run: true,
                 ops_served: 7,
-                modules: vec![ModuleStatus { name: "SmbusPIIX4".into(), sha256: "00".repeat(32), loaded: true }],
+                modules: vec![ModuleStatus {
+                    name: "SmbusPIIX4".into(),
+                    sha256: "00".repeat(32),
+                    loaded: true,
+                }],
             })),
             Err(BrokerError::AddressDenied { addr: 0x50 }),
-            Err(BrokerError::Backend { status: -5, message: "NVAPI_ERROR".into() }),
+            Err(BrokerError::Backend {
+                status: -5,
+                message: "NVAPI_ERROR".into(),
+            }),
         ];
         for (i, result) in payloads.into_iter().enumerate() {
             let resp = BrokerResponse { id: i as u64, result };
@@ -439,11 +490,44 @@ mod tests {
 
     #[test]
     fn validation_rules() {
-        assert!(BrokerOp::SmbusReadByte { bus: 0, addr: 0x02, reg: 0 }.validate().is_err());
-        assert!(BrokerOp::SmbusReadByte { bus: 0, addr: 0x78, reg: 0 }.validate().is_err());
-        assert!(BrokerOp::SmbusWriteBlock { bus: 0, addr: 0x39, reg: 0, data: vec![] }.validate().is_err());
-        assert!(BrokerOp::SmbusWriteBlock { bus: 0, addr: 0x39, reg: 0, data: vec![0; 65] }.validate().is_err());
-        assert!(BrokerOp::SmbusReadBlock { bus: 0, addr: 0x39, reg: 0, len: 0 }.validate().is_err());
+        assert!(BrokerOp::SmbusReadByte {
+            bus: 0,
+            addr: 0x02,
+            reg: 0
+        }
+        .validate()
+        .is_err());
+        assert!(BrokerOp::SmbusReadByte {
+            bus: 0,
+            addr: 0x78,
+            reg: 0
+        }
+        .validate()
+        .is_err());
+        assert!(BrokerOp::SmbusWriteBlock {
+            bus: 0,
+            addr: 0x39,
+            reg: 0,
+            data: vec![]
+        }
+        .validate()
+        .is_err());
+        assert!(BrokerOp::SmbusWriteBlock {
+            bus: 0,
+            addr: 0x39,
+            reg: 0,
+            data: vec![0; 65]
+        }
+        .validate()
+        .is_err());
+        assert!(BrokerOp::SmbusReadBlock {
+            bus: 0,
+            addr: 0x39,
+            reg: 0,
+            len: 0
+        }
+        .validate()
+        .is_err());
         assert!(BrokerOp::Health.validate().is_ok());
         for op in every_op() {
             assert!(op.validate().is_ok(), "{op:?}");
@@ -452,9 +536,26 @@ mod tests {
 
     #[test]
     fn spd_denial_only_applies_to_writes() {
-        assert!(BrokerOp::SmbusWriteByte { bus: 0, addr: 0x50, reg: 0, value: 0 }.touches_spd());
+        assert!(BrokerOp::SmbusWriteByte {
+            bus: 0,
+            addr: 0x50,
+            reg: 0,
+            value: 0
+        }
+        .touches_spd());
         assert!(BrokerOp::SmbusWriteQuick { bus: 0, addr: 0x37 }.touches_spd());
-        assert!(!BrokerOp::SmbusReadByte { bus: 0, addr: 0x50, reg: 0 }.touches_spd());
-        assert!(!BrokerOp::SmbusWriteByte { bus: 0, addr: 0x39, reg: 0, value: 0 }.touches_spd());
+        assert!(!BrokerOp::SmbusReadByte {
+            bus: 0,
+            addr: 0x50,
+            reg: 0
+        }
+        .touches_spd());
+        assert!(!BrokerOp::SmbusWriteByte {
+            bus: 0,
+            addr: 0x39,
+            reg: 0,
+            value: 0
+        }
+        .touches_spd());
     }
 }

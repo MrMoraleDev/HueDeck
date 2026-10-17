@@ -11,5 +11,8 @@
 #![forbid(unsafe_code)]
 
 fn main() {
-    println!("lightloom-setup {} (stub; the installer lands in M5)", env!("CARGO_PKG_VERSION"));
+    println!(
+        "lightloom-setup {} (stub; the installer lands in M5)",
+        env!("CARGO_PKG_VERSION")
+    );
 }

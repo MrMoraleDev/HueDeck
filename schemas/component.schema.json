@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://huedeck.dev/schemas/component.schema.json",
+  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "title": "HueDeck component descriptor (SignalRGB-compatible component JSON)",
+  "description": "One addressable-RGB component (fan, strip, AIO block, case panel...) that a user attaches to a plugin channel (e.g. a motherboard JRAINBOW header). The file format is compatible with the SignalRGB 2.5 component library so community component JSON loads unchanged. Invariants that JSON Schema cannot express and that the loader MUST check: (1) LedMapping, LedCoordinates and LedNames all have exactly LedCount elements; (2) every LedCoordinates[i] = [x, y] satisfies 0 <= x < Width and 0 <= y < Height; (3) LedMapping SHOULD be a permutation of 0..LedCount-1 (each output slot used once) - the loader warns on duplicates and keeps the last writer; (4) ProductName is the identity/persistence key: a user component with the same ProductName overrides the built-in one. Semantics: LedCoordinates[i] is where LED i sits in the Width x Height sampling buffer (index-aligned with LedNames[i]); LedMapping[i] is the slot in the component's output colour stream (wire order) that receives that LED's colour, i.e. stream[LedMapping[i]] = sample(LedCoordinates[i]).",
+  "type": "object",
+  "required": [
+    "ProductName",
+    "DisplayName",
+    "Brand",
+    "Type",
+    "LedCount",
+    "Width",
+    "Height",
+    "LedMapping",
+    "LedCoordinates",
+    "LedNames"
+  ],
+  "properties": {
+    "ProductName": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Unique identity and persistence key of the component. Must contain at least one non-whitespace character. Leading/trailing whitespace is tolerated (it exists in shipped files) but loaders compare the trimmed value."
+    },
+    "DisplayName": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Label shown in the component picker and used as the canvas endpoint name. Convention: \"<Product> - <N> LED\". Placeholder strips are named \"Default Strip - N\"."
+    },
+    "Brand": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Brand filter value in the picker (free text, case-sensitive). \"Custom\" is reserved for user-created and placeholder strips."
+    },
+    "Type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Category filter value (free text, case-sensitive). Observed: Fan, Strip, AIO, Case, Cable, custom, Heatsink, Water Block, Desk, Chair, Cooler, Panel, Tower, GPU, Light Bar and vendor-specific names."
+    },
+    "LedCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of LEDs in the component. Must equal the length of LedMapping, LedCoordinates and LedNames."
+    },
+    "Width": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Width in cells of the component's sampling buffer. Every LedCoordinates x must be in 0..Width-1."
+    },
+    "Height": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Height in cells of the component's sampling buffer. Every LedCoordinates y must be in 0..Height-1."
+    },
+    "LedMapping": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "Output (wire-order) slot for each LED: stream[LedMapping[i]] = colour sampled at LedCoordinates[i]. Length must equal LedCount; values should form a permutation of 0..LedCount-1."
+    },
+    "LedCoordinates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "description": "[x, y] cell of each LED inside the Width x Height buffer. Length must equal LedCount. Duplicate coordinates are allowed (several LEDs sampling the same cell)."
+    },
+    "LedNames": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Human-readable name per LED (\"Led 1\" or zone names). Length must equal LedCount."
+    },
+    "ImageUrl": {
+      "type": "string",
+      "pattern": "^(https?://|file://|/|\\./|[A-Za-z]:[\\\\/]).+",
+      "description": "URL of the picker/layout image (PNG, JPG or SVG; 1024x1024 with a 920x920 live area recommended). Optional; a placeholder image is used when absent. Mutually complementary with Image."
+    },
+    "Image": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9+/=\\s]+$",
+      "description": "Inline base64 PNG (no data: prefix) used instead of ImageUrl."
+    },
+    "ComponentId": {
+      "type": "string",
+      "pattern": "^\\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\\}?$",
+      "description": "UUID of one component INSTANCE on a channel. Only present in persisted channel arrays (never in library files); it is the canvas endpoint uid of that instance."
+    },
+    "Custom": {
+      "type": "boolean",
+      "description": "Marks a user-created component (engine-side flag; rarely serialised)."
+    }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "ProductName": "Default Strip - 4",
+      "DisplayName": "Default Strip - 4",
+      "Brand": "Custom",
+      "Type": "Strip",
+      "LedCount": 4,
+      "Width": 4,
+      "Height": 1,
+      "LedMapping": [0, 1, 2, 3],
+      "LedCoordinates": [[0, 0], [1, 0], [2, 0], [3, 0]],
+      "LedNames": ["Led 1", "Led 2", "Led 3", "Led 4"],
+      "ImageUrl": "https://assets.signalrgb.com/devices/default/misc/led-strip.png"
+    }
+  ]
+}

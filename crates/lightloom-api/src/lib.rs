@@ -38,7 +38,12 @@ pub struct Route {
 }
 
 const fn r(method: &'static str, path: &'static str, mutating: bool, milestone: &'static str) -> Route {
-    Route { method, path, mutating, milestone }
+    Route {
+        method,
+        path,
+        mutating,
+        milestone,
+    }
 }
 
 /// SignalRGB-compatible routes on [`COMPAT_REST_PORT`] (relative to [`COMPAT_PREFIX`]).
@@ -104,7 +109,12 @@ mod tests {
         for table in [COMPAT_ROUTES, NATIVE_ROUTES] {
             let mut seen = HashSet::new();
             for route in table {
-                assert!(seen.insert((route.method, route.path)), "duplicate {} {}", route.method, route.path);
+                assert!(
+                    seen.insert((route.method, route.path)),
+                    "duplicate {} {}",
+                    route.method,
+                    route.path
+                );
                 assert!(route.path.starts_with('/'));
             }
         }
@@ -114,7 +124,11 @@ mod tests {
     fn compat_mutations_use_non_get_except_next_previous() {
         for route in COMPAT_ROUTES {
             if route.method == "GET" && route.mutating {
-                assert!(route.path.ends_with("/next") || route.path.ends_with("/previous"), "{}", route.path);
+                assert!(
+                    route.path.ends_with("/next") || route.path.ends_with("/previous"),
+                    "{}",
+                    route.path
+                );
             }
         }
     }

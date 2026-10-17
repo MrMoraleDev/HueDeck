@@ -103,7 +103,11 @@ impl PluginIndex {
         for key in meta.keys() {
             if let Some(previous) = self.by_key.insert(key, meta.source_path.clone()) {
                 if previous != meta.source_path {
-                    let c = Collision { key, previous, winner: meta.source_path.clone() };
+                    let c = Collision {
+                        key,
+                        previous,
+                        winner: meta.source_path.clone(),
+                    };
                     self.collisions.push(c.clone());
                     out.push(c);
                 }
@@ -140,7 +144,12 @@ mod tests {
     #[test]
     fn last_scanned_wins_and_collisions_are_reported() {
         let mut idx = PluginIndex::new();
-        let a = PluginMeta::minimal("/cdn/EVision/EVision_Keyboard_Controller.js", "EVision", 0x320F, vec![0x5088, 0x5064]);
+        let a = PluginMeta::minimal(
+            "/cdn/EVision/EVision_Keyboard_Controller.js",
+            "EVision",
+            0x320F,
+            vec![0x5088, 0x5064],
+        );
         let b = PluginMeta::minimal("/addons/qmk/GMMK_Numpad.js", "GMMK", 0x320F, vec![0x5088]);
         assert!(idx.insert(&a).is_empty());
         let c = idx.insert(&b);
@@ -165,7 +174,10 @@ mod tests {
     fn errors_display_paths() {
         let e = LoaderError::HelperModule(PathBuf::from("lib/Util.js"));
         assert!(e.to_string().contains("Util.js"));
-        let e = LoaderError::MissingExport { path: PathBuf::from("x.js"), export: "ProductId" };
+        let e = LoaderError::MissingExport {
+            path: PathBuf::from("x.js"),
+            export: "ProductId",
+        };
         assert_eq!(e.to_string(), "x.js: missing export ProductId");
     }
 }

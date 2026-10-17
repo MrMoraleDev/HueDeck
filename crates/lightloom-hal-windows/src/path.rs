@@ -42,7 +42,10 @@ impl ParsedHidPath {
 fn hex_after<'a>(lower: &'a str, marker: &str, digits: usize) -> Option<&'a str> {
     let start = lower.find(marker)? + marker.len();
     let candidate = lower.get(start..start + digits)?;
-    candidate.chars().all(|c| c.is_ascii_hexdigit()).then_some(candidate)
+    candidate
+        .chars()
+        .all(|c| c.is_ascii_hexdigit())
+        .then_some(candidate)
 }
 
 /// Parse a Windows HID interface path. Tolerates missing parts; never panics.
@@ -50,7 +53,9 @@ pub fn parse_hid_path(path: &str) -> ParsedHidPath {
     let lower = path.to_ascii_lowercase();
     let vid = hex_after(&lower, "vid_", 4).and_then(|h| u16::from_str_radix(h, 16).ok());
     let pid = hex_after(&lower, "pid_", 4).and_then(|h| u16::from_str_radix(h, 16).ok());
-    let interface_number = hex_after(&lower, "&mi_", 2).and_then(|h| i32::from_str_radix(h, 16).ok()).unwrap_or(-1);
+    let interface_number = hex_after(&lower, "&mi_", 2)
+        .and_then(|h| i32::from_str_radix(h, 16).ok())
+        .unwrap_or(-1);
     let collection = lower
         .find("&col")
         .and_then(|i| lower.get(i + 4..i + 6))
@@ -64,7 +69,13 @@ pub fn parse_hid_path(path: &str) -> ParsedHidPath {
         parts.next(); // "HID#VID_...&Col02"
         parts.next().filter(|s| !s.is_empty()).map(str::to_string)
     };
-    ParsedHidPath { vid, pid, interface_number, collection, instance_id }
+    ParsedHidPath {
+        vid,
+        pid,
+        interface_number,
+        collection,
+        instance_id,
+    }
 }
 
 #[cfg(test)]
@@ -86,7 +97,9 @@ mod tests {
 
     #[test]
     fn single_interface_device_reports_minus_one() {
-        let p = parse_hid_path(r"\\?\hid#vid_1462&pid_7c91#7&1f2e3d4c&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}");
+        let p = parse_hid_path(
+            r"\\?\hid#vid_1462&pid_7c91#7&1f2e3d4c&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}",
+        );
         assert_eq!((p.vid, p.pid), (Some(0x1462), Some(0x7C91)));
         assert_eq!(p.interface_number, -1);
         assert_eq!(p.collection, 0);
@@ -102,7 +115,13 @@ mod tests {
     #[test]
     fn garbage_is_tolerated() {
         let p = parse_hid_path("");
-        assert_eq!(p, ParsedHidPath { interface_number: -1, ..Default::default() });
+        assert_eq!(
+            p,
+            ParsedHidPath {
+                interface_number: -1,
+                ..Default::default()
+            }
+        );
         let p = parse_hid_path(r"\\?\HID#VID_ZZZZ&PID_12&MI_&Col#");
         assert_eq!(p.vid, None);
         assert_eq!(p.pid, None);

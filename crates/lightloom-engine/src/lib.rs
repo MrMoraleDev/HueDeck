@@ -26,7 +26,7 @@ pub use color::{apply_brightness, effective_brightness, Rgb};
 pub use frame::Frame;
 pub use frame_store::FrameStore;
 pub use layout::{
-    CanvasSize, ColorCorrection, DeviceGeometry, Layout, LightingMode, Placement, Point, Scale, CANVAS_HEIGHT,
-    CANVAS_WIDTH,
+    CanvasSize, ColorCorrection, DeviceGeometry, Layout, LightingMode, Placement, Point, Scale,
+    CANVAS_HEIGHT, CANVAS_WIDTH,
 };
 pub use sampler::{compute_offsets, OffsetTable, RotationPivot, SamplePoint, SamplerConfig, OFF_CANVAS};

@@ -20,7 +20,12 @@ pub struct NotImplemented {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "lightloom", version, about = "Lightloom command-line client", propagate_version = true)]
+#[command(
+    name = "lightloom",
+    version,
+    about = "Lightloom command-line client",
+    propagate_version = true
+)]
 struct Cli {
     /// Daemon address (host:port) when not the default loopback port.
     #[arg(long, env = "LIGHTLOOM_ADDR", default_value = "127.0.0.1:16138")]
@@ -92,7 +97,9 @@ fn run(cli: Cli) -> Result<(), NotImplemented> {
         Command::Light { .. } => ("light", "M1"),
         Command::Rainbow { .. } => ("rainbow", "M1"),
         Command::Bench { .. } => ("bench", "M1"),
-        Command::Compat { command: CompatCommand::DryRun { .. } } => ("compat dry-run", "M2"),
+        Command::Compat {
+            command: CompatCommand::DryRun { .. },
+        } => ("compat dry-run", "M2"),
     };
     Err(NotImplemented { command, milestone })
 }

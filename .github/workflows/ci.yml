@@ -73,11 +73,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Policy lives in deny.toml at the repo root.
+      # Policy lives in deny.toml at the repo root (graph.all-features, targets, lists).
+      # The action defaults to `--all-features`; pass `--workspace` instead so deny.toml
+      # stays the single source of truth for feature selection.
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          arguments: --all-features
+          arguments: --workspace
 
   node:
     name: node (prelude + plugins)
@@ -88,10 +90,12 @@ jobs:
         with:
           node-version: "24"
 
+      # Node >= 21 no longer walks a bare directory argument (`node --test dir` fails with
+      # MODULE_NOT_FOUND); pass a quoted glob so Node's own matcher expands it.
       - name: Prelude tests
         run: |
           if [ -d prelude/tests ]; then
-            node --test prelude/tests
+            node --test "prelude/tests/**/*.test.{js,mjs}"
           else
             echo "::notice::prelude/tests not present yet - skipping"
           fi
@@ -99,7 +103,7 @@ jobs:
       - name: Plugin tests
         run: |
           if [ -d plugins ] && find plugins -type f \( -name '*.test.js' -o -name '*.test.mjs' \) | grep -q .; then
-            node --test plugins
+            node --test "plugins/**/*.test.{js,mjs}"
           else
             echo "::notice::no plugin tests found under plugins/ - skipping"
           fi
@@ -115,6 +119,9 @@ jobs:
 
       - name: Validate corpus against JSON Schemas
         run: |
+          if [ -f tests/schemas/requirements.txt ]; then
+            python -m pip install --quiet -r tests/schemas/requirements.txt
+          fi
           if [ -f tests/schemas/validate_corpus.py ]; then
             python -I tests/schemas/validate_corpus.py --skip-if-missing-corpus
           else

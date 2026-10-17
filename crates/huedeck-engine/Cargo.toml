@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "huedeck-engine"
+description = "HueDeck engine core: colour/frame types, FrameStore (triple buffer + seq + condvar), layouts, per-LED sampling tables, brightness math"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+triple_buffer = { workspace = true }
+
+[dev-dependencies]
+# Layout JSON shape is checked against the schemas/layout.schema.json example.
+serde_json = { workspace = true }

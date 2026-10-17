@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "huedeck-renderer"
+description = "huedeck-renderer: CEF offscreen Chromium process rendering lightscripts at 320x200 into shared memory (stub until M3)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "huedeck-renderer"
+path = "src/main.rs"
+
+[dependencies]
+huedeck-protocol = { path = "../huedeck-protocol" }
+# TODO(M3): cef = "154.5.0+154.0.34" (not a workspace pin yet; added with SPIKE A).

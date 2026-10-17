@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "huedeck-hal-linux"
+description = "HueDeck HAL backends for Linux: hidraw + report-descriptor TLC split, i2c-dev, udev, hwmon (stub until M7)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+huedeck-hal = { path = "../huedeck-hal" }
+# TODO(M7): hidapi (linux-native), huedeck-hid-desc, nusb, serialport, i2cdev, libc.

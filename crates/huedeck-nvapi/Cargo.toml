@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "huedeck-nvapi"
+description = "HueDeck dynamic NvAPI loader for GPU I2C and thermal (stub until M5)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# TODO(M5): libloading or windows (LoadLibrary) for nvapi64.dll; thiserror.

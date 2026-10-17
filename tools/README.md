@@ -1,0 +1,18 @@
+<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+# tools/
+
+Developer and packaging helpers that are not part of the shipped binaries.
+
+| Tool              | Purpose                                                                                   | Status |
+|-------------------|-------------------------------------------------------------------------------------------|--------|
+| `gen-udev/`       | Emit `70-huedeck.rules` from loaded plugin VID:PID lists (see its README)                  | planned (M7) |
+| `pawnio-hash-pin/`| Compute and verify SHA-256 pins of the PawnIO modules the iobroker is allowed to load      | planned (M5) |
+| `shm-dump/`       | Dump the renderer shared-memory ring (3x 320x200 BGRA + engine data + seq) to PNG/JSON for debugging frame timing | planned (M3) |
+
+Conventions:
+
+- Small tools are Rust binaries in their own crate under `tools/<name>/` (not workspace
+  default members); scripts that need no compilation may be Python 3.13 run with `-I`.
+- Every file carries `SPDX-License-Identifier: Apache-2.0 OR MIT`.
+- Tools never read WhirlwindFX-authored files from the repository; they operate on the
+  user's own installation directories when a corpus is required.

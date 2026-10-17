@@ -14,7 +14,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop, "feature/**"]
     tags-ignore: ["v*"]
   pull_request:
   workflow_dispatch:

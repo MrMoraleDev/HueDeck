@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "huedeck-plugin-host"
 description = "HueDeck SignalRGB-compatible plugin host: module resolution, export model (call-if-function), loader trait; the rquickjs runtime lands in M0 spike B / M1"
 version.workspace = true

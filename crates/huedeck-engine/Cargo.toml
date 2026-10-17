@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "huedeck-engine"
 description = "HueDeck engine core: colour/frame types, FrameStore (triple buffer + seq + condvar), layouts, per-LED sampling tables, brightness math"
 version.workspace = true

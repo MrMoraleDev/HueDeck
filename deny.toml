@@ -25,6 +25,8 @@ exceptions = []
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace-internal `path = "../x"` dependencies carry no version on purpose.
+allow-wildcard-paths = true
 highlight = "all"
 deny = [
   # vulnerable / unmaintained low-level IO drivers must never enter the tree

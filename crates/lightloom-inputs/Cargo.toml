@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "lightloom-inputs"
+description = "Lightloom input sources feeding engine.audio / engine.zone / engine.vision / sensors (stub until M6)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { workspace = true }

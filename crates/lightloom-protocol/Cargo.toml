@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "lightloom-protocol"
+description = "Lightloom wire types shared between daemon, renderer and io-broker: shm frame header, broker op enum (serde + postcard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }

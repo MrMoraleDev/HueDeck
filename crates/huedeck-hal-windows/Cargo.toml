@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "huedeck-hal-windows"
+description = "HueDeck HAL backends for Windows: hidapi (hid.dll) HID enumeration/I/O with &MI_xx / &ColNN endpoint parsing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+huedeck-hal = { path = "../huedeck-hal" }
+huedeck-hid-desc = { path = "../huedeck-hid-desc" }
+tracing = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+hidapi = { workspace = true, features = ["windows-native"] }
+# TODO(M2): windows = { workspace = true } for CM_Register_Notification / CM_Get_Parent;
+# TODO(M2): nusb, serialport.

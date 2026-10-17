@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lightloom.dev/schemas/plugin-source.schema.json",
+  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "title": "Lightloom plugin source",
+  "description": "One entry of the plugin sources manager: a git repository or a local directory that contributes plugins, components or effects. Sources are hash-pinned (pinned_sha256 of the checked-out tree listing) and updated only on explicit user action. A source is not loaded until the user has read and acknowledged its license text (license_text_acknowledged_at). WhirlwindFX-authored files are never a source; the import wizard handles the user's own copies separately.",
+  "type": "object",
+  "required": ["kind", "url", "enabled"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$",
+      "description": "Stable slug for the source (defaults to a hash of url)."
+    },
+    "name": { "type": "string", "description": "Display name, e.g. \"SRGBmods community plugins\"." },
+    "kind": {
+      "type": "string",
+      "enum": ["git", "path"],
+      "description": "git: cloned with a git client into the sources cache; path: an existing local directory used in place (never modified)."
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1,
+      "description": "git: https:// or ssh clone URL; path: absolute local directory path or file:// URL."
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "default": "HEAD",
+      "description": "git only: branch, tag or commit to fetch."
+    },
+    "pinned_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hex SHA-256 of the canonical tree listing (sorted relative path + blob SHA-256 per file) at the last approved update. Content differing from the pin is not loaded until the user approves the diff."
+    },
+    "pinned_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "git only: commit SHA-1 the pin was taken from."
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX expression of the source's license as declared by the repo (informational)."
+    },
+    "license_text_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hash of the license text that was shown; a changed license text re-triggers acknowledgement."
+    },
+    "license_text_acknowledged_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "RFC 3339 timestamp of the user's acknowledgement of the license text; null/absent = not yet acknowledged, source stays disabled."
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Whether plugins from this source are loaded. Effective only when license_text_acknowledged_at is set."
+    },
+    "subdirs": {
+      "type": "object",
+      "description": "Optional sub-directories inside the source to scan (defaults: Plugins, Components, Effects at the root).",
+      "properties": {
+        "plugins": { "type": "array", "items": { "type": "string" } },
+        "components": { "type": "array", "items": { "type": "string" } },
+        "effects": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "preset": {
+      "type": "boolean",
+      "default": false,
+      "description": "true for sources pre-listed by Lightloom (user can still remove them)."
+    },
+    "last_checked_at": { "type": "string", "format": "date-time" },
+    "last_updated_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "git" } } },
+      "then": {
+        "properties": {
+          "url": { "type": "string", "pattern": "^(https?://|ssh://|git@)[^\\s]+$" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "path" } } },
+      "then": {
+        "properties": {
+          "url": { "type": "string", "pattern": "^(file://|/|[A-Za-z]:[\\\\/]|\\\\\\\\)[^\\n]+$" }
+        },
+        "not": { "properties": { "ref": true }, "required": ["ref"] }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "id": "srgbmods-plugins",
+      "name": "SRGBmods plugins",
+      "kind": "git",
+      "url": "https://gitlab.com/srgbmods/signalrgb-plugins.git",
+      "ref": "main",
+      "pinned_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "license": "MIT",
+      "license_text_acknowledged_at": "2026-10-17T12:00:00Z",
+      "enabled": true,
+      "preset": true
+    },
+    {
+      "kind": "path",
+      "url": "C:\\Users\\me\\Documents\\Lightloom\\dev-plugins",
+      "enabled": true,
+      "license_text_acknowledged_at": "2026-10-17T12:00:00Z"
+    }
+  ]
+}

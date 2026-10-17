@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lightloom.dev/schemas/controllable-parameters.schema.json",
+  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "title": "Lightloom controllable parameters (plugin user-control descriptors)",
+  "description": "The array returned by a device plugin's ControllableParameters() export, and the object shape accepted by device.addProperty()/getProperty(). Each entry becomes a module-level global named <property> inside the plugin and an on<property>Changed() hook is invoked before the next Render() when the user changes it. Plugins frequently write numeric and boolean fields as strings (\"min\":\"100\", \"default\":\"false\"); the engine coerces them, so every numeric field here accepts number|string. Corpus facts (SignalRGB 2.5.80, ~4000 descriptors): device plugins only use color, combobox, number, boolean and keycode; values are string[] or mixed number/string arrays; min/max/step are almost always quoted; live is only ever false. Macro scripts (this.Options) use the same descriptor shape, add mousecode and {key,label} values, and additionally use the macro-only types effectname, layoutname, effectpreset, device, playlist and sensor, which are deliberately NOT in this enum (they are validated by the macros subsystem).",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/control"
+  },
+  "$defs": {
+    "numberish": {
+      "description": "A number, or a string that parses as one (plugins commonly quote numbers).",
+      "anyOf": [
+        { "type": "number" },
+        { "type": "string", "pattern": "^\\s*[-+]?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?\\s*$" }
+      ]
+    },
+    "booleanish": {
+      "description": "A boolean, or one of the string/number spellings plugins use for it.",
+      "anyOf": [
+        { "type": "boolean" },
+        { "type": "string", "enum": ["true", "false", "True", "False", "1", "0"] },
+        { "type": "integer", "enum": [0, 1] }
+      ]
+    },
+    "hexColor": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$",
+      "description": "#RRGGBB (optionally #RRGGBBAA) colour literal."
+    },
+    "keyedValue": {
+      "type": "object",
+      "required": ["key", "label"],
+      "properties": {
+        "key": { "anyOf": [{ "type": "string" }, { "type": "number" }], "description": "Stored value." },
+        "label": { "type": "string", "description": "Text shown in the UI." }
+      },
+      "additionalProperties": true
+    },
+    "control": {
+      "type": "object",
+      "required": ["property", "type"],
+      "properties": {
+        "property": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "description": "JS identifier of the global the value is exposed as; also the persistence key."
+        },
+        "label": { "type": "string", "description": "UI label. Defaults to property when absent." },
+        "type": {
+          "type": "string",
+          "enum": ["color", "combobox", "number", "boolean", "hue", "textfield", "keycode", "mousecode", "list"],
+          "description": "Widget/value type. color -> \"#RRGGBB\" string; combobox/list -> one of values (stored by key); number -> number; boolean -> boolean; hue -> number 0..360; textfield -> string (optionally constrained by filter); keycode -> key-name string (\"None\" sentinel); mousecode -> mouse-button name (\"None\" sentinel). list is accepted as an alias of combobox."
+        },
+        "group": { "type": "string", "description": "UI grouping key (e.g. \"lighting\", \"settings\", \"dpi\"). May be empty." },
+        "description": { "type": "string" },
+        "tooltip": { "type": "string" },
+        "min": { "$ref": "#/$defs/numberish", "description": "Lower bound for number/hue (for color: hue range lower bound, conventionally 0)." },
+        "max": { "$ref": "#/$defs/numberish", "description": "Upper bound for number/hue (for color: conventionally 360)." },
+        "step": { "$ref": "#/$defs/numberish", "description": "Slider/spinner increment for number." },
+        "default": {
+          "description": "Initial value. Type depends on type; plugins often quote numbers and booleans.",
+          "anyOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "null" }
+          ]
+        },
+        "values": {
+          "description": "Choices for combobox/list: plain strings, numbers, or {key,label} objects.",
+          "type": "array",
+          "items": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "$ref": "#/$defs/keyedValue" }
+            ]
+          }
+        },
+        "live": {
+          "$ref": "#/$defs/booleanish",
+          "description": "true (default): apply as the user drags/edits; false: apply only on explicit save."
+        },
+        "order": { "$ref": "#/$defs/numberish", "description": "Sort index inside the group (lower first)." },
+        "filter": { "type": "string", "description": "Regular expression (ECMAScript) constraining textfield input." },
+        "width": { "$ref": "#/$defs/numberish", "description": "UI sizing hint (semantics engine-defined)." },
+        "height": { "$ref": "#/$defs/numberish", "description": "UI sizing hint (semantics engine-defined)." }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "enum": ["combobox", "list"] } }, "required": ["type"] },
+          "then": { "properties": { "values": true }, "required": ["values"] }
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "examples": [
+    [
+      { "property": "shutdownColor", "group": "lighting", "label": "Shutdown Color", "min": "0", "max": "360", "type": "color", "default": "#000000" },
+      { "property": "LightingMode", "group": "lighting", "label": "Lighting Mode", "type": "combobox", "values": ["Canvas", "Forced"], "default": "Canvas" },
+      { "property": "forcedColor", "group": "lighting", "label": "Forced Color", "min": "0", "max": "360", "type": "color", "default": "#009bde" },
+      { "property": "dpi1", "group": "dpi", "label": "DPI 1", "step": "100", "type": "number", "min": "100", "max": "16000", "default": "800", "live": false }
+    ]
+  ]
+}

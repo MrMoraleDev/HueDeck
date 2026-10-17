@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+name = "lightloom-plugin-host"
+description = "Lightloom SignalRGB-compatible plugin host: module resolution, export model (call-if-function), loader trait; the rquickjs runtime lands in M0 spike B / M1"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+# TODO(M1): rquickjs = { workspace = true } once the runtime module is written;
+# the crate must keep compiling without it until then.

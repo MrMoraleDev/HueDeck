@@ -27,12 +27,13 @@ RestartSec=2s
 KillSignal=SIGTERM
 TimeoutStopSec=10s
 Environment=RUST_LOG=info
-# Hardening (user scope; devices are reached through hidraw/i2c-dev nodes).
+# Hardening that works in every `systemd --user` instance. Options that need a mount
+# namespace (ProtectSystem=, ProtectHome=, PrivateTmp=, ReadWritePaths=) are left out on
+# purpose: user instances can only apply them where unprivileged user namespaces are
+# allowed, and the service would otherwise fail with "Failed to set up mount namespacing".
+# The daemon confines itself to %h/.config/huedeck, %h/.local/share/huedeck and
+# %h/.cache/huedeck (XDG dirs) and creates them on first start.
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=%h/.config/huedeck %h/.local/share/huedeck %h/.cache/huedeck
 RestrictRealtime=true
 LockPersonality=true
 

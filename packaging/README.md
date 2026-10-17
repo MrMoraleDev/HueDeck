@@ -13,7 +13,7 @@ packaging, M7 Linux packaging) drop files into known places.
 | Directory   | Target               | Planned files                                                                 | Milestone |
 |-------------|----------------------|-------------------------------------------------------------------------------|-----------|
 | `wix/`      | Windows MSI (WiX v4+) | `huedeck.wxs`, `Product.wxs` fragments, `License.rtf`, `huedeck.ico`, `build.ps1` | M4 |
-| `winget/`   | winget manifest       | `manifests/h/HueDeck/HueDeck/<version>/HueDeck.HueDeck.{installer,locale.en-US,}.yaml` | M4 |
+| `winget/`   | winget manifest       | `manifests/h/HueDeck/HueDeck/<version>/HueDeck.HueDeck.yaml`, `HueDeck.HueDeck.installer.yaml`, `HueDeck.HueDeck.locale.en-US.yaml` | M4 |
 | `systemd/`  | Linux user service    | `huedeckd.service` (present)                                                  | M7 |
 | `udev/`     | Linux device access   | `70-huedeck.rules.template` (present); generated `70-huedeck.rules` via `tools/gen-udev` | M7 |
 | `appimage/` | AppImage              | `AppRun`, `huedeck.desktop`, `huedeck.svg`, `build-appimage.sh` (linuxdeploy)   | M7 |

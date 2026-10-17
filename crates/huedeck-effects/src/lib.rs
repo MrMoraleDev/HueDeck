@@ -24,7 +24,7 @@ pub mod model;
 pub mod parse;
 
 pub use model::{
-    ControlMeta, ControlType, ControlValue, DisplaySize, EffectMeta, HslRanges, MeterMeta, MeterType, Range, Region,
-    ResolutionOverride, Uses,
+    ControlMeta, ControlType, ControlValue, DisplaySize, EffectMeta, HslRanges, MeterMeta, MeterType, Range,
+    Region, ResolutionOverride, Uses,
 };
 pub use parse::parse_effect_meta;

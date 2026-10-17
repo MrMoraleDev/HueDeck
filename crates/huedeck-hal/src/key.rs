@@ -30,7 +30,11 @@ pub struct DeviceKey {
 impl DeviceKey {
     /// Build a key.
     pub fn new(vid: u16, pid: u16, serial: impl Into<String>) -> Self {
-        Self { vid, pid, serial: serial.into() }
+        Self {
+            vid,
+            pid,
+            serial: serial.into(),
+        }
     }
 
     /// Parse `vid:pid:serial`. The serial may itself contain colons; only the
@@ -123,11 +127,19 @@ mod tests {
     fn endpoint_uid_grammar() {
         let d = DeviceKey::new(0x1E71, 0x2007, "AB");
         assert_eq!(
-            EndpointUid::Subdevice { device: d.clone(), id: "Fan1".into() }.to_string(),
+            EndpointUid::Subdevice {
+                device: d.clone(),
+                id: "Fan1".into()
+            }
+            .to_string(),
             "1e71:2007:AB:Fan1"
         );
         assert_eq!(
-            EndpointUid::Channel { device: d, name: "JRAINBOW1".into() }.to_string(),
+            EndpointUid::Channel {
+                device: d,
+                name: "JRAINBOW1".into()
+            }
+            .to_string(),
             "1e71:2007:AB:JRAINBOW1"
         );
         assert_eq!(EndpointUid::Smbus { address: 0x39 }.to_string(), "I2CBUS:57");

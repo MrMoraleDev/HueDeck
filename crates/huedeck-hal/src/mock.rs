@@ -72,7 +72,10 @@ impl Default for TransactionRecorder {
 impl TransactionRecorder {
     /// New, empty recorder.
     pub fn new() -> Self {
-        Self { inner: Arc::new(Mutex::new(Vec::new())), epoch: Instant::now() }
+        Self {
+            inner: Arc::new(Mutex::new(Vec::new())),
+            epoch: Instant::now(),
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<Transaction>> {
@@ -82,7 +85,12 @@ impl TransactionRecorder {
     /// Append one transaction.
     pub fn record(&self, kind: TransactionKind, target: impl Into<String>, bytes: impl Into<Vec<u8>>) {
         let ts = self.epoch.elapsed();
-        self.lock().push(Transaction { kind, target: target.into(), bytes: bytes.into(), ts });
+        self.lock().push(Transaction {
+            kind,
+            target: target.into(),
+            bytes: bytes.into(),
+            ts,
+        });
     }
 
     /// Copy of everything recorded so far.
@@ -107,7 +115,11 @@ impl TransactionRecorder {
 
     /// Payloads of every transaction of `kind`, in order.
     pub fn payloads(&self, kind: TransactionKind) -> Vec<Vec<u8>> {
-        self.lock().iter().filter(|t| t.kind == kind).map(|t| t.bytes.clone()).collect()
+        self.lock()
+            .iter()
+            .filter(|t| t.kind == kind)
+            .map(|t| t.bytes.clone())
+            .collect()
     }
 
     /// Payloads of every HID output-report write, in order.
@@ -155,7 +167,10 @@ impl MockHid {
 
     /// Empty backend that logs into an existing recorder.
     pub fn with_recorder(recorder: TransactionRecorder) -> Self {
-        Self { endpoints: Vec::new(), recorder }
+        Self {
+            endpoints: Vec::new(),
+            recorder,
+        }
     }
 
     /// Build an endpoint description with a synthetic `mock://` path.
@@ -192,7 +207,10 @@ impl MockHid {
 
     /// Add an endpoint in place.
     pub fn push_endpoint(&mut self, info: HidEndpointInfo) {
-        self.endpoints.push(Arc::new(Mutex::new(MockEndpointState { info, ..Default::default() })));
+        self.endpoints.push(Arc::new(Mutex::new(MockEndpointState {
+            info,
+            ..Default::default()
+        })));
     }
 
     /// The shared recorder.
@@ -207,14 +225,18 @@ impl MockHid {
 
     /// Queue an input report for the next `read_timeout` on `path`.
     pub fn script_read(&self, path: &str, report: impl Into<Vec<u8>>) -> HalResult<()> {
-        let ep = self.endpoint(path).ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let ep = self
+            .endpoint(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
         lock(&ep).scripted_reads.push_back(report.into());
         Ok(())
     }
 
     /// Queue a report for the next `get_input_report` on `path`.
     pub fn script_input_report(&self, path: &str, report: impl Into<Vec<u8>>) -> HalResult<()> {
-        let ep = self.endpoint(path).ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let ep = self
+            .endpoint(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
         lock(&ep).scripted_input_reports.push_back(report.into());
         Ok(())
     }
@@ -222,8 +244,12 @@ impl MockHid {
     /// Preload the feature report for id `report[0]` on `path`.
     pub fn set_feature_report(&self, path: &str, report: impl Into<Vec<u8>>) -> HalResult<()> {
         let report = report.into();
-        let id = *report.first().ok_or_else(|| HalError::InvalidArgument("empty feature report".into()))?;
-        let ep = self.endpoint(path).ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let id = *report
+            .first()
+            .ok_or_else(|| HalError::InvalidArgument("empty feature report".into()))?;
+        let ep = self
+            .endpoint(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
         lock(&ep).feature_reports.insert(id, report);
         Ok(())
     }
@@ -239,14 +265,20 @@ impl HidBackend for MockHid {
     }
 
     fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>> {
-        let state = self.endpoint(path).ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let state = self
+            .endpoint(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
         let info = {
             let mut s = lock(&state);
             s.open_count += 1;
             s.info.clone()
         };
         self.recorder.record(TransactionKind::Open, path, Vec::new());
-        Ok(Box::new(MockHidHandle { state, recorder: self.recorder.clone(), info }))
+        Ok(Box::new(MockHidHandle {
+            state,
+            recorder: self.recorder.clone(),
+            info,
+        }))
     }
 }
 
@@ -275,7 +307,8 @@ impl HidHandle for MockHidHandle {
         if lock(&self.state).fail_writes {
             return Err(HalError::Backend("mock: write failure scripted".into()));
         }
-        self.recorder.record(TransactionKind::Write, &*self.info.path, data);
+        self.recorder
+            .record(TransactionKind::Write, &*self.info.path, data);
         Ok(data.len())
     }
 
@@ -284,7 +317,8 @@ impl HidHandle for MockHidHandle {
         match next {
             Some(report) => {
                 let n = Self::copy_out(&report, buf);
-                self.recorder.record(TransactionKind::Read, &*self.info.path, &buf[..n]);
+                self.recorder
+                    .record(TransactionKind::Read, &*self.info.path, &buf[..n]);
                 Ok(n)
             }
             None => Ok(0),
@@ -292,18 +326,24 @@ impl HidHandle for MockHidHandle {
     }
 
     fn send_feature_report(&mut self, data: &[u8]) -> HalResult<usize> {
-        let id = *data.first().ok_or_else(|| HalError::InvalidArgument("empty feature report".into()))?;
+        let id = *data
+            .first()
+            .ok_or_else(|| HalError::InvalidArgument("empty feature report".into()))?;
         lock(&self.state).feature_reports.insert(id, data.to_vec());
-        self.recorder.record(TransactionKind::SendFeature, &*self.info.path, data);
+        self.recorder
+            .record(TransactionKind::SendFeature, &*self.info.path, data);
         Ok(data.len())
     }
 
     fn get_feature_report(&mut self, buf: &mut [u8]) -> HalResult<usize> {
-        let id = *buf.first().ok_or_else(|| HalError::InvalidArgument("empty buffer".into()))?;
+        let id = *buf
+            .first()
+            .ok_or_else(|| HalError::InvalidArgument("empty buffer".into()))?;
         let stored = lock(&self.state).feature_reports.get(&id).cloned();
         let report = stored.ok_or_else(|| HalError::Backend(format!("mock: no feature report {id:#04x}")))?;
         let n = Self::copy_out(&report, buf);
-        self.recorder.record(TransactionKind::GetFeature, &*self.info.path, &buf[..n]);
+        self.recorder
+            .record(TransactionKind::GetFeature, &*self.info.path, &buf[..n]);
         Ok(n)
     }
 
@@ -311,14 +351,16 @@ impl HidHandle for MockHidHandle {
         let next = lock(&self.state).scripted_input_reports.pop_front();
         let report = next.ok_or_else(|| HalError::Backend("mock: no input report scripted".into()))?;
         let n = Self::copy_out(&report, buf);
-        self.recorder.record(TransactionKind::GetInputReport, &*self.info.path, &buf[..n]);
+        self.recorder
+            .record(TransactionKind::GetInputReport, &*self.info.path, &buf[..n]);
         Ok(n)
     }
 }
 
 impl Drop for MockHidHandle {
     fn drop(&mut self) {
-        self.recorder.record(TransactionKind::Close, &*self.info.path, Vec::new());
+        self.recorder
+            .record(TransactionKind::Close, &*self.info.path, Vec::new());
     }
 }
 
@@ -410,7 +452,11 @@ impl SmbusBus for MockSmbus {
 
     fn write_block(&mut self, addr: u8, reg: u8, data: &[u8]) -> HalResult<()> {
         if data.len() > self.descriptor.max_block_len {
-            return Err(HalError::InvalidArgument(format!("block of {} > max {}", data.len(), self.descriptor.max_block_len)));
+            return Err(HalError::InvalidArgument(format!(
+                "block of {} > max {}",
+                data.len(),
+                self.descriptor.max_block_len
+            )));
         }
         let dev = self.device(addr)?;
         for (i, b) in data.iter().enumerate() {
@@ -479,7 +525,11 @@ mod tests {
             0xFF00,
             0x01,
             0,
-            ReportLengths { input: 65, output: 65, feature: 185 },
+            ReportLengths {
+                input: 65,
+                output: 65,
+                feature: 185,
+            },
         ))
     }
 
@@ -558,6 +608,9 @@ mod tests {
         assert_eq!(bus.read_block(0x39, 0x10, &mut back).unwrap(), 3);
         assert_eq!(back, [1, 2, 3]);
         assert!(bus.read_byte_no_reg(0x39).is_err());
-        assert_eq!(rec.payloads(TransactionKind::SmbusWriteQuick), vec![vec![0x39], vec![0x3A]]);
+        assert_eq!(
+            rec.payloads(TransactionKind::SmbusWriteQuick),
+            vec![vec![0x39], vec![0x3A]]
+        );
     }
 }

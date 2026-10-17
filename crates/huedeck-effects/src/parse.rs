@@ -12,7 +12,9 @@ fn attr<'a>(el: &ElementRef<'a>, name: &str) -> Option<&'a str> {
 }
 
 fn attr_f64(el: &ElementRef<'_>, name: &str) -> Option<f64> {
-    attr(el, name).and_then(|s| s.parse::<f64>().ok()).filter(|v| v.is_finite())
+    attr(el, name)
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
 }
 
 fn attr_range(el: &ElementRef<'_>, name: &str, warnings: &mut Vec<String>, meter: &str) -> Option<Range> {
@@ -20,7 +22,9 @@ fn attr_range(el: &ElementRef<'_>, name: &str, warnings: &mut Vec<String>, meter
     match raw.parse::<Range>() {
         Ok(r) => Some(r),
         Err(e) => {
-            warnings.push(format!("meter \"{meter}\": attribute {name}=\"{raw}\" ignored: {e}"));
+            warnings.push(format!(
+                "meter \"{meter}\": attribute {name}=\"{raw}\" ignored: {e}"
+            ));
             None
         }
     }
@@ -36,11 +40,20 @@ fn parse_control(el: &ElementRef<'_>, property: &str, warnings: &mut Vec<String>
         }
     };
     let values = attr(el, "values")
-        .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect())
+        .map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     Some(ControlMeta {
         property: property.to_string(),
-        label: attr(el, "label").filter(|s| !s.is_empty()).unwrap_or(property).to_string(),
+        label: attr(el, "label")
+            .filter(|s| !s.is_empty())
+            .unwrap_or(property)
+            .to_string(),
         control_type,
         default: attr(el, "default").map(str::to_string),
         min: attr_f64(el, "min"),
@@ -58,8 +71,17 @@ fn unit(v: Option<f64>) -> Option<f64> {
 
 /// `x`/`y`/`width` are required and must lie in `0..=1`; `height` is optional.
 fn parse_region(el: &ElementRef<'_>) -> Option<Region> {
-    let (x, y, width) = (unit(attr_f64(el, "x"))?, unit(attr_f64(el, "y"))?, unit(attr_f64(el, "width"))?);
-    Some(Region { x, y, width, height: unit(attr_f64(el, "height")) })
+    let (x, y, width) = (
+        unit(attr_f64(el, "x"))?,
+        unit(attr_f64(el, "y"))?,
+        unit(attr_f64(el, "width"))?,
+    );
+    Some(Region {
+        x,
+        y,
+        width,
+        height: unit(attr_f64(el, "height")),
+    })
 }
 
 fn hsl(el: &ElementRef<'_>, keys: [&str; 3], warnings: &mut Vec<String>, meter: &str) -> Option<HslRanges> {
@@ -73,7 +95,9 @@ fn hsl(el: &ElementRef<'_>, keys: [&str; 3], warnings: &mut Vec<String>, meter: 
 
 fn parse_meter(el: &ElementRef<'_>, name: &str, warnings: &mut Vec<String>) -> Option<MeterMeta> {
     let Some(type_raw) = attr(el, "type") else {
-        warnings.push(format!("meter \"{name}\": Type not specified; Meter will be ignored"));
+        warnings.push(format!(
+            "meter \"{name}\": Type not specified; Meter will be ignored"
+        ));
         return None;
     };
     let meter_type = match type_raw.parse::<MeterType>() {
@@ -84,7 +108,9 @@ fn parse_meter(el: &ElementRef<'_>, name: &str, warnings: &mut Vec<String>) -> O
         }
     };
     let Some(region) = parse_region(el) else {
-        warnings.push(format!("meter \"{name}\": Invalid X/Y/Width (allowed range for each is [0-1]); Meter will be ignored"));
+        warnings.push(format!(
+            "meter \"{name}\": Invalid X/Y/Width (allowed range for each is [0-1]); Meter will be ignored"
+        ));
         return None;
     };
     Some(MeterMeta {
@@ -104,17 +130,26 @@ fn parse_meter(el: &ElementRef<'_>, name: &str, warnings: &mut Vec<String>) -> O
 
 fn parse_display_size(s: &str) -> Option<DisplaySize> {
     let (w, h) = s.split_once(['x', 'X'])?;
-    Some(DisplaySize { width: w.trim().parse().ok()?, height: h.trim().parse().ok()? })
+    Some(DisplaySize {
+        width: w.trim().parse().ok()?,
+        height: h.trim().parse().ok()?,
+    })
 }
 
 /// A `<resolution>` needs `size="WxH"` or `aspect="W:H"` plus a valid region.
 fn parse_resolution(el: &ElementRef<'_>) -> Option<ResolutionOverride> {
     let size = attr(el, "size").and_then(parse_display_size);
-    let aspect = attr(el, "aspect").filter(|a| a.split_once(':').is_some()).map(str::to_string);
+    let aspect = attr(el, "aspect")
+        .filter(|a| a.split_once(':').is_some())
+        .map(str::to_string);
     if size.is_none() && aspect.is_none() {
         return None;
     }
-    Some(ResolutionOverride { size, aspect, region: parse_region(el)? })
+    Some(ResolutionOverride {
+        size,
+        aspect,
+        region: parse_region(el)?,
+    })
 }
 
 fn detect_uses(html: &str, has_meters: bool) -> Uses {
@@ -125,7 +160,9 @@ fn detect_uses(html: &str, has_meters: bool) -> Uses {
         meters: has_meters || html.contains("engine.vision"),
         engine: html.contains("engine."),
         webgl: lower.contains("webgl"),
-        input: html.contains("onCanvasTapped") || html.contains("onKeyPressed") || html.contains("onCanvasApiEvent"),
+        input: html.contains("onCanvasTapped")
+            || html.contains("onKeyPressed")
+            || html.contains("onCanvasApiEvent"),
     }
 }
 
@@ -155,7 +192,8 @@ pub fn parse_effect_meta(html: &str) -> EffectMeta {
                 if let Some(m) = meta.meters.last_mut() {
                     m.resolutions.push(r);
                 } else {
-                    meta.warnings.push("<resolution> without a preceding meter ignored".into());
+                    meta.warnings
+                        .push("<resolution> without a preceding meter ignored".into());
                 }
             } else {
                 meta.warnings.push("Detected malformed <resolution> tag".into());
@@ -261,7 +299,10 @@ function onmodeChanged(){}
         assert!(!m.background);
         assert_eq!(m.properties.len(), 1);
         let c = &m.properties[0];
-        assert_eq!((c.property.as_str(), c.label.as_str(), c.control_type), ("color", "Colour", ControlType::Color));
+        assert_eq!(
+            (c.property.as_str(), c.label.as_str(), c.control_type),
+            ("color", "Colour", ControlType::Color)
+        );
         assert_eq!((c.min, c.max), (Some(0.0), Some(360.0)));
         assert_eq!(c.default_value(), ControlValue::Text("#009bde".into()));
         assert_eq!(c.js_initializer(None), "var color = \"#009bde\";");
@@ -278,12 +319,18 @@ function onmodeChanged(){}
         assert_eq!(m.title, "Ping Pong");
         let props: Vec<&str> = m.properties.iter().map(|c| c.property.as_str()).collect();
         assert_eq!(props, ["color1", "color2", "speed", "bounce", "width"]);
-        assert_eq!(m.control("color1").unwrap().tooltip.as_deref(), Some("Band colour"));
+        assert_eq!(
+            m.control("color1").unwrap().tooltip.as_deref(),
+            Some("Band colour")
+        );
         assert_eq!(m.control("color2").unwrap().tooltip, None);
         let speed = m.control("speed").unwrap();
         assert_eq!(speed.control_type, ControlType::Number);
         assert_eq!(speed.default_value(), ControlValue::Number(5.0));
-        assert_eq!(m.control("bounce").unwrap().default_value(), ControlValue::Bool(true));
+        assert_eq!(
+            m.control("bounce").unwrap().default_value(),
+            ControlValue::Bool(true)
+        );
         assert_eq!(m.control("width").unwrap().step, Some(10.0));
         assert_eq!(m.control("width").unwrap().group.as_deref(), Some("Shape"));
         assert_eq!(
@@ -300,7 +347,10 @@ function onmodeChanged(){}
         assert_eq!(mode.control_type, ControlType::Combobox);
         assert_eq!(mode.values, ["Standard", "Cinema", "Mono", "Vivid"]);
         assert_eq!(mode.default_value(), ControlValue::Text("Standard".into()));
-        assert_eq!(m.control("saturate").unwrap().default_value(), ControlValue::Bool(false));
+        assert_eq!(
+            m.control("saturate").unwrap().default_value(),
+            ControlValue::Bool(false)
+        );
         assert!(m.uses.video && m.uses.engine);
         assert!(!m.uses.audio && !m.uses.webgl);
     }
@@ -312,7 +362,15 @@ function onmodeChanged(){}
         let health = &m.meters[0];
         assert_eq!(health.name, "health");
         assert_eq!(health.meter_type, MeterType::Linear);
-        assert_eq!(health.region, Region { x: 0.1, y: 0.9, width: 0.3, height: Some(0.02) });
+        assert_eq!(
+            health.region,
+            Region {
+                x: 0.1,
+                y: 0.9,
+                width: 0.3,
+                height: Some(0.02)
+            }
+        );
         let win = health.color_match.unwrap();
         assert_eq!(win.h, Some(Range { lo: 0.0, hi: 20.0 }));
         assert_eq!(win.s, Some(Range { lo: 60.0, hi: 100.0 }));
@@ -320,8 +378,18 @@ function onmodeChanged(){}
         let hdr = health.hdr_match.unwrap();
         assert_eq!(hdr.h, Some(Range { lo: 350.0, hi: 360.0 }));
         assert_eq!((hdr.s, hdr.l), (None, None));
-        assert_eq!(health.resolutions.len(), 2, "a <resolution> without size or aspect is dropped");
-        assert_eq!(health.resolutions[0].size, Some(DisplaySize { width: 1920, height: 1080 }));
+        assert_eq!(
+            health.resolutions.len(),
+            2,
+            "a <resolution> without size or aspect is dropped"
+        );
+        assert_eq!(
+            health.resolutions[0].size,
+            Some(DisplaySize {
+                width: 1920,
+                height: 1080
+            })
+        );
         assert_eq!(health.resolutions[0].region.y, 0.88);
         assert_eq!(health.resolutions[1].aspect.as_deref(), Some("21:9"));
         assert_eq!(health.resolutions[1].region.height, None);
@@ -340,7 +408,10 @@ function onmodeChanged(){}
         assert_eq!(choice.values, ["a", "b", "c"]);
         assert_eq!(choice.default_value(), ControlValue::Text("b".into()));
 
-        assert!(m.warnings.iter().any(|w| w.contains("\"broken\"") && w.contains("Type not specified")));
+        assert!(m
+            .warnings
+            .iter()
+            .any(|w| w.contains("\"broken\"") && w.contains("Type not specified")));
         assert!(m.warnings.iter().any(|w| w.contains("\"offscreen\"")));
         assert!(m.warnings.iter().any(|w| w.contains("\"weird\"")));
         assert!(m.warnings.iter().any(|w| w.contains("malformed <resolution>")));
@@ -352,7 +423,10 @@ function onmodeChanged(){}
         let json = serde_json::to_value(&m).unwrap();
         assert_eq!(json["id"], "HUD Reader.html");
         assert_eq!(json["title"], "HUD Reader");
-        assert!(json.get("warnings").is_none(), "warnings are not part of the schema");
+        assert!(
+            json.get("warnings").is_none(),
+            "warnings are not part of the schema"
+        );
         assert!(json.get("controls").is_none());
         let health = &json["meters"][0];
         assert_eq!(health["type"], "linear");
@@ -362,7 +436,9 @@ function onmodeChanged(){}
         assert_eq!(health["resolutions"][0]["size"]["width"], 1920);
         assert_eq!(health["resolutions"][1]["aspect"], "21:9");
         assert!(health.get("hdr_match").is_none() && health.get("x").is_none());
-        let choice = &json["properties"][1];
+        // `weird` (unknown type="dial") is dropped with a warning, so the combobox is first.
+        assert_eq!(json["properties"].as_array().map(|a| a.len()), Some(1));
+        let choice = &json["properties"][0];
         assert_eq!(choice["type"], "combobox");
         assert_eq!(choice["values"][1], "b");
         assert!(choice.get("control_type").is_none() && choice.get("min").is_none());
@@ -383,9 +459,21 @@ function onmodeChanged(){}
         let back: EffectMeta = serde_json::from_str(example).unwrap();
         assert_eq!(back.id, "Solid Color.html");
         // `min`/`max` are numberish strings in the example.
-        assert_eq!((back.properties[0].min, back.properties[0].max), (Some(0.0), Some(360.0)));
-        assert_eq!(back.meters[0].color_match.unwrap().h, Some(Range { lo: 90.0, hi: 140.0 }));
-        assert_eq!(back.meters[0].resolutions[0].size, Some(DisplaySize { width: 1920, height: 1080 }));
+        assert_eq!(
+            (back.properties[0].min, back.properties[0].max),
+            (Some(0.0), Some(360.0))
+        );
+        assert_eq!(
+            back.meters[0].color_match.unwrap().h,
+            Some(Range { lo: 90.0, hi: 140.0 })
+        );
+        assert_eq!(
+            back.meters[0].resolutions[0].size,
+            Some(DisplaySize {
+                width: 1920,
+                height: 1080
+            })
+        );
         assert!(back.uses.meters);
     }
 

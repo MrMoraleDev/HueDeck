@@ -17,7 +17,11 @@ pub struct Frame {
 impl Frame {
     /// All-black frame.
     pub fn new(width: u32, height: u32) -> Self {
-        Self { width, height, pixels: vec![0u8; width as usize * height as usize * BYTES_PER_PIXEL] }
+        Self {
+            width,
+            height,
+            pixels: vec![0u8; width as usize * height as usize * BYTES_PER_PIXEL],
+        }
     }
 
     /// Frame filled with one colour (alpha 255).
@@ -31,7 +35,11 @@ impl Frame {
 
     /// Wrap an existing BGRA buffer. Returns `None` when the length does not match.
     pub fn from_bgra(width: u32, height: u32, pixels: Vec<u8>) -> Option<Self> {
-        (pixels.len() == width as usize * height as usize * BYTES_PER_PIXEL).then_some(Self { width, height, pixels })
+        (pixels.len() == width as usize * height as usize * BYTES_PER_PIXEL).then_some(Self {
+            width,
+            height,
+            pixels,
+        })
     }
 
     /// Width in pixels.
@@ -64,7 +72,11 @@ impl Frame {
     pub fn pixel_at_offset(&self, offset: usize) -> Rgb {
         let at = offset * BYTES_PER_PIXEL;
         match self.pixels.get(at..at + 3) {
-            Some(bgr) => Rgb { r: bgr[2], g: bgr[1], b: bgr[0] },
+            Some(bgr) => Rgb {
+                r: bgr[2],
+                g: bgr[1],
+                b: bgr[0],
+            },
             None => Rgb::BLACK,
         }
     }

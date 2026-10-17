@@ -51,9 +51,17 @@ impl Pattern {
                 ];
                 let mut f = Frame::new(width, height);
                 let bar_w = (width / BARS.len() as u32).max(1);
-                let marker = if width == 0 { 0 } else { (tick % width as u64) as u32 };
+                let marker = if width == 0 {
+                    0
+                } else {
+                    (tick % width as u64) as u32
+                };
                 for x in 0..width {
-                    let c = if x == marker { Rgb::WHITE } else { BARS[((x / bar_w) as usize).min(BARS.len() - 1)] };
+                    let c = if x == marker {
+                        Rgb::WHITE
+                    } else {
+                        BARS[((x / bar_w) as usize).min(BARS.len() - 1)]
+                    };
                     for y in 0..height {
                         f.set_pixel(x, y, c);
                     }
@@ -78,12 +86,24 @@ pub struct NullRenderer {
 impl NullRenderer {
     /// Renderer for a 320x200 canvas.
     pub fn new(pattern: Pattern, fps: f64) -> Self {
-        Self::with_size(pattern, fps, huedeck_engine::CANVAS_WIDTH, huedeck_engine::CANVAS_HEIGHT)
+        Self::with_size(
+            pattern,
+            fps,
+            huedeck_engine::CANVAS_WIDTH,
+            huedeck_engine::CANVAS_HEIGHT,
+        )
     }
 
     /// Renderer for an arbitrary canvas size (LCD faces, tests).
     pub fn with_size(pattern: Pattern, fps: f64, width: u32, height: u32) -> Self {
-        Self { pattern, fps, width, height, stop: Arc::new(AtomicBool::new(false)), thread: None }
+        Self {
+            pattern,
+            fps,
+            width,
+            height,
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        }
     }
 
     /// The pattern being drawn.
@@ -110,16 +130,18 @@ impl RendererClient for NullRenderer {
         self.stop.store(false, Ordering::Release);
         let stop = Arc::clone(&self.stop);
         let (pattern, fps, width, height) = (self.pattern, self.fps, self.width, self.height);
-        let handle = thread::Builder::new().name("huedeck-null-renderer".into()).spawn(move || {
-            let mut clock = FrameClock::new(fps);
-            while !stop.load(Ordering::Acquire) {
-                let tick = clock.wait_tick();
-                if stop.load(Ordering::Acquire) {
-                    break;
+        let handle = thread::Builder::new()
+            .name("huedeck-null-renderer".into())
+            .spawn(move || {
+                let mut clock = FrameClock::new(fps);
+                while !stop.load(Ordering::Acquire) {
+                    let tick = clock.wait_tick();
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    store.publish(pattern.render(width, height, tick));
                 }
-                store.publish(pattern.render(width, height, tick));
-            }
-        })?;
+            })?;
         self.thread = Some(handle);
         Ok(())
     }
@@ -156,7 +178,11 @@ mod tests {
         let r1 = Pattern::Rainbow.render(320, 1, 1);
         assert_eq!(r0.pixel(0, 0), Rgb::new(255, 0, 0));
         assert_ne!(r0, r1, "rainbow must scroll with the tick");
-        assert_eq!(Pattern::Rainbow.render(320, 1, 180), r0, "scroll wraps every 180 ticks");
+        assert_eq!(
+            Pattern::Rainbow.render(320, 1, 180),
+            r0,
+            "scroll wraps every 180 ticks"
+        );
 
         let t = Pattern::TestPattern.render(16, 1, 5);
         assert_eq!(t.pixel(5, 0), Rgb::WHITE);
@@ -171,10 +197,17 @@ mod tests {
         assert!(!r.is_running());
         r.start(Arc::clone(&store)).unwrap();
         assert!(r.is_running());
-        assert!(matches!(r.start(Arc::clone(&store)), Err(RenderError::AlreadyRunning)));
+        assert!(matches!(
+            r.start(Arc::clone(&store)),
+            Err(RenderError::AlreadyRunning)
+        ));
 
-        let seq = store.wait_for_newer(0, Duration::from_secs(5)).expect("first frame");
-        let seq = store.wait_for_newer(seq, Duration::from_secs(5)).expect("second frame");
+        let seq = store
+            .wait_for_newer(0, Duration::from_secs(5))
+            .expect("first frame");
+        let seq = store
+            .wait_for_newer(seq, Duration::from_secs(5))
+            .expect("second frame");
         assert!(seq >= 2);
         r.stop();
         assert!(!r.is_running());

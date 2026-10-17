@@ -190,7 +190,11 @@ pub fn compute_offsets(geometry: &DeviceGeometry, placement: &Placement, cfg: &S
             offsets.push(cy as i32 * cfg.canvas_width as i32 + cx as i32);
         }
     }
-    OffsetTable { offsets, canvas_width: cfg.canvas_width, canvas_height: cfg.canvas_height }
+    OffsetTable {
+        offsets,
+        canvas_width: cfg.canvas_width,
+        canvas_height: cfg.canvas_height,
+    }
 }
 
 #[cfg(test)]
@@ -199,7 +203,11 @@ mod tests {
     use crate::layout::Point;
 
     fn placement(x: f32, y: f32, scale: f32) -> Placement {
-        Placement { position: Point { x, y }, scale: Some(Scale::uniform(scale)), ..Default::default() }
+        Placement {
+            position: Point { x, y },
+            scale: Some(Scale::uniform(scale)),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -216,7 +224,10 @@ mod tests {
 
     #[test]
     fn scaled_device_samples_cell_centres() {
-        let geom = DeviceGeometry { size: [3, 3], led_positions: vec![[0, 0], [2, 2], [1, 0]] };
+        let geom = DeviceGeometry {
+            size: [3, 3],
+            led_positions: vec![[0, 0], [2, 2], [1, 0]],
+        };
         let table = compute_offsets(&geom, &placement(10.0, 100.0, 8.0), &SamplerConfig::default());
         // LED (0,0) centre = (10 + 4, 100 + 4)
         assert_eq!(table.pixel_of(0), Some((14, 104)));
@@ -228,32 +239,63 @@ mod tests {
 
     #[test]
     fn absent_scale_uses_the_plugin_default() {
-        let geom = DeviceGeometry { size: [2, 2], led_positions: vec![[1, 1]] };
-        let p = Placement { position: Point { x: 0.0, y: 0.0 }, scale: None, ..Default::default() };
-        let cfg = SamplerConfig { default_scale: 8.0, ..Default::default() };
+        let geom = DeviceGeometry {
+            size: [2, 2],
+            led_positions: vec![[1, 1]],
+        };
+        let p = Placement {
+            position: Point { x: 0.0, y: 0.0 },
+            scale: None,
+            ..Default::default()
+        };
+        let cfg = SamplerConfig {
+            default_scale: 8.0,
+            ..Default::default()
+        };
         assert_eq!(compute_offsets(&geom, &p, &cfg).pixel_of(0), Some((12, 12)));
-        assert_eq!(compute_offsets(&geom, &p, &SamplerConfig::default()).pixel_of(0), Some((1, 1)));
+        assert_eq!(
+            compute_offsets(&geom, &p, &SamplerConfig::default()).pixel_of(0),
+            Some((1, 1))
+        );
     }
 
     #[test]
     fn top_left_sample_point_option() {
-        let geom = DeviceGeometry { size: [2, 2], led_positions: vec![[1, 1]] };
-        let cfg = SamplerConfig { sample_point: SamplePoint::TopLeft, ..Default::default() };
+        let geom = DeviceGeometry {
+            size: [2, 2],
+            led_positions: vec![[1, 1]],
+        };
+        let cfg = SamplerConfig {
+            sample_point: SamplePoint::TopLeft,
+            ..Default::default()
+        };
         let table = compute_offsets(&geom, &placement(0.0, 0.0, 10.0), &cfg);
         assert_eq!(table.pixel_of(0), Some((10, 10)));
     }
 
     #[test]
     fn flips_mirror_inside_the_footprint() {
-        let geom = DeviceGeometry { size: [2, 1], led_positions: vec![[0, 0], [1, 0]] };
-        let p = Placement { flip_x: true, ..placement(0.0, 0.0, 10.0) };
+        let geom = DeviceGeometry {
+            size: [2, 1],
+            led_positions: vec![[0, 0], [1, 0]],
+        };
+        let p = Placement {
+            flip_x: true,
+            ..placement(0.0, 0.0, 10.0)
+        };
         let table = compute_offsets(&geom, &p, &SamplerConfig::default());
-        // footprint 20 px wide: LED 0 centre 5 → 15, LED 1 centre 15 → 5
-        assert_eq!(table.pixel_of(0), Some((15, 0)));
-        assert_eq!(table.pixel_of(1), Some((5, 0)));
+        // footprint 20x10 px, cell-centre sampling: LED 0 centre (5,5) → (15,5), LED 1 (15,5) → (5,5)
+        assert_eq!(table.pixel_of(0), Some((15, 5)));
+        assert_eq!(table.pixel_of(1), Some((5, 5)));
 
-        let geom = DeviceGeometry { size: [1, 2], led_positions: vec![[0, 0], [0, 1]] };
-        let p = Placement { flip_y: true, ..placement(0.0, 0.0, 10.0) };
+        let geom = DeviceGeometry {
+            size: [1, 2],
+            led_positions: vec![[0, 0], [0, 1]],
+        };
+        let p = Placement {
+            flip_y: true,
+            ..placement(0.0, 0.0, 10.0)
+        };
         let table = compute_offsets(&geom, &p, &SamplerConfig::default());
         assert_eq!(table.pixel_of(0), Some((5, 15)));
         assert_eq!(table.pixel_of(1), Some((5, 5)));
@@ -262,14 +304,23 @@ mod tests {
     #[test]
     fn default_pivot_is_the_top_left_corner() {
         // Schema: rotate about the endpoint's top-left corner, then translate.
-        let geom = DeviceGeometry { size: [2, 1], led_positions: vec![[0, 0], [1, 0]] };
-        let p = Placement { rotation: 90.0, ..placement(100.0, 100.0, 10.0) };
+        let geom = DeviceGeometry {
+            size: [2, 1],
+            led_positions: vec![[0, 0], [1, 0]],
+        };
+        let p = Placement {
+            rotation: 90.0,
+            ..placement(100.0, 100.0, 10.0)
+        };
         let table = compute_offsets(&geom, &p, &SamplerConfig::default());
         // centre (5,5) → (-5, 5) → (95, 105); centre (15,5) → (-5, 15) → (95, 115)
         assert_eq!(table.pixel_of(0), Some((95, 105)));
         assert_eq!(table.pixel_of(1), Some((95, 115)));
 
-        let p = Placement { rotation: 180.0, ..placement(100.0, 100.0, 10.0) };
+        let p = Placement {
+            rotation: 180.0,
+            ..placement(100.0, 100.0, 10.0)
+        };
         let table = compute_offsets(&geom, &p, &SamplerConfig::default());
         // (5,5) → (-5,-5) → (95, 95)
         assert_eq!(table.pixel_of(0), Some((95, 95)));
@@ -277,9 +328,18 @@ mod tests {
 
     #[test]
     fn rotation_about_centre_is_exact_for_right_angles() {
-        let geom = DeviceGeometry { size: [2, 2], led_positions: vec![[0, 0], [1, 0], [1, 1], [0, 1]] };
-        let cfg = SamplerConfig { pivot: RotationPivot::Center, ..Default::default() };
-        let p = Placement { rotation: 90.0, ..placement(100.0, 100.0, 10.0) };
+        let geom = DeviceGeometry {
+            size: [2, 2],
+            led_positions: vec![[0, 0], [1, 0], [1, 1], [0, 1]],
+        };
+        let cfg = SamplerConfig {
+            pivot: RotationPivot::Center,
+            ..Default::default()
+        };
+        let p = Placement {
+            rotation: 90.0,
+            ..placement(100.0, 100.0, 10.0)
+        };
         let table = compute_offsets(&geom, &p, &cfg);
         // 90° clockwise about (110,110): (0,0)→where (1,0) was, (1,0)→(1,1), (1,1)→(0,1), (0,1)→(0,0)
         assert_eq!(table.pixel_of(0), Some((115, 105)));
@@ -287,20 +347,29 @@ mod tests {
         assert_eq!(table.pixel_of(2), Some((105, 115)));
         assert_eq!(table.pixel_of(3), Some((105, 105)));
 
-        let p = Placement { rotation: 180.0, ..placement(100.0, 100.0, 10.0) };
+        let p = Placement {
+            rotation: 180.0,
+            ..placement(100.0, 100.0, 10.0)
+        };
         let table = compute_offsets(&geom, &p, &cfg);
         assert_eq!(table.pixel_of(0), Some((115, 115)));
     }
 
     #[test]
     fn off_canvas_and_disabled() {
-        let geom = DeviceGeometry { size: [2, 1], led_positions: vec![[0, 0], [1, 0]] };
+        let geom = DeviceGeometry {
+            size: [2, 1],
+            led_positions: vec![[0, 0], [1, 0]],
+        };
         let table = compute_offsets(&geom, &placement(310.0, 0.0, 10.0), &SamplerConfig::default());
         assert_eq!(table.pixel_of(0), Some((315, 5)));
         assert_eq!(table.offsets()[1], OFF_CANVAS);
         assert_eq!(table.pixel_of(1), None);
 
-        let p = Placement { enabled: false, ..placement(0.0, 0.0, 1.0) };
+        let p = Placement {
+            enabled: false,
+            ..placement(0.0, 0.0, 1.0)
+        };
         let table = compute_offsets(&geom, &p, &SamplerConfig::default());
         assert!(table.offsets().iter().all(|o| *o == OFF_CANVAS));
 
@@ -312,7 +381,10 @@ mod tests {
     fn sampling_reads_the_frame() {
         let mut frame = Frame::new(320, 200);
         frame.set_pixel(14, 104, Rgb::new(9, 8, 7));
-        let geom = DeviceGeometry { size: [1, 1], led_positions: vec![[0, 0]] };
+        let geom = DeviceGeometry {
+            size: [1, 1],
+            led_positions: vec![[0, 0]],
+        };
         let table = compute_offsets(&geom, &placement(10.0, 100.0, 8.0), &SamplerConfig::default());
         assert_eq!(table.sample(&frame), vec![Rgb::new(9, 8, 7)]);
         let wrong_size = Frame::solid(2, 2, Rgb::WHITE);

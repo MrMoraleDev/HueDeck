@@ -102,7 +102,10 @@ impl FrameStore {
             if now >= deadline {
                 return None;
             }
-            let (g, _res) = self.cv.wait_timeout(guard, deadline - now).unwrap_or_else(|e| e.into_inner());
+            let (g, _res) = self
+                .cv
+                .wait_timeout(guard, deadline - now)
+                .unwrap_or_else(|e| e.into_inner());
             guard = g;
         }
     }

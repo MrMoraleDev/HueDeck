@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "huedeck-hal"
 description = "HueDeck hardware abstraction layer: HID/USB/serial/SMBus/hotplug/sensor/capture/audio/LampArray traits plus a mock backend for tests"
 version.workspace = true

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "huedeck-effects"
 description = "HueDeck lightscript (effect HTML) metadata: <title>/<meta> parser into the effect-meta model (controls, meters)"
 version.workspace = true

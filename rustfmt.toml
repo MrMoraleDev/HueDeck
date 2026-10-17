@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+# Stable rustfmt options only; checked by `cargo fmt --all --check` in CI.
+edition = "2021"
+max_width = 110
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true

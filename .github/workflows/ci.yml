@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+#
+# Lightloom continuous integration.
+#
+# Jobs:
+#   rust     - fmt / clippy / tests on Windows and Ubuntu (mock HAL, no hardware)
+#   deny     - cargo-deny: licenses (copyleft denied in-tree), advisories, bans, sources
+#   node     - prelude JS shims and first-party plugin tests under Node 24 (node:test)
+#   schemas  - JSON Schema validation of the user-supplied corpus (skipped when absent)
+#
+# Hardware conformance runs on a self-hosted runner in conformance-selfhosted.yml, not here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  # No hardware on hosted runners: the HAL falls back to the mock backend.
+  LIGHTLOOM_HAL: mock
+
+jobs:
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev libusb-1.0-0-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ matrix.os }}
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Policy lives in deny.toml at the repo root.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  node:
+    name: node (prelude + plugins)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Prelude tests
+        run: |
+          if [ -d prelude/tests ]; then
+            node --test prelude/tests
+          else
+            echo "::notice::prelude/tests not present yet - skipping"
+          fi
+
+      - name: Plugin tests
+        run: |
+          if [ -d plugins ] && find plugins -type f \( -name '*.test.js' -o -name '*.test.mjs' \) | grep -q .; then
+            node --test plugins
+          else
+            echo "::notice::no plugin tests found under plugins/ - skipping"
+          fi
+
+  schemas:
+    name: schemas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Validate corpus against JSON Schemas
+        run: |
+          if [ -f tests/schemas/validate_corpus.py ]; then
+            python -I tests/schemas/validate_corpus.py --skip-if-missing-corpus
+          else
+            echo "::notice::tests/schemas/validate_corpus.py not present yet - skipping"
+          fi

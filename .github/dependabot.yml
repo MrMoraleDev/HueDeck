@@ -19,20 +19,4 @@ updates:
       day: monday
     labels: ["deps", "ci"]
 
-  - package-ecosystem: npm
-    directory: "/ui"
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 10
-    groups:
-      npm-minor-patch:
-        update-types: ["minor", "patch"]
-    labels: ["deps", "ui"]
-
-  - package-ecosystem: npm
-    directory: "/sdk"
-    schedule:
-      interval: weekly
-      day: monday
-    labels: ["deps", "sdk"]
+  # npm ecosystems (/ui dashboard, /sdk) are added once those directories carry a package.json.

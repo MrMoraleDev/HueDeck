@@ -21,8 +21,9 @@ on:
         required: false
         default: ""
 
+# Read-only by default; only the `release` job gets `contents: write`.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -46,6 +47,9 @@ jobs:
             archive: tar.gz
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Manual runs may name a tag; pushes build the ref that triggered them.
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -70,10 +74,21 @@ jobs:
       - name: Build (auditable, release)
         run: cargo auditable build --release --workspace --target ${{ matrix.target }}
 
+      # cargo-cyclonedx writes one <crate>.cdx.json per workspace member next to that
+      # crate's Cargo.toml. Collect them into sbom/ and suffix the target so the two
+      # matrix legs do not collide once the artifacts are merged in the release job.
       - name: SBOM (CycloneDX)
-        run: >-
-          cargo cyclonedx --format json --all --target ${{ matrix.target }}
-          --override-filename lightloom-${{ matrix.target }}.cdx
+        shell: bash
+        run: |
+          set -eu
+          cargo cyclonedx --format json --target "${{ matrix.target }}"
+          mkdir -p sbom
+          find . \( -path ./target -o -path ./sbom \) -prune -o -name '*.cdx.json' -print |
+            while read -r f; do
+              n="$(basename "$f" .cdx.json)"
+              mv "$f" "sbom/${n}-${{ matrix.target }}.cdx.json"
+            done
+          ls -la sbom
 
       # ---------------------------------------------------------------------------
       # SIGNING (not enabled yet)
@@ -99,10 +114,13 @@ jobs:
             cp "target/${{ matrix.target }}/release/$b" "$out/"
           done
           for f in LICENSE-APACHE LICENSE-MIT README.md \
-                   packaging/systemd/lightloomd.service packaging/udev/70-lightloom.rules.template; do
-            [ -f "$f" ] && cp "$f" "$out/"
+            packaging/systemd/lightloomd.service packaging/udev/70-lightloom.rules.template; do
+            if [ -f "$f" ]; then cp "$f" "$out/"; fi
           done
-          cp "lightloom-${{ matrix.target }}.cdx.json" "$out/"
+          # SBOMs ship inside the archive and beside it (everything uploaded lives under
+          # dist/ so download-artifact + merge-multiple lands flat in the release job).
+          cp sbom/*.cdx.json "$out/"
+          cp sbom/*.cdx.json dist/
           tar -C dist -czf "dist/lightloom-${{ matrix.target }}.tar.gz" "lightloom-${{ matrix.target }}"
           (cd dist && sha256sum "lightloom-${{ matrix.target }}.tar.gz" > "lightloom-${{ matrix.target }}.sha256")
 
@@ -120,18 +138,26 @@ jobs:
           foreach ($f in "LICENSE-APACHE", "LICENSE-MIT", "README.md") {
             if (Test-Path $f) { Copy-Item $f $out }
           }
-          Copy-Item "lightloom-$target.cdx.json" $out
-          Compress-Archive -Path "$out/*" -DestinationPath "dist/lightloom-$target.zip" -Force
+          Copy-Item "sbom/*.cdx.json" $out
+          Copy-Item "sbom/*.cdx.json" "dist"
+          # Archive the directory itself so the zip has the same lightloom-<target>/ root
+          # as the Linux tarball.
+          Compress-Archive -Path $out -DestinationPath "dist/lightloom-$target.zip" -Force
           $hash = (Get-FileHash "dist/lightloom-$target.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  lightloom-$target.zip" | Out-File -Encoding ascii "dist/lightloom-$target.sha256"
+          # LF only: the release job concatenates these into SHA256SUMS for `sha256sum -c`.
+          [System.IO.File]::WriteAllText(
+            (Join-Path (Get-Location) "dist/lightloom-$target.sha256"),
+            "$hash  lightloom-$target.zip`n")
 
       - uses: actions/upload-artifact@v4
         with:
           name: lightloom-${{ matrix.target }}
+          # Keep every path under dist/ so the artifact root is dist/ (not the repo
+          # root) and the release job's globs match after merge-multiple.
           path: |
             dist/lightloom-${{ matrix.target }}.${{ matrix.archive }}
             dist/lightloom-${{ matrix.target }}.sha256
-            lightloom-${{ matrix.target }}.cdx.json
+            dist/*.cdx.json
           if-no-files-found: error
 
   # Placeholder for the WiX MSI (packaging/wix). Enable once lightloom.wxs exists.
@@ -156,7 +182,11 @@ jobs:
     name: GitHub release
     needs: build
     runs-on: ubuntu-latest
+    # Tag pushes only; a workflow_dispatch run (even with `tag` set) stops after the
+    # build job and leaves its artifacts on the run as a dry run.
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

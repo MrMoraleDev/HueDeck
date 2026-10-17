@@ -13,7 +13,7 @@ packaging, M7 Linux packaging) drop files into known places.
 | Directory   | Target               | Planned files                                                                 | Milestone |
 |-------------|----------------------|-------------------------------------------------------------------------------|-----------|
 | `wix/`      | Windows MSI (WiX v4+) | `lightloom.wxs`, `Product.wxs` fragments, `License.rtf`, `lightloom.ico`, `build.ps1` | M4 |
-| `winget/`   | winget manifest       | `manifests/h/Lightloom/Lightloom/<version>/Lightloom.Lightloom.{installer,locale.en-US,}.yaml` | M4 |
+| `winget/`   | winget manifest       | `manifests/h/Lightloom/Lightloom/<version>/Lightloom.Lightloom.yaml`, `Lightloom.Lightloom.installer.yaml`, `Lightloom.Lightloom.locale.en-US.yaml` | M4 |
 | `systemd/`  | Linux user service    | `lightloomd.service` (present)                                                  | M7 |
 | `udev/`     | Linux device access   | `70-lightloom.rules.template` (present); generated `70-lightloom.rules` via `tools/gen-udev` | M7 |
 | `appimage/` | AppImage              | `AppRun`, `lightloom.desktop`, `lightloom.svg`, `build-appimage.sh` (linuxdeploy)   | M7 |

@@ -17,7 +17,7 @@ max_line_length = 110
 [*.{js,mjs,cjs,ts,json,jsonc,yml,yaml,svelte,html,css}]
 indent_size = 2
 
-[*.{toml,py,wxs,rules,service}]
+[*.{toml,py,wxs,rules,template,service}]
 indent_size = 4
 
 [*.md]

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "lightloom-cli"
 description = "lightloom: command-line client for Lightloom (devices, light, rainbow, bench, compat)"
 version.workspace = true

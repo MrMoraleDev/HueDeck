@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 [package]
+publish = false
 name = "lightloom-renderer"
 description = "lightloom-renderer: CEF offscreen Chromium process rendering lightscripts at 320x200 into shared memory (stub until M3)"
 version.workspace = true

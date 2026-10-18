@@ -172,6 +172,23 @@ impl Placement {
         }
     }
 
+    /// Auto-layout for an endpoint the layout does not place yet: a uniform
+    /// scale that fits a `size` (cells) footprint inside the canvas, centred.
+    /// Every effect then covers the whole endpoint.
+    pub fn fit(size: [u32; 2], canvas: CanvasSize) -> Self {
+        let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
+        let (cw, ch) = (canvas.width as f32, canvas.height as f32);
+        let scale = (cw / w).min(ch / h).clamp(SCALE_MIN, SCALE_MAX);
+        Self {
+            position: Point {
+                x: ((cw - w * scale) / 2.0).max(0.0),
+                y: ((ch - h * scale) / 2.0).max(0.0),
+            },
+            scale: Some(Scale::uniform(scale)),
+            ..Default::default()
+        }
+    }
+
     /// Rotation normalised into `0..360`.
     pub fn rotation_normalized(&self) -> f32 {
         self.rotation.rem_euclid(360.0)
@@ -279,6 +296,28 @@ impl DeviceGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fit_centres_and_fills_the_canvas() {
+        // A 60-LED strip spans the canvas width, vertically centred.
+        let p = Placement::fit([60, 1], CanvasSize::default());
+        let s = p.scale.unwrap().x;
+        assert!((s - 320.0 / 60.0).abs() < 1e-4);
+        assert_eq!(p.position.x, 0.0);
+        assert!((p.position.y - (200.0 - s) / 2.0).abs() < 1e-4);
+        // A tall footprint is bounded by the height; huge ones clamp to SCALE_MIN.
+        let p = Placement::fit([4, 40], CanvasSize::default());
+        assert_eq!(p.scale, Some(Scale::uniform(5.0)));
+        assert_eq!(p.position.x, 150.0);
+        assert_eq!(
+            Placement::fit([4000, 1], CanvasSize::default()).scale,
+            Some(Scale::uniform(SCALE_MIN))
+        );
+        assert_eq!(
+            Placement::fit([1, 1], CanvasSize::default()).scale,
+            Some(Scale::uniform(SCALE_MAX))
+        );
+    }
 
     #[test]
     fn placement_defaults_and_clamps() {

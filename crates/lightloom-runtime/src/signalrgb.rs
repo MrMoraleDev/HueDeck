@@ -16,6 +16,7 @@ use lightloom_engine::{ComponentInstance, Layout, Placement, Point, Scale};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+#[cfg(windows)]
 const ROOT: &str = r"Software\WhirlwindFX\SignalRgb";
 
 /// SignalRGB's component setup of the device `key` (read-only): the channel

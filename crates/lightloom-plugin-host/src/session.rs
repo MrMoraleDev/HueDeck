@@ -11,6 +11,8 @@
 //!    the first one it accepts (the active endpoint until `set_endpoint`);
 //! 4. optionally reads feature reports before `Initialize` ([`RestoreCheckMode`]):
 //!    given ones, or every feature report the report descriptor declares;
+//!    Subdevices and channels the plugin creates get the caller's placements
+//!    and channel components ([`SessionOptions::channel_components`]);
 //! 5. calls `Initialize()`, then `Render()` once per new canvas frame of the
 //!    [`FrameStore`]: a slow plugin skips straight to the latest frame. Each
 //!    `Render()` runs under a watchdog budget; consecutive timeouts fault the
@@ -19,13 +21,15 @@
 //!    feature-report reads and returns a [`SessionReport`].
 
 use crate::catalog::CatalogEntry;
+use crate::children::ChildSetup;
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
 use crate::runtime::{CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
 use crate::stats::LatencyHistogram;
-use lightloom_engine::{FrameStore, Placement, SamplerConfig};
+use lightloom_engine::{ComponentInstance, FrameStore, Placement, SamplerConfig};
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple};
+use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -116,6 +120,15 @@ pub struct SessionOptions {
     pub restore_check: RestoreCheckMode,
     /// Receives every plugin log line.
     pub log_sink: Option<LogSink>,
+    /// Components on the plugin's channels, by channel name, in chain order
+    /// (SignalRGB keeps them per device and channel name). A channel without
+    /// an entry gets the placeholder `Default Strip - N`.
+    pub channel_components: BTreeMap<String, Vec<ComponentInstance>>,
+    /// Placements of subdevices (`<device key>:<subdevice id>`) and component
+    /// instances (`ComponentId`); the others are fitted to the canvas.
+    pub placements: BTreeMap<String, Placement>,
+    /// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
+    pub system_info: Option<Arc<lightloom_hal::SystemInfo>>,
 }
 
 impl Default for SessionOptions {
@@ -130,6 +143,9 @@ impl Default for SessionOptions {
             max_render_timeouts: 3,
             restore_check: RestoreCheckMode::Off,
             log_sink: None,
+            channel_components: BTreeMap::new(),
+            placements: BTreeMap::new(),
+            system_info: None,
         }
     }
 }
@@ -142,6 +158,10 @@ impl std::fmt::Debug for SessionOptions {
             .field("write_mode", &self.write_mode)
             .field("skip_shutdown", &self.skip_shutdown)
             .field("restore_check", &self.restore_check)
+            .field(
+                "channel_components",
+                &self.channel_components.keys().collect::<Vec<_>>(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -192,6 +212,41 @@ impl RestoreCheck {
     }
 }
 
+/// A subdevice the plugin created.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct SubdeviceSummary {
+    /// The plugin's id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Grid size in cells.
+    pub size: [u32; 2],
+}
+
+/// A component instance on a channel.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ComponentSummary {
+    /// `ComponentId`.
+    pub id: String,
+    /// `DisplayName`.
+    pub name: String,
+    /// `LedCount`.
+    pub led_count: u32,
+}
+
+/// A channel the plugin added.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ChannelSummary {
+    /// Channel name.
+    pub name: String,
+    /// The plugin's LED limit.
+    pub led_limit: u32,
+    /// LEDs the plugin sees (`channel.ledCount`).
+    pub led_count: usize,
+    /// Components in chain order.
+    pub components: Vec<ComponentSummary>,
+}
+
 /// Outcome of one session.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SessionReport {
@@ -235,6 +290,10 @@ pub struct SessionReport {
     pub restore_notes: Vec<String>,
     /// `Shutdown(false)` ran.
     pub shutdown_called: bool,
+    /// Subdevices at the end of the session.
+    pub subdevices: Vec<SubdeviceSummary>,
+    /// Channels at the end of the session.
+    pub channels: Vec<ChannelSummary>,
     /// Last plugin log lines.
     pub log_tail: Vec<String>,
     /// Plugin log lines in total.
@@ -268,6 +327,8 @@ impl SessionReport {
             restore_checks: Vec::new(),
             restore_notes: Vec::new(),
             shutdown_called: false,
+            subdevices: Vec::new(),
+            channels: Vec::new(),
             log_tail: Vec::new(),
             log_lines: 0,
             memory_bytes: 0,
@@ -460,6 +521,13 @@ fn run(
             .unwrap_or_else(|| Placement::from_defaults(meta.default_position, meta.default_scale)),
     );
     let geometry = ctx.set_geometry(meta.size, meta.led_positions.clone());
+    ctx.set_child_setup(ChildSetup {
+        device_key: device.key.clone(),
+        channel_components: opts.channel_components.clone(),
+        placements: opts.placements.clone(),
+    });
+    ctx.set_subdevice_controller(meta.subdevice_controller || meta.supports_subdevices);
+    ctx.set_system_info(opts.system_info.as_deref());
     let shared = ctx.shared();
     if let Err(e) = geometry {
         report.faulted = Some(format!("Size() export rejected: {e}"));
@@ -732,6 +800,36 @@ fn finish(
     let (tail, lines) = dev.log_tail();
     report.log_tail = tail;
     report.log_lines = lines;
+    let children = dev.children();
+    report.subdevices = children
+        .subdevices()
+        .iter()
+        .map(|s| SubdeviceSummary {
+            id: s.id.clone(),
+            name: s.name.clone(),
+            size: s.size(),
+        })
+        .collect();
+    let counts = children.led_counts();
+    report.channels = children
+        .channels()
+        .iter()
+        .zip(counts)
+        .map(|(ch, led_count)| ChannelSummary {
+            name: ch.name.clone(),
+            led_limit: ch.led_limit,
+            led_count,
+            components: ch
+                .components
+                .iter()
+                .map(|c| ComponentSummary {
+                    id: c.instance.id.clone(),
+                    name: c.instance.component.display_name.clone(),
+                    led_count: c.instance.component.led_count,
+                })
+                .collect(),
+        })
+        .collect();
     dev.close();
     report.elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     report

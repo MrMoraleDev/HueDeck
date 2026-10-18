@@ -122,6 +122,13 @@ const NATIVE_MODULES: &[&str] = &[
     "appInfo",
 ];
 
+/// Rust-backed modules a device session implements (`js/host.js` `nativeModules`);
+/// the others keep their throwing facade there.
+const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo"];
+
+/// Prefix of the generated modules that pick a device-session implementation.
+const NATIVE_PREFIX: &str = "lightloom:native/";
+
 fn prelude_source(name: &str) -> Option<&'static str> {
     PRELUDE_MODULES.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
 }
@@ -131,6 +138,8 @@ pub fn host_shim_module(shim: &str, module_stubs: bool) -> String {
     if NATIVE_MODULES.contains(&shim) {
         if module_stubs {
             format!("lightloom:stub/{shim}.js")
+        } else if DEVICE_MODULES.contains(&shim) {
+            format!("{NATIVE_PREFIX}{shim}.js")
         } else {
             format!("lightloom:prelude/modules/{shim}.js")
         }
@@ -353,6 +362,19 @@ impl JsLoader for HostLoader {
             .and_then(|s| s.strip_suffix(".js"))
         {
             let src = format!("export default globalThis.__lightloomHost.modules[{shim:?}];\n");
+            return Module::declare(ctx.clone(), name, src);
+        }
+        if let Some(shim) = name
+            .strip_prefix(NATIVE_PREFIX)
+            .and_then(|s| s.strip_suffix(".js"))
+            .filter(|s| DEVICE_MODULES.contains(s))
+        {
+            // The device host's implementation, else the throwing facade.
+            let src = format!(
+                "import facade from \"lightloom:prelude/modules/{shim}.js\";\n\
+                 const real = globalThis.__lightloomHost.nativeModules[{shim:?}];\n\
+                 export default real === undefined ? facade : real;\n"
+            );
             return Module::declare(ctx.clone(), name, src);
         }
         if let Some(spec) = name.strip_prefix(MISSING_PREFIX) {
@@ -894,13 +916,26 @@ mod tests {
             stubbed.resolve_name(base, "@SignalRGB/lcd").unwrap(),
             "lightloom:stub/lcd.js"
         );
-        // Every shim the resolver can produce exists.
+        // Every shim the resolver can produce exists (device-session modules are
+        // generated, over a facade that must exist).
         for shim in crate::meta::HOST_MODULES
             .iter()
             .chain(crate::meta::LIGHTLOOM_ONLY_MODULES)
         {
             let n = host_shim_module(shim, false);
-            assert!(prelude_source(&n).is_some(), "{n}");
+            match n.strip_prefix(NATIVE_PREFIX) {
+                Some(native) => {
+                    assert!(DEVICE_MODULES.contains(&native.trim_end_matches(".js")), "{n}");
+                    let facade = format!("lightloom:prelude/modules/{native}");
+                    assert!(prelude_source(&facade).is_some(), "{facade}");
+                }
+                None => assert!(prelude_source(&n).is_some(), "{n}"),
+            }
         }
+        assert_eq!(
+            host_shim_module("permissions", false),
+            "lightloom:native/permissions.js"
+        );
+        assert_eq!(host_shim_module("lcd", false), "lightloom:prelude/modules/lcd.js");
     }
 }

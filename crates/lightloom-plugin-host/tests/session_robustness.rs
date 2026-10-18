@@ -264,10 +264,8 @@ fn unimplemented_host_members_throw_instead_of_faking_io() {
         "bulk",
         "control",
         "setProtocol",
-        "subdevice",
         "fan",
         "board",
-        "systeminfo",
         "bus",
         "udp",
         "unknown",
@@ -282,8 +280,15 @@ fn unimplemented_host_members_throw_instead_of_faking_io() {
         assert!(mock.recorder().writes().is_empty(), "{probe}: nothing written");
         assert!(!report.is_clean());
     }
-    // Faithful answers stay available: fan control is reported as disabled.
-    let (report, mock) = run_probe("fanflag");
-    assert!(report.failures.is_empty(), "{:#?}", report.failures);
-    assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0x01]]);
+    // Faithful answers stay available: fan control is reported as disabled,
+    // subdevices are real, system info is real (none known here: undefined).
+    for probe in ["fanflag", "subdevice", "systeminfo"] {
+        let (report, mock) = run_probe(probe);
+        assert!(report.failures.is_empty(), "{probe}: {:#?}", report.failures);
+        assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0x01]], "{probe}");
+        if probe == "subdevice" {
+            assert_eq!(report.subdevices.len(), 1);
+            assert_eq!(report.subdevices[0].id, "Strip");
+        }
+    }
 }

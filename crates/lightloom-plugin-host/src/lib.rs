@@ -18,17 +18,20 @@
 //!   compat host module (`js/host.js`: recording stubs, or device natives).
 //! * [`device`]: the native backing of `device.*` for a real device (HID I/O
 //!   through lightloom-hal, canvas sampling, I/O statistics, dry-run writes).
+//! * [`children`]: subdevices and channels (with their component instances),
+//!   each placed and sampled on the canvas on its own.
 //! * [`session`]: one device session = one plugin thread running
 //!   Validate → Initialize → Render per frame → Shutdown.
 //! * [`catalog`]: plugin discovery over plugin directories (VID:PID index).
 //! * [`stats`]: fixed-memory latency histograms for long-running sessions.
 //! * [`exports`]: namespace JSON → [`PluginMeta`].
 //! * [`dryrun`]: the `lightloom compat dry-run` corpus harness.
-// TODO(M2): `bus.*` (SMBus), channels/components, subdevices, hotplug, watchdog fault policy.
+// TODO(M2): hotplug; `bus.*` (SMBus) is M5.
 
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod children;
 pub mod device;
 pub mod dryrun;
 pub mod exports;

@@ -33,6 +33,32 @@ live `lightloom rainbow --signalrgb --device <vid:pid> --duration N`.
 - **Modules**: the SignalRGB MSI plugin needs `@SignalRGB/permissions` (partner permissions,
   all granted) and `@SignalRGB/systeminfo` (`MAG B550 TOMAHAWK (MS-7C91)` from SMBIOS).
 
+## Record and replay
+
+`lightloom light "#00ff00" --signalrgb --device <vid:pid> --duration 8 --record t.json`
+then `lightloom compat replay t.json --signalrgb` (no hardware): every recorded
+packet is reproduced.
+
+| Device | Packets recorded | Replayed | Result |
+|--------|------------------|----------|--------|
+| MSI `1462:7c91` | 224 | 224 | identical |
+| NZXT Kraken X3 `1e71:2007` | 1631 | 1631 | identical |
+| SteelSeries Arctis 5 `1038:12aa` | 2800 | 2800 | identical |
+| Razer DeathAdder V2 Pro `1532:007c` | 212 | 212 | identical (request/response protocol answered from the trace) |
+
+The trace carries what `@SignalRGB/systeminfo` reported and the channel setup, so
+the MSI plugin takes the same path. Plugins that act on wall-clock time (battery
+polls every N seconds) can diverge on longer recordings; the report shows the
+first differing packet per collection.
+
+## Hotplug
+
+Runs register for HID arrival/removal notifications; 250 ms after the last event
+the devices are enumerated again and sessions stop (removed), restart (a replug
+behind a stale handle) or start (new device). Covered by the mock-HAL test
+`crates/lightloom-plugin-host/tests/manager.rs`; physically unplugging a device on
+this machine is still to be done (recovery target: under 2 s).
+
 ## Dry-run limits
 
 Dry-run suppresses writes, so request/response protocols get no answers: the MSI plugin's

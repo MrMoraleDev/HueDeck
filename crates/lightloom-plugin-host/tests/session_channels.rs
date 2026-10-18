@@ -2,7 +2,8 @@
 //! Channels, components and subdevices in a device session
 //! (docs/host-api/components-channels.md): a synthetic ARGB-controller plugin
 //! on the mock HAL, with one channel left to the placeholder strip and one
-//! with a component assigned by the caller.
+//! with a component assigned by the caller; and live controls (parameter
+//! changes with their `on<name>Changed` hooks, `onBrightnessChanged`).
 
 use lightloom_engine::{Component, ComponentInstance, Frame, FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
 use lightloom_hal::mock::MockHid;
@@ -145,4 +146,58 @@ fn channels_components_and_subdevices_reach_the_plugin() {
         (fan.name.as_str(), fan.id.as_str(), fan.led_count),
         ("Probe Fan", "comp-a", 3)
     );
+}
+
+#[test]
+fn controls_apply_before_the_next_render_and_call_the_hooks() {
+    use lightloom_engine::Placement;
+    use lightloom_plugin_host::session::Control;
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/device");
+    let plugin = Catalog::scan(&[dir], Duration::from_secs(10))
+        .lookup(0x1234, 0x4444)
+        .expect("parameter probe")
+        .clone();
+    let info = MockHid::endpoint_info(0x1234, 0x4444, "P", 0, 0xFF00, 1, 0, ReportLengths::default());
+    let mock = Arc::new(MockHid::new().add_endpoint(info.clone()));
+    let backend: Arc<dyn HidBackend> = mock.clone();
+    let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    frames.publish(Frame::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    let handle = session::spawn(
+        SessionDevice {
+            key: "1234:4444:P".into(),
+            vid: 0x1234,
+            pid: 0x4444,
+            endpoints: vec![info],
+        },
+        plugin,
+        backend,
+        Arc::clone(&frames),
+        SessionOptions::default(),
+    )
+    .unwrap();
+    wait_until(Instant::now() + Duration::from_secs(20), || {
+        handle.live().frames >= 1
+    });
+    assert!(mock.recorder().writes().is_empty(), "no hook before a change");
+
+    let mut values = serde_json::Map::new();
+    values.insert("mode".into(), "b".into());
+    assert!(handle.control(Control::Parameters(values)));
+    assert!(handle.control(Control::Placement(Placement {
+        brightness: 50,
+        ..Placement::default()
+    })));
+    // Same brightness again: no hook.
+    assert!(handle.control(Control::Placement(Placement {
+        brightness: 50,
+        ..Placement::default()
+    })));
+    frames.publish(Frame::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    wait_until(Instant::now() + Duration::from_secs(20), || {
+        handle.live().frames >= 2
+    });
+    handle.stop();
+    let report = handle.join().unwrap();
+    assert!(report.is_clean(), "{report:#?}");
+    assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0x02], vec![0x00, 0x15]]);
 }

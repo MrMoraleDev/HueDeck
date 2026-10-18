@@ -6,7 +6,8 @@
 //! 1:1 onto [`HidEndpointInfo`]. [`HidBackend::enumerate`] leaves report
 //! lengths at zero; [`WindowsHidBackend::enumerate_grouped`] fills them from
 //! `HIDP_CAPS` through a zero-access handle (see [`crate::probe`]), and
-//! [`HidBackend::open`] reads them from the reconstructed report descriptor.
+//! [`HidBackend::open`] reads them from `HIDP_CAPS` too (falling back to the
+//! reconstructed report descriptor).
 
 use crate::group::{group_endpoints, own_usb_parent, DeviceGroup, ProbedEndpoint};
 use crate::path::parse_hid_path;
@@ -31,6 +32,28 @@ fn map_err(e: hidapi::HidError) -> HalError {
     } else {
         HalError::Backend(text)
     }
+}
+
+/// Report lengths of `info`'s collection from hidapi's reconstructed report descriptor.
+fn descriptor_lengths(device: &hidapi::HidDevice, info: &HidEndpointInfo) -> Option<ReportLengths> {
+    let mut buf = vec![0u8; MAX_REPORT_DESCRIPTOR];
+    let n = device
+        .get_report_descriptor(&mut buf)
+        .map_err(|e| tracing::debug!(path = %info.path, error = %e, "report descriptor unavailable"))
+        .ok()?;
+    let desc = huedeck_hid_desc::parse(&buf[..n])
+        .map_err(|e| tracing::debug!(path = %info.path, error = %e, "report descriptor not parsed"))
+        .ok()?;
+    // On Windows each `ColNN` path has its own preparsed data, so the
+    // reconstructed descriptor holds exactly this one TLC.
+    let tlc = desc
+        .find(info.usage_page, info.usage)
+        .or_else(|| desc.collections.first())?;
+    Some(ReportLengths {
+        input: tlc.input_len,
+        output: tlc.output_len,
+        feature: tlc.feature_len,
+    })
 }
 
 /// hidapi `windows-native` backend.
@@ -128,28 +151,14 @@ impl HidBackend for WindowsHidBackend {
             });
         drop(api);
 
-        // Report lengths from the descriptor (best effort).
-        let mut buf = vec![0u8; MAX_REPORT_DESCRIPTOR];
-        // TODO(compile-check): hidapi 2.6 `HidDevice::get_report_descriptor(&self, &mut [u8]) -> HidResult<usize>`.
-        match device.get_report_descriptor(&mut buf) {
-            Ok(n) => match huedeck_hid_desc::parse(&buf[..n]) {
-                Ok(desc) => {
-                    // On Windows each `ColNN` path has its own preparsed data, so the
-                    // reconstructed descriptor holds exactly this one TLC.
-                    let tlc = desc
-                        .find(info.usage_page, info.usage)
-                        .or_else(|| desc.collections.first());
-                    if let Some(c) = tlc {
-                        info.report_lengths = ReportLengths {
-                            input: c.input_len,
-                            output: c.output_len,
-                            feature: c.feature_len,
-                        };
-                    }
-                }
-                Err(e) => tracing::debug!(path, error = %e, "report descriptor not parsed"),
-            },
-            Err(e) => tracing::debug!(path, error = %e, "report descriptor unavailable"),
+        // Report lengths: HIDP_CAPS through a zero-access handle (exactly what Windows
+        // enforces for HidD_Get/SetFeature and WriteFile), else the reconstructed descriptor.
+        match probe::read_caps(path) {
+            Ok(caps) => info.report_lengths = caps.lengths,
+            Err(e) => {
+                tracing::debug!(path, error = %e, "HIDP_CAPS unavailable, parsing the report descriptor");
+                info.report_lengths = descriptor_lengths(&device, &info).unwrap_or_default();
+            }
         }
         device.set_blocking_mode(true).map_err(map_err)?;
         tracing::debug!(path, report_lengths = ?info.report_lengths, "opened HID endpoint");

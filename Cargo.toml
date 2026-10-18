@@ -50,6 +50,9 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Devices_Dev
 windows-service = "0.8"
 libc = "0.2"
 humantime = "2"
+# SPIKE A (huedeck-renderer): CEF offscreen Chromium + memory-mapped shm ring. CEF itself is BSD-3.
+cef = { version = "=154.5.0", default-features = false }
+memmap2 = "0.9"
 
 [profile.release]
 opt-level = 3

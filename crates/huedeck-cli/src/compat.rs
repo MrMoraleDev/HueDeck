@@ -108,7 +108,7 @@ pub fn run(command: CompatCommand) -> anyhow::Result<bool> {
             let progress = |n: usize, total: usize, r: &FileReport| {
                 if verbose {
                     eprintln!("[{n}/{total}] {}", file_line(r));
-                } else if n % 50 == 0 || n == total {
+                } else if n.is_multiple_of(50) || n == total {
                     eprint!("\r{n}/{total} files");
                     if n == total {
                         eprintln!();

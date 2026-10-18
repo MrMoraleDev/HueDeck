@@ -54,7 +54,9 @@ impl Snapshot {
         }
         let lit = self
             .bgra
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0].max(p[1]).max(p[2]) > 8)
             .count();
         lit as f64 / px as f64
@@ -68,7 +70,9 @@ impl Snapshot {
         }
         let sum: f64 = self
             .bgra
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| 0.114 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.299 * f64::from(p[2]))
             .sum();
         sum / px as f64
@@ -77,7 +81,7 @@ impl Snapshot {
     /// RGB8 copy (alpha dropped: LEDs never see it; the canvas body is opaque black).
     pub fn to_rgb(&self) -> Vec<u8> {
         let mut rgb = Vec::with_capacity(self.bgra.len() / 4 * 3);
-        for p in self.bgra.chunks_exact(4) {
+        for p in self.bgra.as_chunks::<4>().0 {
             rgb.extend_from_slice(&[p[2], p[1], p[0]]);
         }
         rgb

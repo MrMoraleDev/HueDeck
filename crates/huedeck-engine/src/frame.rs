@@ -27,7 +27,7 @@ impl Frame {
     /// Frame filled with one colour (alpha 255).
     pub fn solid(width: u32, height: u32, color: Rgb) -> Self {
         let mut f = Self::new(width, height);
-        for px in f.pixels.chunks_exact_mut(BYTES_PER_PIXEL) {
+        for px in f.pixels.as_chunks_mut::<BYTES_PER_PIXEL>().0 {
             px.copy_from_slice(&[color.b, color.g, color.r, 0xFF]);
         }
         f

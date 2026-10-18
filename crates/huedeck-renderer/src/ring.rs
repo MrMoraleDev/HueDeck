@@ -96,7 +96,7 @@ fn check_region(base: *const u8, len: usize, header: &FrameHeader) -> Result<(),
             have: len,
         });
     }
-    if (base as usize) % 8 != 0 {
+    if !(base as usize).is_multiple_of(8) {
         return Err(RingError::Misaligned);
     }
     Ok(())
@@ -106,7 +106,7 @@ fn check_region(base: *const u8, len: usize, header: &FrameHeader) -> Result<(),
 /// `base` must point to a live mapping of at least `HEADER_BYTES` bytes that is 8-byte aligned,
 /// and every concurrent access to the header words must be atomic.
 unsafe fn header_word<'a>(base: *mut u8, offset: usize) -> &'a AtomicU64 {
-    debug_assert!(offset + 8 <= HEADER_BYTES && offset % 8 == 0);
+    debug_assert!(offset + 8 <= HEADER_BYTES && offset.is_multiple_of(8));
     // SAFETY: caller guarantees the mapping is live, large enough and 8-aligned; offset is a
     // multiple of 8 inside the header, so the pointer is valid and aligned for AtomicU64.
     unsafe { AtomicU64::from_ptr(base.add(offset).cast::<u64>()) }
@@ -147,7 +147,7 @@ pub fn expected_generation(seq: u64) -> u64 {
 /// Same as [`header_word`].
 unsafe fn load_header_bytes(base: *mut u8) -> [u8; HEADER_BYTES] {
     let mut out = [0u8; HEADER_BYTES];
-    for (i, chunk) in out.chunks_exact_mut(8).enumerate() {
+    for (i, chunk) in out.as_chunks_mut::<8>().0.iter_mut().enumerate() {
         // SAFETY: forwarded from the caller; i * 8 < HEADER_BYTES.
         let word = unsafe { header_word(base, i * 8) }.load(Ordering::Acquire);
         chunk.copy_from_slice(&word.to_ne_bytes());
@@ -204,7 +204,7 @@ impl RingWriter {
             std::ptr::write_bytes(base.add(HEADER_BYTES), 0, header.total_bytes() - HEADER_BYTES);
         }
         let bytes = header.to_bytes();
-        for (i, chunk) in bytes.chunks_exact(8).enumerate() {
+        for (i, chunk) in bytes.as_chunks::<8>().0.iter().enumerate() {
             let mut word = [0u8; 8];
             word.copy_from_slice(chunk);
             // SAFETY: header lies inside the validated, aligned mapping.
@@ -261,11 +261,8 @@ impl RingWriter {
         fence(Ordering::Release);
         // SAFETY: base is the validated mapping; slot < SLOT_COUNT.
         let dst = unsafe { slot_words(self.base, &self.header, slot) };
-        for (word, px) in dst.iter().zip(bgra.chunks_exact(BYTES_PER_PIXEL)) {
-            word.store(
-                u32::from_ne_bytes([px[0], px[1], px[2], px[3]]),
-                Ordering::Relaxed,
-            );
+        for (word, px) in dst.iter().zip(bgra.as_chunks::<BYTES_PER_PIXEL>().0) {
+            word.store(u32::from_ne_bytes(*px), Ordering::Relaxed);
         }
         store_le(gen_word, writing.wrapping_add(1), Ordering::Release);
         store_le(seq_word, seq + 1, Ordering::Release);
@@ -305,7 +302,7 @@ impl RingReader {
         if map.len() < HEADER_BYTES {
             return Err(ShmError::TooShort(map.len()).into());
         }
-        if (base as usize) % 8 != 0 {
+        if !(base as usize).is_multiple_of(8) {
             return Err(RingError::Misaligned);
         }
         // SAFETY: mapping is live, aligned and at least one header long.
@@ -355,7 +352,7 @@ impl RingReader {
             }
             // SAFETY: validated mapping; slot < SLOT_COUNT.
             let src = unsafe { slot_words(self.base, &self.header, slot) };
-            for (px, word) in out.chunks_exact_mut(BYTES_PER_PIXEL).zip(src) {
+            for (px, word) in out.as_chunks_mut::<BYTES_PER_PIXEL>().0.iter_mut().zip(src) {
                 px.copy_from_slice(&word.load(Ordering::Relaxed).to_ne_bytes());
             }
             fence(Ordering::Acquire);

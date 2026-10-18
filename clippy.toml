@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 # Keep in sync with `rust-version` in Cargo.toml [workspace.package].
-msrv = "1.85"
+msrv = "1.89"
 # Unsafe is expected in HAL backends, but every block must say why.
 # (enforced via `clippy::undocumented_unsafe_blocks` in crate lints, not here)
 too-many-arguments-threshold = 8

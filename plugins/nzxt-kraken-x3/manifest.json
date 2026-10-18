@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.nzxt-kraken-x3",
+  "name": "NZXT Kraken X3",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "HueDeck",
+  "description": "Lighting of the NZXT Kraken X53, X63 and X73 coolers: the pump ring (8 LEDs), the logo, and the RGB header on the pump (up to 40 LEDs) as a channel. Pump and fan speeds are never touched. Protocol notes: docs/hardware/nzxt-kraken-x3.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "aio",
+  "devices": [
+    { "vid": "0x1E71", "pids": ["0x2007"], "transport": "hid", "interfaces": [0, -1], "tested": ["0x2007"] }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["NZXT CAM.exe"],
+  "keywords": ["nzxt", "kraken", "x53", "x63", "x73", "aio", "cooler"]
+}

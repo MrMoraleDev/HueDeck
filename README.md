@@ -10,9 +10,9 @@ extra, never a requirement.
 Status: **pre-alpha, M4 (daemon and dashboard)**. `huedeckd` drives the connected
 devices with their plugins, renders effects in offscreen Chromium, keeps settings in
 SQLite and serves the dashboard and a local API on `127.0.0.1:16138`. Its own plugin
-library covers only an MSI Mystic Light board so far; growing it is the current
-priority (see [How device support works](#how-device-support-works)). No installer
-yet. See [Milestones](#milestones).
+library is small (four device families so far); growing it is the current priority
+(see [How device support works](#how-device-support-works)). No installer yet. See
+[Milestones](#milestones).
 
 ## What HueDeck is
 
@@ -85,9 +85,11 @@ so both kinds run on the same loader.
    (HueDeck records and replays every HID exchange: `huedeck light ... --record`,
    `huedeck compat replay`), public standards (HID LampArray, QMK/VIA) and vendors'
    published APIs (network lights). No code is copied from other RGB software.
-   Today it covers the MSI Mystic Light 185-byte boards (tested on `1462:7C91`);
-   Razer, NZXT Kraken, SteelSeries headsets, generic HID LampArray devices and
-   network lights (WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeelight) are next.
+   Today it covers, tested on the reference machine: MSI Mystic Light 185-byte
+   boards (`1462:7C91`), the Razer DeathAdder V2 Pro (`1532:007C`), NZXT Kraken
+   X53/X63/X73 (`1E71:2007`) and the SteelSeries Arctis 5 (`1038:12AA`). Generic HID
+   LampArray devices and network lights (WLED, Philips Hue, Govee, Nanoleaf, LIFX,
+   Yeelight) are next. Adding a device: [plugins/README.md](plugins/README.md).
 2. **Your own plugins and effects**: `%APPDATA%\HueDeck\plugins` and `...\effects`.
 3. **Optional: your SignalRGB installation.** With the setting on, HueDeck also
    uses the plugins, effects and components of a local SignalRGB installation, read

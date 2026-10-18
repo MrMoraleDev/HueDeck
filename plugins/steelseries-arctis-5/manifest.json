@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.steelseries-arctis-5",
+  "name": "SteelSeries Arctis 5",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "HueDeck",
+  "description": "The two ear-cup lights of the SteelSeries Arctis 5 headset (USB 1038:12AA). Audio settings are not touched. Protocol notes: docs/hardware/steelseries-arctis-5.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "headphones",
+  "devices": [
+    { "vid": "0x1038", "pids": ["0x12AA"], "transport": "hid", "interfaces": [5], "tested": ["0x12AA"] }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "arctis", "headset", "headphones"]
+}

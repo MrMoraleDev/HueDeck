@@ -19,6 +19,11 @@ import { pathToFileURL } from "node:url";
  * @param {number} [options.productId]
  * @param {number} [options.vendorId]
  * @param {Set<number> | number[]} [options.failSendReportIds]  report ids for which send_report returns -1
+ * @param {Record<string, number[][]>} [options.channelColors]  per channel name, one [r, g, b] per LED;
+ *   channel(name) of a channel the plugin added returns them through getColors(format, order)
+ * @param {(sent: number[]) => (number[] | undefined)} [options.featureReply]  called after every
+ *   send_report with the bytes sent; a returned array becomes what get_report answers for that
+ *   report id (a device that answers each request)
  */
 export function createMockDevice(options = {}) {
   const featureReports = toReportMap(options.featureReports);
@@ -26,6 +31,7 @@ export function createMockDevice(options = {}) {
   const failSend = new Set(options.failSendReportIds ?? []);
   let colorSource = options.color ?? [0, 0, 0];
   let lastReadSize = 0;
+  const channelColors = new Map(Object.entries(options.channelColors ?? {}));
 
   const device = {
     // --- recordings ---------------------------------------------------------------------
@@ -53,7 +59,10 @@ export function createMockDevice(options = {}) {
       record("send_report", [data, length]);
       const bytes = normalise(data, length);
       device.sent.push({ reportId: bytes[0], length, bytes });
-      return failSend.has(bytes[0]) ? -1 : length;
+      if (failSend.has(bytes[0])) return -1;
+      const reply = options.featureReply?.(bytes);
+      if (reply) featureReports.set(bytes[0], Array.from(reply));
+      return length;
     },
     get_report(reportIdBytes, length) {
       record("get_report", [reportIdBytes, length]);
@@ -91,6 +100,24 @@ export function createMockDevice(options = {}) {
     addChannel(name, ledLimit, defaultLedCount) {
       record("addChannel", [name, ledLimit, defaultLedCount]);
       device.channels.push({ name, ledLimit, defaultLedCount });
+    },
+    setChannelColors(name, colors) { channelColors.set(name, colors); },
+    channel(name) {
+      const added = device.channels.find((c) => c.name === name);
+      if (!added) return undefined;
+      const colors = (channelColors.get(name) ?? []).slice(0, added.ledLimit || Infinity);
+      return {
+        ledCount: colors.length,
+        LedCount() { return colors.length; },
+        LedLimit() { return added.ledLimit; },
+        getColors(format = "Inline", order = "RGB") {
+          const pick = { R: 0, G: 1, B: 2 };
+          const reorder = (c) => Array.from(String(order).toUpperCase(), (ch) => c[pick[ch]] & 0xFF);
+          const each = colors.map(reorder);
+          if (String(format).toLowerCase() === "inline") return each.flat();
+          return [0, 1, 2].map((k) => each.map((c) => c[k]));
+        },
+      };
     },
 
     // --- diagnostics --------------------------------------------------------------------

@@ -189,6 +189,10 @@ pub struct DeviceContext {
     factor: f32,
     stats: IoStats,
     write_latency: LatencyHistogram,
+    /// Frame capture to the first write of its `Render()`.
+    canvas_to_wire: LatencyHistogram,
+    /// Capture time of a frame not yet written out.
+    pending_frame: Option<Instant>,
     validated: Vec<usize>,
     created: Instant,
     first_write: Option<Duration>,
@@ -283,6 +287,8 @@ impl DeviceContext {
             factor: 1.0,
             stats: IoStats::default(),
             write_latency: LatencyHistogram::new(),
+            canvas_to_wire: LatencyHistogram::new(),
+            pending_frame: None,
             validated: Vec::new(),
             created: Instant::now(),
             first_write: None,
@@ -382,6 +388,11 @@ impl DeviceContext {
         self.write_latency.summary()
     }
 
+    /// Frame capture to the first write that followed it (new frames only).
+    pub fn canvas_to_wire(&self) -> LatencySummary {
+        self.canvas_to_wire.summary()
+    }
+
     /// Time from context creation to the first successful (or dry-run) write.
     pub fn first_write(&self) -> Option<Duration> {
         self.first_write
@@ -411,6 +422,16 @@ impl DeviceContext {
 
     /// The frame `device.color(x, y)` samples until the next call.
     pub fn set_frame(&mut self, frame: Arc<Frame>) {
+        self.set_frame_at(frame, Instant::now());
+    }
+
+    /// [`DeviceContext::set_frame`] with the frame's capture time: the first
+    /// write after a new frame records its canvas-to-wire latency (a frame
+    /// republished unchanged, to keep plugins ticking, is not new).
+    pub fn set_frame_at(&mut self, frame: Arc<Frame>, captured: Instant) {
+        if !Arc::ptr_eq(&self.frame, &frame) {
+            self.pending_frame = Some(captured);
+        }
         self.frame = frame;
     }
 
@@ -697,6 +718,9 @@ impl DeviceContext {
     fn mark_write(&mut self, started: Option<Instant>) {
         if self.first_write.is_none() {
             self.first_write = Some(self.created.elapsed());
+        }
+        if let Some(captured) = self.pending_frame.take() {
+            self.canvas_to_wire.record(captured.elapsed());
         }
         if let Some(t) = started {
             self.write_latency.record(t.elapsed());

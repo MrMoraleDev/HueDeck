@@ -17,10 +17,17 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use triple_buffer::{Input, Output, TripleBuffer};
 
+/// A frame and when it was captured (painted, or read from the renderer).
+#[derive(Clone, Debug)]
+struct Stamped {
+    frame: Arc<Frame>,
+    at: Instant,
+}
+
 /// Latest-frame store shared by one producer and many consumers.
 pub struct FrameStore {
-    input: Mutex<Input<Arc<Frame>>>,
-    output: Mutex<Output<Arc<Frame>>>,
+    input: Mutex<Input<Stamped>>,
+    output: Mutex<Output<Stamped>>,
     seq: AtomicU64,
     gate: Mutex<()>,
     cv: Condvar,
@@ -35,8 +42,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl FrameStore {
     /// Store pre-filled with a black frame of the given size (`seq == 0`).
     pub fn new(width: u32, height: u32) -> Self {
-        let initial = Arc::new(Frame::new(width, height));
-        // TODO(compile-check): triple_buffer 9 constructor is `TripleBuffer::new(&T)` (T: Clone).
+        let initial = Stamped {
+            frame: Arc::new(Frame::new(width, height)),
+            at: Instant::now(),
+        };
         let (input, output) = TripleBuffer::new(&initial).split();
         Self {
             input: Mutex::new(input),
@@ -69,9 +78,15 @@ impl FrameStore {
         self.publish_arc(Arc::new(frame))
     }
 
-    /// Publish an already shared frame.
+    /// Publish an already shared frame, captured now.
     pub fn publish_arc(&self, frame: Arc<Frame>) -> u64 {
-        lock(&self.input).write(frame);
+        self.publish_arc_at(frame, Instant::now())
+    }
+
+    /// Publish an already shared frame captured at `at` (the start of its
+    /// canvas-to-wire latency; republishing a held frame keeps its stamp).
+    pub fn publish_arc_at(&self, frame: Arc<Frame>, at: Instant) -> u64 {
+        lock(&self.input).write(Stamped { frame, at });
         // Bump and notify under the gate so a waiter that checked `seq` just
         // before blocking cannot miss this wake-up.
         let _g = lock(&self.gate);
@@ -82,9 +97,15 @@ impl FrameStore {
 
     /// The most recently published frame with its sequence number.
     pub fn latest(&self) -> (u64, Arc<Frame>) {
+        let (seq, frame, _) = self.latest_stamped();
+        (seq, frame)
+    }
+
+    /// [`FrameStore::latest`] plus when the frame was captured.
+    pub fn latest_stamped(&self) -> (u64, Arc<Frame>, Instant) {
         let mut out = lock(&self.output);
-        let frame = out.read().clone();
-        (self.seq(), frame)
+        let stamped = out.read().clone();
+        (self.seq(), stamped.frame, stamped.at)
     }
 
     /// Block until `seq() > last_seen` or `timeout` elapses. Returns the new

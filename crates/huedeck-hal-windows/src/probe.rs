@@ -275,27 +275,35 @@ fn devnode_strings(inst: u32, key: &DEVPROPKEY) -> Vec<String> {
 }
 
 /// Transport of the HID collection at `path` (see [`HidBus`]).
+///
+/// Decided as the hidapi C library does (SignalRGB ships a hidapi C build): the
+/// first compatible id of the parent devnode that *contains* a known token.
+/// hidapi-rs 2.6.7 (`windows-native`) differs in two ways: it matches prefixes
+/// only (missing `ACPI\PNP0C50`), and it also tests the empty string that ends
+/// the id list, which "starts with" anything, so every unknown transport
+/// (Hyper-V VMBus input, ACPI I2C) comes out as USB with interface 0.
 pub fn hid_bus(path: &str) -> HidBus {
     let Some(parent) = parent_devnode(path) else {
         return HidBus::Unknown;
     };
-    devnode_strings(parent, &DEVPKEY_Device_CompatibleIds)
-        .iter()
+    bus_from_compatible_ids(&devnode_strings(parent, &DEVPKEY_Device_CompatibleIds))
+}
+
+fn bus_from_compatible_ids(ids: &[String]) -> HidBus {
+    const TOKENS: [(&str, HidBus); 5] = [
+        ("USB", HidBus::Usb),
+        ("BTHENUM", HidBus::Bluetooth),
+        ("BTHLEDEVICE", HidBus::BluetoothLe),
+        ("PNP0C50", HidBus::I2c),
+        ("PNP0C51", HidBus::Spi),
+    ];
+    ids.iter()
+        .filter(|id| !id.is_empty())
         .find_map(|id| {
             let id = id.to_ascii_uppercase();
-            if id.starts_with("USB") {
-                Some(HidBus::Usb)
-            } else if id.starts_with("BTHENUM") {
-                Some(HidBus::Bluetooth)
-            } else if id.starts_with("BTHLEDEVICE") {
-                Some(HidBus::BluetoothLe)
-            } else if id.starts_with("PNP0C50") {
-                Some(HidBus::I2c)
-            } else if id.starts_with("PNP0C51") {
-                Some(HidBus::Spi)
-            } else {
-                None
-            }
+            TOKENS
+                .iter()
+                .find_map(|(token, bus)| id.contains(token).then_some(*bus))
         })
         .unwrap_or(HidBus::Unknown)
 }
@@ -380,6 +388,27 @@ pub fn read_caps(path: &str) -> Result<Caps, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transport_from_compatible_ids_follows_hidapi_c() {
+        let bus =
+            |ids: &[&str]| bus_from_compatible_ids(&ids.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(
+            bus(&["USB\\Class_03&SubClass_00&Prot_00", "USB\\Class_03"]),
+            HidBus::Usb
+        );
+        assert_eq!(
+            bus(&["BTHENUM\\{00001124-0000-1000-8000-00805f9b34fb}"]),
+            HidBus::Bluetooth
+        );
+        assert_eq!(bus(&["ACPI\\PNP0C50", "*PNP0C50"]), HidBus::I2c);
+        // Hyper-V synthetic mouse: no known token, and the list terminator is not a match.
+        assert_eq!(
+            bus(&["VMBUS\\{cfa8b69e-5b4a-4cc0-b98b-8ba1a1f3f95a}", ""]),
+            HidBus::Unknown
+        );
+        assert_eq!(bus(&[]), HidBus::Unknown);
+    }
 
     #[test]
     fn vid_pid_from_usb_and_bluetooth_paths() {

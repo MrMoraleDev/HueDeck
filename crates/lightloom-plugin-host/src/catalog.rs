@@ -122,8 +122,10 @@ fn read_meta(root: &Path, file: &Path, budget: Duration) -> Result<PluginMeta, S
         Ok(exports.meta)
     })
     .map_err(|_| "plugin thread panicked".to_string())??;
+    // Hybrid plugins also need libusb bulk/control transfers, which device
+    // sessions do not provide yet: refusing them beats faking that I/O.
     match loaded.plugin_type {
-        PluginType::Hid | PluginType::Hybrid => Ok(loaded),
+        PluginType::Hid => Ok(loaded),
         other => Err(format!(
             "plugin type {other:?} is not supported by device sessions yet"
         )),

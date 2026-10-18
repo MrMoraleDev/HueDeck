@@ -21,6 +21,7 @@
 //! * [`session`]: one device session = one plugin thread running
 //!   Validate → Initialize → Render per frame → Shutdown.
 //! * [`catalog`]: plugin discovery over plugin directories (VID:PID index).
+//! * [`stats`]: fixed-memory latency histograms for long-running sessions.
 //! * [`exports`]: namespace JSON → [`PluginMeta`].
 //! * [`dryrun`]: the `lightloom compat dry-run` corpus harness.
 // TODO(M2): `bus.*` (SMBus), channels/components, subdevices, hotplug, watchdog fault policy.
@@ -36,6 +37,7 @@ pub mod meta;
 pub mod resolve;
 pub mod runtime;
 pub mod session;
+pub mod stats;
 
 pub use loader::{Loader, LoaderError, PluginIndex};
 pub use meta::{ControllableParameter, DeviceType, PluginMeta, PluginType, ProductIdExport};

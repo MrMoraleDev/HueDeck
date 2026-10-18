@@ -19,10 +19,14 @@
 //!    feature-report reads and returns a [`SessionReport`].
 
 use crate::catalog::CatalogEntry;
-use crate::device::{lock_device, Brightness, DeviceContext, IoRecord, IoStats, LogSink, WriteMode};
+use crate::device::{
+    lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
+};
 use crate::runtime::{CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
+use crate::stats::LatencyHistogram;
 use lightloom_engine::{FrameStore, Placement, SamplerConfig};
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -142,46 +146,7 @@ impl std::fmt::Debug for SessionOptions {
     }
 }
 
-/// Percentiles of a latency sample, in milliseconds (nearest rank).
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
-pub struct LatencySummary {
-    /// Samples.
-    pub count: usize,
-    /// Median.
-    pub p50_ms: f64,
-    /// 95th percentile.
-    pub p95_ms: f64,
-    /// 99th percentile.
-    pub p99_ms: f64,
-    /// Maximum.
-    pub max_ms: f64,
-    /// Mean.
-    pub mean_ms: f64,
-}
-
-impl LatencySummary {
-    /// Summary of samples given in microseconds.
-    pub fn from_micros(samples: &[u32]) -> Self {
-        if samples.is_empty() {
-            return Self::default();
-        }
-        let mut sorted = samples.to_vec();
-        sorted.sort_unstable();
-        let rank = |p: f64| {
-            let idx = ((p / 100.0) * sorted.len() as f64).ceil() as usize;
-            sorted[idx.clamp(1, sorted.len()) - 1] as f64 / 1000.0
-        };
-        let sum: u64 = sorted.iter().map(|&v| v as u64).sum();
-        Self {
-            count: sorted.len(),
-            p50_ms: rank(50.0),
-            p95_ms: rank(95.0),
-            p99_ms: rank(99.0),
-            max_ms: *sorted.last().unwrap_or(&0) as f64 / 1000.0,
-            mean_ms: sum as f64 / sorted.len() as f64 / 1000.0,
-        }
-    }
-}
+pub use crate::stats::LatencySummary;
 
 /// A lifecycle call that failed.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -317,9 +282,14 @@ impl SessionReport {
         });
     }
 
-    /// No lifecycle failure, no fault, no HID error.
+    /// No lifecycle failure, no fault, no HID error, and every requested
+    /// restore check found the device as it was before.
     pub fn is_clean(&self) -> bool {
-        self.failures.is_empty() && self.faulted.is_none() && self.io.errors() == 0 && self.render_errors == 0
+        self.failures.is_empty()
+            && self.faulted.is_none()
+            && self.io.errors() == 0
+            && self.render_errors == 0
+            && self.restore_checks.iter().all(|c| c.identical)
     }
 }
 
@@ -484,17 +454,24 @@ fn run(
         default_scale: meta.default_scale,
         ..SamplerConfig::default()
     });
-    ctx.set_geometry(meta.size, meta.led_positions.clone());
     ctx.set_placement(
         opts.placement
             .clone()
             .unwrap_or_else(|| Placement::from_defaults(meta.default_position, meta.default_scale)),
     );
+    let geometry = ctx.set_geometry(meta.size, meta.led_positions.clone());
     let shared = ctx.shared();
+    if let Err(e) = geometry {
+        report.faulted = Some(format!("Size() export rejected: {e}"));
+        return finish(report, &shared, None, started);
+    }
 
+    // Device sessions get the real host modules: an unimplemented `@SignalRGB/*`
+    // module throws HostApiMissing instead of answering with stub data.
     let ropts = RuntimeOptions {
         plugin_root: Some(plugin.root.clone()),
         device: Some(Arc::clone(&shared)),
+        module_stubs: false,
         ..RuntimeOptions::default()
     };
     let rt = match PluginRuntime::new(&meta.source_path, &ropts) {
@@ -504,42 +481,143 @@ fn run(
             return finish(report, &shared, None, started);
         }
     };
+
+    // Everything up to the end of the render loop runs under catch_unwind: a
+    // panic (in a native, the engine or the host) must not skip Shutdown(false).
+    let mut lifecycle = Lifecycle::default();
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        drive(
+            &rt,
+            &device,
+            &shared,
+            &frames,
+            &opts,
+            stop,
+            live,
+            &mut report,
+            &mut lifecycle,
+        )
+    }));
+    // A panic that unwound through the engine leaves its lock poisoned: every
+    // later engine call would panic again (dropping it too). Probe once.
+    let mut healthy = true;
+    if let Err(panic) = outcome {
+        report.faulted = Some(format!("plugin thread panicked: {}", panic_text(panic.as_ref())));
+        healthy = catch_unwind(AssertUnwindSafe(|| rt.memory_used())).is_ok();
+    }
+    report.render = lifecycle.render.summary();
+
+    live.set_state(SessionState::Stopping);
+    if lifecycle.initialize_called && !opts.skip_shutdown {
+        if healthy {
+            let shutdown = catch_unwind(AssertUnwindSafe(|| {
+                rt.call_export("Shutdown", CallArgs::Bool(false), budgets.shutdown)
+            }));
+            match shutdown {
+                Ok(Ok(called)) => report.shutdown_called = called,
+                Ok(Err(e)) => report.fail("Shutdown", e),
+                Err(panic) => {
+                    healthy = false;
+                    report.fail(
+                        "Shutdown",
+                        JsFailure {
+                            class: "HostPanic".into(),
+                            message: panic_text(panic.as_ref()),
+                        },
+                    );
+                }
+            }
+        } else {
+            report.fail(
+                "Shutdown",
+                JsFailure {
+                    class: "HostPanic".into(),
+                    message: "not attempted: the plugin engine is unusable after a panic".into(),
+                },
+            );
+        }
+    }
+    for (probe, bytes) in lifecycle.before {
+        let after = lock_device(&shared)
+            .probe_feature(probe.report_id, probe.len)
+            .unwrap_or_default();
+        report
+            .restore_checks
+            .push(RestoreCheck::new(probe.report_id, bytes, after));
+    }
+    if !healthy {
+        // Dropping a poisoned engine panics; leak it (once, in an already failed session).
+        std::mem::forget(rt);
+        return finish(report, &shared, None, started);
+    }
+    finish(report, &shared, Some(&rt), started)
+}
+
+/// What [`drive`] leaves behind for the shutdown phase.
+#[derive(Default)]
+struct Lifecycle {
+    /// `Initialize()` was called (even if it threw): `Shutdown(false)` is due.
+    initialize_called: bool,
+    /// Feature reports read before `Initialize`, for the restore check.
+    before: Vec<(RestoreProbe, Vec<u8>)>,
+    /// `Render()` wall times.
+    render: LatencyHistogram,
+}
+
+/// Load → parameters → Validate → open → restore probes → Initialize → render loop.
+#[allow(clippy::too_many_arguments)]
+fn drive(
+    rt: &PluginRuntime,
+    device: &SessionDevice,
+    shared: &SharedDevice,
+    frames: &FrameStore,
+    opts: &SessionOptions,
+    stop: &AtomicBool,
+    live: &LiveStats,
+    report: &mut SessionReport,
+    lifecycle: &mut Lifecycle,
+) {
+    let budgets = opts.budgets;
     let loaded = rt.load(budgets.load);
     if let Some(e) = loaded.error {
         report.fail("load", e);
-        return finish(report, &shared, Some(&rt), started);
+        return;
     }
     if let Err(e) = rt.prepare_device(device.vid, device.pid, budgets.validate) {
         report.fail("parameters", e);
-        return finish(report, &shared, Some(&rt), started);
+        return;
     }
     if !opts.parameters.is_empty() {
         let values = serde_json::Value::Object(opts.parameters.clone());
         if let Err(e) = rt.set_globals(&values, budgets.validate) {
             report.fail("parameters", e);
-            return finish(report, &shared, Some(&rt), started);
+            return;
         }
     }
 
-    // Validate every collection; the first accepted one becomes the active endpoint.
-    let mut chosen = None;
+    // Validate every collection; the first accepted one becomes the active endpoint,
+    // and set_endpoint may later switch among the accepted ones only.
+    let mut validated = Vec::new();
     for (i, ep) in device.endpoints.iter().enumerate() {
         match rt.validate(&ep.endpoint_tuple(), budgets.validate) {
-            Ok(true) => {
-                report.validated += 1;
-                chosen.get_or_insert(i);
-            }
+            Ok(true) => validated.push(i),
             Ok(false) => {}
             Err(e) => report.fail(format!("Validate #{i}"), e),
         }
     }
-    let Some(index) = chosen else {
+    report.validated = validated.len();
+    let Some(&index) = validated.first() else {
         report.faulted = Some("no collection passed Validate(endpoint)".into());
-        return finish(report, &shared, Some(&rt), started);
+        return;
     };
-    if let Err(e) = lock_device(&shared).open(index) {
-        report.faulted = Some(format!("cannot open {}: {e}", device.endpoints[index].path));
-        return finish(report, &shared, Some(&rt), started);
+    {
+        let mut dev = lock_device(shared);
+        dev.set_validated(validated.clone());
+        if let Err(e) = dev.open(index) {
+            drop(dev);
+            report.faulted = Some(format!("cannot open {}: {e}", device.endpoints[index].path));
+            return;
+        }
     }
     report.endpoint = Some(device.endpoints[index].endpoint_tuple());
     report.endpoint_path = Some(device.endpoints[index].path.clone());
@@ -548,7 +626,7 @@ fn run(
         RestoreCheckMode::Off => Vec::new(),
         RestoreCheckMode::Reports(list) => list.clone(),
         RestoreCheckMode::DeclaredFeatureReports => {
-            let declared = lock_device(&shared).feature_reports();
+            let declared = lock_device(shared).feature_reports();
             if declared.is_empty() {
                 report
                     .restore_notes
@@ -563,10 +641,9 @@ fn run(
                 .collect()
         }
     };
-    let mut before = Vec::new();
     for p in probes {
-        match lock_device(&shared).probe_feature(p.report_id, p.len) {
-            Some(bytes) => before.push((p, bytes)),
+        match lock_device(shared).probe_feature(p.report_id, p.len) {
+            Some(bytes) => lifecycle.before.push((p, bytes)),
             None => report.restore_notes.push(format!(
                 "feature report 0x{:02X} ({} bytes) could not be read before Initialize",
                 p.report_id, p.len
@@ -574,82 +651,73 @@ fn run(
         }
     }
 
+    lifecycle.initialize_called = true;
     match rt.call_export("Initialize", CallArgs::None, budgets.initialize) {
         Ok(_) => report.initialized = true,
         Err(e) => report.fail("Initialize", e),
     }
+    if let Some(fatal) = lock_device(shared).fatal() {
+        report.faulted = Some(fatal.to_string());
+        return;
+    }
+    if !report.initialized {
+        return;
+    }
 
-    if report.initialized {
-        live.set_state(SessionState::Running);
-        let mut render_us = Vec::new();
-        let mut last_seq = 0;
-        let mut consecutive_timeouts = 0u32;
-        while !stop.load(Ordering::Acquire) {
-            let Some(seq) = frames.wait_for_newer(last_seq, Duration::from_millis(100)) else {
-                continue;
-            };
-            last_seq = seq;
-            let (_, frame) = frames.latest();
-            lock_device(&shared).set_frame(frame);
-            let t = Instant::now();
-            let result = rt.call_export("Render", CallArgs::None, budgets.render);
-            render_us.push(t.elapsed().as_micros().min(u32::MAX as u128) as u32);
-            report.frames += 1;
-            live.frames.fetch_add(1, Ordering::Relaxed);
-            match result {
-                Ok(_) => consecutive_timeouts = 0,
-                Err(e) => {
-                    report.render_errors += 1;
-                    live.render_errors.fetch_add(1, Ordering::Relaxed);
-                    let timeout = e.class == "Timeout";
-                    if report.render_errors <= 5 {
-                        report.fail("Render", e);
+    live.set_state(SessionState::Running);
+    let mut last_seq = 0;
+    let mut consecutive_timeouts = 0u32;
+    while !stop.load(Ordering::Acquire) {
+        let Some(seq) = frames.wait_for_newer(last_seq, Duration::from_millis(100)) else {
+            continue;
+        };
+        last_seq = seq;
+        let (_, frame) = frames.latest();
+        lock_device(shared).set_frame(frame);
+        let t = Instant::now();
+        let result = rt.call_export("Render", CallArgs::None, budgets.render);
+        lifecycle.render.record(t.elapsed());
+        report.frames += 1;
+        live.frames.fetch_add(1, Ordering::Relaxed);
+        match result {
+            Ok(_) => consecutive_timeouts = 0,
+            Err(e) => {
+                report.render_errors += 1;
+                live.render_errors.fetch_add(1, Ordering::Relaxed);
+                let timeout = e.class == "Timeout";
+                if report.render_errors <= 5 {
+                    report.fail("Render", e);
+                }
+                if timeout {
+                    consecutive_timeouts += 1;
+                    if consecutive_timeouts >= opts.max_render_timeouts {
+                        report.faulted = Some(format!(
+                            "Render() exceeded its {} ms budget {consecutive_timeouts} times in a row",
+                            budgets.render.as_millis()
+                        ));
+                        break;
                     }
-                    if timeout {
-                        consecutive_timeouts += 1;
-                        if consecutive_timeouts >= opts.max_render_timeouts {
-                            report.faulted = Some(format!(
-                                "Render() exceeded its {} ms budget {consecutive_timeouts} times in a row",
-                                budgets.render.as_millis()
-                            ));
-                            break;
-                        }
-                    } else {
-                        consecutive_timeouts = 0;
-                    }
+                } else {
+                    consecutive_timeouts = 0;
                 }
             }
-            let dev = lock_device(&shared);
-            live.hid_errors.store(dev.stats().errors(), Ordering::Relaxed);
-            if let Some(d) = dev.first_write() {
-                live.first_write_us
-                    .store((d.as_micros() as u64).max(1), Ordering::Relaxed);
-            }
         }
-        report.render = LatencySummary::from_micros(&render_us);
-    }
-
-    live.set_state(SessionState::Stopping);
-    if !opts.skip_shutdown {
-        match rt.call_export("Shutdown", CallArgs::Bool(false), budgets.shutdown) {
-            Ok(called) => report.shutdown_called = called,
-            Err(e) => report.fail("Shutdown", e),
+        let dev = lock_device(shared);
+        live.hid_errors.store(dev.stats().errors(), Ordering::Relaxed);
+        if let Some(d) = dev.first_write() {
+            live.first_write_us
+                .store((d.as_micros() as u64).max(1), Ordering::Relaxed);
+        }
+        if let Some(fatal) = dev.fatal() {
+            report.faulted = Some(fatal.to_string());
+            break;
         }
     }
-    for (probe, bytes) in before {
-        let after = lock_device(&shared)
-            .probe_feature(probe.report_id, probe.len)
-            .unwrap_or_default();
-        report
-            .restore_checks
-            .push(RestoreCheck::new(probe.report_id, bytes, after));
-    }
-    finish(report, &shared, Some(&rt), started)
 }
 
 fn finish(
     mut report: SessionReport,
-    shared: &crate::device::SharedDevice,
+    shared: &SharedDevice,
     rt: Option<&PluginRuntime>,
     started: Instant,
 ) -> SessionReport {
@@ -658,7 +726,7 @@ fn finish(
     }
     let mut dev = lock_device(shared);
     report.io = dev.stats().clone();
-    report.write = LatencySummary::from_micros(dev.write_micros());
+    report.write = dev.write_latency();
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
     let (tail, lines) = dev.log_tail();
@@ -672,19 +740,6 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn latency_summary_uses_nearest_rank() {
-        let samples: Vec<u32> = (1..=100).map(|v| v * 1000).collect();
-        let s = LatencySummary::from_micros(&samples);
-        assert_eq!(s.count, 100);
-        assert_eq!(
-            (s.p50_ms, s.p95_ms, s.p99_ms, s.max_ms),
-            (50.0, 95.0, 99.0, 100.0)
-        );
-        assert!((s.mean_ms - 50.5).abs() < 1e-9);
-        assert_eq!(LatencySummary::from_micros(&[]), LatencySummary::default());
-    }
 
     #[test]
     fn restore_check_lists_differences() {

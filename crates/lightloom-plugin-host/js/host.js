@@ -126,6 +126,26 @@ function hostLog(text) {
   }
 }
 
+/**
+ * Device mode: a documented member Lightloom does not implement yet. Recorded as
+ * an API gap, logged once, and throws HostApiMissing when called, so a plugin
+ * never acts on stub data in a real session.
+ */
+function unimplementedMember(member) {
+  return function lightloomUnimplemented() {
+    gap(member);
+    if (!state.gapsLogged.has(member)) {
+      state.gapsLogged.add(member);
+      hostLog(`API_GAP: ${member} is not implemented by this host`);
+    }
+    throw new HostApiMissing(member);
+  };
+}
+
+function unimplemented(objectName, names) {
+  return fromEntries(names.map((n) => [n, unimplementedMember(`${objectName}.${n}`)]));
+}
+
 /** Device mode: an unimplemented member logs once, then throws a typed error when called. */
 function gapThrower(member) {
   return function lightloomApiGap() {
@@ -486,9 +506,13 @@ function reportIdArg(data) {
   return 0;
 }
 
+// Reads may block at most 5 s, so a stop request (Ctrl-C, window close) still
+// leaves the session time to run Shutdown() before the host gives up on it.
+const MAX_READ_TIMEOUT_MS = 5000;
+
 function timeoutArg(timeout, fallback) {
   const t = Number(timeout);
-  return Number.isFinite(t) && t >= 0 ? Math.min(Math.trunc(t), 60000) : fallback;
+  return Number.isFinite(t) && t >= 0 ? Math.min(Math.trunc(t), MAX_READ_TIMEOUT_MS) : fallback;
 }
 
 /** `device.log(value[, { toFile, hex }])`; `hex` prints a byte array as hex. */
@@ -502,7 +526,45 @@ function deviceLog(value, ...rest) {
 }
 
 if (native !== undefined) {
+  const stubAddFeature = deviceTarget.addFeature;
   Object.assign(deviceTarget, {
+    // Not implemented in device sessions yet: these throw instead of answering
+    // with stub data (libusb transfers and subdevices: M2, fans: M5, LCD: M6).
+    ...unimplemented("device", [
+      "bulk_transfer",
+      "control_transfer",
+      "setProtocol",
+      "createSubdevice",
+      "removeSubdevice",
+      "subdeviceColor",
+      "setSubdeviceName",
+      "setSubdeviceSize",
+      "setSubdeviceLeds",
+      "setSubdeviceLedMap",
+      "setSubdeviceImageUrl",
+      "setSubdeviceImage",
+      "SetIsSubdeviceController",
+      "createFanControl",
+      "removeFanControl",
+      "setRPM",
+      "getFanlevel",
+      "getFanLevel",
+      "getNormalizedFanlevel",
+      "getNormalizedFanLevel",
+      "getImageBuffer",
+      "getMotherboardName",
+    ]),
+    getCurrentSubdevices: () => [],
+    // Lightloom does not drive fans yet; plugins that check this skip fan control.
+    fanControlDisabled: () => true,
+    // Network features need sockets Lightloom does not provide to device plugins yet.
+    addFeature: (name) => {
+      const key = String(name);
+      if (key === "udp" || key === "dtls") {
+        unimplementedMember(`device.addFeature(${key})`)();
+      }
+      return stubAddFeature(name);
+    },
     write: (data, length) => native.hidWrite(bytesArg(data, length)),
     send_report: (data, length) => native.hidSendFeature(bytesArg(data, length)),
     read: (data, length, timeout) => native.hidRead(lengthArg(data, length), timeoutArg(timeout, 100)),
@@ -763,7 +825,8 @@ g.__lightloom = {
 };
 g.console = consoleStub;
 g.device = recording("device", deviceTarget);
-g.bus = recording("bus", busMembers(true));
+// SMBus is not available to device sessions yet (M5): every `bus.*` member throws there.
+g.bus = native !== undefined ? recording("bus", {}) : recording("bus", busMembers(true));
 g.service = recording("service", serviceTarget);
 // Plain-data snapshot of the plugin's own controller object / the plugin's
 // DiscoveryService instance: unknown fields are plugin data, not host API.

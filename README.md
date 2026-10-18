@@ -1,105 +1,122 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<div align="center">
+
 # Lightloom
 
-**A standalone, open-source RGB manager for Windows (Linux next): one download,
-your lights, no account, no telemetry, no ads.** Devices are driven by Lightloom's own
-plugin library; effects are HTML5-canvas lightscripts; a local dashboard runs in
-your browser. Compatibility with SignalRGB's plugins and effects is an optional
-extra, never a requirement.
+### Every light in your setup. One open app. Nothing else to install.
 
-Status: **pre-alpha, M4 (daemon and dashboard)**. `lightloomd` drives the connected
-devices with their plugins, renders effects in offscreen Chromium, keeps settings in
-SQLite and serves the dashboard and a local API on `127.0.0.1:16138`. Its own plugin
-library is small (four device families so far); growing it is the current priority
-(see [How device support works](#how-device-support-works)). No installer yet. See
-[Milestones](#milestones).
+Lightloom is a free, open-source RGB lighting manager. It talks to your motherboard,
+mouse, cooler, headset and LED strips directly, plays effects written as web pages,
+and gives you a modern dashboard in your browser.
 
-## What Lightloom is
+**No account. No telemetry. No ads. No paid tier.**
 
-- `lightloomd` - per-user daemon, unprivileged: device registry and plugin host,
-  layout and sampling, effect pipeline, persistence (SQLite), local HTTP/WS API and
-  the dashboard (`http://127.0.0.1:16138`).
-- `lightloom` - command-line tool (`devices`, `light`, `rainbow`, `effect`, `bench`,
-  `record`/`replay`, `compat dry-run`).
-- `lightloom-renderer` - effects run in real Chromium (CEF, offscreen) in their own
-  process and reach the daemon as 320x200 frames through shared memory.
-- `lightloom-iobroker` - **optional** Windows service for SMBus / GPU-I2C / SuperIO
-  through [PawnIO](https://pawnio.eu/); installed only on explicit opt-in. Not
-  needed on Linux and not needed for HID, USB, serial or network devices.
+[![CI](https://github.com/MrMoraleDev/Lightloom/actions/workflows/ci.yml/badge.svg)](https://github.com/MrMoraleDev/Lightloom/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+![Platform: Windows, Linux planned](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20planned-informational)
+![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 
-No custom kernel driver, no account, no telemetry, no ads, no process killing, no
-marketplace.
+[Why Lightloom](#why-lightloom) · [Features](#features) · [Devices](#supported-devices) ·
+[Quick start](#quick-start) · [Add your device](#add-your-device) · [Roadmap](#roadmap)
 
-## Architecture summary
+</div>
 
-```
-+---------------------------------------------------------------------------------+
-| Dashboard (any browser, http://127.0.0.1:16138) | 3rd-party tools (:16038/:16034)|
-+-----------------------+---------------------------------------------------------+
-                        | loopback HTTP/WS (native API token-authed; compat shape-copied)
-+-----------------------v---------------------------------------------------------+
-| lightloomd   per-user, UNPRIVILEGED, tokio                                        |
-|   lightloom-api ---> lightloom-engine: registry | layouts + sampling | FrameStore    |
-|                    scheduler | channels/components | fan curves | SQLite | events |
-|   lightloom-plugin-host   one rquickjs runtime per plugin OS thread               |
-|                         device.* / bus.* / channel / service / controller       |
-|                         @SignalRGB/* shims (plain JS prelude), compat-v1 profile |
-|   lightloom-inputs        audio FFT (200 bins) | screen zones 28x20 | sensors      |
-|   lightloom-render        RendererClient: null (M1, CI) | cef (shm frames)         |
-|   lightloom-hal           traits + mock; hal-windows (hidapi, nusb/WinUSB,         |
-|                         serialport, CM_Register_Notification, LampArray)         |
-|                         hal-linux (hidraw, nusb, serialport, udev, i2cdev, hwmon) |
-+-----------+----------------------------------------+----------------------------+
-            | shm: 3 x 320x200 BGRA + engine data    | named pipe / unix socket
-            | + seq, control pipe                    | postcard, closed op enum
-+-----------v--------------------+    +--------------v-----------------------------+
-| lightloom-renderer (user)        |    | lightloom-iobroker (Windows service,         |
-|  CEF offscreen Chromium        |    |  LocalSystem, OPTIONAL, opt-in install)    |
-|  320x200 @ 30 fps              |    |  PawnIO client (pinned modules), NvAPI I2C |
-|  URL filter = effect dir only  |    |  one global mutex per SMBus transaction,   |
-|  +1 browser per LCD face       |    |  allowlists, SPD write denial, audit log   |
-+--------------------------------+    +--------------------------------------------+
-```
+> **Pre-alpha.** Lightloom already drives real hardware with its own plugins, renders
+> effects and has a working dashboard, but there is no installer yet: today you build
+> it from source. Watch the repository to catch the first release.
 
-Frame path: Chromium paints the effect -> shm slot + sequence number -> daemon
-FrameStore (triple buffer) -> each plugin thread wakes, samples its LEDs through a
-precomputed offset table, applies brightness/lighting mode, calls the plugin's
-`Render()` -> HID/USB/serial/SMBus write on that same thread. Slow devices skip to
-the latest frame; nothing queues.
+## Why Lightloom
 
-Long form: [docs/architecture.md](docs/architecture.md) (concise, current) and
-[docs/architecture-synthesis.md](docs/architecture-synthesis.md) (panel synthesis,
-decision log D1-D18). Decisions: [docs/adr/](docs/adr/).
+- **Standalone.** Download Lightloom and control your lights. No vendor suite, no other
+  RGB program in the background, no cloud service.
+- **Private by design.** No account, no sign-in, no telemetry, no ads, no "Pro"
+  subscription. Lightloom never phones home: its daemon listens only on `127.0.0.1`,
+  and every change needs a token that only your user account can read.
+- **A dashboard you will enjoy using.** Pick an effect and tune it live, save presets,
+  watch a live preview of the canvas and drag your devices into place on a visual
+  layout. It runs in any browser, served by Lightloom itself.
+- **Effects are web pages.** Every effect is an HTML5 canvas page rendered by real
+  Chromium, so anything a browser can draw can light up your room. In our tests,
+  20 out of 20 effects came out bit-identical to Chrome.
+- **Fast and light.** A Rust daemon with one thread per device: colours reach the
+  hardware 2 to 4 ms after the effect paints them, 30 times a second.
+- **Easy to extend.** One small JavaScript file per device family; supporting a new
+  model of a known family is usually one more product id. An effect is one `.html`
+  file.
+- **Kind to your hardware.** No kernel driver, no admin rights for USB devices,
+  `--dry-run` to see every packet before anything is written, devices handed back
+  cleanly on exit, and other apps are never killed: Lightloom tells you what to close.
+- **Already using SignalRGB?** Lightloom can optionally use your SignalRGB effects,
+  plugins and layout too ([details](#signalrgb-compatibility-optional)).
+- **Free forever.** GPL-3.0-or-later: nobody can ship a closed Lightloom with ads or
+  spyware added. Plugins and effects can use any license.
 
-## How device support works
+## Features
 
-A device plugin is one small JavaScript file per device *family*: it says which USB
-ids it drives and turns the LED colours Lightloom samples from the canvas into the
-packets the device expects. Supporting another model of a family Lightloom already
-has usually means adding its product id to that file. The host API is the one
-SignalRGB plugins are written against (documented in [docs/host-api/](docs/host-api/)),
-so both kinds run on the same loader.
+### One canvas for the whole setup
 
-1. **Lightloom's own plugin library** (`plugins/`, MIT) is what ships with Lightloom and
-   needs nothing else installed. Its protocols come from the devices' own traffic
-   (Lightloom records and replays every HID exchange: `lightloom light ... --record`,
-   `lightloom compat replay`), public standards (HID LampArray, QMK/VIA) and vendors'
-   published APIs (network lights). No code is copied from other RGB software.
-   Today it covers, tested on the reference machine: MSI Mystic Light 185-byte
-   boards (`1462:7C91`), the Razer DeathAdder V2 Pro (`1532:007C`), NZXT Kraken
-   X53/X63/X73 (`1E71:2007`) and the SteelSeries Arctis 5 (`1038:12AA`). Generic HID
-   LampArray devices and network lights (WLED, Philips Hue, Govee, Nanoleaf, LIFX,
-   Yeelight) are next. Adding a device: [plugins/README.md](plugins/README.md).
-2. **Your own plugins and effects**: `%APPDATA%\Lightloom\plugins` and `...\effects`.
-3. **Optional: your SignalRGB installation.** With the setting on, Lightloom also
-   uses the plugins, effects and components of a local SignalRGB installation, read
-   where they are (never copied, never changed), and can import its canvas layout
-   and channel setup. Lightloom never ships, downloads or redistributes
-   WhirlwindFX-authored files.
+- Effects paint a 320×200 canvas; every device takes its colours from where it sits
+  on the layout, so an effect flows across your desk from device to device.
+- Per-device position, size, rotation and mirroring; global, layout and per-device
+  brightness; several layouts to switch between.
+- ARGB headers: tell Lightloom what is connected (fans, strips, how many LEDs) and
+  every component gets its own place on the canvas.
+- Hot-plug: unplug and replug a device, and Lightloom picks it up again.
 
-Plugins the host does not understand fail loudly: an unknown host member is logged
-once as `API_GAP` and then throws, and `lightloom compat dry-run <dir>` reports the
-gaps for a whole directory before you depend on it.
+### Effects
+
+- 13 starter effects included, public domain (CC0): rainbow wave, plasma, aurora,
+  fire, starfield, shader waves (WebGL), breathing, conic spin, marquee text, solid
+  colour, test pattern, plus audio bars and screen ambience (live audio and screen
+  input arrive with M6).
+- An effect's `<meta>` tags become dashboard controls (sliders, colour pickers, lists,
+  switches) automatically; save your favourite settings as presets.
+- Drop your own `.html` file into the effects folder and it shows up in the list.
+- Games and tools can send events to the running effect over the local API.
+
+### Dashboard, API and command line
+
+- **Dashboard** at `http://127.0.0.1:16138`: effects with live controls and preview,
+  layout editor, devices and channels, settings, export and import of your whole
+  setup in one file.
+- **Local API**: everything the dashboard does, over REST and WebSocket (`/v1/...`),
+  with live state events and a live canvas stream. Script your lights.
+- **`lightloom` CLI**: list devices, set a colour, run an effect, record and replay
+  device traffic, benchmark latency.
+
+### SignalRGB compatibility (optional)
+
+Lightloom never needs SignalRGB. If you have it installed, one setting lets Lightloom
+also:
+
+- run the **device plugins** of your installation, for devices Lightloom's own library
+  does not cover yet;
+- run your **SignalRGB effects** unchanged;
+- use its **components** (fans, strips) to describe your ARGB channels;
+- **import your layout and channel setup** with one click;
+- answer tools and game integrations written for **SignalRGB's local API**
+  (ports 16038 and 16034) while SignalRGB itself is not running.
+
+Those files are read where they are: never copied, changed or redistributed. The
+plugin and effect formats are the same, so community plugins and effects in the
+SignalRGB format run in Lightloom too.
+
+## Supported devices
+
+Lightloom's own plugin library, tested on real hardware:
+
+| Device | USB id | What lights up |
+|---|---|---|
+| MSI Mystic Light boards (185-byte protocol), e.g. MAG B550 Tomahawk | `1462:7C91` | six onboard LED zones |
+| Razer DeathAdder V2 Pro (wired; receiver `007D` untested) | `1532:007C` | logo |
+| NZXT Kraken X53 / X63 / X73 | `1E71:2007` | pump ring, logo, RGB header on the pump |
+| SteelSeries Arctis 5 | `1038:12AA` | both ear cups |
+
+Coming next: the Sony DualSense light bar, per-LED ARGB strips on MSI JRAINBOW
+headers, any **HID LampArray** device (the Windows Dynamic Lighting standard),
+network lights (**WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeelight**), then many
+more families adapted from OpenRGB. Missing your device?
+[Add it](#add-your-device) or open an issue with its USB id.
 
 ## Quick start
 
@@ -118,8 +135,7 @@ to its executable (in a source checkout: the tree's `plugins/`, `effects/` and
 `%APPDATA%\Lightloom\config.toml` (ports, frame rate, extra plugin directories,
 devices to leave alone); `--home DIR` keeps everything in one directory,
 `--dry-run` never writes to devices. Close other RGB software that owns the same
-devices: Lightloom leaves them alone while it runs and tells you so, it never
-terminates other applications.
+devices: Lightloom leaves them alone while it runs and tells you so.
 
 The command-line tool drives devices without the daemon (stop `lightloomd` first):
 
@@ -133,59 +149,125 @@ target/release/lightloom compat replay t.json           # ... and replay it agai
 target/release/lightloom bench --mock 1462:7c91         # latency percentiles against a scripted device
 ```
 
-`--signalrgb` adds a local SignalRGB installation's plugins and channel setup
-(read in place). Effects results on the reference machine are in
-[docs/hardware/effects-m3.md](docs/hardware/effects-m3.md); the daemon and dashboard
-in [docs/hardware/daemon-m4.md](docs/hardware/daemon-m4.md).
+Measurements on the reference machine: [effects](docs/hardware/effects-m3.md),
+[daemon and dashboard](docs/hardware/daemon-m4.md).
 
-## Milestones
+## Add your device
+
+A device plugin is one JavaScript file per device family. The heart of the Razer
+plugin:
+
+```js
+export function Name() { return "Razer DeathAdder V2 Pro"; }
+export function VendorId() { return 0x1532; }
+export function ProductId() { return [0x007C, 0x007D]; }  // a new model: often just one more id
+export function Size() { return [1, 1]; }
+export function LedNames() { return ["Logo"]; }
+
+export function Render() {                 // 30 times a second
+  const [r, g, b] = device.color(0, 0);    // what the effect painted where the mouse sits
+  send(0x0F, 0x03, [0, 0, 0, 0, 0, r, g, b]);
+}
+```
+
+Three ways to learn a device's protocol, all documented in
+[plugins/README.md](plugins/README.md):
+
+1. **Record it.** Lightloom records every HID exchange (`--record`); a probe effect
+   paints each LED with its own coordinates, and the probe tools in
+   [tools/device-probe/](tools/device-probe/) read back which byte drives which LED.
+2. **Read the spec.** Public standards (HID LampArray) and vendors' published APIs
+   (WLED, Hue, Govee, Nanoleaf, LIFX, Yeelight).
+3. **Adapt it from OpenRGB.** Its device code is GPL-2.0-or-later, so it can become
+   a Lightloom plugin, with its authors credited in the file.
+
+Every first-party plugin is tested byte for byte against recorded traffic
+(`node --test "plugins/**/*.test.mjs"`), and `lightloom bench --mock` runs it in the
+real host against a scripted device before it touches hardware.
+
+## How it works
+
+```text
+ effect.html ──► Chromium, offscreen (lightloom-renderer) ──► 320×200 canvas, 30 fps
+                                                              │ shared memory
+                                                              ▼
+ dashboard ◄─► local API ◄─► lightloomd (Rust): layout, brightness, SQLite settings
+                                │
+                                └─► one thread per device: its plugin turns the
+                                    sampled colours into packets ──► USB / HID
+```
+
+- `lightloomd`: the per-user, unprivileged daemon: device plugins, layout and
+  sampling, effects, settings (SQLite), local API and dashboard.
+- `lightloom`: the command-line tool.
+- `lightloom-renderer`: effects in real Chromium (CEF), in a process of their own; a
+  crashed effect is restarted in under 2 seconds, holding the last frame meanwhile.
+- `lightloom-iobroker` (planned, M5, opt-in): an optional Windows service for RAM,
+  GPU and other SMBus devices through the signed [PawnIO](https://pawnio.eu/)
+  driver. Not needed for USB, HID, serial or network devices.
+
+Long form: [docs/architecture.md](docs/architecture.md). Decisions:
+[docs/adr/](docs/adr/).
+
+## Roadmap
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M0 | Workspace, pins, cargo-deny, CI (mock HAL), HAL traits, ADRs, Host API spec, CEF and rquickjs spikes | done |
-| M1 | First light, headless: MSI Mystic Light board from the CLI | done |
-| M2 | Compatible plugin host, corpus harness, hotplug, conformance suite | done (physical unplug test pending) |
-| M3 | Effects pipeline: CEF renderer, layouts, sampling, `lightloom bench` | done |
-| M4 | Daemon, SQLite persistence, local API, dashboard, import, installer | in progress: daemon, API, dashboard, SignalRGB import done; installer next |
-| Devices | Lightloom's own plugin library: Razer, NZXT, SteelSeries, MSI families, HID LampArray, network lights | in progress |
-| M5 | Privileged bus via `lightloom-iobroker` + PawnIO, NvAPI I2C, sensors | planned |
-| M6 | Audio/screen inputs, network device support, LCD faces, macros, OpenRGB SDK server | planned |
-| M7 | Linux backend, AppImage/Flatpak, 1.0 | planned |
+| M0 | Workspace, CI, hardware abstraction, decision records, host API spec | done |
+| M1 | First light from the command line (MSI Mystic Light) | done |
+| M2 | Plugin host, hot-plug, record and replay, conformance suite | done |
+| M3 | Effects in Chromium, layouts, sampling, benchmarks | done |
+| M4 | Daemon, settings, local API, dashboard, SignalRGB import, installer | in progress: installer next |
+| Devices | Lightloom's own plugin library: DualSense, MSI ARGB headers, HID LampArray, network lights, OpenRGB families | in progress |
+| M5 | RAM, GPU and SMBus devices through PawnIO, sensors | planned |
+| M6 | Audio and screen-reactive effects, network lights, LCD screens, macros, OpenRGB SDK server | planned |
+| M7 | Linux, AppImage/Flatpak, 1.0 | planned |
 
 ## Repository layout
 
-```
-crates/      Rust workspace crates (lightloom-hal, -plugin-host, -engine, -render, -renderer, -iobroker, ...)
-prelude/     plain-JS host shims (@SignalRGB/* facades, BinaryUtils, Errors, base64)
-plugins/     first-party MIT plugins        effects/     CC0 starter lightscripts
-components/  own component JSON library     schemas/     JSON Schemas + OpenAPI
-sdk/         lightloom.d.ts, Node simulator   tests/       conformance + integration
-docs/        host-api/ (spec), adr/, architecture.md, hardware/
-packaging/   wix, winget, systemd, udev, appimage, flatpak    tools/   gen-udev, pawnio-hash-pin, shm-dump
+```text
+crates/     Rust crates: daemon, CLI, plugin host, renderer, engine, API, hardware layers
+ui/         the dashboard (Svelte + TypeScript)
+plugins/    Lightloom's device plugins, with recorded fixtures and tests
+effects/    starter effects (CC0)
+prelude/    JavaScript host modules for plugins (@SignalRGB/* and @lightloom/*)
+schemas/    JSON Schemas of manifests, components, layouts and effect metadata
+docs/       host API spec, decision records, architecture, hardware notes
+tools/      device probe, effects benchmark, udev rule generator
+packaging/  systemd and udev files
+tests/      schema and conformance tests
 ```
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) (clean-room rule, DCO sign-off, conventional
-commits, how to run tests), [SECURITY.md](SECURITY.md) and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Device plugins, protocol recordings, effects, bug reports and reviews are all
+welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) (where code may come from,
+DCO sign-off, conventional commits, how to run the tests); security issues go
+through [SECURITY.md](SECURITY.md); the project follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-Code and the Host API specification: **Apache-2.0 OR MIT**, at your option
-([LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT)). First-party plugins
-under `plugins/` are MIT; starter effects under `effects/` are CC0-1.0. Pawn modules
-for PawnIO are LGPL-2.1 and upstreamed to PawnIO.Modules, never kept in this tree.
-Details in [ADR-0006](docs/adr/0006-license-apache-mit.md).
+Lightloom is free software under the **GNU General Public License v3.0 or later**
+([LICENSE](LICENSE)).
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for
-inclusion in Lightloom by you shall be dual licensed as above, without any additional
-terms or conditions.
+- You may use, study, share, modify and even sell it. Whoever distributes Lightloom,
+  modified or not, must pass on its source under the same license, so nobody can
+  ship a closed version with ads or telemetry added.
+- **Add-ons can use any license.** Device plugins, effects and other add-ons that
+  work through Lightloom's plugin, effect, file-format and local-API interfaces are not
+  bound by the GPL ([LICENSE-EXCEPTION.md](LICENSE-EXCEPTION.md)).
+- The starter effects in `effects/` are CC0-1.0: remix them freely.
+- Code adapted from other GPL projects, such as OpenRGB, keeps its authors'
+  copyright and names its source in every file.
+
+Details: [ADR-0010](docs/adr/0010-license-gpl-3.md). Contributions are accepted
+under the same license with a DCO sign-off.
 
 ## Trademarks
 
 SignalRGB is a trademark of Whirlwind Virtual Realities Inc. Lightloom is an
 independent project, not affiliated with, endorsed by or sponsored by Whirlwind
-Virtual Realities Inc.; the name is used only nominatively to describe
-compatibility. OpenRGB, PawnIO, Chromium, NVIDIA, AMD and all device vendor names
-are trademarks of their respective owners.
+Virtual Realities Inc.; the name is used only to describe compatibility. OpenRGB,
+PawnIO, Chromium, NVIDIA, AMD and all device vendor names are trademarks of their
+respective owners.

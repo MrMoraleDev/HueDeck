@@ -133,3 +133,103 @@ fn sessions_follow_unplug_replug_and_stale_handles() {
         "{current:#?}"
     );
 }
+
+#[test]
+fn a_session_that_failed_before_removal_stays_failed() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/device");
+    let plugin = Catalog::scan(&[dir], Duration::from_secs(10))
+        .lookup(0x1234, 0x3333)
+        .expect("failing plugin")
+        .clone();
+    let info = MockHid::endpoint_info(0x1234, 0x3333, "F", 0, 0xFF00, 1, 0, ReportLengths::default());
+    let mock = Arc::new(MockHid::new().add_endpoint(info.clone()));
+    let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    let backend: Arc<dyn HidBackend> = mock.clone();
+    let mut manager = DeviceManager::new(
+        backend,
+        frames,
+        Box::new(|_: &SessionDevice, _: &CatalogEntry| SessionOptions::default()),
+    );
+    let device = Present {
+        device: SessionDevice {
+            key: "1234:3333:F".into(),
+            vid: 0x1234,
+            pid: 0x3333,
+            endpoints: vec![info.clone()],
+        },
+        plugin,
+    };
+    manager.reconcile(vec![device]);
+    wait_until("the session to end", || manager.all_finished());
+    // Not restarted while plugged in; removed later.
+    assert!(
+        manager.reconcile(Vec::new())
+            == vec![Change::Removed {
+                key: "1234:3333:F".into()
+            }]
+    );
+    let (reports, _) = manager.finish();
+    assert_eq!(reports.len(), 1);
+    assert!(!reports[0].device_removed, "it had ended before the removal");
+    assert!(!reports[0].is_clean(), "the Initialize failure must stay visible");
+}
+
+#[test]
+fn restarts_of_a_device_back_off() {
+    let b = info("B");
+    let mock = Arc::new(MockHid::new().add_endpoint(b.clone()));
+    let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    let running = Arc::new(AtomicBool::new(true));
+    let publisher = {
+        let (frames, running) = (Arc::clone(&frames), Arc::clone(&running));
+        std::thread::spawn(move || {
+            while running.load(Ordering::Acquire) {
+                frames.publish(Frame::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })
+    };
+    let backend: Arc<dyn HidBackend> = mock.clone();
+    let mut manager = DeviceManager::new(
+        backend,
+        frames,
+        Box::new(|_: &SessionDevice, _: &CatalogEntry| SessionOptions::default()),
+    )
+    .with_restart_after(Duration::ZERO);
+    let plugin = plugin();
+    manager.reconcile(present(&mock, &plugin));
+    let rendering = |m: &DeviceManager| m.sessions().all(|h| h.live().frames > 2);
+    let stale = |m: &MockHid| {
+        m.unplug(&b.path).unwrap();
+        m.replug(&b.path).unwrap();
+    };
+    wait_until("B to render", || rendering(&manager));
+    stale(&mock);
+    wait_until("B to notice", || manager.has_disconnected());
+    assert_eq!(
+        manager.reconcile(present(&mock, &plugin)),
+        vec![Change::Restarted {
+            key: "1234:5555:B".into()
+        }]
+    );
+    // Stale again at once: the next restart waits for the backoff (1 s).
+    wait_until("the new session to render", || rendering(&manager));
+    stale(&mock);
+    wait_until("the new session to notice", || {
+        manager.sessions().any(|h| h.live().disconnected)
+    });
+    assert!(!manager.has_disconnected(), "backing off");
+    assert!(manager.reconcile(present(&mock, &plugin)).is_empty());
+    wait_until("the backoff to pass", || manager.has_disconnected());
+    assert_eq!(
+        manager.reconcile(present(&mock, &plugin)),
+        vec![Change::Restarted {
+            key: "1234:5555:B".into()
+        }]
+    );
+    let (reports, failed) = manager.finish();
+    running.store(false, Ordering::Release);
+    publisher.join().unwrap();
+    assert!(failed.is_empty(), "{failed:?}");
+    assert_eq!(reports.len(), 3);
+}

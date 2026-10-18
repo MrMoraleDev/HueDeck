@@ -477,6 +477,7 @@ impl DeviceContext {
             kind: crate::children::EndpointKind::Device,
             name: self.name().to_string(),
             channel: None,
+            product: None,
             size: self.size(),
             leds: self.led_positions().len(),
             placement: self.placement.clone(),

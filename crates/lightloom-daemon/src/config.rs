@@ -21,6 +21,9 @@
 //!
 //! [ui]
 //! # dir = "C:/.../ui/dist"
+//!
+//! [devices]
+//! ignore = []                   # "vid:pid" or "vid:pid:serial" prefixes Lightloom never opens
 //! ```
 
 use anyhow::Context;
@@ -41,6 +44,8 @@ pub struct Config {
     pub renderer: RendererConfig,
     /// Dashboard.
     pub ui: UiConfig,
+    /// Devices.
+    pub devices: DevicesConfig,
 }
 
 /// `[api]`.
@@ -88,6 +93,15 @@ impl Default for LightingConfig {
 pub struct PluginsConfig {
     /// Extra plugin directories (scanned after the built-in ones; later wins).
     pub dirs: Vec<PathBuf>,
+}
+
+/// `[devices]`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DevicesConfig {
+    /// Devices never driven, by key prefix (`vid:pid` or `vid:pid:serial`, hex):
+    /// Lightloom does not even open them.
+    pub ignore: Vec<String>,
 }
 
 /// `[renderer]`.

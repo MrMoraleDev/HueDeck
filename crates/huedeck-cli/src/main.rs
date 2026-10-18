@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //! `huedeck` — command-line client.
 //!
-//! M0 skeleton: the subcommand tree is final, every handler returns
-//! [`NotImplemented`] naming the milestone that fills it in.
+//! The subcommand tree is final; handlers not implemented yet return
+//! [`NotImplemented`] naming the milestone that fills them in.
+//! `devices` is live (read-only HID enumeration).
 
 #![forbid(unsafe_code)]
 
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+
+mod compat;
+mod devices;
 
 /// Placeholder error for commands that land in a later milestone.
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +45,9 @@ enum Command {
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
+        /// Only show devices matching `vid[:pid]` (hex; repeatable).
+        #[arg(long = "filter", value_name = "VID[:PID]")]
+        filters: Vec<devices::Filter>,
     },
     /// Set every device (or one) to a solid colour.
     Light {
@@ -75,33 +81,29 @@ enum Command {
     /// SignalRGB-compatibility tooling.
     Compat {
         #[command(subcommand)]
-        command: CompatCommand,
+        command: compat::CompatCommand,
     },
 }
 
-#[derive(Debug, Subcommand)]
-enum CompatCommand {
-    /// Load every plugin in a directory with stubbed host objects and report API gaps.
-    DryRun {
-        /// Plugin directory (e.g. the user's SignalRGB plugin cache).
-        dir: PathBuf,
-        /// Also run Initialize() under the harness.
-        #[arg(long)]
-        initialize: bool,
-    },
+fn run_devices(json: bool, filters: &[devices::Filter]) -> anyhow::Result<()> {
+    let groups = devices::apply_filters(devices::enumerate()?, filters);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&devices::to_json(&groups))?);
+    } else {
+        println!("{}", devices::render_table(&groups));
+    }
+    Ok(())
 }
 
-fn run(cli: Cli) -> Result<(), NotImplemented> {
+fn run(cli: Cli) -> anyhow::Result<()> {
     let (command, milestone) = match cli.command {
-        Command::Devices { .. } => ("devices", "M1"),
+        Command::Devices { json, filters } => return run_devices(json, &filters),
         Command::Light { .. } => ("light", "M1"),
         Command::Rainbow { .. } => ("rainbow", "M1"),
         Command::Bench { .. } => ("bench", "M1"),
-        Command::Compat {
-            command: CompatCommand::DryRun { .. },
-        } => ("compat dry-run", "M2"),
+        Command::Compat { command } => return compat::run(command),
     };
-    Err(NotImplemented { command, milestone })
+    Err(NotImplemented { command, milestone }.into())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -123,17 +125,38 @@ mod tests {
     #[test]
     fn every_subcommand_names_its_milestone() {
         let cases = [
-            (vec!["huedeck", "devices"], "M1"),
             (vec!["huedeck", "light", "#ff0000"], "M1"),
             (vec!["huedeck", "rainbow", "--fps", "60"], "M1"),
             (vec!["huedeck", "bench"], "M1"),
-            (vec!["huedeck", "compat", "dry-run", "C:/plugins"], "M2"),
         ];
         for (argv, milestone) in cases {
             let cli = Cli::try_parse_from(argv.iter().copied()).unwrap();
             let err = run(cli).unwrap_err();
+            let err = err.downcast_ref::<NotImplemented>().expect("NotImplemented");
             assert_eq!(err.milestone, milestone, "{argv:?}");
             assert!(err.to_string().contains(milestone));
         }
+    }
+
+    #[test]
+    fn devices_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "huedeck",
+            "devices",
+            "--json",
+            "--filter",
+            "1462:7c91",
+            "--filter",
+            "1532",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Devices { json, filters } => {
+                assert!(json);
+                assert_eq!(filters.len(), 2);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(Cli::try_parse_from(["huedeck", "devices", "--filter", "nothex"]).is_err());
     }
 }

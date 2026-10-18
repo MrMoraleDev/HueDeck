@@ -14,5 +14,5 @@ homepage.workspace = true
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
-# TODO(M1): rquickjs = { workspace = true } once the runtime module is written;
-# the crate must keep compiling without it until then.
+rquickjs = { workspace = true }
+serde_json = { workspace = true }

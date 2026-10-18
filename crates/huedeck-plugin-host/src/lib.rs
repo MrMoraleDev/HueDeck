@@ -1,24 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //! SignalRGB-compatible plugin host (`compat-v1` profile).
 //!
-//! This milestone ships only the pieces that need no JavaScript engine:
+//! Engine-independent pieces:
 //!
-//! * [`meta`]: the export model — [`PluginMeta`](meta::PluginMeta) and the
+//! * [`meta`]: the export model — [`PluginMeta`] and the
 //!   *call-if-function* rule for metadata exports.
 //! * [`resolve`]: bare-specifier and relative module resolution
 //!   (`@SignalRGB/*` → host shims, `./X.js` → inside the plugin root only).
-//! * [`loader`]: the [`Loader`](loader::Loader) trait plus the VID:PID
-//!   [`PluginIndex`](loader::PluginIndex) with SignalRGB's last-scanned-wins rule.
+//! * [`loader`]: the [`Loader`] trait plus the VID:PID
+//!   [`PluginIndex`] with SignalRGB's last-scanned-wins rule.
 //!
-//! The rquickjs-backed runtime (one runtime per plugin thread, `device.*` /
-//! `bus.*` host objects, API_GAP trap, watchdog) follows in M0 spike B / M1.
-// TODO(M1): add the `runtime` module on rquickjs 0.14 (QuickJS-NG).
+//! rquickjs-backed pieces (M0 spike B):
+//!
+//! * [`runtime`]: one QuickJS-NG runtime + context per plugin on its own OS
+//!   thread, 64 MiB heap cap, deadline-driven interrupt handler, the
+//!   `@SignalRGB/*` resolver/loader over the embedded `prelude/`, and the
+//!   recording stub host (`js/stub_host.js`).
+//! * [`exports`]: namespace JSON → [`PluginMeta`].
+//! * [`dryrun`]: the `huedeck compat dry-run` corpus harness.
+// TODO(M1/M2): replace the stub host with real `device.*` / `bus.*` objects
+// backed by huedeck-hal, and the dry-run loop with the engine's plugin threads.
 
 #![forbid(unsafe_code)]
 
+pub mod dryrun;
+pub mod exports;
 pub mod loader;
 pub mod meta;
 pub mod resolve;
+pub mod runtime;
 
 pub use loader::{Loader, LoaderError, PluginIndex};
 pub use meta::{ControllableParameter, DeviceType, PluginMeta, PluginType, ProductIdExport};

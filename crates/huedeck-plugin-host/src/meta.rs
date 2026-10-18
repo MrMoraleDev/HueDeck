@@ -88,6 +88,10 @@ pub const HOST_MODULES: &[&str] = &[
     "Errors",
 ];
 
+/// Shims resolvable only under the `@huedeck/` prefix (HueDeck extensions
+/// with no SignalRGB counterpart, see `prelude/modules/README.md`).
+pub const HUEDECK_ONLY_MODULES: &[&str] = &["BinaryUtils", "createColorArray", "hexToRgb"];
+
 /// `Type()` export, compared case-insensitively; `Hid` when absent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PluginType {
@@ -290,6 +294,49 @@ pub struct DeviceMessage {
     pub tooltip: Option<String>,
 }
 
+/// Which lifecycle exports a module declares (detected at scan time, never called there).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifecycleExports {
+    /// `Validate(endpoint)`.
+    pub validate: bool,
+    /// `Initialize()`.
+    pub initialize: bool,
+    /// `Render()`.
+    pub render: bool,
+    /// `Shutdown(systemSuspending)`.
+    pub shutdown: bool,
+    /// `Scan(bus)` (SMBus plugins).
+    pub scan: bool,
+    /// `DiscoveryService` (network plugins; a function or a class).
+    pub discovery_service: bool,
+    /// Every `on<Prop>Changed` export, including the built-in `onBrightnessChanged`, in module-namespace (sorted) order.
+    pub change_hooks: Vec<String>,
+}
+
+impl LifecycleExports {
+    /// Names of the fixed lifecycle exports that are present, in [`LIFECYCLE_EXPORTS`] order.
+    pub fn present(&self) -> Vec<&'static str> {
+        let flags = [
+            self.validate,
+            self.initialize,
+            self.render,
+            self.shutdown,
+            self.scan,
+            self.discovery_service,
+        ];
+        LIFECYCLE_EXPORTS
+            .iter()
+            .zip(flags)
+            .filter_map(|(name, on)| on.then_some(*name))
+            .collect()
+    }
+
+    /// Whether the module can run as a device at all (`Initialize` + `Render`).
+    pub fn is_device(&self) -> bool {
+        self.initialize && self.render
+    }
+}
+
 /// Raw shape of a `ProductId` export after the call-if-function step.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProductIdExport {
@@ -302,6 +349,37 @@ pub enum ProductIdExport {
 }
 
 impl ProductIdExport {
+    /// Classify the JSON image of a `ProductId` export (`None` when the shape is not accepted).
+    pub fn from_json(value: &serde_json::Value) -> Option<Self> {
+        use serde_json::Value as J;
+        match value {
+            J::Number(n) => n.as_u64().and_then(|v| u32::try_from(v).ok()).map(Self::Single),
+            J::String(s) => Some(Self::Keys(vec![s.clone()])),
+            // `ProductId() { return PIDLibrary; }` → the object's keys.
+            J::Object(map) => Some(Self::Keys(map.keys().cloned().collect())),
+            J::Array(items) => {
+                if items.iter().all(|v| v.is_number()) {
+                    items
+                        .iter()
+                        .map(|v| v.as_u64().and_then(|v| u32::try_from(v).ok()))
+                        .collect::<Option<Vec<_>>>()
+                        .map(Self::List)
+                } else {
+                    items
+                        .iter()
+                        .map(|v| match v {
+                            J::String(s) => Some(s.clone()),
+                            J::Number(n) => Some(n.to_string()),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(Self::Keys)
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Resolve to concrete 16-bit product ids, applying the exe's acceptance rule.
     pub fn product_ids(&self) -> Result<Vec<u16>, MetaError> {
         let to16 = |v: u32| {
@@ -423,6 +501,15 @@ pub struct PluginMeta {
     pub uses_usb_sensor_mutex: bool,
     /// `AllowConflictBypass()`.
     pub allow_conflict_bypass: bool,
+    /// Deprecated `SupportsSubdevices()` was exported (folded into `subdevice_controller` as well).
+    #[serde(default)]
+    pub supports_subdevices: bool,
+    /// `BrandGPUList()` entries, kept verbatim (plugin-defined identifier objects).
+    #[serde(default)]
+    pub brand_gpu_list: Vec<serde_json::Value>,
+    /// Lifecycle exports the module declares.
+    #[serde(default)]
+    pub lifecycle: LifecycleExports,
 }
 
 impl PluginMeta {
@@ -460,6 +547,21 @@ impl PluginMeta {
             uses_corsair_mutex: false,
             uses_usb_sensor_mutex: false,
             allow_conflict_bypass: false,
+            supports_subdevices: false,
+            brand_gpu_list: Vec::new(),
+            lifecycle: LifecycleExports::default(),
+        }
+    }
+
+    /// The dry-run "meta-complete" rule: `Name` + `VendorId` + `ProductId`, or a
+    /// named SMBus / network plugin (those are keyed by bus address or service, not VID:PID).
+    pub fn is_complete(&self) -> bool {
+        if self.name.is_empty() {
+            return false;
+        }
+        match self.plugin_type {
+            PluginType::Smbus | PluginType::Network => true,
+            _ => self.vendor_id != 0 && !self.product_ids.is_empty(),
         }
     }
 
@@ -555,6 +657,60 @@ mod tests {
         assert!(ProductIdExport::Keys(vec!["abc".into()]).product_ids().is_err());
         assert!(ProductIdExport::List(vec![]).product_ids().is_err());
         assert!(ProductIdExport::Single(0x1_0000).product_ids().is_err());
+    }
+
+    #[test]
+    fn product_id_from_json_shapes() {
+        use serde_json::json;
+        assert_eq!(
+            ProductIdExport::from_json(&json!(0x7C91)),
+            Some(ProductIdExport::Single(0x7C91))
+        );
+        assert_eq!(
+            ProductIdExport::from_json(&json!([1, 2])),
+            Some(ProductIdExport::List(vec![1, 2]))
+        );
+        assert_eq!(
+            ProductIdExport::from_json(&json!(["3488", "0x0DA1"]))
+                .unwrap()
+                .product_ids()
+                .unwrap(),
+            vec![0x0DA0, 0x0DA1]
+        );
+        assert_eq!(
+            ProductIdExport::from_json(&json!({"3488": 1}))
+                .unwrap()
+                .product_ids()
+                .unwrap(),
+            vec![0x0DA0]
+        );
+        assert!(ProductIdExport::from_json(&json!({"a": 1}))
+            .unwrap()
+            .product_ids()
+            .is_err());
+        assert_eq!(ProductIdExport::from_json(&json!(true)), None);
+    }
+
+    #[test]
+    fn lifecycle_and_completeness() {
+        let mut l = LifecycleExports {
+            initialize: true,
+            render: true,
+            ..Default::default()
+        };
+        assert_eq!(l.present(), vec!["Initialize", "Render"]);
+        assert!(l.is_device());
+        l.scan = true;
+        assert_eq!(l.present(), vec!["Initialize", "Render", "Scan"]);
+
+        let mut m = PluginMeta::minimal("x.js", "X", 0x1462, vec![0x7C91]);
+        assert!(m.is_complete());
+        m.product_ids.clear();
+        assert!(!m.is_complete());
+        m.plugin_type = PluginType::Smbus;
+        assert!(m.is_complete());
+        m.name.clear();
+        assert!(!m.is_complete());
     }
 
     #[test]

@@ -8,9 +8,9 @@ version = "0.0.1"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/huedeck/huedeck"
+repository = "https://github.com/MrMoraleDev/HueDeck"
 authors = ["HueDeck contributors"]
-homepage = "https://github.com/huedeck/huedeck"
+homepage = "https://github.com/MrMoraleDev/HueDeck"
 description = "HueDeck — open source RGB manager, compatible with the SignalRGB plugin and lightscript ecosystem"
 keywords = ["rgb", "led", "hid", "signalrgb", "lighting"]
 categories = ["hardware-support"]
@@ -50,6 +50,9 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Devices_Dev
 windows-service = "0.8"
 libc = "0.2"
 humantime = "2"
+# SPIKE A (huedeck-renderer): CEF offscreen Chromium + memory-mapped shm ring. CEF itself is BSD-3.
+cef = { version = "=154.5.0", default-features = false }
+memmap2 = "0.9"
 
 [profile.release]
 opt-level = 3

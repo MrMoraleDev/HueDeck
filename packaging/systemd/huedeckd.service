@@ -13,7 +13,7 @@
 
 [Unit]
 Description=HueDeck RGB manager daemon
-Documentation=https://github.com/huedeck/huedeck
+Documentation=https://github.com/MrMoraleDev/HueDeck
 After=graphical-session.target
 PartOf=graphical-session.target
 

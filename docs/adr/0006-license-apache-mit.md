@@ -14,7 +14,8 @@ managers. At the same time:
 - OpenRGB (the other large open RGB project) is GPL-2-only; copying its code would
   force the whole core to GPL-2 and block permissive reuse.
 - PawnIO modules are Pawn source run by a GPL-2 driver whose exception covers only
-  the IOCTL interface, so Pawn code we write would be GPL-2.
+  the IOCTL interface; official PawnIO builds load only modules that are LGPL-2.1,
+  merged into PawnIO.Modules and signed by its maintainer.
 - The Rust ecosystem convention is dual Apache-2.0 / MIT, which maximizes
   compatibility with the crates we depend on and gives an explicit patent grant.
 - Community plugin repositories come under their own licenses and must be consumed
@@ -31,8 +32,12 @@ managers. At the same time:
   ones, with minimal friction.
 - Starter effects under `effects/` are **CC0-1.0**, so users can remix them without
   attribution.
-- Pawn modules authored by the project live in a **separate GPL-2 repository**
-  (`huedeck-pawn-modules`), never in this tree.
+- Pawn modules the project needs beyond the official set are written under
+  **LGPL-2.1** and upstreamed to PawnIO.Modules (the only way they load on official
+  PawnIO builds), never kept in this tree. The signed module blobs HueDeck uses are
+  separate LGPL-2.1 files shipped with their license text and source location
+  (amended 2026-10-18 after the M5 research brief; previously "a separate GPL-2
+  repository").
 - `cargo-deny` enforces a permissive-only allowlist in-tree (MIT, Apache-2.0,
   BSD-2/3, ISC, Zlib, MPL-2.0, Unicode, CC0, 0BSD, BSL-1.0, OpenSSL); GPL, LGPL
   and AGPL crates are denied.

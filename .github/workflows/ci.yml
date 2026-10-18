@@ -4,6 +4,7 @@
 #
 # Jobs:
 #   rust     - fmt / clippy / tests on Windows and Ubuntu (mock HAL, no hardware)
+#   renderer-cef - huedeck-renderer with the opt-in `cef` feature (real Chromium host), Windows
 #   deny     - cargo-deny: licenses (copyleft denied in-tree), advisories, bans, sources
 #   node     - prelude JS shims and first-party plugin tests under Node 24 (node:test)
 #   schemas  - JSON Schema validation of the user-supplied corpus (skipped when absent)
@@ -67,6 +68,40 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace
+
+  # The real CEF host of huedeck-renderer (opt-in `cef` feature). cef-dll-sys downloads the CEF
+  # minimal distribution (~170 MB) into CEF_PATH on the first run and builds
+  # libcef_dll_wrapper with CMake + Ninja; the distribution is cached by CEF version.
+  renderer-cef:
+    name: renderer (cef, windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-renderer-cef
+
+      - name: Point CEF_PATH at the cached distribution
+        shell: bash
+        run: echo "CEF_PATH=$RUNNER_TEMP\\cef" >> "$GITHUB_ENV"
+
+      - name: Cache CEF distribution
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\cef
+          key: cef-154.0.34-windows-x86_64
+
+      - name: cargo clippy + build (--features cef)
+        shell: bash
+        run: |
+          . crates/huedeck-renderer/tools/cef-env.sh
+          cargo clippy -p huedeck-renderer --features cef --all-targets -- -D warnings
+          cargo build -p huedeck-renderer --features cef
 
   deny:
     name: cargo-deny

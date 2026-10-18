@@ -19,3 +19,7 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
+serde_json = { workspace = true }
+huedeck-hal = { path = "../huedeck-hal" }
+huedeck-hal-windows = { path = "../huedeck-hal-windows" }
+huedeck-plugin-host = { path = "../huedeck-plugin-host" }

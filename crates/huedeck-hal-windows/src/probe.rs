@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use windows::core::PCWSTR;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_DevNode_PropertyW, CM_Get_Device_IDW, CM_Get_Device_Interface_ListW,
-    CM_Get_Device_Interface_List_SizeW, CM_Get_Parent, CM_Locate_DevNodeW,
+    CM_Get_Device_Interface_List_SizeW, CM_Get_Device_Interface_PropertyW, CM_Get_Parent, CM_Locate_DevNodeW,
     CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL, CR_BUFFER_SMALL, CR_SUCCESS,
     MAX_DEVICE_ID_LEN,
 };
@@ -34,8 +34,8 @@ use windows::Win32::Devices::HumanInterfaceDevice::{
     HIDP_STATUS_SUCCESS, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Devices::Properties::{
-    DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_Manufacturer, DEVPROPTYPE, DEVPROP_TYPE_STRING,
-    DEVPROP_TYPE_STRING_LIST,
+    DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_Manufacturer, DEVPROPTYPE,
+    DEVPROP_TYPE_STRING, DEVPROP_TYPE_STRING_LIST,
 };
 use windows::Win32::Foundation::DEVPROPKEY;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
@@ -61,9 +61,41 @@ fn device_id(devinst: u32) -> Result<String, String> {
     Ok(String::from_utf16_lossy(&buf[..len]))
 }
 
+/// Device instance id behind a device-interface path: the interface's
+/// `DEVPKEY_Device_InstanceId`, as hidapi reads it. Parsing the path is only the
+/// fallback; it fails for paths that do not follow the `HID#VID_…` pattern
+/// (e.g. VMBus devices: `HID#{guid}#…`).
+fn interface_instance_id(path: &str) -> Option<String> {
+    let wpath = wide(path);
+    let mut kind = DEVPROPTYPE(0);
+    let mut buf = [0u16; 512];
+    let mut size = (buf.len() * 2) as u32;
+    // SAFETY: NUL-terminated interface path; the buffer pointer and its size in bytes
+    // describe `buf`; out pointers are valid.
+    let cr = unsafe {
+        CM_Get_Device_Interface_PropertyW(
+            PCWSTR(wpath.as_ptr()),
+            &DEVPKEY_Device_InstanceId,
+            &mut kind,
+            Some(buf.as_mut_ptr().cast()),
+            &mut size,
+            0,
+        )
+    };
+    if cr == CR_SUCCESS && kind == DEVPROP_TYPE_STRING {
+        let units = ((size as usize) / 2).min(buf.len());
+        let id = String::from_utf16_lossy(&buf[..units]);
+        let id = id.trim_end_matches('\0');
+        if !id.is_empty() {
+            return Some(id.to_string());
+        }
+    }
+    interface_path_to_instance_id(path)
+}
+
 /// USB parent device instance id of a HID collection path.
 pub fn usb_parent(path: &str) -> Result<String, String> {
-    let id = interface_path_to_instance_id(path).ok_or_else(|| "unparseable HID path".to_string())?;
+    let id = interface_instance_id(path).ok_or_else(|| "unparseable HID path".to_string())?;
     let wid = wide(&id);
     let mut inst = 0u32;
     // SAFETY: `wid` is NUL-terminated and outlives the call; `inst` is a valid out pointer.
@@ -202,7 +234,7 @@ pub enum HidBus {
 
 /// The device node directly above the HID collection at `path`.
 fn parent_devnode(path: &str) -> Option<u32> {
-    let id = interface_path_to_instance_id(path)?;
+    let id = interface_instance_id(path)?;
     let wid = wide(&id);
     let mut inst = 0u32;
     // SAFETY: NUL-terminated id that outlives the call; valid out pointer.

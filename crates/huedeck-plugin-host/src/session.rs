@@ -17,6 +17,9 @@
 //!    [`FrameStore`]: a slow plugin skips straight to the latest frame. Each
 //!    `Render()` runs under a watchdog budget; consecutive timeouts fault the
 //!    session;
+//!    Changes sent through [`SessionHandle::control`] apply before the next
+//!    `Render()`: parameter values (then `on<name>Changed()`), brightness,
+//!    placement (then `onBrightnessChanged()` for a new device brightness);
 //! 6. on stop calls `Shutdown(false)` (unless told not to), repeats the
 //!    feature-report reads and returns a [`SessionReport`].
 
@@ -33,6 +36,7 @@ use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -454,11 +458,26 @@ impl LiveStats {
     }
 }
 
+/// A change applied to a running session before its next `Render()`.
+#[derive(Clone, Debug)]
+pub enum Control {
+    /// New values of plugin parameters (`ControllableParameters` or
+    /// `device.addProperty` names): assigned to their globals, then each
+    /// parameter's `on<name>Changed()` export is called, if there is one.
+    Parameters(serde_json::Map<String, serde_json::Value>),
+    /// Global and layout brightness.
+    Brightness(Brightness),
+    /// Where the device sits on the canvas; a new device brightness then
+    /// calls the plugin's `onBrightnessChanged()`.
+    Placement(Placement),
+}
+
 /// A running session.
 #[derive(Debug)]
 pub struct SessionHandle {
     key: String,
     started: Instant,
+    control: Sender<Control>,
     stop: Arc<AtomicBool>,
     live: Arc<LiveStats>,
     thread: JoinHandle<SessionReport>,
@@ -473,6 +492,12 @@ impl SessionHandle {
     /// When the session was spawned.
     pub fn started(&self) -> Instant {
         self.started
+    }
+
+    /// Queue `control` for the session (applied before the next `Render()`).
+    /// `false` when the session has ended.
+    pub fn control(&self, control: Control) -> bool {
+        self.control.send(control).is_ok()
     }
 
     /// Ask the session to finish its current frame, shut down and return.
@@ -519,25 +544,29 @@ pub fn spawn(
         first_write_us: AtomicU64::new(0),
     });
     let key = device.key.clone();
+    let started = Instant::now();
+    let (control, controls) = channel();
     let (stop2, live2) = (Arc::clone(&stop), Arc::clone(&live));
     let thread = std::thread::Builder::new()
         .name(format!("huedeck-plugin {key}"))
         .stack_size(PLUGIN_THREAD_STACK)
         .spawn(move || {
-            let report = run(device, plugin, backend, frames, opts, &stop2, &live2);
+            let report = run(device, plugin, backend, frames, opts, &stop2, &live2, &controls);
             drop(stop2);
             live2.set_state(SessionState::Done);
             report
         })?;
     Ok(SessionHandle {
         key,
-        started: Instant::now(),
+        started,
+        control,
         stop,
         live,
         thread,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     device: SessionDevice,
     plugin: CatalogEntry,
@@ -546,6 +575,7 @@ fn run(
     opts: SessionOptions,
     stop: &Arc<AtomicBool>,
     live: &LiveStats,
+    controls: &Receiver<Control>,
 ) -> SessionReport {
     let started = Instant::now();
     let budgets = opts.budgets;
@@ -607,6 +637,7 @@ fn run(
             &opts,
             stop,
             live,
+            controls,
             &mut report,
             &mut lifecycle,
         )
@@ -687,6 +718,7 @@ fn drive(
     opts: &SessionOptions,
     stop: &Arc<AtomicBool>,
     live: &LiveStats,
+    controls: &Receiver<Control>,
     report: &mut SessionReport,
     lifecycle: &mut Lifecycle,
 ) {
@@ -791,6 +823,9 @@ fn drive(
             continue;
         };
         last_seq = seq;
+        while let Ok(control) = controls.try_recv() {
+            apply_control(rt, shared, control, &budgets, report);
+        }
         let (_, frame) = frames.latest();
         lock_device(shared).set_frame(frame);
         let t = Instant::now();
@@ -836,6 +871,45 @@ fn drive(
         if let Some(fatal) = dev.fatal() {
             report.faulted = Some(fatal.to_string());
             break;
+        }
+    }
+}
+
+/// Apply one [`Control`] between two `Render()` calls.
+fn apply_control(
+    rt: &PluginRuntime,
+    shared: &SharedDevice,
+    control: Control,
+    budgets: &Budgets,
+    report: &mut SessionReport,
+) {
+    let hook = |name: &str, report: &mut SessionReport| {
+        if let Err(e) = rt.call_export(name, CallArgs::None, budgets.call(budgets.validate)) {
+            report.fail(name, e);
+        }
+    };
+    match control {
+        Control::Parameters(values) => {
+            let names: Vec<String> = values.keys().cloned().collect();
+            if let Err(e) = rt.set_globals(&serde_json::Value::Object(values), budgets.validate) {
+                report.fail("parameters", e);
+                return;
+            }
+            for name in names {
+                hook(&format!("on{name}Changed"), report);
+            }
+        }
+        Control::Brightness(b) => lock_device(shared).set_brightness(b),
+        Control::Placement(p) => {
+            let changed = {
+                let mut dev = lock_device(shared);
+                let before = dev.device_brightness();
+                dev.set_placement(p);
+                dev.device_brightness() != before
+            };
+            if changed {
+                hook("onBrightnessChanged", report);
+            }
         }
     }
 }

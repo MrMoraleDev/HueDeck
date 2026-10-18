@@ -12,6 +12,7 @@
 //! reads return a zero-filled buffer with `getLastReadSize() == 0`. Failures
 //! are counted in [`IoStats`] and logged once per operation kind.
 
+use crate::stats::{LatencyHistogram, LatencySummary};
 use huedeck_engine::{
     apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, Frame, OffsetTable, Placement,
     SamplerConfig,
@@ -26,6 +27,10 @@ use std::time::{Duration, Instant};
 pub const MAX_PAUSE: Duration = Duration::from_millis(1000);
 /// Largest report buffer a plugin may request or send.
 pub const MAX_REPORT_LEN: usize = 1 << 16;
+/// Largest LED grid side `Size()` / `device.setSize` may declare.
+pub const MAX_GRID_SIDE: u32 = 1024;
+/// Largest LED grid (cells) `Size()` / `device.setSize` may declare.
+pub const MAX_GRID_CELLS: u32 = 65_536;
 /// Log lines kept for the session report.
 const LOG_TAIL: usize = 50;
 /// I/O records kept for the session report (dry-run writes, first reads).
@@ -156,7 +161,8 @@ pub struct DeviceContext {
     brightness: Brightness,
     factor: f32,
     stats: IoStats,
-    write_us: Vec<u32>,
+    write_latency: LatencyHistogram,
+    validated: Vec<usize>,
     created: Instant,
     first_write: Option<Duration>,
     io_log: Vec<IoRecord>,
@@ -164,6 +170,7 @@ pub struct DeviceContext {
     log_lines: u64,
     log_sink: Option<LogSink>,
     warned: BTreeSet<&'static str>,
+    fatal: Option<String>,
 }
 
 impl std::fmt::Debug for DeviceContext {
@@ -179,6 +186,15 @@ impl std::fmt::Debug for DeviceContext {
     }
 }
 
+/// The message of a caught panic.
+pub(crate) fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "panic without a message".into())
+}
+
 fn clamp_len(len: i32) -> usize {
     usize::try_from(len).unwrap_or(0).min(MAX_REPORT_LEN)
 }
@@ -189,10 +205,24 @@ fn to_bytes(values: &[i32]) -> Vec<u8> {
 
 fn pause_duration(ms: f64) -> Duration {
     if ms.is_finite() && ms > 0.0 {
-        Duration::from_secs_f64(ms / 1000.0).min(MAX_PAUSE)
+        let max_ms = MAX_PAUSE.as_secs_f64() * 1000.0;
+        Duration::from_micros((ms.min(max_ms) * 1000.0) as u64)
     } else {
         Duration::ZERO
     }
+}
+
+/// `size` when it is a usable LED grid: each side 1..=[`MAX_GRID_SIDE`],
+/// at most [`MAX_GRID_CELLS`] cells.
+pub fn checked_grid(size: [u32; 2]) -> Result<[u32; 2], String> {
+    let [w, h] = size;
+    let cells = u64::from(w) * u64::from(h);
+    if w == 0 || h == 0 || w > MAX_GRID_SIDE || h > MAX_GRID_SIDE || cells > u64::from(MAX_GRID_CELLS) {
+        return Err(format!(
+            "LED grid {w}x{h} is outside 1..={MAX_GRID_SIDE} per side / {MAX_GRID_CELLS} cells"
+        ));
+    }
+    Ok(size)
 }
 
 impl DeviceContext {
@@ -220,7 +250,8 @@ impl DeviceContext {
             brightness: Brightness::default(),
             factor: 1.0,
             stats: IoStats::default(),
-            write_us: Vec::new(),
+            write_latency: LatencyHistogram::new(),
+            validated: Vec::new(),
             created: Instant::now(),
             first_write: None,
             io_log: Vec::new(),
@@ -228,6 +259,7 @@ impl DeviceContext {
             log_lines: 0,
             log_sink: None,
             warned: BTreeSet::new(),
+            fatal: None,
         };
         ctx.update_factor();
         ctx
@@ -263,14 +295,13 @@ impl DeviceContext {
         self.active.map(|i| &self.endpoints[i])
     }
 
-    /// Open collection `index` (closing the previous one).
+    /// Open collection `index`. The previous one stays open (and active)
+    /// unless the new open succeeds.
     pub fn open(&mut self, index: usize) -> huedeck_hal::HalResult<()> {
         let info = self
             .endpoints
             .get(index)
             .ok_or_else(|| huedeck_hal::HalError::InvalidArgument(format!("no endpoint #{index}")))?;
-        self.handle = None;
-        self.active = None;
         let handle = self.backend.open(&info.path)?;
         // Keep what the backend learned at open time (report lengths, declared feature reports).
         self.endpoints[index].report_lengths = handle.info().report_lengths;
@@ -278,6 +309,12 @@ impl DeviceContext {
         self.handle = Some(handle);
         self.active = Some(index);
         Ok(())
+    }
+
+    /// Collections `Validate(endpoint)` accepted, in order: the only ones
+    /// `set_endpoint` may switch to.
+    pub fn set_validated(&mut self, indices: Vec<usize>) {
+        self.validated = indices;
     }
 
     /// Close the open collection.
@@ -304,9 +341,9 @@ impl DeviceContext {
         &self.stats
     }
 
-    /// Durations of successful writes and feature sends, in microseconds.
-    pub fn write_micros(&self) -> &[u32] {
-        &self.write_us
+    /// Latency of successful writes and feature sends.
+    pub fn write_latency(&self) -> LatencySummary {
+        self.write_latency.summary()
     }
 
     /// Time from context creation to the first successful (or dry-run) write.
@@ -365,17 +402,21 @@ impl DeviceContext {
         self.placement.brightness.min(100)
     }
 
-    /// Set the LED grid (`Size()`); values below 1 become 1.
-    pub fn set_geometry(&mut self, size: [u32; 2], led_positions: Vec<[u32; 2]>) {
-        self.size = [size[0].max(1), size[1].max(1)];
+    /// Set the LED grid (`Size()`), rejecting grids outside [`checked_grid`].
+    pub fn set_geometry(&mut self, size: [u32; 2], led_positions: Vec<[u32; 2]>) -> Result<(), String> {
+        self.size = checked_grid(size)?;
         self.led_positions = led_positions;
         self.rebuild_grid();
+        Ok(())
     }
 
     fn set_size(&mut self, w: i32, h: i32) {
-        let size = [u32::try_from(w).unwrap_or(1), u32::try_from(h).unwrap_or(1)];
+        let size = [u32::try_from(w).unwrap_or(0), u32::try_from(h).unwrap_or(0)];
         let leds = std::mem::take(&mut self.led_positions);
-        self.set_geometry(size, leds);
+        if let Err(e) = self.set_geometry(size, leds.clone()) {
+            self.led_positions = leds;
+            self.log(&format!("device.setSize ignored: {e}"));
+        }
     }
 
     fn set_leds(&mut self, flat: &[i32]) {
@@ -420,6 +461,20 @@ impl DeviceContext {
     }
 
     // ------------------------------------------------------------------ logging
+
+    /// A failure the session must not render through (a panic in a device
+    /// native); the session stops and shuts the plugin down.
+    pub fn fatal(&self) -> Option<&str> {
+        self.fatal.as_deref()
+    }
+
+    /// Record a fatal failure (the first one wins) and log it.
+    pub fn set_fatal(&mut self, msg: String) {
+        if self.fatal.is_none() {
+            self.log(&msg);
+            self.fatal = Some(msg);
+        }
+    }
 
     /// Store and forward one plugin log line.
     pub fn log(&mut self, text: &str) {
@@ -472,8 +527,7 @@ impl DeviceContext {
             self.first_write = Some(self.created.elapsed());
         }
         if let Some(t) = started {
-            self.write_us
-                .push(t.elapsed().as_micros().min(u32::MAX as u128) as u32);
+            self.write_latency.record(t.elapsed());
         }
     }
 
@@ -564,10 +618,17 @@ impl DeviceContext {
         }
         match result {
             Ok(n) => {
-                let n = n.min(len);
                 self.stats.feature_gets += 1;
+                // The real size, even beyond `len`: a plugin checking getLastReadSize()
+                // must be able to tell a longer report from the one it expects.
                 self.last_read_size = n;
-                self.record(IoKind::GetFeature, &buf[..n], false);
+                if n > len {
+                    self.warn_once(
+                        "feature-longer",
+                        &format!("GET_REPORT(Feature 0x{report_id:02X}) returned {n} bytes, {len} requested"),
+                    );
+                }
+                self.record(IoKind::GetFeature, &buf[..n.min(len)], false);
                 buf
             }
             Err(e) => {
@@ -626,8 +687,9 @@ impl DeviceContext {
         }
     }
 
-    /// `device.read(_, len, timeout)`: `len` bytes as the backend returns them
-    /// (zero-padded); `getLastReadSize()` is the byte count, `0` on timeout.
+    /// `device.read(_, len, timeout)`: `len` bytes, report id first
+    /// (zero-padded after the report); `getLastReadSize()` is the byte count.
+    /// An empty array on timeout or failure (hid-usb.md).
     pub fn read(&mut self, len: usize, timeout_ms: i32) -> Vec<u8> {
         self.last_read_size = 0;
         let mut buf = vec![0u8; len];
@@ -641,7 +703,7 @@ impl DeviceContext {
         match handle.read_timeout(&mut buf, timeout_ms.max(0)) {
             Ok(0) => {
                 self.stats.read_timeouts += 1;
-                buf
+                Vec::new()
             }
             Ok(n) => {
                 let n = n.min(len);
@@ -652,7 +714,7 @@ impl DeviceContext {
             Err(e) => {
                 self.stats.read_errors += 1;
                 self.fail("read", &e.to_string());
-                vec![0u8; len]
+                Vec::new()
             }
         }
     }
@@ -673,8 +735,9 @@ impl DeviceContext {
     }
 
     /// `device.set_endpoint(interface, usage, usage_page[, collection])`:
-    /// switch to the first collection matching the tuple (`collection` is a
-    /// wildcard when `None`). `false` when nothing matches or the open fails.
+    /// switch to the first collection `Validate` accepted that matches the
+    /// tuple (`collection` is a wildcard when `None`). `false` when nothing
+    /// matches or the open fails; the previous collection then stays active.
     pub fn set_endpoint(
         &mut self,
         interface: i32,
@@ -682,12 +745,14 @@ impl DeviceContext {
         usage_page: u16,
         collection: Option<u16>,
     ) -> bool {
-        let Some(index) = self.endpoints.iter().position(|e| {
-            e.endpoint_tuple()
+        let found = self.validated.iter().copied().find(|&i| {
+            self.endpoints[i]
+                .endpoint_tuple()
                 .matches(interface, usage, usage_page, collection)
-        }) else {
+        });
+        let Some(index) = found else {
             self.log(&format!(
-                "set_endpoint({interface}, {usage:#06x}, {usage_page:#06x}, {collection:?}): no such endpoint"
+                "set_endpoint({interface}, {usage:#06x}, {usage_page:#06x}, {collection:?}): no validated endpoint matches"
             ));
             return false;
         };
@@ -739,13 +804,24 @@ impl DeviceContext {
 /// Install `globalThis.__huedeckNative`, backed by `device`.
 pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice) -> rquickjs::Result<()> {
     let natives = Object::new(ctx.clone())?;
+    // A panic must never unwind through rquickjs: with the `parallel` feature it
+    // would poison the runtime's lock and every later call (Shutdown included)
+    // would panic too. Each native therefore catches panics, marks the device
+    // fatal (the session stops and shuts down) and throws a JS InternalError.
     macro_rules! native {
         ($name:literal, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
             let shared = device.clone();
-            let f = Function::new(ctx.clone(), move |$($arg: $ty),*| {
-                let mut guard = lock_device(&shared);
-                let $d: &mut DeviceContext = &mut guard;
-                $body
+            let f = Function::new(ctx.clone(), move |cx: Ctx<'_>, $($arg: $ty),*| -> rquickjs::Result<_> {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut guard = lock_device(&shared);
+                    let $d: &mut DeviceContext = &mut guard;
+                    $body
+                }));
+                result.map_err(|panic| {
+                    let msg = format!("host panic in device.{}: {}", $name, panic_text(panic.as_ref()));
+                    lock_device(&shared).set_fatal(msg.clone());
+                    rquickjs::Exception::throw_internal(&cx, &msg)
+                })
             })?;
             natives.set($name, f)?;
         }};
@@ -762,7 +838,10 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice) -> rquickjs::Result<
     native!("lastReadSize", |d| d.last_read_size() as i32);
     native!("clearReadBuffer", |d| d.clear_read_buffer());
     native!("setEndpoint", |d, iface: i32, usage: i32, page: i32, col: i32| {
-        d.set_endpoint(iface, usage as u16, page as u16, u16::try_from(col).ok())
+        match (u16::try_from(usage), u16::try_from(page)) {
+            (Ok(usage), Ok(page)) => d.set_endpoint(iface, usage, page, u16::try_from(col).ok()),
+            _ => false,
+        }
     });
     native!("endpoints", |d| d.endpoint_tuples());
     native!("hidInfo", |d| d.hid_info());
@@ -860,7 +939,8 @@ mod tests {
     fn color_samples_the_placed_grid_with_brightness() {
         let (mock, info) = msi_like();
         let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
-        ctx.set_geometry([6, 1], (0..6).map(|x| [x, 0]).collect());
+        ctx.set_geometry([6, 1], (0..6).map(|x| [x, 0]).collect())
+            .unwrap();
         ctx.set_placement(Placement {
             scale: Some(Scale::uniform(8.0)),
             ..Placement::default()
@@ -881,12 +961,19 @@ mod tests {
     }
 
     #[test]
-    fn set_endpoint_switches_collections() {
+    fn set_endpoint_switches_between_validated_collections_only() {
         // (vid, pid, serial, interface, usage_page, usage, collection, lengths)
         let a = MockHid::endpoint_info(1, 2, "S", 1, 0xFF00, 1, 1, ReportLengths::default());
         let b = MockHid::endpoint_info(1, 2, "S", 1, 0xFF00, 2, 2, ReportLengths::default());
-        let mock = Arc::new(MockHid::new().add_endpoint(a.clone()).add_endpoint(b.clone()));
-        let mut ctx = DeviceContext::new(mock, vec![a, b.clone()], WriteMode::Live);
+        let c = MockHid::endpoint_info(1, 2, "S", 1, 0xFF00, 3, 3, ReportLengths::default());
+        let mock = Arc::new(
+            MockHid::new()
+                .add_endpoint(a.clone())
+                .add_endpoint(b.clone())
+                .add_endpoint(c.clone()),
+        );
+        let mut ctx = DeviceContext::new(mock, vec![a, b.clone(), c], WriteMode::Live);
+        ctx.set_validated(vec![0, 1]);
         ctx.open(0).unwrap();
         assert!(
             ctx.set_endpoint(1, 2, 0xFF00, None),
@@ -898,17 +985,76 @@ mod tests {
         );
         assert!(ctx.set_endpoint(1, 1, 0xFF00, Some(1)));
         assert!(!ctx.set_endpoint(1, 1, 0xFF00, Some(2)), "collection mismatch");
+        assert!(
+            !ctx.set_endpoint(1, 3, 0xFF00, None),
+            "collection 3 was not validated"
+        );
+        assert_eq!(ctx.active_endpoint().map(|e| e.collection), Some(1));
         assert_eq!(
             ctx.endpoint_tuples(),
-            vec![vec![1, 1, 0xFF00, 1], vec![1, 2, 0xFF00, 2]]
+            vec![
+                vec![1, 1, 0xFF00, 1],
+                vec![1, 2, 0xFF00, 2],
+                vec![1, 3, 0xFF00, 3]
+            ]
         );
     }
 
     #[test]
-    fn pause_is_clamped() {
+    fn a_failed_switch_keeps_the_open_collection() {
+        let a = MockHid::endpoint_info(1, 2, "S", 1, 0xFF00, 1, 1, ReportLengths::default());
+        // `gone` is validated but no longer present: its open fails.
+        let gone = MockHid::endpoint_info(1, 2, "S", 1, 0xFF00, 2, 2, ReportLengths::default());
+        let mock = Arc::new(MockHid::new().add_endpoint(a.clone()));
+        let mut ctx = DeviceContext::new(mock.clone(), vec![a.clone(), gone], WriteMode::Live);
+        ctx.set_validated(vec![0, 1]);
+        ctx.open(0).unwrap();
+        assert!(!ctx.set_endpoint(1, 2, 0xFF00, None));
+        assert_eq!(
+            ctx.active_endpoint().map(|e| e.path.as_str()),
+            Some(a.path.as_str())
+        );
+        assert_eq!(ctx.write(&[0, 1]), 2, "writes still reach the old collection");
+        assert_eq!(mock.recorder().writes(), vec![vec![0, 1]]);
+    }
+
+    #[test]
+    fn read_timeouts_return_nothing() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock.clone(), vec![info.clone()], WriteMode::Live);
+        ctx.open(0).unwrap();
+        assert!(ctx.read(65, 0).is_empty());
+        assert_eq!((ctx.last_read_size(), ctx.stats().read_timeouts), (0, 1));
+        mock.script_read(&info.path, vec![0x01, 0xAA]).unwrap();
+        let r = ctx.read(4, 0);
+        assert_eq!((r, ctx.last_read_size()), (vec![0x01, 0xAA, 0, 0], 2));
+    }
+
+    #[test]
+    fn pause_is_clamped_without_panicking() {
         assert_eq!(pause_duration(-5.0), Duration::ZERO);
         assert_eq!(pause_duration(f64::NAN), Duration::ZERO);
+        assert_eq!(pause_duration(f64::INFINITY), Duration::ZERO);
         assert_eq!(pause_duration(5.0), Duration::from_millis(5));
+        assert_eq!(pause_duration(0.5), Duration::from_micros(500));
         assert_eq!(pause_duration(1e12), MAX_PAUSE);
+        assert_eq!(pause_duration(1e23), MAX_PAUSE);
+    }
+
+    #[test]
+    fn grids_are_bounded() {
+        assert!(checked_grid([6, 1]).is_ok());
+        assert!(checked_grid([1024, 64]).is_ok());
+        assert!(checked_grid([0, 1]).is_err());
+        assert!(checked_grid([1025, 1]).is_err());
+        assert!(checked_grid([70_000, 70_000]).is_err());
+        assert!(checked_grid([512, 512]).is_err(), "262144 cells");
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        ctx.set_geometry([6, 1], (0..6).map(|x| [x, 0]).collect())
+            .unwrap();
+        ctx.set_size(70_000, 70_000);
+        assert_eq!(ctx.size(), [6, 1], "an oversized setSize is ignored");
+        assert_eq!(ctx.led_positions().len(), 6);
     }
 }

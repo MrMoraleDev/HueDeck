@@ -258,6 +258,17 @@ impl DeviceManager {
         self.sessions.iter().any(|(k, h)| self.restartable(k, h))
     }
 
+    /// The reports of sessions that ended so far, and the sessions that panicked
+    /// or did not stop in time, handing them over (a long-running caller drains
+    /// them so they do not pile up).
+    pub fn drain_reports(&mut self) -> (Vec<SessionReport>, Vec<String>) {
+        self.reap_stopping();
+        (
+            std::mem::take(&mut self.reports),
+            std::mem::take(&mut self.failed),
+        )
+    }
+
     /// Stop every session and return all reports (including those of sessions
     /// stopped earlier) and the sessions that panicked or did not stop in time.
     pub fn finish(mut self) -> (Vec<SessionReport>, Vec<String>) {

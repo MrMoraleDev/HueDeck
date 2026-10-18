@@ -32,6 +32,19 @@ function hexOf(hex) {
   return hexToBytes(hex);
 }
 
+// Byte 0x3E (J_CORSAIR record +9): the controller reports the written value + 4 (bench, 2026-10-18).
+const CORSAIR_FLAGS = 0x3E;
+
+/** What a GET of 0x52 returns after `sent` was SET: +4 at 0x3E, colour 2 of slot 6 not retained. */
+function controllerReadback(sent) {
+  const back = Array.from(sent);
+  back[CORSAIR_FLAGS] = (back[CORSAIR_FLAGS] + 4) & 0xFF;
+  for (let i = 0; i < 3; i++) {
+    back[0x7C + 5 + i] = 0;
+  }
+  return back;
+}
+
 /** Boot a fresh plugin instance against a mock device whose 0x52 feature report is `image`. */
 async function boot(image, params = {}, color = [0, 0, 0]) {
   const device = createMockDevice({ featureReports: { [REPORT_ID]: image }, color, productId: 0x7C91 });
@@ -139,6 +152,8 @@ test("Render sends exactly one 185-byte 0x52 packet: restore image + static red 
       for (let i = 0; i < 9; i++) touched.add(off + i);
     }
     touched.add(0xB8);
+    touched.add(CORSAIR_FLAGS);
+    assert.equal(device.sent[0].bytes[CORSAIR_FLAGS], RESTORE[CORSAIR_FLAGS] - 4, "0x3E is written as read - 4");
     for (let i = 0; i < LENGTH; i++) {
       if (!touched.has(i)) {
         assert.equal(device.sent[0].bytes[i], RESTORE[i], `byte 0x${i.toString(16)} must be preserved from the restore image`);
@@ -217,8 +232,9 @@ test("re-Initialize after suspend keeps the original restore image when the boar
     plugin.Render();
     plugin.Shutdown(true);                     // suspend: paints #112233
     assert.equal(device.sent.length, 2);
-    // The controller now reports the packet we just wrote; the host re-runs Initialize on resume.
-    device.setFeatureReport(REPORT_ID, device.sent[1].bytes);
+    // The controller now reports the packet we just wrote (with its read-back quirks); the host
+    // re-runs Initialize on resume.
+    device.setFeatureReport(REPORT_ID, controllerReadback(device.sent[1].bytes));
     plugin.Initialize();
     plugin.Shutdown(false);
     assert.equal(device.sent.length, 3);
@@ -242,6 +258,7 @@ test("re-Initialize adopts a fresh image when someone else changed the controlle
     plugin.Shutdown(false);
     const expected = foreign.slice();
     expected[0xB8] = 0x00;
+    expected[CORSAIR_FLAGS] = foreign[CORSAIR_FLAGS] - 4;
     assertPacket(device.sent[2], bytesToHex(expected), "restore of foreign image");
   } finally {
     restoreGlobals();
@@ -300,10 +317,43 @@ test("JRAINBOW/JRGB headers are untouched and no channels are created in M1", as
     const untouchedRanges = [[0x01, 0x0B], [0x0B, 0x15], [0x15, 0x1F], [0x1F, 0x2A], [0x2A, 0x35], [0x35, 0x40], [0x40, 0x4A], [0x86, 0xB8]];
     for (const [from, to] of untouchedRanges) {
       for (let i = from; i < to; i++) {
-        assert.equal(p[i], RESTORE[i], `header/unused byte 0x${i.toString(16)} preserved`);
+        const want = i === CORSAIR_FLAGS ? RESTORE[i] - 4 : RESTORE[i];
+        assert.equal(p[i], want, `header/unused byte 0x${i.toString(16)} preserved`);
       }
     }
   } finally {
     restoreGlobals();
   }
+});
+
+test("a GET of our own packet is recognised despite the controller's read-back quirks", async () => {
+  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [10, 20, 30]);
+  try {
+    plugin.Initialize();
+    plugin.Render();
+    // A re-Initialize that reads back exactly what the board reports after our SET keeps the
+    // original restore image; a byte-exact comparison would have adopted our own packet.
+    device.setFeatureReport(REPORT_ID, controllerReadback(device.sent[0].bytes));
+    plugin.Initialize();
+    plugin.Shutdown(false);
+    assertPacket(device.sent[device.sent.length - 1], fixture.expectedRestorePacket, "restore after re-Initialize");
+  } finally {
+    restoreGlobals();
+  }
+});
+
+test("repeated sessions keep 0x3E stable on a controller that adds 4 on read-back", async () => {
+  let image = RESTORE.slice();
+  for (let session = 0; session < 3; session++) {
+    const { device, plugin, restoreGlobals } = await boot(image, {}, [255, 0, 0]);
+    try {
+      plugin.Initialize();
+      plugin.Render();
+      plugin.Shutdown(false);
+      image = controllerReadback(device.sent[device.sent.length - 1].bytes);
+    } finally {
+      restoreGlobals();
+    }
+  }
+  assert.equal(image[CORSAIR_FLAGS], RESTORE[CORSAIR_FLAGS], "no drift across sessions");
 });

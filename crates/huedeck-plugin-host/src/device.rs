@@ -16,7 +16,7 @@ use huedeck_engine::{
     apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, Frame, OffsetTable, Placement,
     SamplerConfig,
 };
-use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle};
+use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportSpec};
 use rquickjs::{Ctx, Function, Object};
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -272,8 +272,9 @@ impl DeviceContext {
         self.handle = None;
         self.active = None;
         let handle = self.backend.open(&info.path)?;
-        // Keep the report lengths the backend learned at open time.
+        // Keep what the backend learned at open time (report lengths, declared feature reports).
         self.endpoints[index].report_lengths = handle.info().report_lengths;
+        self.endpoints[index].feature_reports = handle.info().feature_reports.clone();
         self.handle = Some(handle);
         self.active = Some(index);
         Ok(())
@@ -283,6 +284,14 @@ impl DeviceContext {
     pub fn close(&mut self) {
         self.handle = None;
         self.active = None;
+    }
+
+    /// Feature reports the open collection's report descriptor declares
+    /// (empty when nothing is open or the backend could not read it).
+    pub fn feature_reports(&self) -> Vec<ReportSpec> {
+        self.active_endpoint()
+            .map(|e| e.feature_reports.clone())
+            .unwrap_or_default()
     }
 
     /// Whether writes reach the hardware.

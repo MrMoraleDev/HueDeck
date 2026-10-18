@@ -75,6 +75,16 @@ const REPORT_ID = 0x52;
 const REPORT_LENGTH = 185;
 const SAVE_FLAG_OFFSET = 0xB8;          // 184: 0 = apply only, non-zero = persist to flash. Always 0 here.
 
+// Bytes whose GET value is not simply the last SET value (bench, 2026-10-18, this board; see the
+// hardware doc, section "Bench results"):
+//  * J_CORSAIR record +9 (0x3E) reads back as the written value + 4. SignalRGB writes 0x00 there
+//    and the controller then reports 0x04, so a naive read-modify-write grows it by 4 per session.
+//    Every packet therefore writes (read value - 4), which keeps the GET value stable.
+//  * Colour 2 (+5..+7) of an onboard record is not always retained (slot 6 reads back 0), so it is
+//    ignored when recognising our own packet in a GET.
+const CORSAIR_FLAGS_OFFSET = 0x35 + 9;
+const READBACK_BIAS = 4;
+
 // Zone record field offsets (relative to the record start).
 const Z_EFFECT = 0;                      // effect number
 const Z_COLOR1 = 1;                      // +1 R, +2 G, +3 B
@@ -153,7 +163,7 @@ export function Initialize() {
   // "before HueDeck" state is the image captured the first time; keep it so that Shutdown(false)
   // still restores the pre-run appearance. Anything else (cold boot, another application wrote
   // in between) is a genuinely new state and becomes the restore image.
-  if (restoreImage === null || lastSent === null || !sameBytes(current, lastSent)) {
+  if (restoreImage === null || lastSent === null || !readsBackAs(current, lastSent)) {
     restoreImage = current;
   }
   writesEnabled = true;
@@ -188,25 +198,57 @@ export function Shutdown(SystemSuspending) {
   }
   // Normal exit: put the controller back exactly as we found it (save flag forced to 0 so the
   // restore never persists anything to flash).
-  const packet = restoreImage.slice();
-  packet[SAVE_FLAG_OFFSET] = 0x00;
-  sendPacket(packet);
+  sendPacket(writableFrom(restoreImage));
 }
 
 // ---------------------------------------------------------------------------------------------
 // Packet construction
 // ---------------------------------------------------------------------------------------------
-// Start from a copy of the restore image and rewrite only the fields we understand.
+// Start from the restore image as it must be written and rewrite only the fields we understand.
 function buildPacket(colourFor) {
-  const packet = restoreImage.slice();
+  const packet = writableFrom(restoreImage);
 
   for (let index = 0; index < ONBOARD_ZONES.length; index++) {
     const rgb = colourFor(index);
     writeStaticZone(packet, ONBOARD_ZONES[index].offset, rgb);
   }
-
-  packet[SAVE_FLAG_OFFSET] = 0x00;
   return packet;
+}
+
+// The bytes to SET so that a later GET returns `image`: the save flag cleared and the read-back
+// bias of the J_CORSAIR flags byte removed.
+function writableFrom(image) {
+  const packet = image.slice();
+  packet[SAVE_FLAG_OFFSET] = 0x00;
+  const flags = packet[CORSAIR_FLAGS_OFFSET] & 0xFF;
+  packet[CORSAIR_FLAGS_OFFSET] = flags >= READBACK_BIAS ? flags - READBACK_BIAS : flags;
+  return packet;
+}
+
+// Whether `current` (a GET) is what the controller reports after we SET `sent`.
+function readsBackAs(current, sent) {
+  if (current.length !== sent.length) {
+    return false;
+  }
+  const ignored = new Set([SAVE_FLAG_OFFSET]);
+  for (const zone of ONBOARD_ZONES) {
+    for (let i = 0; i < 3; i++) {
+      ignored.add(zone.offset + Z_COLOR2 + i);
+    }
+  }
+  for (let i = 0; i < sent.length; i++) {
+    if (ignored.has(i)) {
+      continue;
+    }
+    let expected = sent[i] & 0xFF;
+    if (i === CORSAIR_FLAGS_OFFSET) {
+      expected = (expected + READBACK_BIAS) & 0xFF;
+    }
+    if ((current[i] & 0xFF) !== expected) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Static effect with a single colour. Colour 2 is set to the same value so that boards wiring

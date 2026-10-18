@@ -9,13 +9,14 @@
 //!    then the caller's parameter overrides;
 //! 3. calls `Validate(endpoint)` for every collection of the device and opens
 //!    the first one it accepts (the active endpoint until `set_endpoint`);
-//! 4. optionally reads a feature report before `Initialize` ([`RestoreProbe`]);
+//! 4. optionally reads feature reports before `Initialize` ([`RestoreCheckMode`]):
+//!    given ones, or every feature report the report descriptor declares;
 //! 5. calls `Initialize()`, then `Render()` once per new canvas frame of the
 //!    [`FrameStore`]: a slow plugin skips straight to the latest frame. Each
 //!    `Render()` runs under a watchdog budget; consecutive timeouts fault the
 //!    session;
 //! 6. on stop calls `Shutdown(false)` (unless told not to), repeats the
-//!    feature-report read and returns a [`SessionReport`].
+//!    feature-report reads and returns a [`SessionReport`].
 
 use crate::catalog::CatalogEntry;
 use crate::device::{lock_device, Brightness, DeviceContext, IoRecord, IoStats, LogSink, WriteMode};
@@ -78,6 +79,18 @@ pub struct RestoreProbe {
     pub len: usize,
 }
 
+/// Which feature reports a session compares before `Initialize` and after `Shutdown`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RestoreCheckMode {
+    /// No comparison.
+    #[default]
+    Off,
+    /// Every feature report the open collection's report descriptor declares.
+    DeclaredFeatureReports,
+    /// These reports only.
+    Reports(Vec<RestoreProbe>),
+}
+
 /// How a session runs.
 #[derive(Clone)]
 pub struct SessionOptions {
@@ -95,8 +108,8 @@ pub struct SessionOptions {
     pub skip_shutdown: bool,
     /// Consecutive `Render()` timeouts that fault the session.
     pub max_render_timeouts: u32,
-    /// Optional before/after feature-report comparison.
-    pub restore_probe: Option<RestoreProbe>,
+    /// Before/after feature-report comparison.
+    pub restore_check: RestoreCheckMode,
     /// Receives every plugin log line.
     pub log_sink: Option<LogSink>,
 }
@@ -111,7 +124,7 @@ impl Default for SessionOptions {
             write_mode: WriteMode::Live,
             skip_shutdown: false,
             max_render_timeouts: 3,
-            restore_probe: None,
+            restore_check: RestoreCheckMode::Off,
             log_sink: None,
         }
     }
@@ -124,7 +137,7 @@ impl std::fmt::Debug for SessionOptions {
             .field("parameters", &self.parameters)
             .field("write_mode", &self.write_mode)
             .field("skip_shutdown", &self.skip_shutdown)
-            .field("restore_probe", &self.restore_probe)
+            .field("restore_check", &self.restore_check)
             .finish_non_exhaustive()
     }
 }
@@ -179,7 +192,7 @@ pub struct PhaseFailure {
     pub error: JsFailure,
 }
 
-/// Before/after comparison of [`RestoreProbe`].
+/// Before/after comparison of one feature report ([`RestoreCheckMode`]).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct RestoreCheck {
     /// Report id that was read.
@@ -251,8 +264,10 @@ pub struct SessionReport {
     pub io: IoStats,
     /// Dry-run writes and the first reads.
     pub io_log: Vec<IoRecord>,
-    /// Before/after feature-report comparison.
-    pub restore_check: Option<RestoreCheck>,
+    /// Before/after feature-report comparisons, one per report read.
+    pub restore_checks: Vec<RestoreCheck>,
+    /// Why requested reports were not compared (unreadable, none declared).
+    pub restore_notes: Vec<String>,
     /// `Shutdown(false)` ran.
     pub shutdown_called: bool,
     /// Last plugin log lines.
@@ -285,7 +300,8 @@ impl SessionReport {
             first_write_ms: None,
             io: IoStats::default(),
             io_log: Vec::new(),
-            restore_check: None,
+            restore_checks: Vec::new(),
+            restore_notes: Vec::new(),
             shutdown_called: false,
             log_tail: Vec::new(),
             log_lines: 0,
@@ -528,9 +544,35 @@ fn run(
     report.endpoint = Some(device.endpoints[index].endpoint_tuple());
     report.endpoint_path = Some(device.endpoints[index].path.clone());
 
-    let before = opts
-        .restore_probe
-        .and_then(|p| lock_device(&shared).probe_feature(p.report_id, p.len));
+    let probes: Vec<RestoreProbe> = match &opts.restore_check {
+        RestoreCheckMode::Off => Vec::new(),
+        RestoreCheckMode::Reports(list) => list.clone(),
+        RestoreCheckMode::DeclaredFeatureReports => {
+            let declared = lock_device(&shared).feature_reports();
+            if declared.is_empty() {
+                report
+                    .restore_notes
+                    .push("the report descriptor declares no feature reports (or could not be read)".into());
+            }
+            declared
+                .iter()
+                .map(|r| RestoreProbe {
+                    report_id: r.id,
+                    len: r.len,
+                })
+                .collect()
+        }
+    };
+    let mut before = Vec::new();
+    for p in probes {
+        match lock_device(&shared).probe_feature(p.report_id, p.len) {
+            Some(bytes) => before.push((p, bytes)),
+            None => report.restore_notes.push(format!(
+                "feature report 0x{:02X} ({} bytes) could not be read before Initialize",
+                p.report_id, p.len
+            )),
+        }
+    }
 
     match rt.call_export("Initialize", CallArgs::None, budgets.initialize) {
         Ok(_) => report.initialized = true,
@@ -594,11 +636,13 @@ fn run(
             Err(e) => report.fail("Shutdown", e),
         }
     }
-    if let (Some(probe), Some(before)) = (opts.restore_probe, before) {
+    for (probe, bytes) in before {
         let after = lock_device(&shared)
             .probe_feature(probe.report_id, probe.len)
             .unwrap_or_default();
-        report.restore_check = Some(RestoreCheck::new(probe.report_id, before, after));
+        report
+            .restore_checks
+            .push(RestoreCheck::new(probe.report_id, bytes, after));
     }
     finish(report, &shared, Some(&rt), started)
 }

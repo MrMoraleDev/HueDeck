@@ -7,10 +7,12 @@
 
 use huedeck_engine::{Frame, FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
 use huedeck_hal::mock::{MockHid, TransactionKind};
-use huedeck_hal::{HidBackend, HidEndpointInfo, ReportLengths};
+use huedeck_hal::{HidBackend, HidEndpointInfo, ReportLengths, ReportSpec};
 use huedeck_plugin_host::catalog::{Catalog, CatalogEntry};
 use huedeck_plugin_host::device::{IoKind, WriteMode};
-use huedeck_plugin_host::session::{self, RestoreProbe, SessionDevice, SessionOptions, SessionReport};
+use huedeck_plugin_host::session::{
+    self, RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -75,7 +77,10 @@ struct Rig {
 }
 
 fn rig(interface: i32) -> Rig {
-    let info = endpoint(interface);
+    rig_with(endpoint(interface))
+}
+
+fn rig_with(info: HidEndpointInfo) -> Rig {
     let mock = MockHid::new().add_endpoint(info.clone());
     mock.set_feature_report(&info.path, hex(fixture()["restoreImage"].as_str().unwrap()))
         .unwrap();
@@ -123,10 +128,10 @@ fn solid_red_frame_drives_the_golden_packet_and_shutdown_restores() {
     let report = run(
         &rig,
         SessionOptions {
-            restore_probe: Some(RestoreProbe {
+            restore_check: RestoreCheckMode::Reports(vec![RestoreProbe {
                 report_id: 0x52,
                 len: 185,
-            }),
+            }]),
             ..SessionOptions::default()
         },
         Rgb::new(255, 0, 0),
@@ -147,10 +152,12 @@ fn solid_red_frame_drives_the_golden_packet_and_shutdown_restores() {
     assert_eq!(sends[1], hex(fx["expectedRestorePacket"].as_str().unwrap()));
 
     // The device was read before Initialize (plugin restore image) and the
-    // restore check read it again after Shutdown: only the save flag (0xB8),
-    // which HueDeck always clears, differs from the synthetic fixture image.
-    let check = report.restore_check.expect("restore check");
-    assert_eq!(check.differing_offsets, vec![0xB8]);
+    // restore check read it again after Shutdown. The mock stores what was
+    // written verbatim, so two bytes differ from the synthetic fixture image:
+    // 0x3E, which the plugin writes as read - 4 (the real controller reads it
+    // back as written + 4), and the save flag 0xB8, always cleared.
+    assert_eq!(report.restore_checks.len(), 1, "{:?}", report.restore_notes);
+    assert_eq!(report.restore_checks[0].differing_offsets, vec![0x3E, 0xB8]);
     let kinds: Vec<TransactionKind> = rig.mock.recorder().snapshot().iter().map(|t| t.kind).collect();
     assert_eq!(kinds.first(), Some(&TransactionKind::Open));
     assert_eq!(kinds.last(), Some(&TransactionKind::Close));
@@ -222,4 +229,48 @@ fn endpoint_rejected_by_validate_is_never_opened() {
     assert_eq!(report.validated, 0);
     assert!(report.faulted.as_deref().unwrap_or("").contains("Validate"));
     assert!(rig.mock.recorder().is_empty(), "nothing opened, nothing sent");
+}
+
+#[test]
+fn declared_feature_reports_are_compared_without_naming_them() {
+    let mut info = endpoint(0);
+    // What the Windows backend reads from the report descriptor at open time.
+    info.feature_reports = vec![
+        ReportSpec { id: 0x52, len: 185 },
+        ReportSpec { id: 0x53, len: 725 },
+    ];
+    let rig = rig_with(info);
+    let report = run(
+        &rig,
+        SessionOptions {
+            restore_check: RestoreCheckMode::DeclaredFeatureReports,
+            ..SessionOptions::default()
+        },
+        Rgb::new(255, 0, 0),
+        1,
+    );
+    assert!(report.failures.is_empty(), "{:#?}", report.failures);
+    // 0x52 is compared; 0x53 is declared but the mock holds no such report,
+    // so it is reported as unreadable instead of being compared.
+    let ids: Vec<u8> = report.restore_checks.iter().map(|c| c.report_id).collect();
+    assert_eq!(ids, vec![0x52]);
+    assert_eq!(report.restore_checks[0].differing_offsets, vec![0x3E, 0xB8]);
+    assert_eq!(report.restore_notes.len(), 1, "{:?}", report.restore_notes);
+    assert!(report.restore_notes[0].contains("0x53"));
+}
+
+#[test]
+fn declared_mode_without_a_descriptor_says_so() {
+    let rig = rig(0);
+    let report = run(
+        &rig,
+        SessionOptions {
+            restore_check: RestoreCheckMode::DeclaredFeatureReports,
+            ..SessionOptions::default()
+        },
+        Rgb::new(255, 0, 0),
+        1,
+    );
+    assert!(report.restore_checks.is_empty());
+    assert!(report.restore_notes[0].contains("declares no feature reports"));
 }

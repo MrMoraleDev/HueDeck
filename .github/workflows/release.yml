@@ -74,6 +74,40 @@ jobs:
       - name: Build (auditable, release)
         run: cargo auditable build --release --workspace --target ${{ matrix.target }}
 
+      # Windows ships the effect renderer with its CEF runtime (the `cef` feature downloads the
+      # CEF minimal distribution into CEF_PATH and builds libcef_dll_wrapper with CMake + Ninja,
+      # as in the CI job) and the dashboard; tools/package/stage-windows.ps1 assembles them.
+      - name: Point CEF_PATH at the cached distribution
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CEF_PATH=$RUNNER_TEMP\\cef" >> "$GITHUB_ENV"
+
+      - name: Cache CEF distribution
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\cef
+          key: cef-154.0.34-windows-x86_64
+
+      - name: Build the effect renderer (auditable, release, --features cef)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          . crates/huedeck-renderer/tools/cef-env.sh
+          cargo auditable build --release -p huedeck-renderer --features cef --target ${{ matrix.target }}
+
+      - uses: actions/setup-node@v7
+        if: runner.os == 'Windows'
+        with:
+          node-version: "24"
+
+      - name: Build the dashboard
+        if: runner.os == 'Windows'
+        working-directory: ui
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
       # cargo-cyclonedx writes one <crate>.cdx.json per workspace member next to that
       # crate's Cargo.toml. Collect them into sbom/ and suffix the target so the two
       # matrix legs do not collide once the artifacts are merged in the release job.
@@ -131,13 +165,9 @@ jobs:
           $ErrorActionPreference = "Stop"
           $target = "${{ matrix.target }}"
           $out = "dist/huedeck-$target"
-          New-Item -ItemType Directory -Force $out | Out-Null
-          foreach ($b in $env:HUEDECK_BINS.Split(" ")) {
-            Copy-Item "target/$target/release/$b.exe" $out
-          }
-          foreach ($f in "LICENSE", "LICENSE-EXCEPTION.md", "README.md") {
-            if (Test-Path $f) { Copy-Item $f $out }
-          }
+          # Daemon, CLI, renderer + CEF runtime, dashboard, plugins, effects, licenses and the
+          # Chromium notices, laid out the way huedeckd looks for them (next to itself).
+          tools/package/stage-windows.ps1 -Release "target/$target/release" -Ui "ui/dist" -Out $out
           Copy-Item "sbom/*.cdx.json" $out
           Copy-Item "sbom/*.cdx.json" "dist"
           # Archive the directory itself so the zip has the same huedeck-<target>/ root

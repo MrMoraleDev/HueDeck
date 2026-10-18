@@ -21,6 +21,12 @@ packaging, M7 Linux packaging) drop files into known places.
 
 ## Windows (MSI, winget)
 
+- The **portable build** is what the release workflow publishes today: one directory
+  (zipped) staged by `tools/package/stage-windows.ps1` with `huedeckd.exe`, `huedeck.exe`,
+  `huedeck-renderer.exe` and its CEF runtime, `ui/`, `plugins/`, `effects/`, the license
+  texts and `THIRD-PARTY/CEF-Chromium-CREDITS.html`. Unzip anywhere and run
+  `huedeckd.exe --open`; settings go to `%LOCALAPPDATA%\HueDeck` and `%APPDATA%\HueDeck`.
+  About 400 MB unpacked, most of it Chromium.
 - The MSI installs `huedeckd.exe`, `huedeck.exe`, `huedeck-renderer.exe` plus the CEF
   runtime under `%ProgramFiles%\HueDeck`, registers the `huedeck://` URL scheme and an
   optional per-user autostart entry. It never installs a kernel driver.

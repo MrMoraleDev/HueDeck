@@ -1349,6 +1349,8 @@ impl Engine {
     fn import_signalrgb(&mut self, name: String) -> Result<Value, ApiError> {
         let (layout, notes) = lightloom_runtime::signalrgb::layout(&name);
         let mut imported_channels = 0;
+        // Devices whose sessions use something else than what is imported now.
+        let mut changed = std::collections::BTreeSet::new();
         let keys: Vec<String> = self
             .store
             .devices()
@@ -1358,8 +1360,17 @@ impl Engine {
             .collect();
         for key in &keys {
             let (channels, _) = lightloom_runtime::signalrgb::channels(key);
+            let before = self.store.channels(key).map_err(internal)?;
             for (channel, list) in channels {
                 let array = Value::Array(list.iter().map(ComponentInstance::to_json).collect());
+                // Without a stored setup the session already reads SignalRGB's when that is on.
+                let same = match before.get(&channel) {
+                    Some(old) => *old == array,
+                    None => self.signalrgb,
+                };
+                if !same {
+                    changed.insert(key.clone());
+                }
                 self.store.set_channel(key, &channel, &array).map_err(internal)?;
                 imported_channels += 1;
             }
@@ -1371,11 +1382,9 @@ impl Engine {
             let saved = self.store.layout(&l.name).map_err(internal)?.unwrap_or(l);
             self.switch_layout(saved).map_err(internal)?;
         }
-        if imported_channels > 0 {
-            let present: Vec<String> = self.present.iter().map(|p| p.device.key.clone()).collect();
-            for key in present.iter().filter(|k| keys.contains(k)) {
-                self.restart_device(key);
-            }
+        let present: Vec<String> = self.present.iter().map(|p| p.device.key.clone()).collect();
+        for key in present.iter().filter(|k| changed.contains(*k)) {
+            self.restart_device(key);
         }
         self.log(format!(
             "imported from SignalRGB: {endpoints} placements as layout {name}, {imported_channels} channel setups"

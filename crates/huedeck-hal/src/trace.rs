@@ -119,6 +119,11 @@ pub enum TraceOp {
     },
     /// Input queue flushed.
     ClearReadBuffer,
+    /// The report descriptor was read.
+    ReportDescriptor {
+        /// The answer.
+        answer: Answer,
+    },
 }
 
 /// Which kind of report a packet was sent as.
@@ -539,6 +544,16 @@ impl HidHandle for RecordingHandle {
         r
     }
 
+    fn report_descriptor(&mut self) -> HalResult<Vec<u8>> {
+        let r = self.inner.report_descriptor();
+        let answer = match &r {
+            Ok(bytes) => Answer::Data(bytes.clone()),
+            Err(e) => Answer::Error(e.to_string()),
+        };
+        self.log.push(&self.path(), TraceOp::ReportDescriptor { answer });
+        r
+    }
+
     fn clear_read_buffer(&mut self) -> HalResult<()> {
         let r = self.inner.clear_read_buffer();
         self.log.push(&self.path(), TraceOp::ClearReadBuffer);
@@ -552,6 +567,7 @@ struct Answers {
     features: BTreeMap<u8, VecDeque<Answer>>,
     inputs: BTreeMap<u8, VecDeque<Answer>>,
     reads: VecDeque<Answer>,
+    descriptors: VecDeque<Answer>,
     /// Outcomes of the opens (`Some(error)` = failed).
     opens: VecDeque<Option<String>>,
     /// Outcomes of the writes and feature sends, in order.
@@ -594,6 +610,7 @@ impl ReplayHid {
                     a.inputs.entry(*report_id).or_default().push_back(answer.clone());
                 }
                 TraceOp::Read { answer, .. } => a.reads.push_back(answer.clone()),
+                TraceOp::ReportDescriptor { answer } => a.descriptors.push_back(answer.clone()),
                 TraceOp::Open => a.opens.push_back(None),
                 TraceOp::OpenFailed { error } => a.opens.push_back(Some(error.clone())),
                 TraceOp::Write { error, .. } | TraceOp::SendFeature { error, .. } => {
@@ -780,6 +797,25 @@ impl HidHandle for ReplayHandle {
     fn clear_read_buffer(&mut self) -> HalResult<()> {
         self.log.push(&self.info.path, TraceOp::ClearReadBuffer);
         Ok(())
+    }
+
+    fn report_descriptor(&mut self) -> HalResult<Vec<u8>> {
+        let next = {
+            let mut all = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+            all.get_mut(&self.info.path)
+                .and_then(|a| a.descriptors.pop_front())
+        };
+        let (r, answer) = match next {
+            Some(Answer::Data(bytes)) => (Ok(bytes.clone()), Answer::Data(bytes)),
+            Some(Answer::Error(e)) => (Err(HalError::Backend(e.clone())), Answer::Error(e)),
+            None => (
+                Err(HalError::Unsupported("report descriptor (not in the trace)")),
+                Answer::Error("not in the trace".into()),
+            ),
+        };
+        self.log
+            .push(&self.info.path, TraceOp::ReportDescriptor { answer });
+        r
     }
 }
 

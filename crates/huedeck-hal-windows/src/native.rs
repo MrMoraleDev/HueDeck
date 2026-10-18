@@ -224,13 +224,32 @@ fn hid_string(handle: HANDLE, f: StringFn) -> String {
     String::from_utf16_lossy(&buf[..len])
 }
 
+/// Which collections an enumeration describes: those of the devices in
+/// `ids` (every device when `None`), plus, on any device, the collections
+/// whose `(usage page, usage)` is in `usages`.
+#[derive(Clone, Copy, Default)]
+struct Wanted<'a> {
+    ids: Option<&'a BTreeSet<(u16, u16)>>,
+    usages: Option<&'a BTreeSet<(u16, u16)>>,
+}
+
+impl Wanted<'_> {
+    fn id(&self, key: (u16, u16)) -> bool {
+        self.ids.is_none_or(|w| w.contains(&key))
+    }
+
+    fn usage(&self, key: (u16, u16)) -> bool {
+        self.usages.is_some_and(|u| u.contains(&key))
+    }
+
+    fn any_usage(&self) -> bool {
+        self.usages.is_some_and(|u| !u.is_empty())
+    }
+}
+
 /// Describe the collection at `path` through a zero-access handle (no report
-/// I/O). `None` when `wanted` is given and the collection's VID/PID is not in it.
-fn endpoint_info(
-    path: &str,
-    wanted: Option<&BTreeSet<(u16, u16)>>,
-    strings: bool,
-) -> Result<Option<HidEndpointInfo>, String> {
+/// I/O). `None` when the collection is not `wanted`.
+fn endpoint_info(path: &str, wanted: Wanted<'_>, strings: bool) -> Result<Option<HidEndpointInfo>, String> {
     let handle = open_path(path, 0, false).map_err(|e| format!("CreateFileW(access=0): {}", e.message()))?;
     let mut attrs = HIDD_ATTRIBUTES {
         Size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32,
@@ -240,10 +259,14 @@ fn endpoint_info(
     if !unsafe { HidD_GetAttributes(handle.0, &mut attrs) } {
         return Err("HidD_GetAttributes failed".into());
     }
-    if wanted.is_some_and(|w| !w.contains(&(attrs.VendorID, attrs.ProductID))) {
+    let id_wanted = wanted.id((attrs.VendorID, attrs.ProductID));
+    if !id_wanted && !wanted.any_usage() {
         return Ok(None);
     }
     let caps = collection_caps(handle.0)?;
+    if !id_wanted && !wanted.usage((caps.usage_page, caps.usage)) {
+        return Ok(None);
+    }
     let parsed = parse_hid_path(path);
     // `MI_xx` when the path names one (also for virtual collections a vendor driver
     // re-exposes, e.g. Razer Synapse's RZVIRTUAL nodes); otherwise 0 for a
@@ -294,13 +317,14 @@ impl NativeHidBackend {
         Self
     }
 
-    fn enumerate_matching(&self, wanted: Option<&BTreeSet<(u16, u16)>>) -> HalResult<Vec<HidEndpointInfo>> {
+    fn enumerate_matching(&self, wanted: Wanted<'_>) -> HalResult<Vec<HidEndpointInfo>> {
         let paths = probe::hid_interface_paths().map_err(HalError::Backend)?;
         let mut out = Vec::new();
         for path in paths {
-            // Skip without opening when the path already names another device.
-            if let (Some(w), Some(key)) = (wanted, probe::path_vid_pid(&path)) {
-                if !w.contains(&key) {
+            // Skip without opening when the path already names another device
+            // and no collection is wanted by usage.
+            if let Some(key) = probe::path_vid_pid(&path) {
+                if !wanted.id(key) && !wanted.any_usage() {
                     continue;
                 }
             }
@@ -329,14 +353,29 @@ impl NativeHidBackend {
 
     /// Every collection, grouped by physical device (see [`crate::group`]).
     pub fn enumerate_grouped(&self) -> HalResult<Vec<DeviceGroup>> {
-        Ok(Self::group(self.enumerate_matching(None)?))
+        Ok(Self::group(self.enumerate_matching(Wanted::default())?))
     }
 
     /// Only the collections of devices whose `(vid, pid)` is in `wanted`
     /// (the devices a host has plugins for); others are never opened.
     pub fn enumerate_grouped_for(&self, wanted: &BTreeSet<(u16, u16)>) -> HalResult<Vec<DeviceGroup>> {
+        self.enumerate_grouped_matching(wanted, &BTreeSet::new())
+    }
+
+    /// The collections of devices whose `(vid, pid)` is in `wanted`, plus the
+    /// collections of any device whose `(usage page, usage)` is in `usages`
+    /// (generic plugins such as HID LampArray). Collections of other devices
+    /// are opened only to read their capabilities.
+    pub fn enumerate_grouped_matching(
+        &self,
+        wanted: &BTreeSet<(u16, u16)>,
+        usages: &BTreeSet<(u16, u16)>,
+    ) -> HalResult<Vec<DeviceGroup>> {
         let started = std::time::Instant::now();
-        let groups = Self::group(self.enumerate_matching(Some(wanted))?);
+        let groups = Self::group(self.enumerate_matching(Wanted {
+            ids: Some(wanted),
+            usages: Some(usages),
+        })?);
         tracing::debug!(
             elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
             groups = groups.len(),
@@ -348,7 +387,7 @@ impl NativeHidBackend {
 
 impl HidBackend for NativeHidBackend {
     fn enumerate(&self) -> HalResult<Vec<HidEndpointInfo>> {
-        self.enumerate_matching(None)
+        self.enumerate_matching(Wanted::default())
     }
 
     fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>> {
@@ -382,7 +421,7 @@ unsafe impl Send for NativeHidHandle {}
 impl NativeHidHandle {
     /// Open the collection at `path` for report I/O.
     pub fn open(path: &str) -> HalResult<Self> {
-        let info = endpoint_info(path, None, false)
+        let info = endpoint_info(path, Wanted::default(), false)
             .map_err(HalError::Backend)?
             .ok_or_else(|| HalError::NotFound(path.to_string()))?;
         // Windows owns system mice and keyboards exclusively; like hidapi, fall back to a
@@ -503,6 +542,10 @@ fn padded(data: &[u8], len: usize) -> std::borrow::Cow<'_, [u8]> {
 impl HidHandle for NativeHidHandle {
     fn info(&self) -> &HidEndpointInfo {
         &self.info
+    }
+
+    fn report_descriptor(&mut self) -> HalResult<Vec<u8>> {
+        crate::hid::read_report_descriptor(&self.info.path)
     }
 
     fn write(&mut self, data: &[u8]) -> HalResult<usize> {

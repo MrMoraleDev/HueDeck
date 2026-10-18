@@ -6,7 +6,7 @@
 //! hidraw node covers the whole interface and `huedeck-hid-desc` splits it
 //! into TLCs so plugins observe identical tuples on both OSes.
 
-use crate::error::HalResult;
+use crate::error::{HalError, HalResult};
 use crate::key::DeviceKey;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -165,6 +165,13 @@ pub trait HidHandle: Send {
         let mut scratch = vec![0u8; 4096];
         while self.read_timeout(&mut scratch, 0)? > 0 {}
         Ok(())
+    }
+
+    /// The report descriptor of this collection, as the OS reports it (on
+    /// Windows: reconstructed from the collection's preparsed data). No report
+    /// I/O. Default: unsupported.
+    fn report_descriptor(&mut self) -> HalResult<Vec<u8>> {
+        Err(HalError::Unsupported("report descriptor"))
     }
 }
 

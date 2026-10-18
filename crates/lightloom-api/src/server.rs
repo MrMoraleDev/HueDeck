@@ -426,7 +426,7 @@ struct ImportLayoutBody {
 
 async fn import_signalrgb(State(ctx): State<ApiContext>, body: Option<Json<ImportLayoutBody>>) -> Response {
     let name = body.and_then(|Json(b)| b.name);
-    reply(ctx.call(Request::ImportSignalRgbLayout { name }).await)
+    reply(ctx.call(Request::ImportSignalRgb { name }).await)
 }
 
 async fn export(State(ctx): State<ApiContext>) -> Response {

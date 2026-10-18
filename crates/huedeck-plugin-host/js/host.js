@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// HueDeck stub host (M0 spike B / `huedeck compat dry-run`).
+// HueDeck compat host.
 //
 // Evaluated as an ES module in every plugin context *before* the plugin
 // module. It installs the compat-v1 host globals (`device`, `bus`, `console`,
 // `service`, `controller`, `discovery`, `XmlHttp`, `XMLHttpRequest`,
-// `BinaryUtils`) as recording stubs that return sane defaults and never touch
-// hardware, plus `device.addFeature()` feature globals. Member lists follow
-// docs/host-api/*.md. Every call of a listed member is counted
+// `BinaryUtils`) plus `device.addFeature()` feature globals. Member lists
+// follow docs/host-api/*.md. Every call of a listed member is counted
 // (`<object>.<member>`); every access to a member that is not listed is
-// recorded as `API_GAP:<object>.<member>` and answered with a no-op function,
-// so the dry-run measures how far the corpus gets against the documented
-// surface. `controller` and `discovery` hold plugin-defined data
-// (network-services.md §1.1), so reads of fields the stub lacks are recorded
-// as stub fields, not API gaps, and yield `undefined`.
+// recorded as `API_GAP:<object>.<member>`. `controller` and `discovery` hold
+// plugin-defined data (network-services.md §1.1), so reads of fields the host
+// lacks are recorded as stub fields, not API gaps, and yield `undefined`.
+//
+// Two modes, chosen by the Rust side through `__huedeckConfig.mode`:
+//
+// * "stub" (default; `huedeck compat dry-run`): every member is a recording
+//   stub that returns sane defaults and never touches hardware; an API gap is
+//   answered with a no-op function, so the dry-run measures how far the
+//   corpus gets against the documented surface.
+// * "device" (a real device session): the HID, canvas and logging members of
+//   `device` call the natives on `__huedeckNative` (crates/huedeck-plugin-host
+//   src/device.rs), which this module captures and removes from the global
+//   object before plugin code runs. An API gap is logged once and throws
+//   `HostApiMissing` when called (architecture-synthesis.md D6).
 //
 // The Rust side reads state back through `globalThis.__huedeckHost`
 // (non-writable, non-configurable: plugin code cannot replace it).
@@ -21,6 +30,7 @@
 import { createColorArray, layoutColors } from "huedeck:prelude/createColorArray.js";
 import { BinaryUtils } from "huedeck:prelude/BinaryUtils.js";
 import { createFeatureGlobal as createBase64Feature } from "huedeck:prelude/base64.js";
+import { HostApiMissing } from "huedeck:prelude/HostApiMissing.js";
 
 // Builtins the host-side helpers rely on, captured before plugin code runs
 // (a plugin replacing `JSON.stringify` must not falsify the report).
@@ -37,6 +47,11 @@ const freeze = Object.freeze;
 
 const cfg = globalThis.__huedeckConfig ?? {};
 
+// Device mode: capture the natives and take them out of plugin reach.
+const native = cfg.mode === "device" ? globalThis.__huedeckNative : undefined;
+delete globalThis.__huedeckNative;
+const strictGaps = native !== undefined;
+
 const state = {
   gaps: new Map(),
   fields: new Map(),
@@ -50,6 +65,7 @@ const state = {
   subdevices: [],
   notifyId: 0,
   namespace: undefined,
+  gapsLogged: new Set(),
 };
 
 // Keys that probing code (Promise resolution, JSON, printing, typeof checks
@@ -102,6 +118,45 @@ function line(text) {
   }
 }
 
+/** A plugin-visible log line: counted, and forwarded to the session log in device mode. */
+function hostLog(text) {
+  line(text);
+  if (native !== undefined) {
+    native.log(String(text));
+  }
+}
+
+/**
+ * Device mode: a documented member HueDeck does not implement yet. Recorded as
+ * an API gap, logged once, and throws HostApiMissing when called, so a plugin
+ * never acts on stub data in a real session.
+ */
+function unimplementedMember(member) {
+  return function huedeckUnimplemented() {
+    gap(member);
+    if (!state.gapsLogged.has(member)) {
+      state.gapsLogged.add(member);
+      hostLog(`API_GAP: ${member} is not implemented by this host`);
+    }
+    throw new HostApiMissing(member);
+  };
+}
+
+function unimplemented(objectName, names) {
+  return fromEntries(names.map((n) => [n, unimplementedMember(`${objectName}.${n}`)]));
+}
+
+/** Device mode: an unimplemented member logs once, then throws a typed error when called. */
+function gapThrower(member) {
+  return function huedeckApiGap() {
+    if (!state.gapsLogged.has(member)) {
+      state.gapsLogged.add(member);
+      hostLog(`API_GAP: ${member} is not implemented by this host`);
+    }
+    throw new HostApiMissing(member);
+  };
+}
+
 /**
  * Wrap `target` as a recording host object: calls of its function members are
  * counted as `<objectName>.<member>`; unknown string members are recorded as
@@ -138,6 +193,9 @@ function recording(objectName, target, { data = false } = {}) {
         return undefined;
       }
       gap(`${objectName}.${key}`);
+      if (strictGaps) {
+        return gapThrower(`${objectName}.${key}`);
+      }
       return function huedeckApiGap() {
         return undefined;
       };
@@ -150,7 +208,7 @@ const zeros = (n) => {
   return new Array(len).fill(0);
 };
 const noop = () => undefined;
-const logFn = (...args) => line(fmt(args));
+const logFn = (...args) => hostLog(fmt(args));
 
 // ---------------------------------------------------------------- console
 const consoleStub = recording("console", {
@@ -412,6 +470,153 @@ const deviceTarget = {
   getMotherboardName: () => "",
 };
 
+// ---------------------------------------------------------------- device (device mode)
+// Argument normalisation follows hid-usb.md §2: a byte array is any array-like
+// of numbers, each taken `& 0xFF`; an explicit length pads with zeros or
+// truncates; reads return `length` bytes, report id first.
+const MAX_REPORT = 1 << 16;
+const toInt = (v) => Math.trunc(Number(v)) | 0;
+
+function lengthArg(data, length) {
+  const n = Number(length);
+  if (Number.isFinite(n) && n > 0) {
+    return Math.min(Math.trunc(n), MAX_REPORT);
+  }
+  const l = data != null && typeof data.length === "number" ? data.length : 0;
+  return Math.min(l >>> 0, MAX_REPORT);
+}
+
+function bytesArg(data, length) {
+  const n = lengthArg(data, length);
+  const src = data != null && typeof data.length === "number" ? data : [];
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    out[i] = i < src.length ? Number(src[i]) & 0xff : 0;
+  }
+  return out;
+}
+
+function reportIdArg(data) {
+  if (typeof data === "number") {
+    return data & 0xff;
+  }
+  if (data != null && typeof data.length === "number" && data.length > 0) {
+    return Number(data[0]) & 0xff;
+  }
+  return 0;
+}
+
+// Reads may block at most 5 s, so a stop request (Ctrl-C, window close) still
+// leaves the session time to run Shutdown() before the host gives up on it.
+const MAX_READ_TIMEOUT_MS = 5000;
+
+function timeoutArg(timeout, fallback) {
+  const t = Number(timeout);
+  return Number.isFinite(t) && t >= 0 ? Math.min(Math.trunc(t), MAX_READ_TIMEOUT_MS) : fallback;
+}
+
+/** `device.log(value[, { toFile, hex }])`; `hex` prints a byte array as hex. */
+function deviceLog(value, ...rest) {
+  const opts = rest.length === 1 && rest[0] && typeof rest[0] === "object" && !isArray(rest[0]) ? rest[0] : undefined;
+  if (opts && opts.hex && value != null && typeof value !== "string" && typeof value.length === "number") {
+    hostLog(arrayFrom(value, (b) => (Number(b) & 0xff).toString(16).padStart(2, "0")).join(" "));
+    return;
+  }
+  hostLog(fmt(opts === undefined ? [value, ...rest] : [value]));
+}
+
+if (native !== undefined) {
+  const stubAddFeature = deviceTarget.addFeature;
+  Object.assign(deviceTarget, {
+    // Not implemented in device sessions yet: these throw instead of answering
+    // with stub data (libusb transfers and subdevices: M2, fans: M5, LCD: M6).
+    ...unimplemented("device", [
+      "bulk_transfer",
+      "control_transfer",
+      "setProtocol",
+      "createSubdevice",
+      "removeSubdevice",
+      "subdeviceColor",
+      "setSubdeviceName",
+      "setSubdeviceSize",
+      "setSubdeviceLeds",
+      "setSubdeviceLedMap",
+      "setSubdeviceImageUrl",
+      "setSubdeviceImage",
+      "SetIsSubdeviceController",
+      "createFanControl",
+      "removeFanControl",
+      "setRPM",
+      "getFanlevel",
+      "getFanLevel",
+      "getNormalizedFanlevel",
+      "getNormalizedFanLevel",
+      "getImageBuffer",
+      "getMotherboardName",
+    ]),
+    getCurrentSubdevices: () => [],
+    // HueDeck does not drive fans yet; plugins that check this skip fan control.
+    fanControlDisabled: () => true,
+    // Network features need sockets HueDeck does not provide to device plugins yet.
+    addFeature: (name) => {
+      const key = String(name);
+      if (key === "udp" || key === "dtls") {
+        unimplementedMember(`device.addFeature(${key})`)();
+      }
+      return stubAddFeature(name);
+    },
+    write: (data, length) => native.hidWrite(bytesArg(data, length)),
+    send_report: (data, length) => native.hidSendFeature(bytesArg(data, length)),
+    read: (data, length, timeout) => native.hidRead(lengthArg(data, length), timeoutArg(timeout, 100)),
+    get_report: (data, length) => native.hidGetFeature(reportIdArg(data), lengthArg(data, length)),
+    input_report: (data, length) => native.hidGetInput(reportIdArg(data), lengthArg(data, length)),
+    getLastReadSize: () => native.lastReadSize(),
+    clearReadBuffer: () => native.clearReadBuffer(),
+    flush: () => native.clearReadBuffer(),
+    set_endpoint: (iface, usage, usagePage, collection) =>
+      native.setEndpoint(toInt(iface), toInt(usage), toInt(usagePage), collection === undefined ? -1 : toInt(collection)),
+    getHidEndpoints: () =>
+      native.endpoints().map(([iface, usage, usagePage, collection]) => ({
+        interface: iface,
+        usage,
+        usage_page: usagePage,
+        collection,
+      })),
+    getHidInfo: () => {
+      const [readLength, writeLength] = native.hidInfo();
+      return { readLength, writeLength };
+    },
+    getDeviceInfo: () => {
+      const [manufacturer, product, serialNumber] = native.deviceInfo();
+      return { product, manufacturer, serialNumber, vendorId: state.vendorId, productId: state.productId };
+    },
+    pause: (ms) => native.pause(Number(ms) || 0),
+    color: (x, y) => native.color(toInt(x), toInt(y)),
+    getBrightness: () => native.brightness(),
+    setName: (name) => native.setName(String(name)),
+    setSize: (size) => {
+      if (size != null && typeof size.length === "number" && size.length >= 2) {
+        native.setSize(toInt(size[0]), toInt(size[1]));
+      }
+    },
+    setControllableLeds: (_names, positions) => {
+      const flat = [];
+      if (isArray(positions)) {
+        for (const p of positions) {
+          flat.push(toInt(p?.[0]), toInt(p?.[1]));
+        }
+      }
+      native.setLeds(flat);
+    },
+    log: deviceLog,
+    notify: (title, text) => {
+      hostLog(`notify: ${String(title ?? "")}: ${String(text ?? "")}`);
+      state.notifyId += 1;
+      return String(state.notifyId);
+    },
+  });
+}
+
 // ---------------------------------------------------------------- SMBus
 function busMembers(fixed) {
   const a = fixed ? 0 : 1; // argument offset: free buses take the address first
@@ -615,12 +820,13 @@ g.__huedeck = {
     if (m) {
       gap(m[1]);
     }
-    line(text);
+    hostLog(text);
   },
 };
 g.console = consoleStub;
 g.device = recording("device", deviceTarget);
-g.bus = recording("bus", busMembers(true));
+// SMBus is not available to device sessions yet (M5): every `bus.*` member throws there.
+g.bus = native !== undefined ? recording("bus", {}) : recording("bus", busMembers(true));
 g.service = recording("service", serviceTarget);
 // Plain-data snapshot of the plugin's own controller object / the plugin's
 // DiscoveryService instance: unknown fields are plugin data, not host API.
@@ -763,6 +969,19 @@ function applyParameters(params) {
   return n;
 }
 
+/** Override parameter globals from `{ name: value }` (CLI `--param`, UI changes). */
+function setGlobals(values) {
+  if (values === null || typeof values !== "object") {
+    return 0;
+  }
+  let n = 0;
+  for (const k of objectKeys(values)) {
+    g[k] = values[k];
+    n += 1;
+  }
+  return n;
+}
+
 function setIds(vendorId, productId) {
   state.vendorId = Number(vendorId) || 0;
   state.productId = Number(productId) || 0;
@@ -797,6 +1016,7 @@ defineProperty(g, "__huedeckHost", {
   value: freeze({
     readMeta,
     applyParameters,
+    setGlobals,
     setIds,
     setNamespace,
     namespace,

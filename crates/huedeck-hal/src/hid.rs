@@ -24,6 +24,15 @@ pub struct ReportLengths {
     pub feature: usize,
 }
 
+/// One report declared by an endpoint's report descriptor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ReportSpec {
+    /// Report id (`0` when the collection uses unnumbered reports).
+    pub id: u8,
+    /// Length in bytes **including** the report-id byte (hidapi convention).
+    pub len: usize,
+}
+
 /// The `{interface, usage, usage_page, collection}` tuple a plugin's
 /// `Validate(endpoint)` and `set_endpoint(...)` operate on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -82,6 +91,11 @@ pub struct HidEndpointInfo {
     /// Report sizes (may be all-zero until the endpoint is opened on
     /// backends that only learn them from the report descriptor).
     pub report_lengths: ReportLengths,
+    /// Feature reports the report descriptor declares, ascending by id.
+    /// Filled when the backend reads the descriptor (Windows: at open);
+    /// empty when unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub feature_reports: Vec<ReportSpec>,
 }
 
 impl HidEndpointInfo {
@@ -127,11 +141,14 @@ pub trait HidHandle: Send {
     /// Static information about this endpoint.
     fn info(&self) -> &HidEndpointInfo;
 
-    /// Write an output report. Returns the number of bytes written.
+    /// Write an output report. Returns `data.len()` on success (backends may
+    /// pad the transfer to the collection's output report length).
     fn write(&mut self, data: &[u8]) -> HalResult<usize>;
 
     /// Read an input report, waiting at most `timeout_ms` (`0` = non-blocking
-    /// poll, `-1` = block). Returns `Ok(0)` on timeout.
+    /// poll, `-1` = block). The report id comes first, `0x00` when the
+    /// collection uses unnumbered reports, as SignalRGB plugins expect
+    /// (hid-usb.md). Returns the bytes stored, `Ok(0)` on timeout.
     fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> HalResult<usize>;
 
     /// SET_REPORT(Feature). Returns the number of bytes sent.

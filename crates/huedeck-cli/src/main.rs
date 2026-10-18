@@ -1,26 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //! `huedeck` — command-line client.
 //!
-//! The subcommand tree is final; handlers not implemented yet return
-//! [`NotImplemented`] naming the milestone that fills them in.
-//! `devices` is live (read-only HID enumeration).
+//! Headless commands (no daemon yet): `devices` (read-only HID enumeration),
+//! `light` / `rainbow` / `bench` (null renderer → plugin sessions → hardware,
+//! see [`run`]) and `compat dry-run` (corpus harness).
+//!
+//! Exit codes: `0` success; `1` a device session failed, faulted or saw HID
+//! errors; `2` a setup error (no plugin or device, conflicting software, bad
+//! arguments).
 
 #![forbid(unsafe_code)]
 
 use clap::{Parser, Subcommand};
+use std::process::ExitCode;
 
 mod compat;
 mod devices;
-
-/// Placeholder error for commands that land in a later milestone.
-#[derive(Debug, thiserror::Error)]
-#[error("`huedeck {command}` is not implemented yet (planned for milestone {milestone})")]
-pub struct NotImplemented {
-    /// Subcommand name.
-    pub command: &'static str,
-    /// Milestone.
-    pub milestone: &'static str,
-}
+mod run;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -49,34 +45,35 @@ enum Command {
         #[arg(long = "filter", value_name = "VID[:PID]")]
         filters: Vec<devices::Filter>,
     },
-    /// Set every device (or one) to a solid colour.
+    /// Set every supported device (or the --device ones) to a solid colour until Ctrl-C.
     Light {
-        /// Colour as #RRGGBB or a CSS name.
-        color: String,
-        /// Restrict to one device uid (vid:pid:serial).
-        #[arg(long)]
-        device: Option<String>,
-        /// Do not write to hardware; print the packets instead.
-        #[arg(long)]
-        dry_run: bool,
+        /// Colour as #RRGGBB or a basic name (red, green, blue, white, ...).
+        #[arg(value_parser = run::parse_color)]
+        color: huedeck_engine::Rgb,
+        #[command(flatten)]
+        run: run::RunArgs,
     },
-    /// Run the built-in rainbow pattern through the null renderer.
+    /// Run the built-in rainbow pattern through the null renderer until Ctrl-C.
     Rainbow {
-        /// Frames per second.
-        #[arg(long, default_value_t = 30.0)]
+        /// Frames per second (1-240).
+        #[arg(long, default_value_t = 30.0, value_parser = run::parse_fps)]
         fps: f64,
-        /// Stop after this many seconds (default: until Ctrl-C).
-        #[arg(long)]
-        duration: Option<u64>,
+        #[command(flatten)]
+        run: run::RunArgs,
     },
-    /// Measure frame / sample / write latency histograms.
+    /// Drive the rainbow pattern for a fixed time and report latency percentiles.
     Bench {
         /// Seconds to run.
-        #[arg(long, default_value_t = 10)]
-        seconds: u64,
-        /// Frames per second to drive.
-        #[arg(long, default_value_t = 30.0)]
+        #[arg(long, default_value_t = 10.0, value_parser = run::parse_secs)]
+        seconds: f64,
+        /// Frames per second to drive (1-240).
+        #[arg(long, default_value_t = 30.0, value_parser = run::parse_fps)]
         fps: f64,
+        /// Use a scripted in-memory device with this VID:PID instead of hardware (CI, no device needed).
+        #[arg(long, value_name = "VID:PID", value_parser = run::parse_vid_pid)]
+        mock: Option<(u16, u16)>,
+        #[command(flatten)]
+        run: run::RunArgs,
     },
     /// SignalRGB-compatibility tooling.
     Compat {
@@ -95,21 +92,38 @@ fn run_devices(json: bool, filters: &[devices::Filter]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run(cli: Cli) -> anyhow::Result<()> {
-    let (command, milestone) = match cli.command {
-        Command::Devices { json, filters } => return run_devices(json, &filters),
-        Command::Light { .. } => ("light", "M1"),
-        Command::Rainbow { .. } => ("rainbow", "M1"),
-        Command::Bench { .. } => ("bench", "M1"),
-        Command::Compat { command } => return compat::run(command),
-    };
-    Err(NotImplemented { command, milestone }.into())
+fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
+    match cli.command {
+        Command::Devices { json, filters } => run_devices(json, &filters).map(|_| run::Outcome::Clean),
+        Command::Light { color, run } => run::run(run::Mode::Light(color), &run),
+        Command::Rainbow { fps, run } => run::run(run::Mode::Rainbow { fps }, &run),
+        Command::Bench {
+            seconds,
+            fps,
+            mock,
+            run,
+        } => run::run(run::Mode::Bench { fps, seconds, mock }, &run),
+        Command::Compat { command } => compat::run(command).map(|_| run::Outcome::Clean),
+    }
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("HUEDECK_LOG")
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     let cli = Cli::parse();
-    run(cli)?;
-    Ok(())
+    match dispatch(cli) {
+        Ok(run::Outcome::Clean) => ExitCode::SUCCESS,
+        Ok(run::Outcome::Failed) => ExitCode::from(1),
+        Err(e) => {
+            eprintln!("huedeck: {e:#}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -123,19 +137,63 @@ mod tests {
     }
 
     #[test]
-    fn every_subcommand_names_its_milestone() {
-        let cases = [
-            (vec!["huedeck", "light", "#ff0000"], "M1"),
-            (vec!["huedeck", "rainbow", "--fps", "60"], "M1"),
-            (vec!["huedeck", "bench"], "M1"),
-        ];
-        for (argv, milestone) in cases {
-            let cli = Cli::try_parse_from(argv.iter().copied()).unwrap();
-            let err = run(cli).unwrap_err();
-            let err = err.downcast_ref::<NotImplemented>().expect("NotImplemented");
-            assert_eq!(err.milestone, milestone, "{argv:?}");
-            assert!(err.to_string().contains(milestone));
+    fn run_commands_parse() {
+        let cli = Cli::try_parse_from([
+            "huedeck",
+            "light",
+            "#ff0000",
+            "--dry-run",
+            "--device",
+            "1462:7c91",
+            "--restore-check=0x52:185",
+            "--param",
+            "LightingMode=Forced",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Light { color, run } => {
+                assert_eq!(color, huedeck_engine::Rgb::new(255, 0, 0));
+                assert!(run.dry_run);
+                assert_eq!(run.devices, vec!["1462:7c91".to_string()]);
+                assert_eq!(
+                    run.restore_check,
+                    vec![run::RestoreArg::Report(
+                        huedeck_plugin_host::session::RestoreProbe {
+                            report_id: 0x52,
+                            len: 185
+                        }
+                    )]
+                );
+                assert_eq!(run.params.len(), 1);
+            }
+            other => panic!("unexpected {other:?}"),
         }
+        let cli = Cli::try_parse_from(["huedeck", "rainbow", "--fps", "60", "--duration", "600"]).unwrap();
+        assert!(
+            matches!(cli.command, Command::Rainbow { fps, ref run } if fps == 60.0 && run.duration == Some(600.0))
+        );
+        let cli = Cli::try_parse_from(["huedeck", "bench", "--mock", "1462:7c91", "--seconds", "2"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Bench {
+                mock: Some((0x1462, 0x7c91)),
+                ..
+            }
+        ));
+        // `--restore-check` alone means every declared feature report; it never eats the next token.
+        let cli = Cli::try_parse_from(["huedeck", "rainbow", "--restore-check", "--fps", "60"]).unwrap();
+        assert!(
+            matches!(cli.command, Command::Rainbow { ref run, .. } if run.restore_check == vec![run::RestoreArg::Auto])
+        );
+        assert!(Cli::try_parse_from(["huedeck", "light", "notacolour"]).is_err());
+        // Out-of-range times and rates are rejected before anything starts.
+        assert!(Cli::try_parse_from(["huedeck", "light", "red", "--duration", "1e30"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "light", "red", "--duration", "0"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "light", "red", "--stats-every", "NaN"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "bench", "--seconds", "inf"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "rainbow", "--fps", "0"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "rainbow", "--fps", "1000"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "light", "red", "--brightness", "101"]).is_err());
     }
 
     #[test]

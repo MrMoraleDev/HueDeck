@@ -460,6 +460,31 @@ impl DeviceContext {
         self.update_factor();
     }
 
+    /// Where the device sits on the canvas.
+    pub fn placement(&self) -> &Placement {
+        &self.placement
+    }
+
+    /// A child endpoint's new placement (see [`Children::set_placement`]).
+    pub fn set_child_placement(&mut self, uid: &str, placement: Placement) -> bool {
+        self.children.set_placement(uid, placement)
+    }
+
+    /// The device and its children as canvas endpoints; `key` is the device's uid.
+    pub fn endpoint_views(&self, key: &str) -> Vec<crate::children::EndpointView> {
+        let mut out = vec![crate::children::EndpointView {
+            uid: key.to_string(),
+            kind: crate::children::EndpointKind::Device,
+            name: self.name().to_string(),
+            channel: None,
+            size: self.size(),
+            leds: self.led_positions().len(),
+            placement: self.placement.clone(),
+        }];
+        out.extend(self.children.views());
+        out
+    }
+
     /// The device brightness slider (`device.getBrightness()`), `0..=100`.
     pub fn device_brightness(&self) -> u8 {
         self.placement.brightness.min(100)

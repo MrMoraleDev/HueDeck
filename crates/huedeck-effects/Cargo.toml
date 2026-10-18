@@ -14,7 +14,5 @@ homepage.workspace = true
 [dependencies]
 scraper = { workspace = true }
 serde = { workspace = true }
-
-[dev-dependencies]
-# EffectMeta JSON shape is checked against schemas/effect-meta.schema.json.
+# Control values set from outside arrive as JSON (ControlMeta::coerce).
 serde_json = { workspace = true }

@@ -1,0 +1,85 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- HueDeck starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Shader Waves</title>
+  <meta description="Interfering colour waves drawn by a WebGL fragment shader." />
+  <meta publisher="HueDeck" />
+  <meta property="hue" label="Base Hue" type="hue" min="0" max="360" default="200" />
+  <meta property="speed" label="Speed" type="number" min="1" max="100" default="25" />
+  <meta property="spread" label="Hue Spread" type="number" min="0" max="100" default="30" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var gl = canvas.getContext("webgl", { alpha: false, antialias: false });
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    var VERTEX = "attribute vec2 pos; void main() { gl_Position = vec4(pos, 0.0, 1.0); }";
+    var FRAGMENT = [
+      "precision mediump float;",
+      "uniform vec2 res; uniform float t; uniform float hue; uniform float spread;",
+      "vec3 hsv(float h, float s, float v) {",
+      "  vec3 p = abs(fract(vec3(h) + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);",
+      "  return v * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), s);",
+      "}",
+      "void main() {",
+      "  vec2 uv = gl_FragCoord.xy / res;",
+      "  float w = sin(uv.x * 12.0 + t) * 0.5 + sin(uv.y * 9.0 - t * 1.3) * 0.5 + sin((uv.x + uv.y) * 7.0 + t * 0.7);",
+      "  float h = fract(hue / 360.0 + w * spread * 0.004);",
+      "  float v = 0.55 + 0.45 * sin(w * 2.0 + t);",
+      "  gl_FragColor = vec4(hsv(h, 1.0, v), 1.0);",
+      "}"
+    ].join("\n");
+
+    function compile(type, source) {
+      var s = gl.createShader(type);
+      gl.shaderSource(s, source);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    }
+
+    if (!gl) {
+      console.error("Shader Waves: WebGL is not available");
+      var c2 = canvas.getContext("2d");
+      c2.fillStyle = "#200000";
+      c2.fillRect(0, 0, canvas.width, canvas.height);
+    } else {
+      var prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERTEX));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAGMENT));
+      gl.linkProgram(prog);
+      gl.useProgram(prog);
+      var buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(prog, "pos");
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      var uRes = gl.getUniformLocation(prog, "res"), uT = gl.getUniformLocation(prog, "t");
+      var uHue = gl.getUniformLocation(prog, "hue"), uSpread = gl.getUniformLocation(prog, "spread");
+      var t = 0, last = 0;
+      var frame = function (now) {
+        var dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
+        last = now;
+        t += (dt * num(speed, 25)) / 12;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.uniform2f(uRes, canvas.width, canvas.height);
+        gl.uniform1f(uT, t);
+        gl.uniform1f(uHue, num(hue, 200));
+        gl.uniform1f(uSpread, num(spread, 30));
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    }
+  </script>
+</body>
+</html>

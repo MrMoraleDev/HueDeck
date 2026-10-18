@@ -196,6 +196,38 @@ impl ControlMeta {
         }
     }
 
+    /// A value set from outside (UI, CLI `--prop`, daemon) as this control's
+    /// type: numbers from numbers or numeric strings, booleans from booleans,
+    /// `0`/`1` or `"true"`/`"false"`, everything else as text (non-string JSON
+    /// as its JSON text). `None` when it cannot be a number or boolean.
+    pub fn coerce(&self, value: &serde_json::Value) -> Option<ControlValue> {
+        use serde_json::Value;
+        match self.control_type {
+            ControlType::Number | ControlType::Hue => match value {
+                Value::Number(n) => n.as_f64(),
+                Value::String(s) => s.trim().parse::<f64>().ok(),
+                _ => None,
+            }
+            .filter(|v| v.is_finite())
+            .map(ControlValue::Number),
+            ControlType::Boolean => match value {
+                Value::Bool(b) => Some(*b),
+                Value::Number(n) => n.as_f64().map(|v| v != 0.0),
+                Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" => Some(true),
+                    "false" | "0" => Some(false),
+                    _ => None,
+                },
+                _ => None,
+            }
+            .map(ControlValue::Bool),
+            _ => Some(ControlValue::Text(match value {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })),
+        }
+    }
+
     /// `var <property> = <literal>;` for `value` (or the default when `None`).
     pub fn js_initializer(&self, value: Option<&ControlValue>) -> String {
         let v = value.cloned().unwrap_or_else(|| self.default_value());
@@ -457,6 +489,27 @@ impl EffectMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outside_values_take_the_control_type() {
+        use serde_json::json;
+        let html = r##"<head><meta property="speed" label="S" type="number" default="1"/>
+            <meta property="on" label="O" type="boolean" default="0"/>
+            <meta property="tint" label="T" type="color" default="#000000"/></head>"##;
+        let meta = crate::parse_effect_meta(html);
+        let (speed, on, tint) = (&meta.properties[0], &meta.properties[1], &meta.properties[2]);
+        assert_eq!(speed.coerce(&json!(5)), Some(ControlValue::Number(5.0)));
+        assert_eq!(speed.coerce(&json!(" 2.5 ")), Some(ControlValue::Number(2.5)));
+        assert_eq!(speed.coerce(&json!("fast")), None);
+        assert_eq!(on.coerce(&json!("1")), Some(ControlValue::Bool(true)));
+        assert_eq!(on.coerce(&json!(0)), Some(ControlValue::Bool(false)));
+        assert_eq!(on.coerce(&json!("maybe")), None);
+        assert_eq!(
+            tint.coerce(&json!("#ff0000")),
+            Some(ControlValue::Text("#ff0000".into()))
+        );
+        assert_eq!(tint.coerce(&json!(7)), Some(ControlValue::Text("7".into())));
+    }
 
     #[test]
     fn js_literals_are_safe() {

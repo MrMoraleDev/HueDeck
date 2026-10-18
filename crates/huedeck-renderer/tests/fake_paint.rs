@@ -83,6 +83,7 @@ fn fake_on_paint_source_fills_ring_and_stats() {
             fps: 30,
             snapshot_frames: vec![10, 100],
             raw_intervals: true,
+            serve: false,
         },
     );
     // 30 fps with +-2 ms jitter and one 90 ms hitch before frame 61.
@@ -157,6 +158,7 @@ fn size_mismatch_is_rejected_not_published() {
             fps: 30,
             snapshot_frames: vec![],
             raw_intervals: false,
+            serve: false,
         },
     );
     let now = Instant::now();

@@ -185,10 +185,16 @@ pub struct DeviceContext {
     placement: Placement,
     sampler: SamplerConfig,
     grid: OffsetTable,
+    /// `LightingMode::Forced` colour of the placement.
+    forced: Option<huedeck_engine::Rgb>,
     brightness: Brightness,
     factor: f32,
     stats: IoStats,
     write_latency: LatencyHistogram,
+    /// Frame capture to the first write of its `Render()`.
+    canvas_to_wire: LatencyHistogram,
+    /// Capture time of a frame not yet written out.
+    pending_frame: Option<Instant>,
     validated: Vec<usize>,
     created: Instant,
     first_write: Option<Duration>,
@@ -279,10 +285,13 @@ impl DeviceContext {
             placement,
             sampler,
             grid,
+            forced: None,
             brightness: Brightness::default(),
             factor: 1.0,
             stats: IoStats::default(),
             write_latency: LatencyHistogram::new(),
+            canvas_to_wire: LatencyHistogram::new(),
+            pending_frame: None,
             validated: Vec::new(),
             created: Instant::now(),
             first_write: None,
@@ -382,6 +391,11 @@ impl DeviceContext {
         self.write_latency.summary()
     }
 
+    /// Frame capture to the first write that followed it (new frames only).
+    pub fn canvas_to_wire(&self) -> LatencySummary {
+        self.canvas_to_wire.summary()
+    }
+
     /// Time from context creation to the first successful (or dry-run) write.
     pub fn first_write(&self) -> Option<Duration> {
         self.first_write
@@ -411,6 +425,16 @@ impl DeviceContext {
 
     /// The frame `device.color(x, y)` samples until the next call.
     pub fn set_frame(&mut self, frame: Arc<Frame>) {
+        self.set_frame_at(frame, Instant::now());
+    }
+
+    /// [`DeviceContext::set_frame`] with the frame's capture time: the first
+    /// write after a new frame records its canvas-to-wire latency (a frame
+    /// republished unchanged, to keep plugins ticking, is not new).
+    pub fn set_frame_at(&mut self, frame: Arc<Frame>, captured: Instant) {
+        if !Arc::ptr_eq(&self.frame, &frame) {
+            self.pending_frame = Some(captured);
+        }
         self.frame = frame;
     }
 
@@ -421,8 +445,9 @@ impl DeviceContext {
         self.rebuild_grid();
     }
 
-    /// Where the device sits on the canvas.
+    /// Where the device sits on the canvas (and whether it shows a forced colour).
     pub fn set_placement(&mut self, placement: Placement) {
+        self.forced = placement.forced();
         self.placement = placement;
         self.update_factor();
         self.rebuild_grid();
@@ -485,6 +510,10 @@ impl DeviceContext {
         };
         if x >= self.size[0] || y >= self.size[1] {
             return [0, 0, 0];
+        }
+        if let Some(c) = self.forced {
+            let c = apply_brightness(c, self.factor);
+            return [c.r, c.g, c.b];
         }
         let index = (y * self.size[0] + x) as usize;
         let ok = self.frame.width() == self.sampler.canvas_width
@@ -697,6 +726,9 @@ impl DeviceContext {
     fn mark_write(&mut self, started: Option<Instant>) {
         if self.first_write.is_none() {
             self.first_write = Some(self.created.elapsed());
+        }
+        if let Some(captured) = self.pending_frame.take() {
+            self.canvas_to_wire.record(captured.elapsed());
         }
         if let Some(t) = started {
             self.write_latency.record(t.elapsed());
@@ -1254,6 +1286,29 @@ mod tests {
             layout: 100,
         });
         assert_eq!(ctx.color(2, 0), [100, 50, 25]);
+    }
+
+    #[test]
+    fn a_forced_placement_ignores_the_canvas() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        ctx.set_geometry([2, 1], vec![[0, 0], [1, 0]]).unwrap();
+        ctx.set_frame(Arc::new(Frame::solid(320, 200, Rgb::new(1, 2, 3))));
+        ctx.set_placement(Placement {
+            enabled: false,
+            lighting_mode: huedeck_engine::LightingMode::Forced,
+            forced_color: "#ff8000".into(),
+            brightness: 50,
+            ..Placement::default()
+        });
+        assert_eq!(
+            ctx.color(1, 0),
+            [128, 64, 0],
+            "forced, scaled, even when disabled"
+        );
+        assert_eq!(ctx.color(2, 0), [0, 0, 0], "outside the grid");
+        ctx.set_placement(Placement::default());
+        assert_eq!(ctx.color(0, 0), [1, 2, 3]);
     }
 
     #[test]

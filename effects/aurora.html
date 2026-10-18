@@ -1,0 +1,60 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- HueDeck starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Aurora</title>
+  <meta description="Soft curtains of light, blended additively and blurred." />
+  <meta publisher="HueDeck" />
+  <meta property="hue" label="Hue" type="hue" min="0" max="360" default="140" />
+  <meta property="speed" label="Speed" type="number" min="1" max="100" default="20" />
+  <meta property="curtains" label="Curtains" type="number" min="1" max="6" default="3" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var t = 0, last = 0;
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    function draw(now) {
+      var dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
+      last = now;
+      t += (dt * num(speed, 20)) / 20;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.filter = "none";
+      ctx.fillStyle = "#02030a";
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = "lighter";
+      ctx.filter = "blur(6px)";
+      var n = Math.round(Math.max(1, Math.min(6, num(curtains, 3))));
+      var base = num(hue, 140);
+      for (var c = 0; c < n; c++) {
+        var h = (base + c * 35) % 360;
+        var g = ctx.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, "hsla(" + h + ",100%,60%,0)");
+        g.addColorStop(0.45, "hsla(" + h + ",100%,55%,0.55)");
+        g.addColorStop(1, "hsla(" + ((h + 40) % 360) + ",100%,40%,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(0, H);
+        for (var x = 0; x <= W; x += 8) {
+          var y = H * 0.35 + Math.sin(x * 0.02 + t * (1 + c * 0.3) + c) * 30 + Math.sin(x * 0.051 - t * 0.7) * 14;
+          ctx.lineTo(x, y);
+        }
+        ctx.lineTo(W, H);
+        ctx.closePath();
+        ctx.fill();
+      }
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

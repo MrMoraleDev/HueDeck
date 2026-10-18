@@ -784,6 +784,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ctrlc",
+ "huedeck-effects",
  "huedeck-engine",
  "huedeck-hal",
  "huedeck-hal-windows",
@@ -904,7 +905,12 @@ name = "huedeck-render"
 version = "0.0.1"
 dependencies = [
  "huedeck-engine",
+ "huedeck-protocol",
+ "huedeck-renderer",
+ "serde",
+ "serde_json",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

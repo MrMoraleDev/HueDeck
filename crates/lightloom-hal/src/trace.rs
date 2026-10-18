@@ -67,6 +67,11 @@ pub enum Answer {
 pub enum TraceOp {
     /// The collection was opened.
     Open,
+    /// Opening the collection failed.
+    OpenFailed {
+        /// Why.
+        error: String,
+    },
     /// Output report sent.
     Write {
         /// Report, id first.
@@ -116,11 +121,32 @@ pub enum TraceOp {
     ClearReadBuffer,
 }
 
+/// Which kind of report a packet was sent as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SentKind {
+    /// Output report (`write`).
+    Output,
+    /// Feature report (`send_feature_report`).
+    Feature,
+}
+
+/// A packet sent to a device.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sent {
+    /// Report kind.
+    pub kind: SentKind,
+    /// Report, id first.
+    #[serde(with = "hex_bytes")]
+    pub bytes: Vec<u8>,
+}
+
 impl TraceOp {
-    /// Bytes this operation sent to the device, if it sent any.
-    pub fn sent(&self) -> Option<&[u8]> {
+    /// The report this operation sent to the device, if it sent one.
+    pub fn sent(&self) -> Option<(SentKind, &[u8])> {
         match self {
-            TraceOp::Write { data, .. } | TraceOp::SendFeature { data, .. } => Some(data),
+            TraceOp::Write { data, .. } => Some((SentKind::Output, data)),
+            TraceOp::SendFeature { data, .. } => Some((SentKind::Feature, data)),
             _ => None,
         }
     }
@@ -155,6 +181,52 @@ pub struct TracedDevice {
     /// Components assigned per channel (each a JSON array of component instances).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub channels: BTreeMap<String, serde_json::Value>,
+    /// Sessions the recording ran for the device; more than one (a hotplug
+    /// restart) cannot be replayed in lockstep.
+    #[serde(default)]
+    pub sessions: u32,
+}
+
+/// Which feature reports the recording's sessions read before `Initialize`
+/// and after `Shutdown` (those reads are in the trace too).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceRestoreCheck {
+    /// None.
+    #[default]
+    Off,
+    /// Every feature report the report descriptor declares.
+    Declared,
+    /// These `(report id, length)` pairs.
+    Reports(Vec<(u8, usize)>),
+}
+
+/// Session options of the recording that change what the plugins send.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceOptions {
+    /// Global brightness `0..=100`.
+    #[serde(default = "full_brightness")]
+    pub brightness: u8,
+    /// `Shutdown(false)` was skipped.
+    #[serde(default)]
+    pub skip_shutdown: bool,
+    /// Restore-check reads.
+    #[serde(default)]
+    pub restore_check: TraceRestoreCheck,
+}
+
+fn full_brightness() -> u8 {
+    100
+}
+
+impl Default for TraceOptions {
+    fn default() -> Self {
+        Self {
+            brightness: 100,
+            skip_shutdown: false,
+            restore_check: TraceRestoreCheck::Off,
+        }
+    }
 }
 
 /// A recording: the collections and every operation on them, in order.
@@ -175,6 +247,9 @@ pub struct HidTrace {
     /// What `@SignalRGB/systeminfo` reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_info: Option<crate::smbios::SystemInfo>,
+    /// Session options that change what the plugins send.
+    #[serde(default)]
+    pub options: TraceOptions,
     /// The devices driven.
     #[serde(default)]
     pub devices: Vec<TracedDevice>,
@@ -192,6 +267,7 @@ impl Default for HidTrace {
             canvas: None,
             parameters: serde_json::Map::new(),
             system_info: None,
+            options: TraceOptions::default(),
             devices: Vec::new(),
             endpoints: Vec::new(),
             events: Vec::new(),
@@ -213,8 +289,8 @@ impl HidTrace {
         Ok(t)
     }
 
-    /// Bytes sent to the collection at `path`, in order.
-    pub fn sent_to(&self, path: &str) -> Vec<&[u8]> {
+    /// Reports sent to the collection at `path`, in order.
+    pub fn sent_to(&self, path: &str) -> Vec<(SentKind, &[u8])> {
         self.events
             .iter()
             .filter(|e| e.path == path)
@@ -309,6 +385,7 @@ impl RecordingHid {
                 paths: endpoints.iter().map(|e| e.path.clone()).collect(),
                 frames: 0,
                 channels: BTreeMap::new(),
+                sessions: 0,
             });
         }
     }
@@ -325,11 +402,17 @@ impl RecordingHid {
         self.log.trace().system_info = info;
     }
 
-    /// How many `Render()` calls the session of `key` made.
-    pub fn set_frames(&self, key: &str, frames: u64) {
+    /// A session of `key` ended after `frames` `Render()` calls.
+    pub fn add_session(&self, key: &str, frames: u64) {
         if let Some(d) = self.log.trace().devices.iter_mut().find(|d| d.key == key) {
             d.frames = frames;
+            d.sessions += 1;
         }
+    }
+
+    /// Session options that change what the plugins send.
+    pub fn set_options(&self, options: TraceOptions) {
+        self.log.trace().options = options;
     }
 
     /// What the canvas showed and which parameters were overridden, for the replay.
@@ -357,7 +440,13 @@ impl HidBackend for RecordingHid {
     }
 
     fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>> {
-        let inner = self.inner.open(path)?;
+        let inner = match self.inner.open(path) {
+            Ok(h) => h,
+            Err(e) => {
+                self.log.push(path, TraceOp::OpenFailed { error: e.to_string() });
+                return Err(e);
+            }
+        };
         self.log.note_endpoints(std::slice::from_ref(inner.info()));
         self.log.push(path, TraceOp::Open);
         Ok(Box::new(RecordingHandle {
@@ -463,6 +552,10 @@ struct Answers {
     features: BTreeMap<u8, VecDeque<Answer>>,
     inputs: BTreeMap<u8, VecDeque<Answer>>,
     reads: VecDeque<Answer>,
+    /// Outcomes of the opens (`Some(error)` = failed).
+    opens: VecDeque<Option<String>>,
+    /// Outcomes of the writes and feature sends, in order.
+    sends: VecDeque<Option<String>>,
 }
 
 /// Plays a [`HidTrace`] back (see the module docs).
@@ -501,7 +594,12 @@ impl ReplayHid {
                     a.inputs.entry(*report_id).or_default().push_back(answer.clone());
                 }
                 TraceOp::Read { answer, .. } => a.reads.push_back(answer.clone()),
-                _ => {}
+                TraceOp::Open => a.opens.push_back(None),
+                TraceOp::OpenFailed { error } => a.opens.push_back(Some(error.clone())),
+                TraceOp::Write { error, .. } | TraceOp::SendFeature { error, .. } => {
+                    a.sends.push_back(error.clone());
+                }
+                TraceOp::ClearReadBuffer => {}
             }
         }
         Self {
@@ -531,6 +629,19 @@ impl HidBackend for ReplayHid {
             .find(|e| e.path == path)
             .cloned()
             .ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let outcome = {
+            let mut all = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+            all.get_mut(path).and_then(|a| a.opens.pop_front())
+        };
+        let error = match outcome {
+            Some(None) => None,
+            Some(Some(e)) => Some(e),
+            None => Some("replay: the recording did not open this collection here".to_string()),
+        };
+        if let Some(error) = error {
+            self.log.push(path, TraceOp::OpenFailed { error: error.clone() });
+            return Err(HalError::Backend(error));
+        }
         self.log.push(path, TraceOp::Open);
         Ok(Box::new(ReplayHandle {
             info,
@@ -547,6 +658,14 @@ struct ReplayHandle {
 }
 
 impl ReplayHandle {
+    /// The recorded outcome of the next write or feature send.
+    fn next_send(&self) -> Option<String> {
+        let mut all = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+        all.get_mut(&self.info.path)
+            .and_then(|a| a.sends.pop_front())
+            .flatten()
+    }
+
     /// The next recorded answer picked by `pick`, copied into `buf`.
     fn next(
         &self,
@@ -578,14 +697,18 @@ impl HidHandle for ReplayHandle {
     }
 
     fn write(&mut self, data: &[u8]) -> HalResult<usize> {
+        let error = self.next_send();
         self.log.push(
             &self.info.path,
             TraceOp::Write {
                 data: data.to_vec(),
-                error: None,
+                error: error.clone(),
             },
         );
-        Ok(data.len())
+        match error {
+            Some(e) => Err(HalError::Backend(e)),
+            None => Ok(data.len()),
+        }
     }
 
     fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> HalResult<usize> {
@@ -606,14 +729,18 @@ impl HidHandle for ReplayHandle {
     }
 
     fn send_feature_report(&mut self, data: &[u8]) -> HalResult<usize> {
+        let error = self.next_send();
         self.log.push(
             &self.info.path,
             TraceOp::SendFeature {
                 data: data.to_vec(),
-                error: None,
+                error: error.clone(),
             },
         );
-        Ok(data.len())
+        match error {
+            Some(e) => Err(HalError::Backend(e)),
+            None => Ok(data.len()),
+        }
     }
 
     fn get_feature_report(&mut self, buf: &mut [u8]) -> HalResult<usize> {
@@ -664,9 +791,9 @@ pub struct Divergence {
     /// Index among the packets sent to that collection.
     pub index: usize,
     /// What the recording sent (`None`: the recording sent fewer packets).
-    pub recorded: Option<Vec<u8>>,
+    pub recorded: Option<Sent>,
     /// What the replay sent (`None`: the replay sent fewer packets).
-    pub replayed: Option<Vec<u8>>,
+    pub replayed: Option<Sent>,
 }
 
 /// The first difference between the packets each collection received in the
@@ -686,11 +813,15 @@ pub fn compare(recorded: &HidTrace, replayed: &HidTrace) -> Vec<Divergence> {
         let (a, b) = (recorded.sent_to(path), replayed.sent_to(path));
         let first = (0..a.len().max(b.len())).find(|&i| a.get(i) != b.get(i));
         if let Some(index) = first {
+            let packet = |p: &(SentKind, &[u8])| Sent {
+                kind: p.0,
+                bytes: p.1.to_vec(),
+            };
             out.push(Divergence {
                 path: path.to_string(),
                 index,
-                recorded: a.get(index).map(|p| p.to_vec()),
-                replayed: b.get(index).map(|p| p.to_vec()),
+                recorded: a.get(index).map(packet),
+                replayed: b.get(index).map(packet),
             });
         }
     }
@@ -752,9 +883,17 @@ mod tests {
         exercise(&replay, &info.path, 10);
         let d = compare(&trace, &replay.trace());
         assert_eq!(d.len(), 1);
+        let feature = |bytes: Vec<u8>| Sent {
+            kind: SentKind::Feature,
+            bytes,
+        };
         assert_eq!(
             (d[0].index, d[0].recorded.clone(), d[0].replayed.clone()),
-            (0, Some(vec![0x52, 7, 9]), Some(vec![0x52, 7, 10]))
+            (
+                0,
+                Some(feature(vec![0x52, 7, 9])),
+                Some(feature(vec![0x52, 7, 10]))
+            )
         );
 
         // Answers run out: GET_REPORT fails, reads time out.
@@ -766,6 +905,32 @@ mod tests {
         let mut input = [0u8; 4];
         h.read_timeout(&mut input, 0).unwrap();
         assert_eq!(h.read_timeout(&mut input, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn failures_and_report_kinds_are_replayed() {
+        let (mock, info) = device();
+        let rec = RecordingHid::new(mock.clone(), "failures");
+        assert!(rec.open("mock://nowhere").is_err());
+        let mut h = rec.open(&info.path).unwrap();
+        mock.endpoint(&info.path).unwrap().lock().unwrap().fail_writes = true;
+        assert!(h.write(&[0, 1]).is_err());
+        let trace = rec.trace();
+        assert!(matches!(trace.events[0].op, TraceOp::OpenFailed { .. }));
+
+        let replay = ReplayHid::new(&trace);
+        let mut r = replay.open(&info.path).unwrap();
+        assert!(r.write(&[0, 1]).is_err(), "the recorded failure is replayed");
+        assert!(replay.open(&info.path).is_err(), "only one open was recorded");
+        assert!(compare(&trace, &replay.trace()).is_empty());
+
+        // The same bytes sent as a feature report are a different packet.
+        let replay = ReplayHid::new(&trace);
+        let mut r = replay.open(&info.path).unwrap();
+        let _ = r.send_feature_report(&[0, 1]);
+        let d = compare(&trace, &replay.trace());
+        assert_eq!(d[0].recorded.as_ref().map(|s| s.kind), Some(SentKind::Output));
+        assert_eq!(d[0].replayed.as_ref().map(|s| s.kind), Some(SentKind::Feature));
     }
 
     #[test]

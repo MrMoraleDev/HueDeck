@@ -240,6 +240,20 @@ pub struct EndpointView {
     pub placement: Placement,
 }
 
+/// A channel of a running session (component editor).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelInfo {
+    /// The plugin's name; the persistence key of its components.
+    pub name: String,
+    /// LED budget (0 = none).
+    pub led_limit: u32,
+    /// LEDs the plugin is told about (components, capped at the limit).
+    pub led_count: usize,
+    /// Component instance ids in chain order.
+    pub components: Vec<String>,
+}
+
 /// What the caller decides for a device's subdevices and channels.
 #[derive(Clone, Debug, Default)]
 pub struct ChildSetup {
@@ -315,6 +329,20 @@ impl Children {
             return true;
         }
         false
+    }
+
+    /// The channels in creation order.
+    pub fn channel_infos(&self) -> Vec<ChannelInfo> {
+        self.channels
+            .iter()
+            .zip(self.led_counts())
+            .map(|(ch, led_count)| ChannelInfo {
+                name: ch.name.clone(),
+                led_limit: ch.led_limit,
+                led_count,
+                components: ch.components.iter().map(|c| c.instance.id.clone()).collect(),
+            })
+            .collect()
     }
 
     /// The subdevices and component instances as endpoints, in creation and chain order.

@@ -258,6 +258,14 @@ fn endpoints_are_published_and_child_placements_apply_live() {
         (EndpointKind::Component, Some("ARGB 2"), 3)
     );
 
+    let channels = handle.channels();
+    let summary: Vec<_> = channels
+        .iter()
+        .map(|c| (c.name.as_str(), c.led_limit, c.led_count, c.components.len()))
+        .collect();
+    assert_eq!(summary, vec![("ARGB 1", 120, 60, 1), ("ARGB 2", 10, 3, 1)]);
+    assert_eq!(channels[1].components, vec!["comp-a".to_string()]);
+
     let moved = Placement {
         position: Point { x: 100.0, y: 50.0 },
         ..Placement::default()

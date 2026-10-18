@@ -27,7 +27,7 @@ use lightloom_renderer::control::{self, Command};
 use lightloom_renderer::inject::{injection_script, INJECT_KEY, INJECT_URL};
 use lightloom_renderer::ring::RingWriter;
 use lightloom_renderer::sink::{FrameSink, PaintOutcome, SinkConfig, SinkReport};
-use lightloom_renderer::url::file_url;
+use lightloom_renderer::url::{file_url, UrlFilter};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::os::raw::c_int;
@@ -37,10 +37,13 @@ use std::time::Instant;
 
 /// Console lines kept for the report.
 const CONSOLE_KEEP: usize = 40;
+/// Blocked URLs kept for the report (all are counted).
+const BLOCKED_KEEP: usize = 20;
 /// `sourceURL` of scripts run for control commands (shows up in console messages).
 const CONTROL_URL: &str = "lightloom://renderer/control.js";
 
-/// Mutable run state shared by the handlers (all called on the CEF UI thread).
+/// Mutable run state shared by the handlers (CEF UI thread; the request handler runs on the
+/// IO thread).
 #[derive(Default)]
 struct RunState {
     browser: Option<Browser>,
@@ -54,12 +57,15 @@ struct RunState {
     console: Vec<String>,
     console_total: u64,
     console_errors: u64,
+    blocked_total: u64,
+    blocked: Vec<String>,
 }
 
 /// Everything the browser-process handlers need.
 struct HostCtx {
     args: Args,
     url: String,
+    filter: UrlFilter,
     inject_js: Option<String>,
     sink: Mutex<FrameSink>,
     state: Mutex<RunState>,
@@ -181,6 +187,7 @@ fn create_browser(host: &Arc<HostCtx>) {
         HueLifeSpanHandler::new(host.clone()),
         HueLoadHandler::new(host.clone()),
         HueDisplayHandler::new(host.clone()),
+        HueRequestHandler::new(host.clone(), HueBlockedRequest::new()),
     );
     let mut extra = dictionary_value_create();
     if let (Some(dict), Some(js)) = (extra.as_mut(), host.inject_js.as_deref()) {
@@ -312,9 +319,14 @@ wrap_client! {
         life_span: LifeSpanHandler,
         load: LoadHandler,
         display: DisplayHandler,
+        request: RequestHandler,
     }
 
     impl Client {
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request.clone())
+        }
+
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render.clone())
         }
@@ -329,6 +341,87 @@ wrap_client! {
 
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(self.display.clone())
+        }
+    }
+}
+
+/// Whether `request` may load; a refused URL is counted and kept for the report.
+fn admit(host: &HostCtx, request: Option<&mut Request>) -> bool {
+    let url = request
+        .map(|r| CefString::from(&r.url()).to_string())
+        .unwrap_or_default();
+    if host.filter.allows(&url) {
+        return true;
+    }
+    if host.args.verbose {
+        eprintln!("lightloom-renderer: blocked {url}");
+    }
+    let mut st = host.state.lock();
+    st.blocked_total += 1;
+    if st.blocked.len() < BLOCKED_KEEP {
+        st.blocked.push(url.chars().take(200).collect());
+    }
+    false
+}
+
+wrap_request_handler! {
+    struct HueRequestHandler {
+        host: Arc<HostCtx>,
+        blocked: ResourceRequestHandler,
+    }
+
+    impl RequestHandler {
+        fn on_before_browse(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _user_gesture: c_int,
+            _is_redirect: c_int,
+        ) -> c_int {
+            // Non-zero cancels the navigation.
+            c_int::from(!admit(&self.host, request))
+        }
+
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _target_url: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            _user_gesture: c_int,
+        ) -> c_int {
+            1
+        }
+
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _is_navigation: c_int,
+            _is_download: c_int,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut c_int>,
+        ) -> Option<ResourceRequestHandler> {
+            (!admit(&self.host, request)).then(|| self.blocked.clone())
+        }
+    }
+}
+
+// Attached to refused requests: cancels them before anything is loaded.
+wrap_resource_request_handler! {
+    struct HueBlockedRequest;
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            ReturnValue::CANCEL
         }
     }
 }
@@ -411,6 +504,26 @@ wrap_life_span_handler! {
                     bh.close_browser(1);
                 }
             }
+        }
+
+        fn on_before_popup(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _popup_id: c_int,
+            _target_url: Option<&CefString>,
+            _target_frame_name: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            _user_gesture: c_int,
+            _popup_features: Option<&PopupFeatures>,
+            _window_info: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _no_javascript_access: Option<&mut c_int>,
+        ) -> c_int {
+            // Effects get no popups (window.open, target=_blank).
+            1
         }
 
         fn on_before_close(&self, _browser: Option<&mut Browser>) {
@@ -604,6 +717,8 @@ struct RunReport {
     console_messages: u64,
     console_errors: u64,
     console: Vec<String>,
+    blocked_requests: u64,
+    blocked_urls: Vec<String>,
     errors: Vec<String>,
 }
 
@@ -680,6 +795,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
 
     let host = Arc::new(HostCtx {
         url: url.clone(),
+        filter: UrlFilter::for_effect(&effect, args.allow_network),
         inject_js: (!args.no_inject).then_some(inject_js),
         sink: Mutex::new(sink),
         state: Mutex::new(RunState::default()),
@@ -798,6 +914,8 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
         console_messages: st.console_total,
         console_errors: st.console_errors,
         console: st.console.clone(),
+        blocked_requests: st.blocked_total,
+        blocked_urls: st.blocked.clone(),
         errors,
     };
     let json = serde_json::to_string_pretty(&report).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));

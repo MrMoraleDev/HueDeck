@@ -148,6 +148,12 @@ pub struct MockEndpointState {
     pub fail_writes: bool,
     /// Number of times the endpoint was opened.
     pub open_count: usize,
+    /// Unplugged: absent from `enumerate()`, `open` fails, I/O fails with
+    /// [`HalError::Disconnected`].
+    pub unplugged: bool,
+    /// Bumped by every unplug: handles opened before keep failing after a
+    /// replug, as stale Windows handles do.
+    pub generation: u64,
 }
 
 type SharedEndpoint = Arc<Mutex<MockEndpointState>>;
@@ -242,6 +248,26 @@ impl MockHid {
         Ok(())
     }
 
+    /// Unplug the endpoint at `path` (see [`MockEndpointState::unplugged`]).
+    pub fn unplug(&self, path: &str) -> HalResult<()> {
+        let ep = self
+            .endpoint(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let mut s = lock(&ep);
+        s.unplugged = true;
+        s.generation += 1;
+        Ok(())
+    }
+
+    /// Plug the endpoint at `path` back in (handles opened before stay stale).
+    pub fn replug(&self, path: &str) -> HalResult<()> {
+        let ep = self
+            .endpoint(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        lock(&ep).unplugged = false;
+        Ok(())
+    }
+
     /// Preload the feature report for id `report[0]` on `path`.
     pub fn set_feature_report(&self, path: &str, report: impl Into<Vec<u8>>) -> HalResult<()> {
         let report = report.into();
@@ -262,23 +288,34 @@ fn lock(ep: &SharedEndpoint) -> MutexGuard<'_, MockEndpointState> {
 
 impl HidBackend for MockHid {
     fn enumerate(&self) -> HalResult<Vec<HidEndpointInfo>> {
-        Ok(self.endpoints.iter().map(|e| lock(e).info.clone()).collect())
+        Ok(self
+            .endpoints
+            .iter()
+            .filter_map(|e| {
+                let s = lock(e);
+                (!s.unplugged).then(|| s.info.clone())
+            })
+            .collect())
     }
 
     fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>> {
         let state = self
             .endpoint(path)
             .ok_or_else(|| HalError::NotFound(path.to_string()))?;
-        let info = {
+        let (info, generation) = {
             let mut s = lock(&state);
+            if s.unplugged {
+                return Err(HalError::NotFound(path.to_string()));
+            }
             s.open_count += 1;
-            s.info.clone()
+            (s.info.clone(), s.generation)
         };
         self.recorder.record(TransactionKind::Open, path, Vec::new());
         Ok(Box::new(MockHidHandle {
             state,
             recorder: self.recorder.clone(),
             info,
+            generation,
         }))
     }
 }
@@ -289,9 +326,19 @@ pub struct MockHidHandle {
     state: SharedEndpoint,
     recorder: TransactionRecorder,
     info: HidEndpointInfo,
+    generation: u64,
 }
 
 impl MockHidHandle {
+    /// `Disconnected` once the device was unplugged after this handle was opened.
+    fn connected(&self) -> HalResult<MutexGuard<'_, MockEndpointState>> {
+        let s = lock(&self.state);
+        if s.unplugged || s.generation != self.generation {
+            return Err(HalError::Disconnected);
+        }
+        Ok(s)
+    }
+
     fn copy_out(src: &[u8], dst: &mut [u8]) -> usize {
         let n = src.len().min(dst.len());
         dst[..n].copy_from_slice(&src[..n]);
@@ -305,7 +352,7 @@ impl HidHandle for MockHidHandle {
     }
 
     fn write(&mut self, data: &[u8]) -> HalResult<usize> {
-        if lock(&self.state).fail_writes {
+        if self.connected()?.fail_writes {
             return Err(HalError::Backend("mock: write failure scripted".into()));
         }
         self.recorder
@@ -314,7 +361,7 @@ impl HidHandle for MockHidHandle {
     }
 
     fn read_timeout(&mut self, buf: &mut [u8], _timeout_ms: i32) -> HalResult<usize> {
-        let next = lock(&self.state).scripted_reads.pop_front();
+        let next = self.connected()?.scripted_reads.pop_front();
         match next {
             Some(report) => {
                 let n = Self::copy_out(&report, buf);
@@ -330,7 +377,7 @@ impl HidHandle for MockHidHandle {
         let id = *data
             .first()
             .ok_or_else(|| HalError::InvalidArgument("empty feature report".into()))?;
-        lock(&self.state).feature_reports.insert(id, data.to_vec());
+        self.connected()?.feature_reports.insert(id, data.to_vec());
         self.recorder
             .record(TransactionKind::SendFeature, &*self.info.path, data);
         Ok(data.len())
@@ -340,7 +387,7 @@ impl HidHandle for MockHidHandle {
         let id = *buf
             .first()
             .ok_or_else(|| HalError::InvalidArgument("empty buffer".into()))?;
-        let stored = lock(&self.state).feature_reports.get(&id).cloned();
+        let stored = self.connected()?.feature_reports.get(&id).cloned();
         let report = stored.ok_or_else(|| HalError::Backend(format!("mock: no feature report {id:#04x}")))?;
         let n = Self::copy_out(&report, buf);
         self.recorder
@@ -349,7 +396,7 @@ impl HidHandle for MockHidHandle {
     }
 
     fn get_input_report(&mut self, buf: &mut [u8]) -> HalResult<usize> {
-        let next = lock(&self.state).scripted_input_reports.pop_front();
+        let next = self.connected()?.scripted_input_reports.pop_front();
         let report = next.ok_or_else(|| HalError::Backend("mock: no input report scripted".into()))?;
         let n = Self::copy_out(&report, buf);
         self.recorder
@@ -516,6 +563,23 @@ impl SmbusBus for MockSmbus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unplugged_devices_vanish_and_their_old_handles_stay_stale() {
+        let info = MockHid::endpoint_info(1, 2, "U", 0, 0xFF00, 1, 0, ReportLengths::default());
+        let mock = MockHid::new().add_endpoint(info.clone());
+        let mut old = mock.open(&info.path).unwrap();
+        assert_eq!(old.write(&[0, 1]).unwrap(), 2);
+        mock.unplug(&info.path).unwrap();
+        assert!(mock.enumerate().unwrap().is_empty());
+        assert!(matches!(old.write(&[0, 1]), Err(HalError::Disconnected)));
+        assert!(mock.open(&info.path).is_err());
+        mock.replug(&info.path).unwrap();
+        assert_eq!(mock.enumerate().unwrap().len(), 1);
+        assert!(matches!(old.write(&[0, 1]), Err(HalError::Disconnected)), "stale");
+        let mut fresh = mock.open(&info.path).unwrap();
+        assert_eq!(fresh.write(&[0, 2]).unwrap(), 2);
+    }
 
     fn backend() -> MockHid {
         MockHid::new().add_endpoint(MockHid::endpoint_info(

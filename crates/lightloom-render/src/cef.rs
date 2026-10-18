@@ -75,6 +75,9 @@ pub struct CefStatus {
     pub running: bool,
     /// Why the last renderer ended (exit status or start error).
     pub last_exit: Option<String>,
+    /// Longest gap between the last frame of a renderer and the first frame of
+    /// the one that replaced it, in milliseconds (devices held the last frame).
+    pub max_recovery_ms: Option<f64>,
 }
 
 struct Shared {
@@ -200,7 +203,7 @@ impl RendererClient for CefRenderer {
     fn status_line(&self) -> Option<String> {
         let st = self.status();
         Some(format!(
-            "renderer: {} start{}, {} frames painted, {} held frames republished{}{}",
+            "renderer: {} start{}, {} frames painted, {} held frames republished{}{}{}",
             st.starts,
             if st.starts == 1 { "" } else { "s" },
             st.frames,
@@ -210,6 +213,9 @@ impl RendererClient for CefRenderer {
             } else {
                 ""
             },
+            st.max_recovery_ms
+                .map(|ms| format!(", longest recovery {ms:.0} ms"))
+                .unwrap_or_default(),
             st.last_exit
                 .map(|e| format!("; last renderer: {e}"))
                 .unwrap_or_default()
@@ -373,9 +379,18 @@ fn pump(
                 if let Some(frame) = Frame::from_bgra(width, height, buf.clone()) {
                     let frame = Arc::new(frame);
                     store.publish_arc_at(Arc::clone(&frame), now);
+                    let mut st = lock(&shared.status);
+                    st.frames += 1;
+                    // First frame of a replacement renderer: how long devices held the old one.
+                    if last_paint.is_none() {
+                        if let Some((_, previous)) = held.as_ref() {
+                            let gap = (now - *previous).as_secs_f64() * 1000.0;
+                            st.max_recovery_ms = Some(st.max_recovery_ms.map_or(gap, |m| m.max(gap)));
+                        }
+                    }
+                    drop(st);
                     *held = Some((frame, now));
                     last_publish = now;
-                    lock(&shared.status).frames += 1;
                 }
                 if let Some(prev) = last_paint.replace(now) {
                     if intervals.len() == DOWNSHIFT_WINDOW {

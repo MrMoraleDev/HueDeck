@@ -29,6 +29,7 @@ lightloom-hal-windows = { path = "../lightloom-hal-windows" }
 lightloom-plugin-host = { path = "../lightloom-plugin-host" }
 lightloom-engine = { path = "../lightloom-engine" }
 lightloom-render = { path = "../lightloom-render" }
+lightloom-effects = { path = "../lightloom-effects" }
 
 # Ctrl-C on Unix; Windows uses lightloom_hal_windows::console (close/log-off/shutdown too).
 [target.'cfg(not(windows))'.dependencies]

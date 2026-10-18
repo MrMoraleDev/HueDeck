@@ -784,6 +784,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ctrlc",
+ "lightloom-effects",
  "lightloom-engine",
  "lightloom-hal",
  "lightloom-hal-windows",
@@ -904,7 +905,12 @@ name = "lightloom-render"
 version = "0.0.1"
 dependencies = [
  "lightloom-engine",
+ "lightloom-protocol",
+ "lightloom-renderer",
+ "serde",
+ "serde_json",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

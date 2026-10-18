@@ -10,6 +10,7 @@
 //! * [`stats`] — paint-interval percentiles / dropped-frame count.
 //! * [`snapshot`] — frame hash, "not black" metrics, PNG export.
 //! * [`inject`] — `window.engine` bootstrap + control globals evaluated before page scripts.
+//! * [`control`] — the stdin control pipe of a serving renderer (`--serve`): commands → JS.
 //! * [`url`] — `file://` URLs for effect paths.
 //! * [`cache`] — Chromium user-data dir: created/wiped per run, never a directory we did not make.
 //! * [`cli`] — command line.
@@ -19,6 +20,7 @@
 
 pub mod cache;
 pub mod cli;
+pub mod control;
 pub mod inject;
 pub mod ring;
 pub mod sink;

@@ -46,6 +46,8 @@ struct Surface {
     /// One offset per `geometry.led_positions` entry.
     table: OffsetTable,
     factor: f32,
+    /// `LightingMode::Forced` colour of the placement.
+    forced: Option<lightloom_engine::Rgb>,
 }
 
 impl Surface {
@@ -59,12 +61,14 @@ impl Surface {
         let placement = placement.unwrap_or_else(|| fit(geometry.size, cfg));
         let table = compute_offsets(&geometry, &placement, cfg);
         let factor = effective_brightness(b.global, b.layout, placement.brightness);
+        let forced = placement.forced();
         Self {
             geometry,
             placement,
             fitted,
             table,
             factor,
+            forced,
         }
     }
 
@@ -82,8 +86,12 @@ impl Surface {
         self.factor = effective_brightness(b.global, b.layout, self.placement.brightness);
     }
 
-    /// Colour of entry `i` of the table (black when off-canvas or absent).
+    /// Colour of entry `i` of the table (black when off-canvas or absent), or the forced colour.
     fn sample(&self, frame: &Frame, cfg: &SamplerConfig, i: usize) -> [u8; 3] {
+        if let Some(c) = self.forced {
+            let c = apply_brightness(c, self.factor);
+            return [c.r, c.g, c.b];
+        }
         let ok = frame.width() == cfg.canvas_width && frame.height() == cfg.canvas_height;
         match self.table.offsets().get(i) {
             Some(&off) if ok && off >= 0 => {

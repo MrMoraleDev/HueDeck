@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Lightloom starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Conic Spin</title>
+  <meta description="A colour wheel turning around the centre of the canvas." />
+  <meta publisher="Lightloom" />
+  <meta property="speed" label="Speed" type="number" min="1" max="100" default="30" />
+  <meta property="reverse" label="Reverse" type="boolean" default="false" />
+  <meta property="saturation" label="Saturation" type="number" min="0" max="100" default="100" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var angle = 0, last = 0;
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    function bool(v) {
+      return v === true || v === 1 || v === "true" || v === "1";
+    }
+
+    function draw(now) {
+      var dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
+      last = now;
+      angle += dt * num(speed, 30) * 0.06 * (bool(reverse) ? -1 : 1);
+      var sat = Math.max(0, Math.min(100, num(saturation, 100)));
+      var g = ctx.createConicGradient(angle, W / 2, H / 2);
+      for (var i = 0; i <= 6; i++) g.addColorStop(i / 6, "hsl(" + i * 60 + "," + sat + "%,50%)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

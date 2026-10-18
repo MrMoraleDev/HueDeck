@@ -21,6 +21,10 @@ and gives you a modern dashboard in your browser.
 
 </div>
 
+<p align="center">
+  <img src="docs/images/dashboard-effects.png" alt="The HueDeck dashboard: the effect list, a live preview of the canvas and the controls of the running effect" width="900">
+</p>
+
 > **Pre-alpha.** HueDeck already drives real hardware with its own plugins, renders
 > effects and has a working dashboard, but there is no installer yet: today you build
 > it from source. Watch the repository to catch the first release.

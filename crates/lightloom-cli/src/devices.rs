@@ -158,11 +158,19 @@ pub fn to_json(groups: &[DeviceGroup]) -> Value {
     )
 }
 
+/// `LIGHTLOOM_HID_BACKEND=hidapi` selects the hidapi backend instead of the
+/// native one (same results; kept for comparison while the native backend is new).
+pub fn use_hidapi() -> bool {
+    std::env::var("LIGHTLOOM_HID_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("hidapi"))
+}
+
 /// Enumerate on this OS.
 #[cfg(windows)]
 pub fn enumerate() -> anyhow::Result<Vec<DeviceGroup>> {
-    let backend = lightloom_hal_windows::WindowsHidBackend::new()?;
-    Ok(backend.enumerate_grouped()?)
+    if use_hidapi() {
+        return Ok(lightloom_hal_windows::WindowsHidBackend::new()?.enumerate_grouped()?);
+    }
+    Ok(lightloom_hal_windows::NativeHidBackend::new().enumerate_grouped()?)
 }
 
 /// Enumerate on this OS.

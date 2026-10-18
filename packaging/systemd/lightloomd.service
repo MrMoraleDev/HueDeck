@@ -13,7 +13,7 @@
 
 [Unit]
 Description=Lightloom RGB manager daemon
-Documentation=https://github.com/lightloom/lightloom
+Documentation=https://github.com/MrMoraleDev/Lightloom
 After=graphical-session.target
 PartOf=graphical-session.target
 

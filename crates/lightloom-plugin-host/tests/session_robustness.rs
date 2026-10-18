@@ -264,10 +264,8 @@ fn unimplemented_host_members_throw_instead_of_faking_io() {
         "bulk",
         "control",
         "setProtocol",
-        "subdevice",
         "fan",
         "board",
-        "systeminfo",
         "bus",
         "udp",
         "unknown",
@@ -282,8 +280,138 @@ fn unimplemented_host_members_throw_instead_of_faking_io() {
         assert!(mock.recorder().writes().is_empty(), "{probe}: nothing written");
         assert!(!report.is_clean());
     }
-    // Faithful answers stay available: fan control is reported as disabled.
-    let (report, mock) = run_probe("fanflag");
+    // Faithful answers stay available: fan control is reported as disabled,
+    // subdevices are real, system info is real (none known here: undefined).
+    for probe in ["fanflag", "subdevice", "systeminfo"] {
+        let (report, mock) = run_probe(probe);
+        assert!(report.failures.is_empty(), "{probe}: {:#?}", report.failures);
+        assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0x01]], "{probe}");
+        if probe == "subdevice" {
+            assert_eq!(report.subdevices.len(), 1);
+            assert_eq!(report.subdevices[0].id, "Strip");
+        }
+    }
+}
+
+#[test]
+fn long_blocking_renders_survive_the_watchdog_and_stop_promptly() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/device");
+    let plugin = Catalog::scan(&[dir], Duration::from_secs(10))
+        .lookup(0x1234, 0x6666)
+        .expect("slow render plugin")
+        .clone();
+    let info = MockHid::endpoint_info(0x1234, 0x6666, "S", 0, 0xFF00, 1, 0, ReportLengths::default());
+    let mock = Arc::new(MockHid::new().add_endpoint(info.clone()));
+    let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    frames.publish(Frame::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    let backend: Arc<dyn HidBackend> = mock.clone();
+    let handle = session::spawn(
+        SessionDevice {
+            key: "1234:6666:S".into(),
+            vid: 0x1234,
+            pid: 0x6666,
+            endpoints: vec![info],
+        },
+        plugin,
+        backend,
+        frames,
+        SessionOptions::default(),
+    )
+    .unwrap();
+    wait_until(Instant::now() + Duration::from_secs(20), || {
+        handle.live().state == SessionState::Running
+    });
+    // Well past the 250 ms JavaScript budget: the paused time does not count.
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(handle.live().render_errors, 0);
+    let asked = Instant::now();
+    handle.stop();
+    let report = handle.join().unwrap();
+    assert!(
+        asked.elapsed() < Duration::from_secs(3),
+        "stop took {:?}",
+        asked.elapsed()
+    );
     assert!(report.failures.is_empty(), "{:#?}", report.failures);
-    assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0x01]]);
+    assert_eq!(report.render_errors, 0);
+    assert!(report.shutdown_called);
+    assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0xff]]);
+}
+
+/// The slow-render plugin in `mode` on a mock device whose reads block.
+fn slow_session(mode: &str, opts: SessionOptions) -> (session::SessionHandle, Arc<MockHid>) {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/device");
+    let plugin = Catalog::scan(&[dir], Duration::from_secs(10))
+        .lookup(0x1234, 0x6666)
+        .expect("slow render plugin")
+        .clone();
+    let info = MockHid::endpoint_info(0x1234, 0x6666, "S", 0, 0xFF00, 1, 0, ReportLengths::default());
+    let mock = Arc::new(MockHid::new().add_endpoint(info.clone()));
+    mock.endpoint(&info.path).unwrap().lock().unwrap().block_reads = true;
+    let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    frames.publish(Frame::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    let backend: Arc<dyn HidBackend> = mock.clone();
+    let mut opts = opts;
+    opts.parameters.insert("mode".into(), mode.into());
+    let handle = session::spawn(
+        SessionDevice {
+            key: "1234:6666:S".into(),
+            vid: 0x1234,
+            pid: 0x6666,
+            endpoints: vec![info],
+        },
+        plugin,
+        backend,
+        frames,
+        opts,
+    )
+    .unwrap();
+    (handle, mock)
+}
+
+#[test]
+fn a_render_blocked_forever_hits_its_wall_clock_cap() {
+    let mut opts = SessionOptions::default();
+    opts.budgets.render_wall = Duration::from_secs(1);
+    opts.max_render_timeouts = 1;
+    let started = Instant::now();
+    let (handle, mock) = slow_session("forever", opts);
+    wait_until(started + Duration::from_secs(20), || handle.is_finished());
+    let report = handle.join().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        report.faulted.as_deref().unwrap_or("").contains("Render()"),
+        "{report:#?}"
+    );
+    assert!(report.shutdown_called);
+    assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0xff]]);
+}
+
+#[test]
+fn a_blocking_read_loop_stops_promptly() {
+    let (handle, mock) = slow_session("read", SessionOptions::default());
+    wait_until(Instant::now() + Duration::from_secs(20), || {
+        handle.live().state == SessionState::Running
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let asked = Instant::now();
+    handle.stop();
+    let report = handle.join().unwrap();
+    assert!(
+        asked.elapsed() < Duration::from_secs(3),
+        "stop took {:?}",
+        asked.elapsed()
+    );
+    assert!(report.failures.is_empty(), "{:#?}", report.failures);
+    assert_eq!(
+        (report.render_errors, report.frames),
+        (0, 0),
+        "the cut frame is not counted"
+    );
+    assert!(report.shutdown_called);
+    assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0xff]]);
 }

@@ -3,20 +3,37 @@
 //!
 //! [`Catalog::scan`] loads every candidate `*.js` file under the given
 //! directories in an isolated runtime with the recording stub host, reads its
-//! metadata exports and indexes HID-family plugins by `(vid, pid)`. Directories
-//! are scanned in the order given and files in sorted order, so SignalRGB's
-//! *last scanned wins* rule ([`PluginIndex`]) lets a later directory override
-//! an earlier one. No plugin lifecycle function runs here.
+//! metadata exports and indexes HID plugins by `(vid, pid)`. Directories are
+//! scanned in the order given and files in sorted order, so SignalRGB's *last
+//! scanned wins* rule ([`PluginIndex`]) lets a later directory override an
+//! earlier one. No plugin lifecycle function runs here.
+//!
+//! Loading a file costs a few milliseconds, so a full SignalRGB corpus (about
+//! a thousand files) would cost seconds on every start. [`Catalog::scan_with`]
+//! keeps an index cache: one entry per file, keyed by path, size and
+//! modification time, holding the metadata (or the reason the file was not a
+//! plugin). Only new or changed files are loaded again, several at a time.
+//!
+//! [`signalrgb_plugin_dirs`] lists the plugin directories of a local SignalRGB
+//! installation in SignalRGB's own scan order, so its plugins can be used in
+//! place (they are read, never copied).
 
 use crate::dryrun::collect_js_files;
 use crate::meta::{PluginMeta, PluginType};
 use crate::runtime::{run_isolated, PluginRuntime, RuntimeOptions};
 use crate::PluginIndex;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, UNIX_EPOCH};
 
 /// Directory names never searched for plugins (tests, fixtures, tooling).
 const SKIP_DIRS: &[&str] = &["tests", "test", "fixtures", "_testkit", "node_modules", ".git"];
+
+/// Bumped whenever what the cache stores (or how metadata is read) changes.
+const INDEX_VERSION: u32 = 1;
 
 /// One discovered plugin.
 #[derive(Clone, Debug)]
@@ -27,12 +44,45 @@ pub struct CatalogEntry {
     pub root: PathBuf,
 }
 
+/// Counters of one scan.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScanStats {
+    /// Candidate files seen.
+    pub files: usize,
+    /// Files whose cached result was reused.
+    pub cached: usize,
+    /// Files loaded in a runtime.
+    pub loaded: usize,
+}
+
 /// Plugins found under a set of directories.
 #[derive(Debug, Default)]
 pub struct Catalog {
     entries: Vec<CatalogEntry>,
     index: PluginIndex,
     skipped: Vec<(PathBuf, String)>,
+    stats: ScanStats,
+}
+
+/// How [`Catalog::scan_with`] works.
+#[derive(Clone, Debug)]
+pub struct ScanOptions {
+    /// Bound on parse + evaluation of one file.
+    pub budget: Duration,
+    /// Index cache file (read, then rewritten when something changed).
+    pub cache: Option<PathBuf>,
+    /// Files loaded at the same time (each in its own runtime and thread).
+    pub jobs: usize,
+}
+
+impl Default for ScanOptions {
+    fn default() -> Self {
+        Self {
+            budget: Duration::from_secs(10),
+            cache: None,
+            jobs: std::thread::available_parallelism().map_or(4, |n| n.get()),
+        }
+    }
 }
 
 /// Whether `path` (below `root`) can hold a device plugin.
@@ -50,34 +100,168 @@ pub fn is_candidate(root: &Path, path: &Path) -> bool {
     !in_skipped_dir && name.ends_with(".js") && !name.ends_with(".test.js")
 }
 
+/// Size and modification time of a file, the cache key next to its path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Stamp {
+    len: u64,
+    modified_ns: u128,
+}
+
+impl Stamp {
+    fn of(path: &Path) -> Option<Self> {
+        let m = std::fs::metadata(path).ok()?;
+        let modified_ns = m.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+        Some(Self {
+            len: m.len(),
+            modified_ns,
+        })
+    }
+}
+
+/// What loading one file produced: its metadata, or why it is not usable.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum Loaded {
+    Meta(Box<PluginMeta>),
+    Failed(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CachedFile {
+    stamp: Stamp,
+    loaded: Loaded,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct IndexCache {
+    version: u32,
+    host: String,
+    files: BTreeMap<String, CachedFile>,
+}
+
+impl IndexCache {
+    fn host_tag() -> String {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    fn load(path: &Path) -> Self {
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<IndexCache>(&bytes).ok())
+            .filter(|c| c.version == INDEX_VERSION && c.host == Self::host_tag())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec(self).map_err(std::io::Error::other)?)?;
+        std::fs::rename(&tmp, path)
+    }
+}
+
 impl Catalog {
-    /// Scan `dirs` (missing directories are reported in [`Catalog::skipped`]).
-    /// `budget` bounds parse + evaluation of each file.
+    /// Scan `dirs` without a cache (missing directories are reported in
+    /// [`Catalog::skipped`]). `budget` bounds parse + evaluation of each file.
     pub fn scan(dirs: &[PathBuf], budget: Duration) -> Self {
+        Self::scan_with(
+            dirs,
+            &ScanOptions {
+                budget,
+                cache: None,
+                jobs: 1,
+            },
+        )
+    }
+
+    /// Scan `dirs` with the options' cache and parallelism.
+    pub fn scan_with(dirs: &[PathBuf], opts: &ScanOptions) -> Self {
         let mut catalog = Catalog::default();
+        let mut cache = opts.cache.as_deref().map(IndexCache::load).unwrap_or_default();
+
+        // 1. Candidate files in scan order.
+        let mut files: Vec<(PathBuf, PathBuf, Option<Stamp>)> = Vec::new();
         for dir in dirs {
-            let files = match collect_js_files(dir) {
-                Ok(f) => f,
-                Err(e) => {
-                    catalog
-                        .skipped
-                        .push((dir.clone(), format!("cannot list directory: {e}")));
-                    continue;
+            match collect_js_files(dir) {
+                Ok(list) => files.extend(list.into_iter().filter(|f| is_candidate(dir, f)).map(|f| {
+                    let stamp = Stamp::of(&f);
+                    (dir.clone(), f, stamp)
+                })),
+                Err(e) => catalog
+                    .skipped
+                    .push((dir.clone(), format!("cannot list directory: {e}"))),
+            }
+        }
+        catalog.stats.files = files.len();
+
+        // 2. Reuse cached results; load the rest, several at a time.
+        let mut results: Vec<Option<Loaded>> = files
+            .iter()
+            .map(|(_, file, stamp)| {
+                let hit = cache.files.get(&file.to_string_lossy().into_owned())?;
+                (Some(hit.stamp) == *stamp).then(|| hit.loaded.clone())
+            })
+            .collect();
+        catalog.stats.cached = results.iter().filter(|r| r.is_some()).count();
+        let missing: Vec<usize> = (0..files.len()).filter(|&i| results[i].is_none()).collect();
+        catalog.stats.loaded = missing.len();
+        if !missing.is_empty() {
+            let next = AtomicUsize::new(0);
+            let done = Mutex::new(Vec::with_capacity(missing.len()));
+            std::thread::scope(|s| {
+                for _ in 0..opts.jobs.clamp(1, missing.len()) {
+                    s.spawn(|| loop {
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&i) = missing.get(k) else { break };
+                        let (root, file, _) = &files[i];
+                        let loaded = load_meta(root, file, opts.budget);
+                        done.lock().unwrap_or_else(|e| e.into_inner()).push((i, loaded));
+                    });
                 }
-            };
-            for file in files.into_iter().filter(|f| is_candidate(dir, f)) {
-                match read_meta(dir, &file, budget) {
-                    Ok(meta) if !meta.product_ids.is_empty() && meta.vendor_id != 0 => {
-                        catalog.index.insert(&meta);
-                        catalog.entries.push(CatalogEntry {
-                            meta,
-                            root: dir.clone(),
-                        });
-                    }
-                    Ok(_) => catalog
-                        .skipped
-                        .push((file, "no VendorId/ProductId exports (helper module?)".into())),
-                    Err(e) => catalog.skipped.push((file, e)),
+            });
+            for (i, loaded) in done.into_inner().unwrap_or_else(|e| e.into_inner()) {
+                if let Some(stamp) = files[i].2 {
+                    cache.files.insert(
+                        files[i].1.to_string_lossy().into_owned(),
+                        CachedFile {
+                            stamp,
+                            loaded: loaded.clone(),
+                        },
+                    );
+                }
+                results[i] = Some(loaded);
+            }
+        }
+
+        // 3. Index in scan order (last scanned wins).
+        for ((root, file, _), loaded) in files.iter().zip(results) {
+            match loaded.map(accept) {
+                Some(Ok(meta)) => {
+                    catalog.index.insert(&meta);
+                    catalog.entries.push(CatalogEntry {
+                        meta,
+                        root: root.clone(),
+                    });
+                }
+                Some(Err(why)) => catalog.skipped.push((file.clone(), why)),
+                None => {}
+            }
+        }
+
+        // 4. Persist the cache (only entries for files that still exist).
+        if let Some(path) = &opts.cache {
+            let present: BTreeSet<String> = files
+                .iter()
+                .map(|(_, f, _)| f.to_string_lossy().into_owned())
+                .collect();
+            let stale = cache.files.keys().any(|k| !present.contains(k));
+            if catalog.stats.loaded > 0 || stale {
+                cache.files.retain(|k, _| present.contains(k));
+                cache.version = INDEX_VERSION;
+                cache.host = IndexCache::host_tag();
+                if let Err(e) = cache.save(path) {
+                    tracing::warn!(path = %path.display(), error = %e, "plugin index cache not written");
                 }
             }
         }
@@ -99,6 +283,11 @@ impl Catalog {
         &self.index
     }
 
+    /// Counters of the scan that built this catalog.
+    pub fn stats(&self) -> ScanStats {
+        self.stats
+    }
+
     /// The plugin owning `(vid, pid)` under the last-scanned-wins rule.
     pub fn lookup(&self, vid: u16, pid: u16) -> Option<&CatalogEntry> {
         let path = self.index.lookup(vid, pid)?;
@@ -106,30 +295,110 @@ impl Catalog {
     }
 }
 
-/// Load `file` with the stub host and read its metadata (HID-family plugins only).
-fn read_meta(root: &Path, file: &Path, budget: Duration) -> Result<PluginMeta, String> {
+/// Load `file` with the stub host and read its metadata.
+fn load_meta(root: &Path, file: &Path, budget: Duration) -> Loaded {
     let opts = RuntimeOptions {
         plugin_root: Some(root.to_path_buf()),
         ..RuntimeOptions::default()
     };
-    let loaded = run_isolated(|| -> Result<PluginMeta, String> {
+    let result = run_isolated(|| -> Result<PluginMeta, String> {
         let rt = PluginRuntime::new(file, &opts).map_err(|e| e.to_string())?;
         let loaded = rt.load(budget);
         if let Some(e) = loaded.error {
             return Err(e.to_string());
         }
-        let exports = loaded.exports.ok_or("no exports")?;
-        Ok(exports.meta)
-    })
-    .map_err(|_| "plugin thread panicked".to_string())??;
+        Ok(loaded.exports.ok_or("no exports")?.meta)
+    });
+    match result {
+        Ok(Ok(meta)) => Loaded::Meta(Box::new(meta)),
+        Ok(Err(e)) => Loaded::Failed(e),
+        Err(_) => Loaded::Failed("plugin thread panicked".into()),
+    }
+}
+
+/// Whether a loaded file is a plugin device sessions can run.
+fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
+    let meta = match loaded {
+        Loaded::Meta(meta) => *meta,
+        Loaded::Failed(why) => return Err(why),
+    };
+    if meta.product_ids.is_empty() || meta.vendor_id == 0 {
+        return Err("no VendorId/ProductId exports (helper module?)".into());
+    }
     // Hybrid plugins also need libusb bulk/control transfers, which device
     // sessions do not provide yet: refusing them beats faking that I/O.
-    match loaded.plugin_type {
-        PluginType::Hid => Ok(loaded),
+    match meta.plugin_type {
+        PluginType::Hid => Ok(meta),
         other => Err(format!(
             "plugin type {other:?} is not supported by device sessions yet"
         )),
     }
+}
+
+/// Plugin directories of a local SignalRGB installation, in the order
+/// SignalRGB scans them (later directories win on VID:PID collisions):
+/// the bundled plugins of the newest installed app version, the plugin CDN
+/// cache, each addon repository, the user's `Documents\WhirlwindFX\Plugins`.
+/// Missing directories are left out; empty on non-Windows hosts.
+pub fn signalrgb_plugin_dirs() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if !cfg!(windows) {
+        return out;
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        if let Some(app) = newest_app_dir(&local.join("VortxEngine")) {
+            out.push(app.join("Signal-x64").join("Plugins"));
+        }
+        let cache = local.join("WhirlwindFX").join("SignalRgb").join("cache");
+        out.push(cache.join("plugin_cdn").join("main").join("Plugins"));
+        if let Ok(rd) = std::fs::read_dir(cache.join("addons")) {
+            let mut addons: Vec<PathBuf> = rd
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .map(|e| e.path())
+                .collect();
+            addons.sort();
+            out.extend(addons);
+        }
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+        out.push(home.join("Documents").join("WhirlwindFX").join("Plugins"));
+    }
+    out.retain(|d| d.is_dir());
+    out
+}
+
+/// `app-x.y.z` directory with the highest version under `root`.
+fn newest_app_dir(root: &Path) -> Option<PathBuf> {
+    let mut apps: Vec<(Vec<u64>, PathBuf)> = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let version = name.strip_prefix("app-")?;
+            let parts = version
+                .split('.')
+                .map(|p| p.parse().ok())
+                .collect::<Option<Vec<u64>>>()?;
+            Some((parts, e.path()))
+        })
+        .collect();
+    apps.sort();
+    apps.pop().map(|(_, p)| p)
+}
+
+/// Where the plugin index cache lives by default: `%LOCALAPPDATA%\lightloom\cache`
+/// on Windows, `$XDG_CACHE_HOME/lightloom` (or `~/.cache/lightloom`) elsewhere.
+pub fn default_cache_path() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("lightloom").join("cache"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .map(|d| d.join("lightloom"))
+    };
+    base.map(|d| d.join("plugin-index.json"))
 }
 
 #[cfg(test)]
@@ -158,5 +427,99 @@ mod tests {
         assert_eq!(msi.meta.size, [6, 1]);
         assert_eq!(msi.meta.led_positions.len(), 6);
         assert!(catalog.lookup(0x1462, 0x0001).is_none());
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lightloom-catalog-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn plugin_source(pid: u16) -> String {
+        format!(
+            "export function Name() {{ return 'P {pid:#06x}'; }}\n\
+             export function VendorId() {{ return 0x1234; }}\n\
+             export function ProductId() {{ return {pid}; }}\n\
+             export function Initialize() {{}}\n\
+             export function Render() {{}}\n\
+             export function Shutdown() {{}}\n"
+        )
+    }
+
+    #[test]
+    fn the_index_cache_reloads_only_changed_files() {
+        let dir = scratch("cache");
+        let plugins = dir.join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::fs::write(plugins.join("a.js"), plugin_source(1)).unwrap();
+        std::fs::write(plugins.join("b.js"), plugin_source(2)).unwrap();
+        std::fs::write(plugins.join("helper.js"), "export const x = 1;\n").unwrap();
+        let opts = ScanOptions {
+            cache: Some(dir.join("index.json")),
+            jobs: 2,
+            ..ScanOptions::default()
+        };
+        let first = Catalog::scan_with(std::slice::from_ref(&plugins), &opts);
+        assert_eq!(
+            first.stats(),
+            ScanStats {
+                files: 3,
+                cached: 0,
+                loaded: 3
+            }
+        );
+        assert_eq!(first.entries().len(), 2);
+        assert_eq!(first.skipped().len(), 1, "helper module");
+
+        let second = Catalog::scan_with(std::slice::from_ref(&plugins), &opts);
+        assert_eq!(
+            second.stats(),
+            ScanStats {
+                files: 3,
+                cached: 3,
+                loaded: 0
+            }
+        );
+        assert_eq!(second.entries().len(), 2);
+        assert!(second.lookup(0x1234, 2).is_some());
+
+        // A changed file (new size) is loaded again; the others stay cached.
+        std::fs::write(plugins.join("b.js"), plugin_source(3) + "// changed\n").unwrap();
+        let third = Catalog::scan_with(std::slice::from_ref(&plugins), &opts);
+        assert_eq!(
+            third.stats(),
+            ScanStats {
+                files: 3,
+                cached: 2,
+                loaded: 1
+            }
+        );
+        assert!(third.lookup(0x1234, 2).is_none());
+        assert!(third.lookup(0x1234, 3).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn later_directories_win_collisions() {
+        let dir = scratch("order");
+        let (first, second) = (dir.join("first"), dir.join("second"));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("x.js"), plugin_source(7)).unwrap();
+        std::fs::write(second.join("y.js"), plugin_source(7)).unwrap();
+        let catalog = Catalog::scan(&[first, second.clone()], Duration::from_secs(10));
+        assert_eq!(catalog.lookup(0x1234, 7).unwrap().root, second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app_dirs_sort_by_version_not_text() {
+        let dir = scratch("apps");
+        for v in ["app-2.5.9", "app-2.5.80", "app-2.4.120", "app-notaversion"] {
+            std::fs::create_dir_all(dir.join(v)).unwrap();
+        }
+        assert_eq!(newest_app_dir(&dir), Some(dir.join("app-2.5.80")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

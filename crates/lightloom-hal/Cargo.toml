@@ -20,3 +20,5 @@ mock = []
 [dependencies]
 thiserror = { workspace = true }
 serde = { workspace = true }
+# HID traces (record/replay) are JSON.
+serde_json = { workspace = true }

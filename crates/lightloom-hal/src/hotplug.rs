@@ -51,7 +51,8 @@ impl DeviceEvent {
     }
 }
 
-/// Source of [`DeviceEvent`]s. Backends debounce bursts (≈500 ms) before emitting.
+/// Source of [`DeviceEvent`]s. A plug or unplug arrives as a burst of events
+/// (one per HID collection); consumers wait for it to settle, then enumerate.
 pub trait HotplugSource: Send {
     /// Start watching and return the receiving end of the event channel.
     fn subscribe(&mut self) -> HalResult<Receiver<DeviceEvent>>;

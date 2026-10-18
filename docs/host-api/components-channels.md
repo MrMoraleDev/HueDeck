@@ -207,3 +207,38 @@ Exe methods on `device`: `fanControlDisabled`, `createFanControl(asName)`, `remo
 - Section 2 'Components': component validation also logs 'Component - %1 - Array Lengths Differ! "LedMapping" equals length: %2, "LedCoordinates" %3, and "LedNames" %4'; LedMapping = output-order permutation (docs: 'Order in which LED color info should be returned'); component JSON fields per docs: ProductName (persistence key, user file with same ProductName overrides built-in), DisplayName, Brand, Type (Fan/Strip/AIO/Case/Chair...), LedCount, Width, Height, LedMapping, LedCoordinates, LedNames, ImageUrl; user components dir Documents\WhirlwindFX\Components.
 - Section 4: device.setImageFromUrl / setSubdeviceImageUrl reject GIF with 'Supported image types are 'PNG', 'JPG', and 'SVG'' (spec truncated the list). Plugin export Image() may return a base64 PNG string (6 files) instead of ''.
 - Section 1.3: docs meta-tags page documents lightscript types number, hue (min≥0,max≤360), boolean (0/1), color (hex default, min/max hue limits), textfield, list (values comma-separated) — 'hue' was omitted from the spec's docs list; engine injects booleans as JS true/false regardless of '0/1' vs 'true/false' default spelling (Clock.html:223 'outlineText === true').
+
+## Lightloom implementation notes (M2)
+
+What `crates/lightloom-plugin-host/src/children.rs` and `js/host.js` (device mode) do
+where the contract above leaves a choice:
+
+- **Channel setup comes from the caller.** A session gets the component instances
+  per channel name (`SessionOptions::channel_components`). `lightloom light|rainbow|bench
+  --signalrgb` imports SignalRGB's arrays read-only from
+  `HKCU\Software\WhirlwindFX\SignalRgb\devices\<vid:pid:serial>\<channel>`; values
+  under that key that are not component arrays (plugin property values) are ignored.
+- **Placeholder.** A channel with no entry gets one `Default Strip - N` (N = the third
+  `addChannel` argument, else `ledLimit / 2`; none when N is 0). An entry that is an empty
+  array stays empty: the user removed every component.
+- **Limits.** `channel.ledCount`, `getColors()` and `device.getLedCount()` agree: the sum of
+  the components' `LedCount`, cut at the channel limit and at what is left of the device
+  limit (`SetLedLimit`, channels in creation order). Plugins that send `ledCount` LEDs never
+  overrun their controller.
+- **Re-adding a channel** keeps its components and updates the limit (logged only when it
+  changes); `removeChannel` drops it, a later `addChannel` gets a fresh setup.
+- **Placement.** Every subdevice and component instance is its own canvas endpoint:
+  `SessionOptions::placements` by uid (`<device key>:<subdevice id>` or `ComponentId`),
+  otherwise fitted to the canvas (`Placement::fit`: uniform scale, centred; refitted when
+  `setSubdeviceSize` changes the grid). Layout import from SignalRGB is M4.
+- **Identify/pulse** has no UI yet: `shouldPulseColors()` is `false`,
+  `getChannelPulseColor()` is `#009EDB`.
+- **Errors** follow the exe texts (`Failed to find subdevice with name: …`,
+  `device.subdeviceColor(): Out of bounds error. …`, `ERROR: Led names and positions vary
+  in length! …`), are logged once per distinct message and never throw; out-of-range
+  samples are black.
+- **`@SignalRGB/permissions`** grants every permission of every partner (`MSI`, `Lian-Li`)
+  and never calls back; **`@SignalRGB/systeminfo`** reports the SMBIOS baseboard
+  (`model` = `Win32_BaseBoard.Product`), BIOS (`releaseDate` as `YYYY-MM-DD`) and populated
+  memory slots (`manufacturer`, `partNumber`, …).
+

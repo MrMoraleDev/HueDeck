@@ -13,8 +13,8 @@ homepage.workspace = true
 
 [dependencies]
 serde = { workspace = true }
-triple_buffer = { workspace = true }
-
-[dev-dependencies]
-# Layout JSON shape is checked against the schemas/layout.schema.json example.
+# Component descriptors keep their JSON object (unknown keys) for getComponentData.
 serde_json = { workspace = true }
+triple_buffer = { workspace = true }
+# ComponentId of new component instances.
+uuid = { workspace = true }

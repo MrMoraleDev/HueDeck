@@ -11,24 +11,32 @@
 //!    the first one it accepts (the active endpoint until `set_endpoint`);
 //! 4. optionally reads feature reports before `Initialize` ([`RestoreCheckMode`]):
 //!    given ones, or every feature report the report descriptor declares;
+//!    Subdevices and channels the plugin creates get the caller's placements
+//!    and channel components ([`SessionOptions::channel_components`]);
 //! 5. calls `Initialize()`, then `Render()` once per new canvas frame of the
 //!    [`FrameStore`]: a slow plugin skips straight to the latest frame. Each
 //!    `Render()` runs under a watchdog budget; consecutive timeouts fault the
 //!    session;
+//!    Changes sent through [`SessionHandle::control`] apply before the next
+//!    `Render()`: parameter values (then `on<name>Changed()`), brightness,
+//!    placement (then `onBrightnessChanged()` for a new device brightness);
 //! 6. on stop calls `Shutdown(false)` (unless told not to), repeats the
 //!    feature-report reads and returns a [`SessionReport`].
 
 use crate::catalog::CatalogEntry;
+use crate::children::ChildSetup;
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
-use crate::runtime::{CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
+use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
 use crate::stats::LatencyHistogram;
-use lightloom_engine::{FrameStore, Placement, SamplerConfig};
+use lightloom_engine::{ComponentInstance, FrameStore, Placement, SamplerConfig};
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple};
+use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -46,7 +54,8 @@ pub struct SessionDevice {
     pub endpoints: Vec<HidEndpointInfo>,
 }
 
-/// Time budgets of the lifecycle calls.
+/// Time budgets of the lifecycle calls: JavaScript time, time blocked in
+/// `device.pause()` and HID I/O excluded ([`Budget`]), under the wall-clock caps.
 #[derive(Clone, Copy, Debug)]
 pub struct Budgets {
     /// Parse + evaluate the module.
@@ -59,6 +68,11 @@ pub struct Budgets {
     pub render: Duration,
     /// `Shutdown()`.
     pub shutdown: Duration,
+    /// Wall-clock cap of one `Render()`, blocked time included (plugins set
+    /// devices up lazily from `Render()`, taking seconds once).
+    pub render_wall: Duration,
+    /// Wall-clock cap of `Validate`, `Initialize` and `Shutdown`.
+    pub call_wall: Duration,
 }
 
 impl Default for Budgets {
@@ -69,6 +83,24 @@ impl Default for Budgets {
             initialize: Duration::from_secs(10),
             render: Duration::from_millis(250),
             shutdown: Duration::from_secs(5),
+            render_wall: Duration::from_secs(30),
+            call_wall: Duration::from_secs(30),
+        }
+    }
+}
+
+impl Budgets {
+    fn call(&self, js: Duration) -> Budget {
+        Budget {
+            js,
+            wall: self.call_wall.max(js),
+        }
+    }
+
+    fn render_budget(&self) -> Budget {
+        Budget {
+            js: self.render,
+            wall: self.render_wall.max(self.render),
         }
     }
 }
@@ -116,6 +148,15 @@ pub struct SessionOptions {
     pub restore_check: RestoreCheckMode,
     /// Receives every plugin log line.
     pub log_sink: Option<LogSink>,
+    /// Components on the plugin's channels, by channel name, in chain order
+    /// (SignalRGB keeps them per device and channel name). A channel without
+    /// an entry gets the placeholder `Default Strip - N`.
+    pub channel_components: BTreeMap<String, Vec<ComponentInstance>>,
+    /// Placements of subdevices (`<device key>:<subdevice id>`) and component
+    /// instances (`ComponentId`); the others are fitted to the canvas.
+    pub placements: BTreeMap<String, Placement>,
+    /// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
+    pub system_info: Option<Arc<lightloom_hal::SystemInfo>>,
 }
 
 impl Default for SessionOptions {
@@ -130,6 +171,9 @@ impl Default for SessionOptions {
             max_render_timeouts: 3,
             restore_check: RestoreCheckMode::Off,
             log_sink: None,
+            channel_components: BTreeMap::new(),
+            placements: BTreeMap::new(),
+            system_info: None,
         }
     }
 }
@@ -142,6 +186,10 @@ impl std::fmt::Debug for SessionOptions {
             .field("write_mode", &self.write_mode)
             .field("skip_shutdown", &self.skip_shutdown)
             .field("restore_check", &self.restore_check)
+            .field(
+                "channel_components",
+                &self.channel_components.keys().collect::<Vec<_>>(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -192,6 +240,41 @@ impl RestoreCheck {
     }
 }
 
+/// A subdevice the plugin created.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct SubdeviceSummary {
+    /// The plugin's id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Grid size in cells.
+    pub size: [u32; 2],
+}
+
+/// A component instance on a channel.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ComponentSummary {
+    /// `ComponentId`.
+    pub id: String,
+    /// `DisplayName`.
+    pub name: String,
+    /// `LedCount`.
+    pub led_count: u32,
+}
+
+/// A channel the plugin added.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ChannelSummary {
+    /// Channel name.
+    pub name: String,
+    /// The plugin's LED limit.
+    pub led_limit: u32,
+    /// LEDs the plugin sees (`channel.ledCount`).
+    pub led_count: usize,
+    /// Components in chain order.
+    pub components: Vec<ComponentSummary>,
+}
+
 /// Outcome of one session.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SessionReport {
@@ -233,14 +316,23 @@ pub struct SessionReport {
     pub restore_checks: Vec<RestoreCheck>,
     /// Why requested reports were not compared (unreadable, none declared).
     pub restore_notes: Vec<String>,
+    /// Worth knowing, not failures: calls a stop request cut short.
+    pub notes: Vec<String>,
     /// `Shutdown(false)` ran.
     pub shutdown_called: bool,
+    /// Subdevices at the end of the session.
+    pub subdevices: Vec<SubdeviceSummary>,
+    /// Channels at the end of the session.
+    pub channels: Vec<ChannelSummary>,
     /// Last plugin log lines.
     pub log_tail: Vec<String>,
     /// Plugin log lines in total.
     pub log_lines: u64,
     /// QuickJS heap at the end of the session.
     pub memory_bytes: i64,
+    /// The session was stopped because its device went away (set by
+    /// [`crate::manager::DeviceManager`]); I/O errors are then expected.
+    pub device_removed: bool,
     /// Session wall time.
     pub elapsed_ms: f64,
 }
@@ -267,10 +359,14 @@ impl SessionReport {
             io_log: Vec::new(),
             restore_checks: Vec::new(),
             restore_notes: Vec::new(),
+            notes: Vec::new(),
             shutdown_called: false,
+            subdevices: Vec::new(),
+            channels: Vec::new(),
             log_tail: Vec::new(),
             log_lines: 0,
             memory_bytes: 0,
+            device_removed: false,
             elapsed_ms: 0.0,
         }
     }
@@ -283,8 +379,17 @@ impl SessionReport {
     }
 
     /// No lifecycle failure, no fault, no HID error, and every requested
-    /// restore check found the device as it was before.
+    /// restore check found the device as it was before. A session whose device
+    /// was removed while it ran is judged without the failures removal causes
+    /// (HID errors, `Render()` / `Shutdown()` / change-hook failures).
     pub fn is_clean(&self) -> bool {
+        if self.device_removed {
+            return self.faulted.is_none()
+                && self
+                    .failures
+                    .iter()
+                    .all(|f| f.phase == "Render" || f.phase == "Shutdown" || f.phase.starts_with("on"));
+        }
         self.failures.is_empty()
             && self.faulted.is_none()
             && self.io.errors() == 0
@@ -313,6 +418,8 @@ struct LiveStats {
     frames: AtomicU64,
     render_errors: AtomicU64,
     hid_errors: AtomicU64,
+    hid_disconnects: AtomicU64,
+    hid_disconnected: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
     first_write_us: AtomicU64,
 }
@@ -328,6 +435,10 @@ pub struct LiveSnapshot {
     pub render_errors: u64,
     /// Failed HID operations so far.
     pub hid_errors: u64,
+    /// Failed HID operations whose device is gone (see [`IoStats::disconnects`]).
+    pub disconnects: u64,
+    /// The latest HID operation failed because the device is gone.
+    pub disconnected: bool,
     /// Session start to the first successful (or dry-run) write.
     pub first_write_ms: Option<f64>,
 }
@@ -349,6 +460,8 @@ impl LiveStats {
             frames: self.frames.load(Ordering::Relaxed),
             render_errors: self.render_errors.load(Ordering::Relaxed),
             hid_errors: self.hid_errors.load(Ordering::Relaxed),
+            disconnects: self.hid_disconnects.load(Ordering::Relaxed),
+            disconnected: self.hid_disconnected.load(Ordering::Relaxed),
             first_write_ms: match self.first_write_us.load(Ordering::Relaxed) {
                 0 => None,
                 us => Some(us as f64 / 1000.0),
@@ -357,10 +470,26 @@ impl LiveStats {
     }
 }
 
+/// A change applied to a running session before its next `Render()`.
+#[derive(Clone, Debug)]
+pub enum Control {
+    /// New values of plugin parameters (`ControllableParameters` or
+    /// `device.addProperty` names): assigned to their globals, then each
+    /// parameter's `on<name>Changed()` export is called, if there is one.
+    Parameters(serde_json::Map<String, serde_json::Value>),
+    /// Global and layout brightness.
+    Brightness(Brightness),
+    /// Where the device sits on the canvas; a new device brightness then
+    /// calls the plugin's `onBrightnessChanged()`.
+    Placement(Placement),
+}
+
 /// A running session.
 #[derive(Debug)]
 pub struct SessionHandle {
     key: String,
+    started: Instant,
+    control: Sender<Control>,
     stop: Arc<AtomicBool>,
     live: Arc<LiveStats>,
     thread: JoinHandle<SessionReport>,
@@ -370,6 +499,17 @@ impl SessionHandle {
     /// Device key.
     pub fn key(&self) -> &str {
         &self.key
+    }
+
+    /// When the session was spawned.
+    pub fn started(&self) -> Instant {
+        self.started
+    }
+
+    /// Queue `control` for the session (applied before the next `Render()`).
+    /// `false` when the session has ended.
+    pub fn control(&self, control: Control) -> bool {
+        self.control.send(control).is_ok()
     }
 
     /// Ask the session to finish its current frame, shut down and return.
@@ -412,34 +552,43 @@ pub fn spawn(
         frames: AtomicU64::new(0),
         render_errors: AtomicU64::new(0),
         hid_errors: AtomicU64::new(0),
+        hid_disconnects: AtomicU64::new(0),
+        hid_disconnected: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
     });
     let key = device.key.clone();
+    let started = Instant::now();
+    let (control, controls) = channel();
     let (stop2, live2) = (Arc::clone(&stop), Arc::clone(&live));
     let thread = std::thread::Builder::new()
         .name(format!("lightloom-plugin {key}"))
         .stack_size(PLUGIN_THREAD_STACK)
         .spawn(move || {
-            let report = run(device, plugin, backend, frames, opts, &stop2, &live2);
+            let report = run(device, plugin, backend, frames, opts, &stop2, &live2, &controls);
+            drop(stop2);
             live2.set_state(SessionState::Done);
             report
         })?;
     Ok(SessionHandle {
         key,
+        started,
+        control,
         stop,
         live,
         thread,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     device: SessionDevice,
     plugin: CatalogEntry,
     backend: Arc<dyn HidBackend>,
     frames: Arc<FrameStore>,
     opts: SessionOptions,
-    stop: &AtomicBool,
+    stop: &Arc<AtomicBool>,
     live: &LiveStats,
+    controls: &Receiver<Control>,
 ) -> SessionReport {
     let started = Instant::now();
     let budgets = opts.budgets;
@@ -460,6 +609,13 @@ fn run(
             .unwrap_or_else(|| Placement::from_defaults(meta.default_position, meta.default_scale)),
     );
     let geometry = ctx.set_geometry(meta.size, meta.led_positions.clone());
+    ctx.set_child_setup(ChildSetup {
+        device_key: device.key.clone(),
+        channel_components: opts.channel_components.clone(),
+        placements: opts.placements.clone(),
+    });
+    ctx.set_subdevice_controller(meta.subdevice_controller || meta.supports_subdevices);
+    ctx.set_system_info(opts.system_info.as_deref());
     let shared = ctx.shared();
     if let Err(e) = geometry {
         report.faulted = Some(format!("Size() export rejected: {e}"));
@@ -494,6 +650,7 @@ fn run(
             &opts,
             stop,
             live,
+            controls,
             &mut report,
             &mut lifecycle,
         )
@@ -511,7 +668,7 @@ fn run(
     if lifecycle.initialize_called && !opts.skip_shutdown {
         if healthy {
             let shutdown = catch_unwind(AssertUnwindSafe(|| {
-                rt.call_export("Shutdown", CallArgs::Bool(false), budgets.shutdown)
+                rt.call_export("Shutdown", CallArgs::Bool(false), budgets.call(budgets.shutdown))
             }));
             match shutdown {
                 Ok(Ok(called)) => report.shutdown_called = called,
@@ -572,8 +729,9 @@ fn drive(
     shared: &SharedDevice,
     frames: &FrameStore,
     opts: &SessionOptions,
-    stop: &AtomicBool,
+    stop: &Arc<AtomicBool>,
     live: &LiveStats,
+    controls: &Receiver<Control>,
     report: &mut SessionReport,
     lifecycle: &mut Lifecycle,
 ) {
@@ -599,7 +757,11 @@ fn drive(
     // and set_endpoint may later switch among the accepted ones only.
     let mut validated = Vec::new();
     for (i, ep) in device.endpoints.iter().enumerate() {
-        match rt.validate(&ep.endpoint_tuple(), budgets.validate) {
+        if stop.load(Ordering::Acquire) {
+            report.notes.push("stopped while validating endpoints".into());
+            return;
+        }
+        match rt.validate(&ep.endpoint_tuple(), budgets.call(budgets.validate)) {
             Ok(true) => validated.push(i),
             Ok(false) => {}
             Err(e) => report.fail(format!("Validate #{i}"), e),
@@ -651,9 +813,22 @@ fn drive(
         }
     }
 
+    if stop.load(Ordering::Acquire) {
+        report.notes.push("stopped before Initialize".into());
+        return;
+    }
     lifecycle.initialize_called = true;
-    match rt.call_export("Initialize", CallArgs::None, budgets.initialize) {
+    // A stop request cuts Initialize short (Shutdown still runs).
+    match rt.call_export_until(
+        "Initialize",
+        CallArgs::None,
+        budgets.call(budgets.initialize),
+        stop,
+    ) {
         Ok(_) => report.initialized = true,
+        Err(e) if e.is_stop() => report
+            .notes
+            .push("Initialize was cut short by a stop request".into()),
         Err(e) => report.fail("Initialize", e),
     }
     if let Some(fatal) = lock_device(shared).fatal() {
@@ -671,11 +846,23 @@ fn drive(
         let Some(seq) = frames.wait_for_newer(last_seq, Duration::from_millis(100)) else {
             continue;
         };
+        // Asked to stop while waiting: no new frame.
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
         last_seq = seq;
+        while let Ok(control) = controls.try_recv() {
+            apply_control(rt, shared, control, &budgets, stop, report);
+        }
         let (_, frame) = frames.latest();
         lock_device(shared).set_frame(frame);
         let t = Instant::now();
-        let result = rt.call_export("Render", CallArgs::None, budgets.render);
+        let result = rt.call_export_until("Render", CallArgs::None, budgets.render_budget(), stop);
+        // Cut short by a stop request (it outlived STOP_GRACE): not the plugin's
+        // fault, and not a whole frame.
+        if matches!(&result, Err(e) if e.is_stop()) {
+            break;
+        }
         lifecycle.render.record(t.elapsed());
         report.frames += 1;
         live.frames.fetch_add(1, Ordering::Relaxed);
@@ -692,8 +879,10 @@ fn drive(
                     consecutive_timeouts += 1;
                     if consecutive_timeouts >= opts.max_render_timeouts {
                         report.faulted = Some(format!(
-                            "Render() exceeded its {} ms budget {consecutive_timeouts} times in a row",
-                            budgets.render.as_millis()
+                            "Render() exceeded its budget ({} ms of JavaScript, {} ms in all) \
+                             {consecutive_timeouts} times in a row",
+                            budgets.render.as_millis(),
+                            budgets.render_wall.as_millis()
                         ));
                         break;
                     }
@@ -704,6 +893,10 @@ fn drive(
         }
         let dev = lock_device(shared);
         live.hid_errors.store(dev.stats().errors(), Ordering::Relaxed);
+        live.hid_disconnects
+            .store(dev.stats().disconnects, Ordering::Relaxed);
+        live.hid_disconnected
+            .store(dev.stats().disconnected, Ordering::Relaxed);
         if let Some(d) = dev.first_write() {
             live.first_write_us
                 .store((d.as_micros() as u64).max(1), Ordering::Relaxed);
@@ -711,6 +904,53 @@ fn drive(
         if let Some(fatal) = dev.fatal() {
             report.faulted = Some(fatal.to_string());
             break;
+        }
+    }
+}
+
+/// Apply one [`Control`] between two `Render()` calls.
+fn apply_control(
+    rt: &PluginRuntime,
+    shared: &SharedDevice,
+    control: Control,
+    budgets: &Budgets,
+    stop: &Arc<AtomicBool>,
+    report: &mut SessionReport,
+) {
+    let hook = |name: &str, report: &mut SessionReport| match rt.call_export_until(
+        name,
+        CallArgs::None,
+        budgets.call(budgets.validate),
+        stop,
+    ) {
+        Ok(_) => {}
+        Err(e) if e.is_stop() => report
+            .notes
+            .push(format!("{name} was cut short by a stop request")),
+        Err(e) => report.fail(name, e),
+    };
+    match control {
+        Control::Parameters(values) => {
+            let names: Vec<String> = values.keys().cloned().collect();
+            if let Err(e) = rt.set_globals(&serde_json::Value::Object(values), budgets.validate) {
+                report.fail("parameters", e);
+                return;
+            }
+            for name in names {
+                hook(&format!("on{name}Changed"), report);
+            }
+        }
+        Control::Brightness(b) => lock_device(shared).set_brightness(b),
+        Control::Placement(p) => {
+            let changed = {
+                let mut dev = lock_device(shared);
+                let before = dev.device_brightness();
+                dev.set_placement(p);
+                dev.device_brightness() != before
+            };
+            if changed {
+                hook("onBrightnessChanged", report);
+            }
         }
     }
 }
@@ -732,6 +972,36 @@ fn finish(
     let (tail, lines) = dev.log_tail();
     report.log_tail = tail;
     report.log_lines = lines;
+    let children = dev.children();
+    report.subdevices = children
+        .subdevices()
+        .iter()
+        .map(|s| SubdeviceSummary {
+            id: s.id.clone(),
+            name: s.name.clone(),
+            size: s.size(),
+        })
+        .collect();
+    let counts = children.led_counts();
+    report.channels = children
+        .channels()
+        .iter()
+        .zip(counts)
+        .map(|(ch, led_count)| ChannelSummary {
+            name: ch.name.clone(),
+            led_limit: ch.led_limit,
+            led_count,
+            components: ch
+                .components
+                .iter()
+                .map(|c| ComponentSummary {
+                    id: c.instance.id.clone(),
+                    name: c.instance.component.display_name.clone(),
+                    led_count: c.instance.component.led_count,
+                })
+                .collect(),
+        })
+        .collect();
     dev.close();
     report.elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     report

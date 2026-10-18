@@ -12,7 +12,7 @@
 //! Resolution is purely lexical: it never touches the file system, so it can
 //! run in tests and in the index-cache pass without I/O.
 
-use crate::meta::HOST_MODULES;
+use crate::meta::{HOST_MODULES, HUEDECK_ONLY_MODULES};
 use std::path::{Component, Path, PathBuf};
 
 /// Accepted bare-specifier prefixes, in priority order.
@@ -68,7 +68,8 @@ impl ModuleResolver {
         for prefix in HOST_PREFIXES {
             if let Some(rest) = specifier.strip_prefix(prefix) {
                 let name = rest.strip_suffix(".js").unwrap_or(rest);
-                return if HOST_MODULES.contains(&name) {
+                let huedeck_only = prefix == "@huedeck/" && HUEDECK_ONLY_MODULES.contains(&name);
+                return if HOST_MODULES.contains(&name) || huedeck_only {
                     Ok(ResolvedModule::HostShim(name.to_string()))
                 } else {
                     Err(ResolveError::UnknownHostModule(name.to_string()))
@@ -138,6 +139,15 @@ mod tests {
         assert_eq!(
             r.resolve(importer, "@SignalRGB/DeviceDiscovery").unwrap(),
             ResolvedModule::HostShim("DeviceDiscovery".into())
+        );
+        assert_eq!(
+            r.resolve(importer, "@huedeck/BinaryUtils").unwrap(),
+            ResolvedModule::HostShim("BinaryUtils".into())
+        );
+        // HueDeck-only shims must not resolve under the SignalRGB prefix.
+        assert_eq!(
+            r.resolve(importer, "@SignalRGB/BinaryUtils"),
+            Err(ResolveError::UnknownHostModule("BinaryUtils".into()))
         );
         assert_eq!(
             r.resolve(importer, "@SignalRGB/nope"),

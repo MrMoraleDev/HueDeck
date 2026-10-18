@@ -1,0 +1,811 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// HueDeck stub host (M0 spike B / `huedeck compat dry-run`).
+//
+// Evaluated as an ES module in every plugin context *before* the plugin
+// module. It installs the compat-v1 host globals (`device`, `bus`, `console`,
+// `service`, `controller`, `discovery`, `XmlHttp`, `XMLHttpRequest`,
+// `BinaryUtils`) as recording stubs that return sane defaults and never touch
+// hardware, plus `device.addFeature()` feature globals. Member lists follow
+// docs/host-api/*.md. Every call of a listed member is counted
+// (`<object>.<member>`); every access to a member that is not listed is
+// recorded as `API_GAP:<object>.<member>` and answered with a no-op function,
+// so the dry-run measures how far the corpus gets against the documented
+// surface. `controller` and `discovery` hold plugin-defined data
+// (network-services.md §1.1), so reads of fields the stub lacks are recorded
+// as stub fields, not API gaps, and yield `undefined`.
+//
+// The Rust side reads state back through `globalThis.__huedeckHost`
+// (non-writable, non-configurable: plugin code cannot replace it).
+
+import { createColorArray, layoutColors } from "huedeck:prelude/createColorArray.js";
+import { BinaryUtils } from "huedeck:prelude/BinaryUtils.js";
+import { createFeatureGlobal as createBase64Feature } from "huedeck:prelude/base64.js";
+
+// Builtins the host-side helpers rely on, captured before plugin code runs
+// (a plugin replacing `JSON.stringify` must not falsify the report).
+const stringify = JSON.stringify;
+const objectKeys = Object.keys;
+const hasOwn = Object.hasOwn;
+const fromEntries = Object.fromEntries;
+const isArray = Array.isArray;
+const arrayFrom = Array.from;
+const isView = ArrayBuffer.isView;
+const isFiniteNumber = Number.isFinite;
+const defineProperty = Object.defineProperty;
+const freeze = Object.freeze;
+
+const cfg = globalThis.__huedeckConfig ?? {};
+
+const state = {
+  gaps: new Map(),
+  fields: new Map(),
+  calls: new Map(),
+  consoleLines: 0,
+  logTail: [],
+  productId: 0,
+  vendorId: 0,
+  properties: new Map(),
+  channels: new Map(),
+  subdevices: [],
+  notifyId: 0,
+  namespace: undefined,
+};
+
+// Keys that probing code (Promise resolution, JSON, printing, typeof checks
+// done by engines) touches without meaning to use a host member.
+const PASSTHROUGH = new Set([
+  "then",
+  "catch",
+  "finally",
+  "toJSON",
+  "constructor",
+  "prototype",
+  "valueOf",
+  "toString",
+  "toLocaleString",
+  "inspect",
+  "nodeType",
+  "$$typeof",
+  "__esModule",
+  "length",
+  "name",
+]);
+
+function bump(map, key) {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function gap(key) {
+  bump(state.gaps, key);
+}
+
+function fmt(args) {
+  return args
+    .map((a) => {
+      if (typeof a === "string") {
+        return a;
+      }
+      try {
+        return stringify(a);
+      } catch {
+        return String(a);
+      }
+    })
+    .join(" ");
+}
+
+function line(text) {
+  state.consoleLines += 1;
+  if (state.logTail.length < 20) {
+    state.logTail.push(String(text).slice(0, 300));
+  }
+}
+
+/**
+ * Wrap `target` as a recording host object: calls of its function members are
+ * counted as `<objectName>.<member>`; unknown string members are recorded as
+ * API gaps and answered with a no-op function (`data: true`: recorded as stub
+ * fields and answered with `undefined`, for plugin-defined plain data).
+ */
+function recording(objectName, target, { data = false } = {}) {
+  const wrappers = new Map();
+  return new Proxy(target, {
+    get(t, key, receiver) {
+      if (typeof key !== "string" || PASSTHROUGH.has(key)) {
+        return Reflect.get(t, key, receiver);
+      }
+      if (key in t) {
+        const value = Reflect.get(t, key, receiver);
+        // Inherited builtins (`hasOwnProperty`, ...) are not host members.
+        if (typeof value !== "function" || !hasOwn(t, key)) {
+          return value;
+        }
+        let w = wrappers.get(key);
+        if (w === undefined || w.fn !== value) {
+          const name = `${objectName}.${key}`;
+          const wrapper = function huedeckRecorded(...args) {
+            bump(state.calls, name);
+            return Reflect.apply(value, this, args);
+          };
+          w = { fn: value, wrapper };
+          wrappers.set(key, w);
+        }
+        return w.wrapper;
+      }
+      if (data) {
+        bump(state.fields, `${objectName}.${key}`);
+        return undefined;
+      }
+      gap(`${objectName}.${key}`);
+      return function huedeckApiGap() {
+        return undefined;
+      };
+    },
+  });
+}
+
+const zeros = (n) => {
+  const len = Number.isFinite(Number(n)) && Number(n) > 0 ? Math.min(Number(n) | 0, 1 << 20) : 0;
+  return new Array(len).fill(0);
+};
+const noop = () => undefined;
+const logFn = (...args) => line(fmt(args));
+
+// ---------------------------------------------------------------- console
+const consoleStub = recording("console", {
+  log: logFn,
+  warn: logFn,
+  error: logFn,
+  info: logFn,
+  debug: logFn,
+  trace: logFn,
+  assert: (cond, ...args) => {
+    if (!cond) {
+      line(fmt(args));
+    }
+  },
+  count: noop,
+  time: noop,
+  timeEnd: noop,
+});
+
+// ---------------------------------------------------------------- channels
+// components-channels.md §1.6. No components are assigned, so every colour
+// query is empty in the requested layout: "Inline" -> [], "Separate" /
+// "Seperate" -> [[], [], []].
+function makeChannel(name, ledLimit = 0) {
+  const ch = {
+    name,
+    ledCount: 0,
+    ledLimit,
+    overrideColors: false,
+    overrideCount: 0,
+    forceColor: false,
+    identifying: false,
+    LedCount: () => 0,
+    LedLimit: () => ch.ledLimit,
+    SetLedLimit: (n) => {
+      ch.ledLimit = Number(n) || 0;
+    },
+    SetLedCount: noop,
+    Name: () => ch.name,
+    SetName: (n) => {
+      ch.name = String(n);
+    },
+    getColors: (layout, order) => layoutColors([], layout, order),
+    shouldPulseColors: () => false,
+    onlyHasDefaultComponents: () => true,
+    getComponentNames: () => [],
+    getComponents: () => [],
+    getComponent: () => undefined,
+    getComponentColors: (_id, layout, order) => layoutColors([], layout, order),
+    getComponentData: () => ({ LedCount: 0 }),
+    getChannelColor: () => "#000000",
+    getPulse: (count, layout, order) => createColorArray("#009EDB", count, layout, order),
+  };
+  return recording("channel", ch);
+}
+
+// ---------------------------------------------------------------- features
+function socketStub() {
+  return recording("socket", {
+    UnconnectedState: 0,
+    HostLookupState: 1,
+    ConnectingState: 2,
+    ConnectedState: 3,
+    BoundState: 4,
+    ClosingState: 6,
+    ListeningState: 5,
+    state: 0,
+    on: noop,
+    bind: noop,
+    close: noop,
+    connect: noop,
+    disconnect: noop,
+    send: (data) => (data && data.length) || 0,
+    write: (data) => (data && data.length) || 0,
+    address: () => ({ address: "0.0.0.0", port: 0, protocol: "IPV4" }),
+    remoteAddress: () => ({ address: "0.0.0.0", port: 0, protocol: "IPV4" }),
+  });
+}
+
+const featureFactories = {
+  base64: () => recording("base64", { ...createBase64Feature() }),
+  udp: () =>
+    recording("udp", {
+      send: (_ip, _port, data) => (data && data.length) || 0,
+      createSocket: socketStub,
+    }),
+  dtls: () =>
+    recording("dtls", {
+      createConnection: noop,
+      send: (data) => (data && data.length) || 0,
+      hasEncryptedConnection: () => false,
+      CloseConnection: noop,
+      onConnectionEstablished: noop,
+      onConnectionClosed: noop,
+      onConnectionError: noop,
+      ignoreSslErrors: noop,
+    }),
+  keyboard: () => recording("keyboard", { sendHid: noop, sendKey: noop, sendEvent: noop }),
+  mouse: () => recording("mouse", { sendHid: noop, sendEvent: noop }),
+  battery: () =>
+    recording("battery", {
+      disabled: 0,
+      unknown: 0,
+      draining: 1,
+      charging: 2,
+      fullCharging: 3,
+      full: 4,
+      wirelessCharging: 5,
+      batteryLevel: 0,
+      batteryState: 0,
+      stateString: "Unknown",
+      lowBatteryWarningLevel: 15,
+      setBatteryLevel: noop,
+      setBatteryState: noop,
+    }),
+};
+
+// ---------------------------------------------------------------- device
+const deviceTarget = {
+  // I/O (hid-usb.md §2). Never touches hardware.
+  write: (data, length) => Number(length) || (data && data.length) || 0,
+  send_report: (data, length) => Number(length) || (data && data.length) || 0,
+  read: (_id, length) => zeros(length),
+  get_report: (_id, length) => zeros(length),
+  input_report: (_id, length) => zeros(length),
+  getLastReadSize: () => 0,
+  clearReadBuffer: noop,
+  flush: noop,
+  set_endpoint: noop,
+  getHidEndpoints: () => [],
+  getHidInfo: () => ({ readLength: 64, writeLength: 64 }),
+  getDeviceInfo: () => ({
+    product: "",
+    manufacturer: "",
+    serialNumber: "",
+    vendorId: state.vendorId,
+    productId: state.productId,
+  }),
+  productId: () => state.productId,
+  bulk_transfer: (endpoint, data, length) =>
+    Number(endpoint) >= 0x80 ? zeros(length) : Number(length) || (data && data.length) || 0,
+  control_transfer: (_rt, _rq, _v, _i, _data, length) => zeros(length),
+  setProtocol: noop,
+  pause: noop,
+  setFrameRateTarget: noop,
+  setRefreshRate: noop,
+  setFrameDelay: noop,
+  resetFrameRateTarget: noop,
+  // Canvas, shape, subdevices (components-channels.md §1-2).
+  color: () => [0, 0, 0],
+  getBrightness: () => 100,
+  subdeviceColor: () => [0, 0, 0],
+  createSubdevice: (id) => {
+    if (!state.subdevices.includes(id)) {
+      state.subdevices.push(id);
+    }
+  },
+  removeSubdevice: (id) => {
+    const i = state.subdevices.indexOf(id);
+    if (i >= 0) {
+      state.subdevices.splice(i, 1);
+    }
+  },
+  getCurrentSubdevices: () => [...state.subdevices],
+  setSubdeviceName: noop,
+  setSubdeviceSize: noop,
+  setSubdeviceLeds: noop,
+  setSubdeviceLedMap: noop,
+  setSubdeviceImageUrl: noop,
+  setSubdeviceImage: noop,
+  SetIsSubdeviceController: noop,
+  setName: noop,
+  setSize: noop,
+  setControllableLeds: noop,
+  setImageFromUrl: noop,
+  setImageFromBase64: noop,
+  repollName: noop,
+  repollLeds: noop,
+  repollSize: noop,
+  SetLedLimit: noop,
+  addChannel: (name, ledLimit) => {
+    state.channels.set(String(name), makeChannel(String(name), Number(ledLimit) || 0));
+  },
+  removeChannel: (name) => {
+    state.channels.delete(String(name));
+  },
+  getChannelNames: () => [...state.channels.keys()],
+  channel: (name) => {
+    const key = String(name);
+    if (!state.channels.has(key)) {
+      state.channels.set(key, makeChannel(key));
+    }
+    return state.channels.get(key);
+  },
+  getLedCount: () => 0,
+  getChannelPulseColor: () => "#009EDB",
+  createColorArray: (color, count, layout, order) => createColorArray(color, count, layout, order),
+  // Properties (components-channels.md §2): each value is a global named `property`.
+  addProperty: (obj) => {
+    if (obj && typeof obj === "object" && typeof obj.property === "string") {
+      state.properties.set(obj.property, obj);
+      if (!(obj.property in globalThis)) {
+        globalThis[obj.property] = coerceDefault(obj);
+      }
+    }
+  },
+  removeProperty: (name) => {
+    state.properties.delete(String(name));
+  },
+  getProperty: (name) => state.properties.get(String(name)),
+  hasProperty: (name) => state.properties.has(String(name)),
+  getPropertyNames: () => [...state.properties.keys()],
+  setUserProperty: (name, value) => {
+    const key = String(name);
+    if (state.properties.has(key) || key in globalThis) {
+      globalThis[key] = value;
+    }
+  },
+  // Features, notifications, messages, logging.
+  addFeature: (name) => {
+    const key = String(name);
+    const make = featureFactories[key];
+    if (make === undefined) {
+      gap(`device.addFeature(${key})`);
+      return;
+    }
+    if (globalThis[key] === undefined || globalThis[key].__huedeckFeature !== key) {
+      const value = make();
+      try {
+        defineProperty(value, "__huedeckFeature", { value: key });
+      } catch {
+        // Proxies over frozen objects: the marker is optional.
+      }
+      globalThis[key] = value;
+    }
+  },
+  notify: () => {
+    state.notifyId += 1;
+    return `huedeck-alert-${state.notifyId}`;
+  },
+  denotify: noop,
+  addMessage: noop,
+  removeMessage: noop,
+  log: logFn,
+  // Fan + temperature API (components-channels.md §5), exact casing plus docs aliases.
+  fanControlDisabled: () => false,
+  createFanControl: noop,
+  removeFanControl: noop,
+  setRPM: noop,
+  getFanlevel: () => 0,
+  getFanLevel: () => 0,
+  getNormalizedFanlevel: () => 0,
+  getNormalizedFanLevel: () => 0,
+  createTemperatureSensor: noop,
+  removeTemperatureSensor: noop,
+  SetTemperature: noop,
+  // Misc documented members.
+  getImageBuffer: () => [],
+  getMotherboardName: () => "",
+};
+
+// ---------------------------------------------------------------- SMBus
+function busMembers(fixed) {
+  const a = fixed ? 0 : 1; // argument offset: free buses take the address first
+  return {
+    WriteQuick: () => 0,
+    ReadByte: () => 0,
+    WriteByte: () => 0,
+    ReadWord: () => 0,
+    WriteWord: () => 0,
+    WriteBlock: () => 0,
+    ReadBlockBytes: (...args) => [0, zeros(args[1 + a])],
+    WriteBlockWithoutRegister: () => 0,
+    ReadBlockWithoutRegister: (...args) => [0, zeros(args[a])],
+    ReadByteWithoutRegister: () => 0,
+    TransactionLock: noop,
+    TransactionUnlock: noop,
+    HasTransactionLock: () => false,
+    Vendor: () => 0,
+    SubVendor: () => 0,
+    Product: () => 0,
+    SubDevice: () => 0,
+    Name: () => "HueDeck stub bus",
+    Type: () => (fixed ? "Fixed" : "Free"),
+    GetAddress: () => 0,
+    IsSystemBus: () => false,
+    IsAMDBus: () => false,
+    IsIntelBus: () => false,
+    IsNvidiaBus: () => false,
+    IsAMDGpuBus: () => false,
+    IsNuvotonBus: () => false,
+    FetchRamInfo: () => "",
+    log: logFn,
+    pause: noop,
+    toString: () => (fixed ? "I2CBusWrapperFixedAddress(stub)" : "I2CBusWrapper(stub)"),
+  };
+}
+
+// ---------------------------------------------------------------- network
+// network-services.md §1.4 (moc slots + properties of the host `service`).
+const serviceTarget = {
+  name: "",
+  icon: "",
+  ui: "",
+  view: null,
+  pluginDir: "",
+  controllersReady: true,
+  controllers: [],
+  devices: [],
+  console: consoleStub,
+  log: logFn,
+  ignoreSslErrors: noop,
+  addController: (obj) => {
+    serviceTarget.controllers.push({ id: obj && obj.id, obj });
+  },
+  removeController: (obj) => {
+    const i = serviceTarget.controllers.findIndex((c) => c.obj === obj || c.id === (obj && obj.id));
+    if (i >= 0) {
+      serviceTarget.controllers.splice(i, 1);
+    }
+  },
+  updateController: noop,
+  hasController: (id) => serviceTarget.controllers.some((c) => c.id === id),
+  getController: (id) => {
+    const c = serviceTarget.controllers.find((x) => x.id === id);
+    return c ? c.obj : undefined;
+  },
+  getSetting: () => undefined,
+  saveSetting: noop,
+  removeSetting: noop,
+  announceController: noop,
+  suppressController: noop,
+  broadcast: noop,
+  callDiscoveryFunction: noop,
+  callControllerFunction: noop,
+  resolve: noop,
+  resolveMacAddress: () => "",
+  saveSnapshot: noop,
+  showSettings: noop,
+  hideSettings: noop,
+};
+
+const controllerTarget = {
+  id: "00:00:00:00:00:00",
+  ip: "127.0.0.1",
+  port: 0,
+  name: "HueDeck stub controller",
+  hostname: "stub.local",
+  mac: "00:00:00:00:00:00",
+};
+
+// HTTP: plugins define their own `class XmlHttp` over XMLHttpRequest; the
+// global is provided for the few that do not. Requests never leave the host:
+// every request completes synchronously with status 0 ("unreachable").
+class XMLHttpRequestStub {
+  constructor() {
+    this.readyState = 0;
+    this.status = 0;
+    this.statusText = "";
+    this.response = "";
+    this.responseText = "";
+    this.responseType = "";
+    this.timeout = 0;
+    this.onreadystatechange = null;
+    this.onload = null;
+    this.onerror = null;
+    this.ontimeout = null;
+  }
+  open() {
+    this.readyState = 1;
+  }
+  setRequestHeader() {}
+  getResponseHeader() {
+    return null;
+  }
+  getAllResponseHeaders() {
+    return "";
+  }
+  abort() {}
+  send() {
+    this.readyState = 4;
+    this.status = 0;
+    if (typeof this.onreadystatechange === "function") {
+      this.onreadystatechange();
+    }
+    if (typeof this.onerror === "function") {
+      this.onerror();
+    }
+  }
+}
+XMLHttpRequestStub.UNSENT = 0;
+XMLHttpRequestStub.OPENED = 1;
+XMLHttpRequestStub.HEADERS_RECEIVED = 2;
+XMLHttpRequestStub.LOADING = 3;
+XMLHttpRequestStub.DONE = 4;
+
+const xmlHttpTarget = {
+  Get: noop,
+  Post: noop,
+  Put: noop,
+  Delete: noop,
+  GetWithAuth: noop,
+  PostWithAuth: noop,
+  PutWithAuth: noop,
+};
+
+// ---------------------------------------------------------------- @SignalRGB/* stub modules
+// Used instead of the throwing prelude facades when the host runs with
+// `module_stubs` (the dry-run default): the facade policy is still exercised
+// by the prelude tests, the dry-run wants to know how far plugins get.
+const modules = {
+  udp: recording("@SignalRGB/udp", { createSocket: socketStub, send: (_ip, _port, d) => (d && d.length) || 0 }),
+  tcp: recording("@SignalRGB/tcp", { createSocket: socketStub }),
+  serial: recording("@SignalRGB/serial", {
+    connect: () => true,
+    disconnect: noop,
+    isConnected: () => true,
+    write: (d) => (d && d.length) || 0,
+    read: () => [],
+    readAll: () => [],
+    getDeviceInfo: () => ({ deviceId: "", vendorId: state.vendorId, productId: state.productId, portName: "" }),
+    getPortName: () => "",
+    getBaudRate: () => 115200,
+    availablePorts: () => [],
+  }),
+  lcd: recording("@SignalRGB/lcd", {
+    initialize: noop,
+    getFrame: () => [],
+    getSlicedFrame: () => [],
+    getImageBuffer: () => [],
+  }),
+  // `{ [partner]: { fans, lighting, macros } }` (hid-usb.md §3); every partner the corpus checks, all granted.
+  permissions: recording("@SignalRGB/permissions", {
+    permissions: () => ({
+      "Lian-Li": { fans: true, lighting: true, macros: true },
+      MSI: { fans: true, lighting: true, macros: true },
+    }),
+    setCallback: noop,
+  }),
+  systeminfo: recording("@SignalRGB/systeminfo", {
+    GetMotherboardInfo: () => ({ manufacturer: "", model: "" }),
+    GetBiosInfo: () => ({ releaseDate: "" }),
+    GetRamInfo: () => [],
+  }),
+  DeviceDiscovery: recording("@SignalRGB/DeviceDiscovery", { foundVirtualDevice: noop }),
+  performance: recording("@SignalRGB/performance", {
+    StartTimer: noop,
+    EndTimer: noop,
+    LogReport: noop,
+    GetTimers: () => ({}),
+  }),
+  appInfo: recording("@SignalRGB/appInfo", { version: "0.0.1", compat: "signalrgb-2.5", name: "HueDeck" }),
+};
+
+// ---------------------------------------------------------------- install
+const g = globalThis;
+g.__huedeck = {
+  plugin: cfg.plugin ?? "",
+  log(_level, msg) {
+    const text = String(msg);
+    const m = /^API_GAP: (\S+) is not implemented/.exec(text);
+    if (m) {
+      gap(m[1]);
+    }
+    line(text);
+  },
+};
+g.console = consoleStub;
+g.device = recording("device", deviceTarget);
+g.bus = recording("bus", busMembers(true));
+g.service = recording("service", serviceTarget);
+// Plain-data snapshot of the plugin's own controller object / the plugin's
+// DiscoveryService instance: unknown fields are plugin data, not host API.
+g.controller = recording("controller", controllerTarget, { data: true });
+g.discovery = recording("discovery", {}, { data: true });
+g.XmlHttp = recording("XmlHttp", xmlHttpTarget);
+g.XMLHttpRequest = XMLHttpRequestStub;
+g.BinaryUtils = BinaryUtils;
+
+// ---------------------------------------------------------------- host-side helpers (called from Rust)
+const METADATA = [
+  "Name",
+  "Publisher",
+  "VendorId",
+  "ProductId",
+  "Size",
+  "DefaultPosition",
+  "DefaultScale",
+  "LedNames",
+  "LedPositions",
+  "ImageUrl",
+  "Image",
+  "Documentation",
+  "Version",
+  "Type",
+  "DeviceType",
+  "ControllableParameters",
+  "ConflictingProcesses",
+  "SubdeviceController",
+  "SupportsSubdevices",
+  "LacksOnBoardLeds",
+  "DefaultComponentBrand",
+  "SupportsFanControl",
+  "DeviceMessages",
+  "UsesCorsairMutex",
+  "UsesUSBSensorMutex",
+  "AllowConflictBypass",
+  "BrandGPUList",
+];
+const LIFECYCLE = ["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService"];
+
+function describeError(e) {
+  if (e && typeof e === "object") {
+    return { name: String(e.name ?? "Error"), message: String(e.message ?? e) };
+  }
+  return { name: "Throw", message: String(e) };
+}
+
+// JSON-safe copy (functions dropped, cycles cut).
+function plain(value, depth = 0) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const t = typeof value;
+  if (t === "number") {
+    return isFiniteNumber(value) ? value : null;
+  }
+  if (t === "string" || t === "boolean") {
+    return value;
+  }
+  if (t === "bigint") {
+    return Number(value);
+  }
+  if (t !== "object" || depth > 8) {
+    return null;
+  }
+  if (isArray(value) || isView(value)) {
+    return arrayFrom(value, (v) => plain(v, depth + 1));
+  }
+  const out = {};
+  for (const k of objectKeys(value)) {
+    const v = plain(value[k], depth + 1);
+    if (v !== null || value[k] === null) {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** Apply the call-if-function rule to every metadata export; returns a JSON string. */
+function readMeta(ns) {
+  const exports = {};
+  const errors = {};
+  for (const name of METADATA) {
+    if (!(name in ns)) {
+      continue;
+    }
+    try {
+      let v = ns[name];
+      if (typeof v === "function") {
+        v = v();
+      }
+      if (name === "ProductId" && v && typeof v === "object" && !isArray(v)) {
+        v = objectKeys(v);
+      }
+      exports[name] = plain(v);
+    } catch (e) {
+      const d = describeError(e);
+      errors[name] = `${d.name}: ${d.message}`;
+    }
+  }
+  const lifecycle = {};
+  for (const name of LIFECYCLE) {
+    lifecycle[name] = typeof ns[name] === "function";
+  }
+  const names = objectKeys(ns);
+  const hooks = names.filter((k) => /^on.+Changed$/.test(k) && typeof ns[k] === "function");
+  return stringify({ exports, errors, lifecycle, hooks, names });
+}
+
+/**
+ * The global value of a ControllableParameters / addProperty entry: its
+ * `default`, with the numeric and boolean strings of the corpus coerced
+ * (`"800"` -> 800 for number/hue, `"true"` -> true for boolean; hid-usb.md
+ * critic pass).
+ */
+function coerceDefault(p) {
+  let v = p.default;
+  const type = String(p.type ?? "").toLowerCase();
+  if ((type === "number" || type === "hue") && typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) {
+    v = Number(v);
+  } else if (type === "boolean" && typeof v === "string") {
+    v = v === "true";
+  }
+  return v;
+}
+
+/** Bind ControllableParameters defaults as globals (before Initialize). */
+function applyParameters(params) {
+  if (!isArray(params)) {
+    return 0;
+  }
+  let n = 0;
+  for (const p of params) {
+    if (p && typeof p.property === "string" && p.property.length > 0) {
+      g[p.property] = coerceDefault(p);
+      n += 1;
+    }
+  }
+  return n;
+}
+
+function setIds(vendorId, productId) {
+  state.vendorId = Number(vendorId) || 0;
+  state.productId = Number(productId) || 0;
+}
+
+/** Keep the evaluated plugin's namespace out of reach of plugin code. */
+function setNamespace(ns) {
+  state.namespace = ns;
+}
+
+/** The plugin namespace recorded by `setNamespace` (undefined before). */
+function namespace() {
+  return state.namespace;
+}
+
+/** Host-side `Scan(bus)` argument. */
+function freeBus() {
+  return recording("bus", busMembers(false));
+}
+
+function report() {
+  return stringify({
+    gaps: fromEntries(state.gaps),
+    fields: fromEntries(state.fields),
+    calls: fromEntries(state.calls),
+    consoleLines: state.consoleLines,
+    logTail: state.logTail,
+  });
+}
+
+defineProperty(g, "__huedeckHost", {
+  value: freeze({
+    readMeta,
+    applyParameters,
+    setIds,
+    setNamespace,
+    namespace,
+    freeBus,
+    report,
+    describeError,
+    modules: freeze(modules),
+  }),
+  writable: false,
+  enumerable: false,
+  configurable: false,
+});

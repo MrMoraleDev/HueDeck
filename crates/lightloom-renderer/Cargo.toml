@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "lightloom-renderer"
-description = "lightloom-renderer: CEF offscreen Chromium process rendering lightscripts at 320x200 into shared memory (SPIKE A)"
+description = "lightloom-renderer: CEF offscreen Chromium process rendering lightscripts at 320x200 into shared memory"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

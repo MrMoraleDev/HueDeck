@@ -2,7 +2,7 @@
 //! JavaScript evaluated in the effect's main-frame V8 context *before* any page script runs
 //! (CEF `OnContextCreated`).
 //!
-//! A zeroed `window.engine` (no real audio/screen/sensor inputs yet), the `<meta property>`
+//! A zeroed `window.engine` (inputs arrive later as `engine` control commands), the `<meta property>`
 //! controls as globals (lightscripts such as the stock Rainbow read `speed`/`vertical` from
 //! their first animation frame on), and the load sequence of docs/host-api/effects-engine.md:
 //! once the page has loaded (its scripts ran and may have declared the same names), every

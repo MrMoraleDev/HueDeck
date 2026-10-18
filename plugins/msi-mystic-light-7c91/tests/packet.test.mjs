@@ -149,6 +149,27 @@ test("Render sends exactly one 185-byte 0x52 packet: restore image + static red 
   }
 });
 
+test("Render skips an unchanged packet within the keepalive window and sends a change at once", async () => {
+  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [255, 0, 0]);
+  try {
+    plugin.Initialize();
+    plugin.Render();
+    plugin.Render();
+    plugin.Render();
+    assert.equal(device.sent.length, 1, "an identical packet is not resent within 1 s");
+    device.setColor([0, 0, 255]);
+    plugin.Render();
+    assert.equal(device.sent.length, 2, "a colour change is sent on the next Render");
+    assert.equal(device.sent[1].bytes[0x4A + 3], 0xFF, "blue byte of onboard LED 1");
+    // A re-Initialize (resume, re-plug) always writes on the next Render.
+    plugin.Initialize();
+    plugin.Render();
+    assert.equal(device.sent.length, 3);
+  } finally {
+    restoreGlobals();
+  }
+});
+
 test("Forced lighting mode ignores the canvas and paints forcedColor", async () => {
   const c = caseByName("forced colour #00FF00");
   const { device, plugin, restoreGlobals } = await boot(RESTORE, { LightingMode: c.lightingMode, forcedColor: c.forcedColor }, hexOf(c.color));

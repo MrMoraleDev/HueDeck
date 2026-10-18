@@ -108,6 +108,11 @@ const ONBOARD_ZONES = [
 let restoreImage = null;                 // 185-byte copy of report 0x52 as read in Initialize()
 let writesEnabled = false;               // true only after a valid restore image was captured
 let lastSent = null;                     // last packet we wrote (used to recognise our own state on re-Initialize)
+let lastSentAt = -Infinity;              // Date.now() of that write
+
+// Render() resends an unchanged packet only once this much time has passed, so a static colour is
+// not pushed to the controller 30 times per second. A changed packet is sent immediately.
+const KEEPALIVE_MS = 1000;
 
 // ---------------------------------------------------------------------------------------------
 // Lifecycle
@@ -115,15 +120,16 @@ let lastSent = null;                     // last packet we wrote (used to recogn
 // Facts observed on this board (2026-10-17, read-only HidP_GetCaps probe): a single HID interface,
 // device path HID\VID_1462&PID_7C91\...&0&0000 (no &MI_xx, no &ColNN), usage_page 0x0001,
 // usage 0x0000, input/output 64 bytes, feature report maximum 725 bytes. The controller does NOT
-// use a vendor-defined usage page, so we select on the interface number only. SignalRGB's plugin
-// accepts interface 0 or 2 and ignores the usage page; Lightloom's host reports -1 for a HID path
-// without an &MI_xx suffix, so both spellings of "the only interface" are accepted.
+// use a vendor-defined usage page, so we select on the interface number only. A non-composite USB
+// device reports interface 0 (hidapi, SignalRGB and Lightloom agree; verified in M0). -1 is accepted
+// too: it is what a host reports for a HID transport without a USB interface.
 export function Validate(endpoint) {
   return endpoint.interface === 0 || endpoint.interface === -1;
 }
 
 export function Initialize() {
   writesEnabled = false;
+  lastSentAt = -Infinity;                // the first Render() after (re-)Initialize always writes
 
   // GET_REPORT(Feature, 0x52). The host returns the report-id-prefixed byte array; the number of
   // bytes the device actually returned is getLastReadSize() when the host provides it. Both the
@@ -164,7 +170,11 @@ export function Render() {
   if (!writesEnabled) {
     return;
   }
-  sendPacket(buildPacket(colourForLed));
+  const packet = buildPacket(colourForLed);
+  if (lastSent !== null && sameBytes(packet, lastSent) && Date.now() - lastSentAt < KEEPALIVE_MS) {
+    return;
+  }
+  sendPacket(packet);
 }
 
 export function Shutdown(SystemSuspending) {
@@ -230,6 +240,7 @@ function sendPacket(packet) {
     return;
   }
   lastSent = packet.slice();
+  lastSentAt = Date.now();
 }
 
 // ---------------------------------------------------------------------------------------------

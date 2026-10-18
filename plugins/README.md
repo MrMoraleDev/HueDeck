@@ -12,7 +12,7 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 | `razer-deathadder-v2-pro` | Razer DeathAdder V2 Pro | wired `1532:007C` |
 | `nzxt-kraken-x3` | NZXT Kraken X53 / X63 / X73 | `1E71:2007` |
 | `steelseries-arctis-5` | SteelSeries Arctis 5 | `1038:12AA` |
-| `sony-dualsense` | Sony DualSense light bar, over USB | run on `054C:0CE6`; visual check pending |
+| `sony-dualsense` | Sony DualSense light bar, over USB | `054C:0CE6` |
 | `hid-lamparray` | any HID LampArray (Windows Dynamic Lighting) device no other plugin claims | Razer DeathAdder V2 Pro's LampArray collection |
 
 ## A plugin directory

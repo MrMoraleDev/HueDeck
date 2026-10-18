@@ -10,7 +10,7 @@
   "compat": "signalrgb-2.5",
   "deviceType": "other",
   "devices": [
-    { "vid": "0x054C", "pids": ["0x0CE6", "0x0DF2"], "transport": "hid", "interfaces": [3], "tested": [] }
+    { "vid": "0x054C", "pids": ["0x0CE6", "0x0DF2"], "transport": "hid", "interfaces": [3], "tested": ["0x0CE6"] }
   ],
   "permissions": ["hid"],
   "keywords": ["sony", "playstation", "dualsense", "controller", "gamepad", "lightbar"]

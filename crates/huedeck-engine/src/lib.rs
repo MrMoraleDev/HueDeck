@@ -10,19 +10,25 @@
 //!   mirroring `schemas/layout.schema.json`.
 //! * [`sampler`]: precomputed per-LED pixel-offset tables so `device.color(x, y)`
 //!   never allocates or does trigonometry on the hot path.
+//! * [`components`]: component descriptors (SignalRGB component JSON), channel
+//!   instances and the descriptor library.
 //!
-//! Registry, scheduler, channels/components, persistence and the import
-//! wizard land here in later milestones.
+//! Registry, scheduler, persistence and the import wizard land here in later
+//! milestones.
 
 #![forbid(unsafe_code)]
 
 pub mod color;
+pub mod components;
 pub mod frame;
 pub mod frame_store;
 pub mod layout;
 pub mod sampler;
 
 pub use color::{apply_brightness, effective_brightness, Rgb};
+pub use components::{
+    parse_channel, Component, ComponentInstance, ComponentLibrary, LibraryEntry, LoadIssue,
+};
 pub use frame::Frame;
 pub use frame_store::FrameStore;
 pub use layout::{

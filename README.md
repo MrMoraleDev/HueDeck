@@ -4,10 +4,12 @@
 **Open-source RGB manager for Windows and Linux, compatible with the SignalRGB
 plugin, effect and component ecosystem.**
 
-Status: **pre-alpha / M0 (bootstrap)**. Nothing lights up yet. The workspace,
-pinned dependencies, license policy, CI, HAL traits and the Host API specification
-are being laid down; the first device ("first light", milestone M1) follows.
-See [Milestones](#milestones).
+Status: **pre-alpha, M2 (compatible plugin host)**. Headless from the command
+line: HueDeck drives an MSI Mystic Light board with its own plugin, and runs
+unmodified SignalRGB plugins from a local SignalRGB installation on real devices
+(MSI board, Razer mouse, SteelSeries headset, NZXT AIO lighting), with subdevices,
+channels and components, hotplug, and HID record/replay. No effect renderer
+pipeline, dashboard or installer yet. See [Milestones](#milestones).
 
 ## What HueDeck is
 
@@ -109,12 +111,19 @@ target/release/huedeck light red --dry-run            # read the device, print t
 target/release/huedeck light "#00ff00" --restore-check  # hold a colour until Ctrl-C, then restore and verify
 target/release/huedeck rainbow --duration 60          # scrolling hues through the null renderer
 target/release/huedeck bench --mock 1462:7c91         # latency percentiles against a scripted device
+target/release/huedeck plugins --signalrgb            # which plugin would drive each connected device
+target/release/huedeck rainbow --signalrgb            # also use your SignalRGB plugins and channel setup (read in place)
+target/release/huedeck light red --record t.json      # record every HID operation ...
+target/release/huedeck compat replay t.json           # ... and replay it against the plugins, no hardware
 target/release/huedeck compat dry-run "<your SignalRGB plugin directory>"
 ```
 
 `light`, `rainbow` and `bench` look for plugins in `./plugins` (or `--plugins DIR`,
-`HUEDECK_PLUGINS`). Close other RGB software that owns the same devices first:
-HueDeck reports conflicting processes and refuses to start, it never terminates them.
+`HUEDECK_PLUGINS`); `--signalrgb` adds the plugins of a local SignalRGB
+installation, read where they are (never copied), and its component setup per
+channel. Devices plugged in, out or back in during a run are followed. Close
+other RGB software that owns the same devices first: HueDeck reports conflicting
+processes and refuses to start, it never terminates them.
 The effect renderer (`huedeck-renderer`, CEF) is built separately with
 `cargo build -p huedeck-renderer --features cef`; see its README.
 
@@ -124,7 +133,7 @@ The effect renderer (`huedeck-renderer`, CEF) is built separately with
 |---|---|---|
 | M0 | Workspace, pins, cargo-deny, CI (mock HAL), HAL traits, ADRs, Host API spec, CEF and rquickjs spikes | done |
 | M1 | First light, headless: MSI Mystic Light board from the CLI | done |
-| M2 | Compatible plugin host, corpus harness, hotplug, conformance suite | planned |
+| M2 | Compatible plugin host, corpus harness, hotplug, conformance suite | in progress: imported plugins on 4 devices, subdevices/channels/components, hotplug, record/replay |
 | M3 | Effects pipeline: CEF renderer, layouts, sampling, `huedeck bench` | planned |
 | M4 | Dashboard, SQLite persistence, local API, import wizard, MSI/winget | planned |
 | M5 | Privileged bus via `huedeck-iobroker` + PawnIO, NvAPI I2C, sensors | planned |

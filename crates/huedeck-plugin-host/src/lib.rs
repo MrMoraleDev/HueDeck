@@ -18,21 +18,27 @@
 //!   compat host module (`js/host.js`: recording stubs, or device natives).
 //! * [`device`]: the native backing of `device.*` for a real device (HID I/O
 //!   through huedeck-hal, canvas sampling, I/O statistics, dry-run writes).
+//! * [`children`]: subdevices and channels (with their component instances),
+//!   each placed and sampled on the canvas on its own.
 //! * [`session`]: one device session = one plugin thread running
 //!   Validate → Initialize → Render per frame → Shutdown.
+//! * [`manager`]: one session per present device, following hotplug
+//!   (stop on removal, restart behind a stale handle, start on arrival).
 //! * [`catalog`]: plugin discovery over plugin directories (VID:PID index).
 //! * [`stats`]: fixed-memory latency histograms for long-running sessions.
 //! * [`exports`]: namespace JSON → [`PluginMeta`].
 //! * [`dryrun`]: the `huedeck compat dry-run` corpus harness.
-// TODO(M2): `bus.*` (SMBus), channels/components, subdevices, hotplug, watchdog fault policy.
+// `bus.*` (SMBus) arrives with the privileged broker (M5).
 
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod children;
 pub mod device;
 pub mod dryrun;
 pub mod exports;
 pub mod loader;
+pub mod manager;
 pub mod meta;
 pub mod resolve;
 pub mod runtime;

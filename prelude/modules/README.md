@@ -22,8 +22,8 @@ each file header, survey of 2026-10-17 over 1006 plugin `.js` files).
 | `tcp` | native module if registered, else `prelude/modules/tcp.js` | Rust (M6) |
 | `serial` | native module if registered, else `prelude/modules/serial.js` | Rust (`serialport`, M2) |
 | `lcd` | native module if registered, else `prelude/modules/lcd.js` | Rust (renderer LCD frame sink, M6) |
-| `permissions` | native module if registered, else `prelude/modules/permissions.js` | Rust (local config, M2) |
-| `systeminfo` | native module if registered, else `prelude/modules/systeminfo.js` | Rust (SMBIOS/WMI/DMI, M5) |
+| `permissions` | device sessions: `huedeck:native/permissions.js` (host.js `nativeModules`), else `prelude/modules/permissions.js` | host (every partner permission granted; no partner gate) |
+| `systeminfo` | device sessions: `huedeck:native/systeminfo.js` (host.js `nativeModules`), else `prelude/modules/systeminfo.js` | Rust (SMBIOS table: Windows `RSMB`; Linux DMI, M7) |
 | `DeviceDiscovery` | native module if registered, else `prelude/modules/DeviceDiscovery.js` | Rust (registry, M2) |
 | `performance` | native module if registered, else `prelude/modules/performance.js` | Rust |
 | `appInfo` | native module if registered, else `prelude/modules/appInfo.js` | Rust |

@@ -11,7 +11,7 @@ use anyhow::{bail, Context};
 use clap::Args;
 use huedeck_engine::{ComponentInstance, FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
 use huedeck_hal::mock::MockHid;
-use huedeck_hal::trace::RecordingHid;
+use huedeck_hal::trace::{RecordingHid, TraceOptions, TraceRestoreCheck};
 use huedeck_hal::{HidBackend, ReportLengths};
 use huedeck_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use huedeck_plugin_host::device::{Brightness, IoKind, LogSink, WriteMode};
@@ -685,6 +685,24 @@ impl Interrupt {
     }
 }
 
+impl Drop for Interrupt {
+    /// Every session has shut down and the outputs are written (on every return path).
+    fn drop(&mut self) {
+        self.finished();
+    }
+}
+
+/// The trace form of a restore-check mode.
+fn trace_restore_check(mode: &RestoreCheckMode) -> TraceRestoreCheck {
+    match mode {
+        RestoreCheckMode::Off => TraceRestoreCheck::Off,
+        RestoreCheckMode::DeclaredFeatureReports => TraceRestoreCheck::Declared,
+        RestoreCheckMode::Reports(list) => {
+            TraceRestoreCheck::Reports(list.iter().map(|p| (p.report_id, p.len)).collect())
+        }
+    }
+}
+
 fn rss_bytes() -> Option<u64> {
     #[cfg(windows)]
     {
@@ -820,8 +838,17 @@ pub enum Outcome {
 
 /// Run `mode` with `args`. Errors are setup problems (no plugin, no device, conflicts).
 pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
+    if args.record.is_some() && args.dry_run {
+        bail!("--record needs the devices' real answers: drop --dry-run");
+    }
     let started = Instant::now();
     let (catalog, _) = args.catalog.scan()?;
+    // Subscribe before enumerating, so a device plugged in meanwhile is not missed.
+    let hotplug = if matches!(mode, Mode::Bench { mock: Some(_), .. }) {
+        Hotplug::inactive()
+    } else {
+        Hotplug::start()
+    };
 
     let (backend, hardware, initial) = match mode {
         Mode::Bench {
@@ -870,6 +897,11 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             },
             args.params.iter().cloned().collect(),
         );
+        r.set_options(TraceOptions {
+            brightness: args.brightness,
+            skip_shutdown: args.keep,
+            restore_check: trace_restore_check(&restore_mode(&args.restore_check)),
+        });
         for t in &initial {
             r.note_device(&t.device.key, t.device.vid, t.device.pid, &t.device.endpoints);
         }
@@ -936,7 +968,6 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             // Do not leave the sessions already started running detached.
             let (_, failed) = manager.finish();
             renderer.stop();
-            interrupt.finished();
             bail!(
                 "starting the device session for {key}: {error} (the sessions already started were stopped{})",
                 if failed.is_empty() { "" } else { ", some uncleanly" }
@@ -944,11 +975,6 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         }
     }
     // Devices plugged in, out or back in while the run goes on are followed.
-    let hotplug = if hardware.is_some() {
-        Hotplug::start()
-    } else {
-        Hotplug::inactive()
-    };
     let mut settle: Option<Instant> = None;
 
     let limit = match mode {
@@ -1005,7 +1031,10 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                 }
             }
         }
-        if hotplug.changed() || manager.has_disconnected() {
+        if hotplug.changed() {
+            // One plug produces a burst of events: wait until it is quiet.
+            settle = Some(Instant::now());
+        } else if settle.is_none() && manager.has_disconnected() {
             settle = Some(Instant::now());
         }
         if let (Some(since), Some(hw)) = (settle, &hardware) {
@@ -1040,11 +1069,12 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     }
     let (sessions, failed_sessions) = manager.finish();
     renderer.stop();
-    interrupt.finished();
     max_rss = max_rss.max(rss_bytes());
+    // A held console close/log-off/shutdown is released only when `interrupt` drops,
+    // after the trace and the JSON report are written.
     if let (Some(r), Some(path)) = (&recorder, &args.record) {
         for s in &sessions {
-            r.set_frames(&s.device, s.frames);
+            r.add_session(&s.device, s.frames);
         }
         let trace = r.trace();
         std::fs::write(path, serde_json::to_string_pretty(&trace)?)

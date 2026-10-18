@@ -217,7 +217,13 @@ struct Window {
     hard: Option<Instant>,
     /// Set by whoever may cancel the call (a session asked to stop).
     stop: Option<Arc<AtomicBool>>,
+    /// When the stop request was first seen.
+    stop_seen: Option<Instant>,
 }
+
+/// A call still running this long after a stop request is interrupted; one
+/// that ends sooner completes normally (its packets are whole).
+pub const STOP_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Default)]
 struct DeadlineState {
@@ -239,6 +245,7 @@ impl Deadline {
             soft: now.checked_add(b.js),
             hard: now.checked_add(b.wall.max(b.js)),
             stop: None,
+            stop_seen: None,
         };
         self.0.fired.store(false, Ordering::Relaxed);
     }
@@ -262,13 +269,19 @@ impl Deadline {
         *self.window() = Window::default();
     }
 
-    /// Whether the armed budget or cap has passed, or a stop was requested.
+    /// Whether the armed budget or cap has passed, or a stop request is
+    /// older than [`STOP_GRACE`].
     pub fn expired(&self) -> bool {
-        let w = self.window();
+        let mut w = self.window();
         let now = Instant::now();
-        w.soft.is_some_and(|d| now >= d)
-            || w.hard.is_some_and(|d| now >= d)
-            || w.stop.as_ref().is_some_and(|s| s.load(Ordering::Acquire))
+        if w.soft.is_some_and(|d| now >= d) || w.hard.is_some_and(|d| now >= d) {
+            return true;
+        }
+        if w.stop.as_ref().is_some_and(|s| s.load(Ordering::Acquire)) {
+            let seen = *w.stop_seen.get_or_insert(now);
+            return now.duration_since(seen) >= STOP_GRACE;
+        }
+        false
     }
 
     /// While the returned guard lives, time does not count against the
@@ -1033,7 +1046,10 @@ mod tests {
         d.arm_until(Duration::from_secs(60), Arc::clone(&stop));
         assert!(!d.expired() && !d.stop_requested());
         stop.store(true, Ordering::Release);
-        assert!(d.expired() && d.stop_requested());
+        assert!(d.stop_requested());
+        assert!(!d.expired(), "a running call gets STOP_GRACE to finish");
+        std::thread::sleep(STOP_GRACE + Duration::from_millis(20));
+        assert!(d.expired());
         assert!(JsFailure::cut_off(&d, "Render").is_stop());
         d.arm(Duration::from_secs(60));
         assert!(!d.expired() && !d.stop_requested(), "plain arms ignore the flag");

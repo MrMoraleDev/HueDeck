@@ -11,12 +11,19 @@
 //! Render-process side: the injection script travels in the browser's `extra_info`
 //! (`OnBrowserCreated`) and is evaluated in the main frame's V8 context in `OnContextCreated`,
 //! i.e. before any page script runs.
+//!
+//! Serve mode (`--serve`): no frame limit and no deadline; a thread reads control commands
+//! from stdin (`lightloom_renderer::control`) and posts each to the UI thread, where it becomes
+//! JavaScript in the main frame or a browser call. End of stdin (the daemon is gone) closes
+//! the browser like `quit`.
 
 use cef::*;
 use lightloom_effects::parse_effect_meta;
+use lightloom_effects::EffectMeta;
 use lightloom_protocol::shm::{FrameHeader, CANVAS_HEIGHT, CANVAS_WIDTH, SLOT_COUNT};
 use lightloom_renderer::cache;
 use lightloom_renderer::cli::Args;
+use lightloom_renderer::control::{self, Command};
 use lightloom_renderer::inject::{injection_script, INJECT_KEY, INJECT_URL};
 use lightloom_renderer::ring::RingWriter;
 use lightloom_renderer::sink::{FrameSink, PaintOutcome, SinkConfig, SinkReport};
@@ -30,6 +37,8 @@ use std::time::Instant;
 
 /// Console lines kept for the report.
 const CONSOLE_KEEP: usize = 40;
+/// `sourceURL` of scripts run for control commands (shows up in console messages).
+const CONTROL_URL: &str = "lightloom://renderer/control.js";
 
 /// Mutable run state shared by the handlers (all called on the CEF UI thread).
 #[derive(Default)]
@@ -191,9 +200,88 @@ fn create_browser(host: &Arc<HostCtx>) {
         quit_message_loop();
         return;
     }
-    let mut deadline = DeadlineTask::new(host.clone());
-    let ms = i64::try_from(host.args.deadline().as_millis()).unwrap_or(i64::MAX);
-    post_delayed_task(ThreadId::UI, Some(&mut deadline), ms);
+    if !host.args.serve {
+        let mut deadline = DeadlineTask::new(host.clone());
+        let ms = i64::try_from(host.args.deadline().as_millis()).unwrap_or(i64::MAX);
+        post_delayed_task(ThreadId::UI, Some(&mut deadline), ms);
+    }
+}
+
+/// Serve mode: read control commands from stdin until it closes; each runs on the UI thread.
+fn spawn_control_reader(host: Arc<HostCtx>, meta: Arc<EffectMeta>) {
+    let spawned = std::thread::Builder::new()
+        .name("lightloom-control".into())
+        .spawn(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            let mut reader = stdin.lock();
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let cmd = match reader.read_line(&mut line) {
+                    // End of input: the daemon is gone.
+                    Ok(0) | Err(_) => Command::Quit,
+                    Ok(_) => match control::parse_line(&line) {
+                        Ok(Some(cmd)) => cmd,
+                        Ok(None) => continue,
+                        Err(e) => {
+                            eprintln!("lightloom-renderer: {e}");
+                            continue;
+                        }
+                    },
+                };
+                let quit = cmd == Command::Quit;
+                let mut task = ControlTask::new(host.clone(), meta.clone(), cmd);
+                post_task(ThreadId::UI, Some(&mut task));
+                if quit {
+                    break;
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        eprintln!("lightloom-renderer: control thread not started ({e}); stop by closing the process");
+    }
+}
+
+/// Run one control command (UI thread).
+fn run_command(host: &HostCtx, meta: &EffectMeta, cmd: &Command) {
+    let browser = host.state.lock().browser.clone();
+    let exec = |js: &str| {
+        if let Some(frame) = browser.as_ref().and_then(|b| b.main_frame()) {
+            frame.execute_java_script(Some(&CefString::from(js)), Some(&CefString::from(CONTROL_URL)), 1);
+        }
+    };
+    match cmd {
+        Command::Quit => request_close(host, "quit"),
+        Command::Fps { value } => {
+            if let Some(bh) = browser.as_ref().and_then(|b| b.host()) {
+                bh.set_windowless_frame_rate(*value as c_int);
+            }
+        }
+        Command::Set { values } => {
+            let (js, skipped) = control::set_script(meta, values);
+            if !skipped.is_empty() {
+                eprintln!("lightloom-renderer: ignored control values: {}", skipped.join(", "));
+            }
+            exec(&js);
+        }
+        Command::Event { sender, event } => exec(&control::event_script(sender, event)),
+        Command::Tap { x, y } => exec(&control::tap_script(*x, *y)),
+    }
+}
+
+wrap_task! {
+    struct ControlTask {
+        host: Arc<HostCtx>,
+        meta: Arc<EffectMeta>,
+        cmd: Command,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            run_command(&self.host, &self.meta, &self.cmd);
+        }
+    }
 }
 
 wrap_task! {
@@ -544,7 +632,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
         Err(e) => return fail(format!("effect {}: {e}", effect.display())),
     };
     let meta = parse_effect_meta(&html);
-    let (inject_js, skipped_controls) = injection_script(&meta);
+    let (inject_js, skipped_controls) = injection_script(&meta, &args.prop_values());
     let url = file_url(&effect);
 
     let ring = match RingWriter::create_file(&args.out, CANVAS_WIDTH, CANVAS_HEIGHT) {
@@ -558,6 +646,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
             fps: args.fps,
             snapshot_frames: args.snapshot_frames.clone(),
             raw_intervals: args.raw_intervals,
+            serve: args.serve,
         },
     );
 
@@ -628,6 +717,9 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
     }
     let cef_initialize_ms = (init_start.elapsed().as_secs_f64() * 1_000_000.0).round() / 1000.0;
 
+    if host.args.serve {
+        spawn_control_reader(host.clone(), Arc::new(meta.clone()));
+    }
     run_message_loop();
     shutdown();
     // The browser process keeps the profile's LevelDB locks (Session Storage, shared_proto_db,
@@ -649,7 +741,12 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
     }
     let created = st.create_requested_at.unwrap_or(run_start);
     let geometry = FrameHeader::new(CANVAS_WIDTH, CANVAS_HEIGHT);
-    let ok = sink.is_done() && !st.timed_out && st.load_error.is_none();
+    // A serving renderer ends when told to; it succeeded if the page loaded and painted.
+    let ok = if args.serve {
+        sink.frames() > 0 && st.load_error.is_none()
+    } else {
+        sink.is_done() && !st.timed_out && st.load_error.is_none()
+    };
     let report = RunReport {
         ok,
         effect: effect.display().to_string(),

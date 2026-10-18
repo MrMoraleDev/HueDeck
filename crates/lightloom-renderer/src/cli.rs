@@ -84,6 +84,28 @@ pub struct Args {
     /// Echo page console messages to stderr as they arrive.
     #[arg(long)]
     pub verbose: bool,
+
+    /// Run until told to stop instead of for `--frames` frames: read control commands
+    /// (one JSON object per line, see `control.rs`) from stdin, and exit when it closes.
+    #[arg(long)]
+    pub serve: bool,
+
+    /// Control value overriding the effect's default, `NAME=VALUE` (VALUE parsed as JSON,
+    /// else taken as a string; repeatable).
+    #[arg(long = "prop", value_name = "NAME=VALUE", value_parser = parse_prop)]
+    pub props: Vec<(String, serde_json::Value)>,
+}
+
+fn parse_prop(s: &str) -> Result<(String, serde_json::Value), String> {
+    let (name, value) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected NAME=VALUE, got {s:?}"))?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(format!("empty property name in {s:?}"));
+    }
+    let value = serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
+    Ok((name.to_string(), value))
 }
 
 /// Chromium switch that makes every host name lookup fail (see [`Args::allow_network`]).
@@ -99,6 +121,11 @@ fn parse_timeout_factor(s: &str) -> Result<f64, String> {
 }
 
 impl Args {
+    /// `--prop` values by name (a later one wins).
+    pub fn prop_values(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.props.iter().cloned().collect()
+    }
+
     /// Deadline for all frames, from browser creation (at least 1 s; saturates instead of
     /// panicking for absurd `--frames`).
     pub fn deadline(&self) -> std::time::Duration {
@@ -158,6 +185,29 @@ mod tests {
         assert!(sw.contains(&BLOCK_DNS_SWITCH.to_string()));
         let open = Args::try_parse_from(["x", "--effect=e", "--out=o", "--allow-network"]).unwrap();
         assert!(!open.chromium_switches().contains(&BLOCK_DNS_SWITCH.to_string()));
+    }
+
+    #[test]
+    fn serve_and_props_parse() {
+        let a = Args::try_parse_from([
+            "x",
+            "--effect=e",
+            "--out=o",
+            "--serve",
+            "--prop",
+            "speed=5",
+            "--prop",
+            "tint=#ff0000",
+            "--prop",
+            "speed=6",
+        ])
+        .unwrap();
+        assert!(a.serve);
+        let v = a.prop_values();
+        assert_eq!(v["speed"], serde_json::json!(6));
+        assert_eq!(v["tint"], serde_json::json!("#ff0000"));
+        assert!(Args::try_parse_from(["x", "--effect=e", "--out=o", "--prop", "novalue"]).is_err());
+        assert!(Args::try_parse_from(["x", "--effect=e", "--out=o", "--prop", "=1"]).is_err());
     }
 
     #[test]

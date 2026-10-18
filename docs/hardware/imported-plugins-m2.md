@@ -29,7 +29,7 @@ live `huedeck rainbow --signalrgb --device <vid:pid> --duration N`.
   as hidapi does.
 - **Watchdog**: `Render()` budgets count JavaScript time only (time in `device.pause()` and HID
   I/O excluded) under a 30 s wall-clock cap, so lazy device setup from `Render()` completes;
-  a stop request still interrupts it at once.
+  on a stop request pauses end at once and a call still running after 500 ms is interrupted.
 - **Modules**: the SignalRGB MSI plugin needs `@SignalRGB/permissions` (partner permissions,
   all granted) and `@SignalRGB/systeminfo` (`MAG B550 TOMAHAWK (MS-7C91)` from SMBIOS).
 

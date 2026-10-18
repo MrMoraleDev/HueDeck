@@ -108,6 +108,12 @@
           "type": "array",
           "items": { "type": "integer", "minimum": -1 },
           "description": "Optional static endpoint filter (USB interface numbers; -1 = unknown/no MI_xx) applied before Validate()."
+        },
+        "tested": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/usbId" },
+          "description": "Product ids, from pids, that someone has run the plugin on with the real device; the others are untested."
         }
       },
       "additionalProperties": false

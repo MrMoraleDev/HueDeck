@@ -24,6 +24,8 @@ import { pathToFileURL } from "node:url";
  * @param {(sent: number[]) => (number[] | undefined)} [options.featureReply]  called after every
  *   send_report with the bytes sent; a returned array becomes what get_report answers for that
  *   report id (a device that answers each request)
+ * @param {Record<string, number[]>} [options.subdeviceColors]  per subdevice id, the colour
+ *   subdeviceColor(id, x, y) returns (black when absent)
  */
 export function createMockDevice(options = {}) {
   const featureReports = toReportMap(options.featureReports);
@@ -32,6 +34,7 @@ export function createMockDevice(options = {}) {
   let colorSource = options.color ?? [0, 0, 0];
   let lastReadSize = 0;
   const channelColors = new Map(Object.entries(options.channelColors ?? {}));
+  const subdeviceColors = new Map(Object.entries(options.subdeviceColors ?? {}));
 
   const device = {
     // --- recordings ---------------------------------------------------------------------
@@ -41,6 +44,7 @@ export function createMockDevice(options = {}) {
     logs: [],           // log:         { message, options }
     pauses: [],         // pause(ms)
     channels: [],       // addChannel(name, ledLimit, defaultLedCount)
+    subdevices: [],     // createSubdevice(id): { id, name, size, leds }
 
     // --- test controls ------------------------------------------------------------------
     setColor(color) { colorSource = color; },
@@ -102,6 +106,22 @@ export function createMockDevice(options = {}) {
       device.channels.push({ name, ledLimit, defaultLedCount });
     },
     setChannelColors(name, colors) { channelColors.set(name, colors); },
+    createSubdevice(id) {
+      record("createSubdevice", [id]);
+      if (!device.subdevices.some((s) => s.id === id)) device.subdevices.push({ id });
+    },
+    setSubdeviceName(id, name) { record("setSubdeviceName", [id, name]); subdevice(id).name = name; },
+    setSubdeviceSize(id, w, h) { record("setSubdeviceSize", [id, w, h]); subdevice(id).size = [w, h]; },
+    setSubdeviceLeds(id, names, positions) {
+      record("setSubdeviceLeds", [id, names, positions]);
+      subdevice(id).leds = { names, positions };
+    },
+    subdeviceColor(id, x, y) {
+      record("subdeviceColor", [id, x, y]);
+      subdevice(id);
+      const c = subdeviceColors.get(id) ?? [0, 0, 0];
+      return [c[0] & 0xFF, c[1] & 0xFF, c[2] & 0xFF];
+    },
     channel(name) {
       const added = device.channels.find((c) => c.name === name);
       if (!added) return undefined;
@@ -126,6 +146,11 @@ export function createMockDevice(options = {}) {
   };
 
   function record(method, args) { device.calls.push({ method, args }); }
+  function subdevice(id) {
+    const found = device.subdevices.find((s) => s.id === id);
+    if (!found) throw new Error(`subdevice '${id}' was never created`);
+    return found;
+  }
   return device;
 }
 

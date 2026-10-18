@@ -12,7 +12,7 @@ use clap::Args;
 use huedeck_engine::{FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
 use huedeck_hal::mock::MockHid;
 use huedeck_hal::{HidBackend, ReportLengths};
-use huedeck_plugin_host::catalog::{Catalog, CatalogEntry};
+use huedeck_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use huedeck_plugin_host::device::{Brightness, IoKind, LogSink, WriteMode};
 use huedeck_plugin_host::session::{
     self, RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
@@ -36,10 +36,8 @@ pub struct RunArgs {
     /// Only drive devices whose key starts with this (`vid:pid` or `vid:pid:serial`, hex; repeatable).
     #[arg(long = "device", value_name = "UID")]
     pub devices: Vec<String>,
-    /// Plugin directory (repeatable; later ones win on VID:PID collisions).
-    /// Default: $HUEDECK_PLUGINS, else ./plugins.
-    #[arg(long = "plugins", value_name = "DIR")]
-    pub plugin_dirs: Vec<PathBuf>,
+    #[command(flatten)]
+    pub catalog: CatalogArgs,
     /// Read devices but never write; print the packets that would be sent.
     #[arg(long)]
     pub dry_run: bool,
@@ -79,6 +77,66 @@ pub struct RunArgs {
     /// Print every plugin log line.
     #[arg(short, long)]
     pub verbose: bool,
+}
+
+/// Where plugins come from (shared by `light`, `rainbow`, `bench` and `plugins`).
+#[derive(Debug, Clone, Default, Args)]
+pub struct CatalogArgs {
+    /// Plugin directory (repeatable; later ones win on VID:PID collisions).
+    /// Default: $HUEDECK_PLUGINS, else ./plugins.
+    #[arg(long = "plugins", value_name = "DIR")]
+    pub plugin_dirs: Vec<PathBuf>,
+    /// Also use the plugins of a local SignalRGB installation, read in place (never
+    /// copied). They are scanned first, so HueDeck's own plugin directories win.
+    #[arg(long)]
+    pub signalrgb: bool,
+    /// Load every plugin file again instead of using the plugin index cache.
+    #[arg(long)]
+    pub no_plugin_cache: bool,
+}
+
+impl CatalogArgs {
+    /// Directories in scan order: SignalRGB's (when asked), then HueDeck's.
+    pub fn dirs(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let mut dirs = Vec::new();
+        if self.signalrgb {
+            let found = huedeck_plugin_host::catalog::signalrgb_plugin_dirs();
+            if found.is_empty() {
+                bail!("--signalrgb: no SignalRGB plugin directory found on this machine");
+            }
+            dirs.extend(found);
+        }
+        if self.plugin_dirs.is_empty() {
+            dirs.extend(default_plugin_dirs());
+        } else {
+            dirs.extend(self.plugin_dirs.iter().cloned());
+        }
+        Ok(dirs)
+    }
+
+    /// Scan the directories (with the index cache unless disabled).
+    pub fn scan(&self) -> anyhow::Result<(Catalog, Vec<PathBuf>)> {
+        let dirs = self.dirs()?;
+        let opts = ScanOptions {
+            cache: if self.no_plugin_cache {
+                None
+            } else {
+                huedeck_plugin_host::catalog::default_cache_path()
+            },
+            ..ScanOptions::default()
+        };
+        let catalog = Catalog::scan_with(&dirs, &opts);
+        if catalog.entries().is_empty() {
+            bail!(
+                "no device plugin found in {} (use --plugins DIR, HUEDECK_PLUGINS or --signalrgb)",
+                dirs.iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        Ok((catalog, dirs))
+    }
 }
 
 /// What to draw and how long to run.
@@ -512,6 +570,73 @@ fn rss_bytes() -> Option<u64> {
     }
 }
 
+/// `huedeck plugins`: the plugins found and, for each connected HID device
+/// (read-only enumeration), the plugin that would drive it.
+pub fn list_plugins(args: &CatalogArgs, json: bool) -> anyhow::Result<()> {
+    let started = Instant::now();
+    let (catalog, dirs) = args.scan()?;
+    let scan_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let stats = catalog.stats();
+    let devices = connected_devices().unwrap_or_else(|e| {
+        eprintln!("huedeck: device enumeration unavailable: {e}");
+        Vec::new()
+    });
+    let matched: Vec<(String, Option<&CatalogEntry>)> = devices
+        .iter()
+        .map(|(key, vid, pid)| (key.clone(), catalog.lookup(*vid, *pid)))
+        .collect();
+    if json {
+        let value = serde_json::json!({
+            "directories": dirs,
+            "files": stats.files,
+            "cached": stats.cached,
+            "loaded": stats.loaded,
+            "scan_ms": scan_ms,
+            "plugins": catalog.entries().iter().map(|e| serde_json::json!({
+                "name": e.meta.name,
+                "file": e.meta.source_path,
+                "vendor_id": e.meta.vendor_id,
+                "product_ids": e.meta.product_ids,
+            })).collect::<Vec<_>>(),
+            "devices": matched.iter().map(|(key, plugin)| serde_json::json!({
+                "device": key,
+                "plugin": plugin.map(|p| &p.meta.source_path),
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+    println!(
+        "{} plugins from {} directories ({} files: {} cached, {} loaded) in {scan_ms:.0} ms",
+        catalog.entries().len(),
+        dirs.len(),
+        stats.files,
+        stats.cached,
+        stats.loaded
+    );
+    for (key, plugin) in &matched {
+        match plugin {
+            Some(p) => println!("  {key}  ->  {}  ({})", p.meta.name, p.meta.source_path.display()),
+            None => println!("  {key}  ->  no plugin"),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
+    let groups = huedeck_hal_windows::NativeHidBackend::new().enumerate_grouped()?;
+    Ok(groups
+        .into_iter()
+        .map(|g| (g.key.to_string(), g.key.vid, g.key.pid))
+        .collect())
+}
+
+#[cfg(not(windows))]
+fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
+    bail!("HID enumeration is only implemented on Windows so far")
+}
+
 /// Exit status of a finished run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -524,21 +649,7 @@ pub enum Outcome {
 /// Run `mode` with `args`. Errors are setup problems (no plugin, no device, conflicts).
 pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     let started = Instant::now();
-    let dirs = if args.plugin_dirs.is_empty() {
-        default_plugin_dirs()
-    } else {
-        args.plugin_dirs.clone()
-    };
-    let catalog = Catalog::scan(&dirs, Duration::from_secs(10));
-    if catalog.entries().is_empty() {
-        bail!(
-            "no device plugin found in {} (use --plugins DIR or HUEDECK_PLUGINS)",
-            dirs.iter()
-                .map(|d| d.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
+    let (catalog, _) = args.catalog.scan()?;
 
     let mock = matches!(mode, Mode::Bench { mock: Some(_), .. });
     let (backend, targets) = match mode {
@@ -937,7 +1048,11 @@ mod tests {
     fn bench_mock_runs_the_first_party_plugin_end_to_end() {
         let args = RunArgs {
             devices: Vec::new(),
-            plugin_dirs: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")],
+            catalog: CatalogArgs {
+                plugin_dirs: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")],
+                signalrgb: false,
+                no_plugin_cache: true,
+            },
             dry_run: false,
             duration: None,
             keep: false,

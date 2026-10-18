@@ -1,6 +1,7 @@
 # cargo-deny configuration — https://embarkstudios.github.io/cargo-deny/
 [graph]
-all-features = false
+# All features, so the opt-in `cef` graph of huedeck-renderer is checked too.
+all-features = true
 targets = [
   { triple = "x86_64-pc-windows-msvc" },
   { triple = "x86_64-unknown-linux-gnu" },
@@ -20,7 +21,12 @@ allow = [
   "OpenSSL", "BSL-1.0",
 ]
 confidence-threshold = 0.8
-exceptions = []
+# Build-only dependencies of cef-dll-sys -> download-cef (fetches and unpacks the CEF binary
+# distribution at build time; nothing of them ships in a HueDeck binary).
+exceptions = [
+  { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" },
+  { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+]
 
 [bans]
 multiple-versions = "warn"

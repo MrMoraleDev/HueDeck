@@ -7,12 +7,16 @@
 //!   Lightloom never terminates another application.
 //! * [`working_set_bytes`]: working set (resident memory) of this process,
 //!   for the RSS figures of `lightloom rainbow` / `lightloom bench`.
+//! * [`system_info`]: motherboard, BIOS and memory modules from the SMBIOS
+//!   table (what `@SignalRGB/systeminfo` reports; SignalRGB reads WMI, which
+//!   reads the same table).
 
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+use windows::Win32::System::SystemInformation::{GetSystemFirmwareTable, RSMB};
 use windows::Win32::System::Threading::GetCurrentProcess;
 
 /// Executable file names (`SignalRgb.exe`, …) of all running processes, in
@@ -61,9 +65,36 @@ pub fn working_set_bytes() -> Option<u64> {
     ok.as_bool().then_some(counters.WorkingSetSize as u64)
 }
 
+/// The machine's SMBIOS facts, `None` when the firmware table is unavailable.
+pub fn system_info() -> Option<lightloom_hal::SystemInfo> {
+    // SAFETY: a size query without a buffer.
+    let size = unsafe { GetSystemFirmwareTable(RSMB, 0, None) };
+    if size == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; size as usize];
+    // SAFETY: the slice describes `buf`, `size` bytes long.
+    let written = unsafe { GetSystemFirmwareTable(RSMB, 0, Some(&mut buf)) };
+    if written == 0 || written > size {
+        return None;
+    }
+    buf.truncate(written as usize);
+    lightloom_hal::smbios::parse_raw_smbios_data(&buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_table_parses() {
+        // Every Windows machine (VMs included) exposes an SMBIOS table.
+        let info = system_info().expect("SMBIOS table");
+        assert!(
+            !info.bios.version.is_empty() || !info.motherboard.model.is_empty(),
+            "{info:?}"
+        );
+    }
 
     #[test]
     fn snapshot_contains_this_process() {

@@ -6,7 +6,7 @@
 #   rust     - fmt / clippy / tests on Windows and Ubuntu (mock HAL, no hardware)
 #   renderer-cef - lightloom-renderer with the opt-in `cef` feature (real Chromium host), Windows
 #   deny     - cargo-deny: licenses (copyleft denied in-tree), advisories, bans, sources
-#   node     - prelude JS shims and first-party plugin tests under Node 24 (node:test)
+#   node     - prelude JS shims and first-party plugin tests under Node 24 (node:test), dashboard check + build
 #   schemas  - JSON Schema validation of the user-supplied corpus (skipped when absent)
 #
 # Hardware conformance runs on a self-hosted runner in conformance-selfhosted.yml, not here.
@@ -153,6 +153,15 @@ jobs:
           else
             echo "::notice::no plugin tests found under plugins/ - skipping"
           fi
+
+      # The dashboard lightloomd serves: type-check (svelte-check) and build.
+      # --ignore-scripts: no package runs install scripts; the bundler ships prebuilt binaries.
+      - name: Dashboard
+        working-directory: ui
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm run build
 
   schemas:
     name: schemas

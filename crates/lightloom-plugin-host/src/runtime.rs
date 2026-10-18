@@ -10,13 +10,18 @@
 //!   `@SignalRGB/<name>.js` (plus the `@lightloom/` alias) resolve to the
 //!   embedded `prelude/` files; relative imports resolve against the importing
 //!   file inside the plugin root (lexically, see [`crate::resolve`]).
-//! * The stub host (`js/stub_host.js`) is evaluated before the plugin module.
+//! * The compat host (`js/host.js`) is evaluated before the plugin module:
+//!   recording stubs for the dry-run, or the natives of a
+//!   [`DeviceContext`](crate::device::DeviceContext) when
+//!   [`RuntimeOptions::device`] is set (a real device session).
 //! * An interrupt that QuickJS swallows (a promise job cut off by the
 //!   deadline is drained by `execute_pending_job`) is still reported as a
 //!   `Timeout`: the deadline remembers that it fired ([`Deadline::fired`]).
 
+use crate::device::SharedDevice;
 use crate::exports::{read_exports, ExportsReading};
 use crate::resolve::{ModuleResolver, ResolveError, ResolvedModule};
+use lightloom_hal::hid::HidEndpointTuple;
 use rquickjs::loader::{ImportAttributes, Loader as JsLoader, Resolver};
 use rquickjs::{Coerced, Context, Ctx, FromJs, Function, Module, Object, Runtime, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,8 +42,8 @@ pub const INTERNAL_PREFIX: &str = "lightloom:";
 /// Internal module standing in for an unknown `@SignalRGB/<x>` import: it
 /// throws `HostApiMissing` when evaluated (prelude/modules/README.md rule 4).
 const MISSING_PREFIX: &str = "lightloom:missing:";
-const STUB_HOST_NAME: &str = "lightloom:host/stub_host.js";
-const STUB_HOST_SOURCE: &str = include_str!("../js/stub_host.js");
+const HOST_NAME: &str = "lightloom:host/host.js";
+const HOST_SOURCE: &str = include_str!("../js/host.js");
 
 /// `prelude/` files embedded at build time, by internal module name.
 pub const PRELUDE_MODULES: &[(&str, &str)] = &[
@@ -146,6 +151,9 @@ pub struct RuntimeOptions {
     /// Back the Rust-backed `@SignalRGB/*` modules with recording stubs instead
     /// of the throwing `prelude/modules/*` facades.
     pub module_stubs: bool,
+    /// Real device session: back `device.*` with this context's natives (and
+    /// make API gaps throw) instead of recording stubs.
+    pub device: Option<SharedDevice>,
 }
 
 impl Default for RuntimeOptions {
@@ -155,6 +163,7 @@ impl Default for RuntimeOptions {
             max_stack_size: DEFAULT_MAX_STACK,
             plugin_root: None,
             module_stubs: true,
+            device: None,
         }
     }
 }
@@ -499,12 +508,12 @@ pub struct PluginRuntime {
     path: PathBuf,
 }
 
-/// `globalThis.__lightloomHost` (installed non-writable by the stub host).
+/// `globalThis.__lightloomHost` (installed non-writable by the host module).
 fn host_object<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
     ctx.globals().get("__lightloomHost")
 }
 
-/// The evaluated plugin namespace kept by the stub host.
+/// The evaluated plugin namespace kept by the host module.
 fn plugin_namespace<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
     host_object(ctx)?.get::<_, Function>("namespace")?.call(())
 }
@@ -562,10 +571,14 @@ impl PluginRuntime {
             let d = &this.deadline;
             let cfg = Object::new(ctx.clone()).map_err(|e| failure(&ctx, e, d))?;
             cfg.set("plugin", plugin).map_err(|e| failure(&ctx, e, d))?;
+            if let Some(device) = &opts.device {
+                cfg.set("mode", "device").map_err(|e| failure(&ctx, e, d))?;
+                crate::device::install(&ctx, device).map_err(|e| failure(&ctx, e, d))?;
+            }
             ctx.globals()
                 .set("__lightloomConfig", cfg)
                 .map_err(|e| failure(&ctx, e, d))?;
-            Module::evaluate(ctx.clone(), STUB_HOST_NAME, STUB_HOST_SOURCE)
+            Module::evaluate(ctx.clone(), HOST_NAME, HOST_SOURCE)
                 .and_then(|p| p.finish::<()>())
                 .map_err(|e| failure(&ctx, e, d))
         })?;
@@ -711,6 +724,54 @@ impl PluginRuntime {
                 Ok(_) if deadline.fired() => Err(JsFailure::timeout(export)),
                 r => r,
             }
+        });
+        deadline.clear();
+        r
+    }
+
+    /// `Validate(endpoint)` under `budget`: the truthiness of its return value.
+    /// A plugin without `Validate` accepts every endpoint.
+    pub fn validate(&self, endpoint: &HidEndpointTuple, budget: Duration) -> Result<bool, JsFailure> {
+        let deadline = &self.deadline;
+        deadline.arm(budget);
+        let r = self.context.with(|ctx| {
+            let run = || -> rquickjs::Result<bool> {
+                let ns = plugin_namespace(&ctx)?;
+                let Some(f) = ns.get::<_, Value>("Validate")?.into_function() else {
+                    return Ok(true);
+                };
+                let ep = Object::new(ctx.clone())?;
+                ep.set("interface", endpoint.interface)?;
+                ep.set("usage", endpoint.usage as i32)?;
+                ep.set("usage_page", endpoint.usage_page as i32)?;
+                ep.set("collection", endpoint.collection as i32)?;
+                let ret: Value = f.call((ep,))?;
+                while ctx.execute_pending_job() {}
+                Ok(Coerced::<bool>::from_js(&ctx, ret)?.0)
+            };
+            match run().map_err(|e| failure(&ctx, e, deadline)) {
+                Ok(_) if deadline.fired() => Err(JsFailure::timeout("Validate")),
+                r => r,
+            }
+        });
+        deadline.clear();
+        r
+    }
+
+    /// Assign globals from a JSON object (`{"LightingMode": "Forced"}`): parameter
+    /// overrides applied after [`PluginRuntime::prepare_device`].
+    pub fn set_globals(&self, values: &serde_json::Value, budget: Duration) -> Result<(), JsFailure> {
+        let json = values.to_string();
+        let deadline = &self.deadline;
+        deadline.arm(budget);
+        let r = self.context.with(|ctx| {
+            let run = || -> rquickjs::Result<()> {
+                let v = ctx.json_parse(json)?;
+                host_object(&ctx)?
+                    .get::<_, Function>("setGlobals")?
+                    .call::<_, ()>((v,))
+            };
+            run().map_err(|e| failure(&ctx, e, deadline))
         });
         deadline.clear();
         r

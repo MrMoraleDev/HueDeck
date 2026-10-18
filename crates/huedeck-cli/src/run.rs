@@ -19,8 +19,11 @@ use huedeck_plugin_host::session::{
 };
 use huedeck_render::{NullRenderer, Pattern, RendererClient};
 use std::path::PathBuf;
+#[cfg(not(windows))]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+#[cfg(not(windows))]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// RGB software that holds the devices HueDeck drives. Reported, never terminated.
@@ -40,7 +43,7 @@ pub struct RunArgs {
     #[arg(long)]
     pub dry_run: bool,
     /// Stop after this many seconds (default: until Ctrl-C; `bench` uses --seconds).
-    #[arg(long, value_name = "SECS")]
+    #[arg(long, value_name = "SECS", value_parser = parse_secs)]
     pub duration: Option<f64>,
     /// Exit without calling the plugin's Shutdown(): the device keeps the last colour.
     #[arg(long)]
@@ -67,7 +70,7 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
     pub brightness: u8,
     /// Print live counters every N seconds (0 = never).
-    #[arg(long, value_name = "SECS", default_value_t = 10.0)]
+    #[arg(long, value_name = "SECS", default_value_t = 10.0, value_parser = parse_stats_secs)]
     pub stats_every: f64,
     /// Write the full run report as JSON.
     #[arg(long, value_name = "FILE")]
@@ -141,6 +144,42 @@ pub fn parse_color(s: &str) -> Result<Rgb, String> {
         return Ok(*c);
     }
     Rgb::from_hex(t).ok_or_else(|| format!("'{s}' is neither #RRGGBB nor a known colour name"))
+}
+
+/// Longest `--duration` / `--seconds` accepted (one year).
+pub const MAX_RUN_SECS: f64 = 31_536_000.0;
+
+/// A run time in seconds: finite, above 0, at most [`MAX_RUN_SECS`].
+pub fn parse_secs(s: &str) -> Result<f64, String> {
+    let v: f64 = s.trim().parse().map_err(|e| format!("'{s}': {e}"))?;
+    if v.is_finite() && v > 0.0 && v <= MAX_RUN_SECS {
+        Ok(v)
+    } else {
+        Err(format!(
+            "'{s}' must be a number of seconds above 0 and at most {MAX_RUN_SECS}"
+        ))
+    }
+}
+
+/// A statistics interval in seconds: 0 (never) up to one day.
+pub fn parse_stats_secs(s: &str) -> Result<f64, String> {
+    let v: f64 = s.trim().parse().map_err(|e| format!("'{s}': {e}"))?;
+    if v.is_finite() && (0.0..=86_400.0).contains(&v) {
+        Ok(v)
+    } else {
+        Err(format!("'{s}' must be between 0 and 86400 seconds"))
+    }
+}
+
+/// A frame rate the frame clock supports (1-240 fps).
+pub fn parse_fps(s: &str) -> Result<f64, String> {
+    let v: f64 = s.trim().parse().map_err(|e| format!("'{s}': {e}"))?;
+    let (min, max) = (huedeck_render::clock::MIN_FPS, huedeck_render::clock::MAX_FPS);
+    if v.is_finite() && (min..=max).contains(&v) {
+        Ok(v)
+    } else {
+        Err(format!("'{s}' must be between {min} and {max} fps"))
+    }
 }
 
 fn parse_u(s: &str) -> Result<u64, String> {
@@ -237,15 +276,55 @@ pub struct RunReport {
     pub first_write_after_start_ms: Option<f64>,
     /// Peak working set sampled once per second (Windows).
     pub max_rss_bytes: Option<u64>,
-    /// One report per session.
+    /// `--keep`: Shutdown() was skipped on purpose.
+    pub keep: bool,
+    /// One report per session that returned.
     pub sessions: Vec<SessionReport>,
+    /// Sessions that panicked or did not stop in time (`key: reason`).
+    pub failed_sessions: Vec<String>,
 }
 
 impl RunReport {
     /// Every session clean (no lifecycle failure, fault or HID error).
     pub fn is_clean(&self) -> bool {
-        !self.sessions.is_empty() && self.sessions.iter().all(SessionReport::is_clean)
+        !self.sessions.is_empty()
+            && self.failed_sessions.is_empty()
+            && self.sessions.iter().all(SessionReport::is_clean)
     }
+}
+
+/// How long stopped sessions get to run Shutdown() before the run gives up on them.
+const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Stop every session and collect the reports of those that end within
+/// [`STOP_TIMEOUT`]. Sessions that panicked or are stuck (in device I/O)
+/// come back as `key: reason`; stuck threads are left behind and end with
+/// the process.
+fn stop_sessions(handles: Vec<session::SessionHandle>) -> (Vec<SessionReport>, Vec<String>) {
+    for h in &handles {
+        h.stop();
+    }
+    let deadline = Instant::now() + STOP_TIMEOUT;
+    while handles.iter().any(|h| !h.is_finished()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut reports = Vec::new();
+    let mut failed = Vec::new();
+    for h in handles {
+        let key = h.key().to_string();
+        if !h.is_finished() {
+            failed.push(format!(
+                "{key}: did not stop within {} s (stuck in device I/O?)",
+                STOP_TIMEOUT.as_secs()
+            ));
+            continue;
+        }
+        match h.join() {
+            Ok(r) => reports.push(r),
+            Err(panic) => failed.push(format!("{key}: panicked: {panic}")),
+        }
+    }
+    (reports, failed)
 }
 
 /// A device paired with the plugin that drives it.
@@ -299,13 +378,22 @@ fn hardware_targets(
     catalog: &Catalog,
     filters: &[String],
 ) -> anyhow::Result<(Arc<dyn HidBackend>, Vec<Target>, usize)> {
-    let backend = huedeck_hal_windows::WindowsHidBackend::new().context("initialising hidapi")?;
     // Enumerate and probe only the devices some plugin claims.
     let wanted: std::collections::BTreeSet<(u16, u16)> =
         catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
-    let groups = backend
-        .enumerate_grouped_for(&wanted)
-        .context("enumerating HID devices")?;
+    let (backend, groups): (Arc<dyn HidBackend>, _) = if crate::devices::use_hidapi() {
+        let b = huedeck_hal_windows::WindowsHidBackend::new().context("initialising hidapi")?;
+        let groups = b
+            .enumerate_grouped_for(&wanted)
+            .context("enumerating HID devices")?;
+        (Arc::new(b), groups)
+    } else {
+        let b = huedeck_hal_windows::NativeHidBackend::new();
+        let groups = b
+            .enumerate_grouped_for(&wanted)
+            .context("enumerating HID devices")?;
+        (Arc::new(b), groups)
+    };
     let total = groups.len();
     let mut targets = Vec::new();
     for g in groups {
@@ -325,7 +413,7 @@ fn hardware_targets(
             });
         }
     }
-    Ok((Arc::new(backend), targets, total))
+    Ok((backend, targets, total))
 }
 
 #[cfg(not(windows))]
@@ -354,20 +442,60 @@ fn running_conflicts(_: &[Target]) -> anyhow::Result<Vec<String>> {
     Ok(Vec::new())
 }
 
-/// Process-wide flag set by Ctrl-C / Ctrl-Break (the handler is installed once),
-/// cleared at the start of every run.
-fn interrupt_flag() -> Arc<AtomicBool> {
-    static FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
-    let flag = FLAG.get_or_init(|| {
-        let flag = Arc::new(AtomicBool::new(false));
-        let handler_flag = Arc::clone(&flag);
-        if let Err(e) = ctrlc::set_handler(move || handler_flag.store(true, Ordering::Release)) {
-            eprintln!("huedeck: Ctrl-C handler not installed ({e}); stop with --duration");
+/// Stop requests from the console: Ctrl-C and Ctrl-Break everywhere; on
+/// Windows also window close, log-off and shutdown, which are held (up to
+/// ~4.5 s) until [`Interrupt::finished`] so plugins can restore devices.
+struct Interrupt {
+    #[cfg(windows)]
+    console: Option<huedeck_hal_windows::console::ConsoleStop>,
+    #[cfg(not(windows))]
+    flag: Arc<AtomicBool>,
+}
+
+impl Interrupt {
+    #[cfg(windows)]
+    fn install() -> Self {
+        let console = huedeck_hal_windows::console::ConsoleStop::install()
+            .map_err(|e| eprintln!("huedeck: console handler not installed ({e}); stop with --duration"))
+            .ok();
+        Self { console }
+    }
+
+    #[cfg(not(windows))]
+    fn install() -> Self {
+        static FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+        let flag = FLAG.get_or_init(|| {
+            let flag = Arc::new(AtomicBool::new(false));
+            let handler_flag = Arc::clone(&flag);
+            if let Err(e) = ctrlc::set_handler(move || handler_flag.store(true, Ordering::Release)) {
+                eprintln!("huedeck: Ctrl-C handler not installed ({e}); stop with --duration");
+            }
+            flag
+        });
+        flag.store(false, Ordering::Release);
+        Self {
+            flag: Arc::clone(flag),
         }
-        flag
-    });
-    flag.store(false, Ordering::Release);
-    Arc::clone(flag)
+    }
+
+    fn requested(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.console.is_some_and(|c| c.requested())
+        }
+        #[cfg(not(windows))]
+        {
+            self.flag.load(Ordering::Acquire)
+        }
+    }
+
+    /// Every session has shut down: a held close/log-off/shutdown may proceed.
+    fn finished(&self) {
+        #[cfg(windows)]
+        if let Some(c) = self.console {
+            c.finished();
+        }
+    }
 }
 
 fn rss_bytes() -> Option<u64> {
@@ -462,7 +590,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         );
     }
 
-    let stop = interrupt_flag();
+    let interrupt = Interrupt::install();
 
     let store = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     let mut renderer = NullRenderer::new(mode.pattern(), mode.fps());
@@ -493,13 +621,20 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             log_sink: Some(sink),
             ..SessionOptions::default()
         };
-        handles.push(session::spawn(
-            t.device,
-            t.plugin,
-            Arc::clone(&backend),
-            Arc::clone(&store),
-            opts,
-        )?);
+        match session::spawn(t.device, t.plugin, Arc::clone(&backend), Arc::clone(&store), opts) {
+            Ok(h) => handles.push((h, Instant::now())),
+            Err(e) => {
+                // Do not leave the sessions already started running detached.
+                let (_, failed) = stop_sessions(handles.into_iter().map(|(h, _)| h).collect());
+                renderer.stop();
+                interrupt.finished();
+                return Err(anyhow::Error::from(e).context(format!(
+                    "starting a device session ({} already started were stopped{})",
+                    failed.len(),
+                    if failed.is_empty() { "" } else { ", some uncleanly" }
+                )));
+            }
+        }
     }
 
     let limit = match mode {
@@ -516,8 +651,15 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     let mut last_rss = Instant::now();
     loop {
         std::thread::sleep(Duration::from_millis(20));
-        if first_write.is_none() && handles.iter().any(|h| h.live().first_write_ms.is_some()) {
-            let ms = started.elapsed().as_secs_f64() * 1000.0;
+        let first = handles
+            .iter()
+            .filter_map(|(h, spawned)| {
+                h.live()
+                    .first_write_ms
+                    .map(|ms| spawned.duration_since(started).as_secs_f64() * 1000.0 + ms)
+            })
+            .reduce(f64::min);
+        if let (None, Some(ms)) = (first_write, first) {
             first_write = Some(ms);
             eprintln!(
                 "huedeck {}: first {} after {ms:.1} ms (command start)",
@@ -532,7 +674,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         if let Some(every) = stats_every {
             if last_stats.elapsed() >= every {
                 last_stats = Instant::now();
-                for h in &handles {
+                for (h, _) in &handles {
                     let l = h.live();
                     eprintln!(
                         "  {:>7.1}s {}: {:?} frames={} render_errors={} hid_errors={} rss={}",
@@ -549,9 +691,9 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                 }
             }
         }
-        let interrupted = stop.load(Ordering::Acquire);
+        let interrupted = interrupt.requested();
         let expired = limit.is_some_and(|l| started.elapsed() >= l);
-        let all_done = handles.iter().all(|h| h.is_finished());
+        let all_done = handles.iter().all(|(h, _)| h.is_finished());
         if interrupted || expired || all_done {
             if interrupted {
                 eprintln!("huedeck {}: interrupted, shutting down", mode.name());
@@ -559,19 +701,13 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             break;
         }
     }
-    for h in &handles {
-        h.stop();
-    }
-    let mut sessions = Vec::new();
-    for h in handles {
-        let key = h.key().to_string();
-        match h.join() {
-            Ok(r) => sessions.push(r),
-            Err(panic) => eprintln!("huedeck: session {key} panicked: {panic}"),
-        }
-    }
+    let (sessions, failed_sessions) = stop_sessions(handles.into_iter().map(|(h, _)| h).collect());
     renderer.stop();
+    interrupt.finished();
     max_rss = max_rss.max(rss_bytes());
+    for f in &failed_sessions {
+        eprintln!("huedeck: session {f}");
+    }
 
     let report = RunReport {
         mode: mode.name(),
@@ -580,7 +716,9 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         elapsed_s: started.elapsed().as_secs_f64(),
         first_write_after_start_ms: first_write,
         max_rss_bytes: max_rss,
+        keep: args.keep,
         sessions,
+        failed_sessions,
     };
     print_report(&report);
     if let Some(path) = &args.json {
@@ -712,10 +850,11 @@ fn print_report(r: &RunReport) {
             }
         }
         if !s.shutdown_called {
-            println!(
-                "  Shutdown() not called{}",
-                if s.initialized { " (--keep)" } else { "" }
-            );
+            if r.keep {
+                println!("  Shutdown() skipped (--keep): the device keeps the last colour");
+            } else if s.initialized && !s.failures.iter().any(|f| f.phase == "Shutdown") {
+                println!("  the plugin exports no Shutdown()");
+            }
         }
         if let Some(f) = &s.faulted {
             println!("  FAULT: {f}");

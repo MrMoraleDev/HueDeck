@@ -55,8 +55,8 @@ enum Command {
     },
     /// Run the built-in rainbow pattern through the null renderer until Ctrl-C.
     Rainbow {
-        /// Frames per second.
-        #[arg(long, default_value_t = 30.0)]
+        /// Frames per second (1-240).
+        #[arg(long, default_value_t = 30.0, value_parser = run::parse_fps)]
         fps: f64,
         #[command(flatten)]
         run: run::RunArgs,
@@ -64,10 +64,10 @@ enum Command {
     /// Drive the rainbow pattern for a fixed time and report latency percentiles.
     Bench {
         /// Seconds to run.
-        #[arg(long, default_value_t = 10.0)]
+        #[arg(long, default_value_t = 10.0, value_parser = run::parse_secs)]
         seconds: f64,
-        /// Frames per second to drive.
-        #[arg(long, default_value_t = 30.0)]
+        /// Frames per second to drive (1-240).
+        #[arg(long, default_value_t = 30.0, value_parser = run::parse_fps)]
         fps: f64,
         /// Use a scripted in-memory device with this VID:PID instead of hardware (CI, no device needed).
         #[arg(long, value_name = "VID:PID", value_parser = run::parse_vid_pid)]
@@ -186,6 +186,13 @@ mod tests {
             matches!(cli.command, Command::Rainbow { ref run, .. } if run.restore_check == vec![run::RestoreArg::Auto])
         );
         assert!(Cli::try_parse_from(["huedeck", "light", "notacolour"]).is_err());
+        // Out-of-range times and rates are rejected before anything starts.
+        assert!(Cli::try_parse_from(["huedeck", "light", "red", "--duration", "1e30"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "light", "red", "--duration", "0"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "light", "red", "--stats-every", "NaN"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "bench", "--seconds", "inf"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "rainbow", "--fps", "0"]).is_err());
+        assert!(Cli::try_parse_from(["huedeck", "rainbow", "--fps", "1000"]).is_err());
         assert!(Cli::try_parse_from(["huedeck", "light", "red", "--brightness", "101"]).is_err());
     }
 

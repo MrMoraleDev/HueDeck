@@ -13,4 +13,10 @@ homepage.workspace = true
 
 [dependencies]
 lightloom-engine = { path = "../lightloom-engine" }
+# The CEF client reads the renderer's shared-memory frame ring.
+lightloom-protocol = { path = "../lightloom-protocol" }
+lightloom-renderer = { path = "../lightloom-renderer" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }

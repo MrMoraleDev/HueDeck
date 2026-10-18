@@ -13,11 +13,12 @@ use crate::run::CatalogArgs;
 use anyhow::Context;
 use clap::Subcommand;
 use lightloom_engine::{FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
-use lightloom_hal::trace::{compare, HidTrace, ReplayHid};
+use lightloom_hal::trace::{compare, HidTrace, ReplayHid, Sent, SentKind, TraceRestoreCheck};
 use lightloom_hal::HidBackend;
+use lightloom_plugin_host::device::Brightness;
 use lightloom_plugin_host::dryrun::{dry_run, DryRunOptions, FileReport, Summary};
 use lightloom_plugin_host::manager::{stop_sessions, STOP_TIMEOUT};
-use lightloom_plugin_host::session::{self, SessionDevice, SessionOptions};
+use lightloom_plugin_host::session::{self, RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -239,6 +240,13 @@ fn replay(
     let mut handles = Vec::new();
     let mut wanted = Vec::new();
     for d in &trace.devices {
+        if d.sessions > 1 {
+            anyhow::bail!(
+                "{} ran {} sessions during the recording (a hotplug restart); such a trace cannot be replayed",
+                d.key,
+                d.sessions
+            );
+        }
         let plugin = catalog
             .lookup(d.vid, d.pid)
             .with_context(|| format!("no plugin claims {} (use --plugins DIR or --signalrgb)", d.key))?
@@ -272,6 +280,20 @@ fn replay(
             parameters: trace.parameters.clone(),
             system_info: trace.system_info.clone().map(Arc::new),
             channel_components,
+            brightness: Brightness {
+                global: trace.options.brightness,
+                layout: 100,
+            },
+            skip_shutdown: trace.options.skip_shutdown,
+            restore_check: match &trace.options.restore_check {
+                TraceRestoreCheck::Off => RestoreCheckMode::Off,
+                TraceRestoreCheck::Declared => RestoreCheckMode::DeclaredFeatureReports,
+                TraceRestoreCheck::Reports(list) => RestoreCheckMode::Reports(
+                    list.iter()
+                        .map(|&(report_id, len)| RestoreProbe { report_id, len })
+                        .collect(),
+                ),
+            },
             ..SessionOptions::default()
         };
         handles.push(session::spawn(
@@ -286,15 +308,25 @@ fn replay(
 
     // Lockstep: publish a frame, wait until every session rendered it, as many
     // times as the recording rendered, so both runs send the same packets.
+    // A session that has rendered its recorded frames stops at once, so its
+    // Shutdown() comes where it came in the recording.
+    let stop_done = |handles: &[session::SessionHandle]| {
+        for (h, &w) in handles.iter().zip(&wanted) {
+            if h.live().frames >= w {
+                h.stop();
+            }
+        }
+    };
     let total = wanted.iter().copied().max().unwrap_or(0);
     let mut stalled = None;
+    stop_done(&handles);
     for n in 1..=total {
         frames.publish(frame.clone());
         let deadline = Instant::now() + frame_timeout;
         while handles
             .iter()
             .zip(&wanted)
-            .any(|(h, &w)| !h.is_finished() && h.live().frames < n.min(w))
+            .any(|(h, &w)| n <= w && !h.is_finished() && h.live().frames < n)
         {
             if Instant::now() > deadline {
                 stalled = Some(n);
@@ -305,6 +337,7 @@ fn replay(
         if stalled.is_some() {
             break;
         }
+        stop_done(&handles);
     }
     let (reports, failed) = stop_sessions(handles, STOP_TIMEOUT);
     for f in &failed {
@@ -327,8 +360,15 @@ fn replay(
         }
     }
     let divergences = compare(&trace, &replayed);
-    let hex = |b: &Option<Vec<u8>>| match b {
-        Some(b) => b.iter().map(|x| format!("{x:02X}")).collect::<String>(),
+    let hex = |p: &Option<Sent>| match p {
+        Some(p) => format!(
+            "{} {}",
+            match p.kind {
+                SentKind::Output => "output",
+                SentKind::Feature => "feature",
+            },
+            p.bytes.iter().map(|x| format!("{x:02X}")).collect::<String>()
+        ),
         None => "(nothing)".into(),
     };
     for d in &trace.devices {
@@ -388,7 +428,7 @@ mod tests {
         }
         let (reports, failed) = stop_sessions(vec![handle], STOP_TIMEOUT);
         assert!(failed.is_empty() && reports[0].is_clean(), "{reports:#?}");
-        rec.set_frames(&device.key, reports[0].frames);
+        rec.add_session(&device.key, reports[0].frames);
         let trace = rec.trace();
         assert!(trace.events.iter().any(|e| e.op.sent().is_some()));
         let path = std::env::temp_dir().join(format!("lightloom-replay-{}.json", std::process::id()));

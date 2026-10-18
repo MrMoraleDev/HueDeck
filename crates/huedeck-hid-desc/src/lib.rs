@@ -9,7 +9,10 @@
 //! * one [`TopLevelCollection`] per application collection, with its usage
 //!   page/usage, 0-based index, the report ids it uses and the longest
 //!   input/output/feature report **in bytes including the report-id byte**
-//!   (the same convention as Windows `HIDP_CAPS.*ReportByteLength` and hidapi).
+//!   (the same convention as Windows `HIDP_CAPS.*ReportByteLength` and hidapi),
+//! * every main item's [`ReportField`]: where its elements sit in the report,
+//!   their size, usages, logical range and enclosing collection, which is what
+//!   a driver needs to build or read a report by usage (HID LampArray).
 
 #![forbid(unsafe_code)]
 
@@ -77,6 +80,10 @@ pub mod tags {
     pub const END_COLLECTION: u8 = 0xC;
     /// Global: Usage Page.
     pub const USAGE_PAGE: u8 = 0x0;
+    /// Main-item flag bit 0: Constant (padding), not Data.
+    pub const FLAG_CONSTANT: u32 = 0x01;
+    /// Main-item flag bit 1: Variable (one usage per element), not Array.
+    pub const FLAG_VARIABLE: u32 = 0x02;
     /// Global: Logical Minimum.
     pub const LOGICAL_MIN: u8 = 0x1;
     /// Global: Logical Maximum.
@@ -138,6 +145,72 @@ impl ReportInfo {
     }
 }
 
+/// Usages `min..=max` on `page` (one usage when `min == max`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UsageRange {
+    /// Usage page.
+    pub page: u16,
+    /// First usage id.
+    pub min: u16,
+    /// Last usage id.
+    pub max: u16,
+}
+
+impl UsageRange {
+    fn len(&self) -> u32 {
+        u32::from(self.max.saturating_sub(self.min)) + 1
+    }
+}
+
+/// One Input/Output/Feature main item: `count` elements of `bit_size` bits
+/// starting `bit_offset` bits into the report payload (the bytes after the
+/// report-id byte, or the whole report when the collection uses no ids).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReportField {
+    /// Direction.
+    pub kind: ReportKind,
+    /// Report id (`0` when the collection uses none).
+    pub report_id: u8,
+    /// First bit of the first element, counted from the start of the payload.
+    pub bit_offset: u32,
+    /// Bits per element.
+    pub bit_size: u32,
+    /// Number of elements.
+    pub count: u32,
+    /// Main-item flags ([`tags::FLAG_CONSTANT`], [`tags::FLAG_VARIABLE`], ...).
+    pub flags: u32,
+    /// Logical minimum in force.
+    pub logical_min: i32,
+    /// Logical maximum in force.
+    pub logical_max: i32,
+    /// Usages in descriptor order. For a variable field element `i` takes
+    /// the `i`-th usage, and the last one when there are fewer usages than
+    /// elements (HID 1.11 §6.2.2.8); for an array field they are the
+    /// selectable usages.
+    pub usages: Vec<UsageRange>,
+    /// `(usage page, usage)` of the innermost collection around the field.
+    pub collection: (u16, u16),
+}
+
+impl ReportField {
+    /// Whether the field is padding.
+    pub fn is_constant(&self) -> bool {
+        self.flags & tags::FLAG_CONSTANT != 0
+    }
+
+    /// Usage `(page, id)` of element `index` of a variable field.
+    pub fn usage(&self, index: u32) -> Option<(u16, u16)> {
+        let mut left = index;
+        for r in &self.usages {
+            if left < r.len() {
+                return Some((r.page, r.min + left as u16));
+            }
+            left -= r.len();
+        }
+        self.usages.last().map(|r| (r.page, r.max))
+    }
+}
+
 /// One application (top-level) collection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TopLevelCollection {
@@ -160,6 +233,8 @@ pub struct TopLevelCollection {
     pub feature_len: usize,
     /// Every `(kind, id)` report seen, in first-appearance order.
     pub reports: Vec<ReportInfo>,
+    /// Every main item inside the collection, in descriptor order.
+    pub fields: Vec<ReportField>,
 }
 
 impl TopLevelCollection {
@@ -273,14 +348,49 @@ fn le_u32(payload: &[u8]) -> u32 {
 #[derive(Clone, Copy, Default)]
 struct GlobalState {
     usage_page: u16,
+    logical_min: i32,
+    logical_max: i32,
     report_size: u32,
     report_count: u32,
     report_id: u8,
 }
 
+/// A local usage as declared: extended usages carry their page, 16-bit ones
+/// take the Usage Page in force at the next main item.
+#[derive(Clone, Copy)]
+struct DeclaredUsage {
+    page: Option<u16>,
+    min: u16,
+    max: u16,
+}
+
 #[derive(Default)]
 struct LocalState {
-    usages: Vec<(u16, u16)>, // (page override or 0, usage)
+    usages: Vec<DeclaredUsage>,
+    /// A Usage Minimum waiting for its Usage Maximum.
+    usage_min: Option<(Option<u16>, u16)>,
+}
+
+impl LocalState {
+    fn resolved(&self, page: u16) -> Vec<UsageRange> {
+        self.usages
+            .iter()
+            .map(|u| UsageRange {
+                page: u.page.unwrap_or(page),
+                min: u.min,
+                max: u.max.max(u.min),
+            })
+            .collect()
+    }
+}
+
+/// `(page override, usage id)` of a local usage item.
+fn declared(item: &Item) -> (Option<u16>, u16) {
+    if item.size == 4 {
+        (Some((item.data >> 16) as u16), item.data as u16)
+    } else {
+        (None, item.data as u16)
+    }
 }
 
 /// Parse a descriptor and compute its top-level collections.
@@ -290,13 +400,16 @@ pub fn parse(bytes: &[u8]) -> Result<ReportDescriptor, DescError> {
     let mut global = GlobalState::default();
     let mut stack: Vec<GlobalState> = Vec::new();
     let mut local = LocalState::default();
-    let mut depth = 0usize;
+    // (usage page, usage) of every open collection, outermost first.
+    let mut open: Vec<(u16, u16)> = Vec::new();
     let mut current: Option<usize> = None; // index into `collections`
 
     for item in &items {
         match item.kind {
             ItemKind::Global => match item.tag {
                 tags::USAGE_PAGE => global.usage_page = item.data as u16,
+                tags::LOGICAL_MIN => global.logical_min = item.signed,
+                tags::LOGICAL_MAX => global.logical_max = item.signed,
                 tags::REPORT_SIZE => global.report_size = item.data,
                 tags::REPORT_COUNT => global.report_count = item.data,
                 tags::REPORT_ID => global.report_id = item.data as u8,
@@ -310,53 +423,54 @@ pub fn parse(bytes: &[u8]) -> Result<ReportDescriptor, DescError> {
             },
             ItemKind::Local => match item.tag {
                 tags::USAGE => {
-                    if item.size == 4 {
-                        local.usages.push(((item.data >> 16) as u16, item.data as u16));
-                    } else {
-                        local.usages.push((0, item.data as u16));
-                    }
+                    let (page, usage) = declared(item);
+                    local.usages.push(DeclaredUsage {
+                        page,
+                        min: usage,
+                        max: usage,
+                    });
                 }
-                tags::USAGE_MIN => {
-                    // Record the minimum as the representative usage of a range.
-                    if item.size == 4 {
-                        local.usages.push(((item.data >> 16) as u16, item.data as u16));
-                    } else {
-                        local.usages.push((0, item.data as u16));
-                    }
+                tags::USAGE_MIN => local.usage_min = Some(declared(item)),
+                tags::USAGE_MAX => {
+                    let (max_page, max) = declared(item);
+                    let (page, min) = local.usage_min.take().unwrap_or((max_page, max));
+                    local.usages.push(DeclaredUsage { page, min, max });
                 }
                 _ => {}
             },
             ItemKind::Main => {
+                // A Usage Minimum without a maximum stands for itself.
+                if let Some((page, min)) = local.usage_min.take() {
+                    local.usages.push(DeclaredUsage { page, min, max: min });
+                }
                 match item.tag {
                     tags::COLLECTION => {
-                        if depth == 0 {
-                            let (page_override, usage) = local.usages.first().copied().unwrap_or((0, 0));
-                            let usage_page = if page_override != 0 {
-                                page_override
-                            } else {
-                                global.usage_page
-                            };
+                        let usage = local
+                            .resolved(global.usage_page)
+                            .first()
+                            .map_or((global.usage_page, 0), |u| (u.page, u.min));
+                        if open.is_empty() {
                             collections.push(TopLevelCollection {
                                 index: collections.len() as u16,
-                                usage_page,
-                                usage,
+                                usage_page: usage.0,
+                                usage: usage.1,
                                 collection_type: item.data as u8,
                                 report_ids: Vec::new(),
                                 input_len: 0,
                                 output_len: 0,
                                 feature_len: 0,
                                 reports: Vec::new(),
+                                fields: Vec::new(),
                             });
                             current = Some(collections.len() - 1);
                         }
-                        depth += 1;
+                        open.push(usage);
                     }
                     tags::END_COLLECTION => {
-                        if depth == 0 {
+                        if open.pop().is_none() {
                             return Err(DescError::UnbalancedEnd { offset: item.offset });
                         }
-                        depth -= 1;
-                        if depth == 0 {
+                        if open.is_empty() {
                             current = None;
                         }
                     }
@@ -374,10 +488,27 @@ pub fn parse(bytes: &[u8]) -> Result<ReportDescriptor, DescError> {
                                 tlc.report_ids.push(id);
                                 tlc.report_ids.sort_unstable();
                             }
-                            match tlc.reports.iter_mut().find(|r| r.kind == kind && r.id == id) {
-                                Some(r) => r.bits = r.bits.saturating_add(bits),
-                                None => tlc.reports.push(ReportInfo { kind, id, bits }),
-                            }
+                            let report = match tlc.reports.iter_mut().find(|r| r.kind == kind && r.id == id) {
+                                Some(r) => r,
+                                None => {
+                                    tlc.reports.push(ReportInfo { kind, id, bits: 0 });
+                                    tlc.reports.last_mut().expect("just pushed")
+                                }
+                            };
+                            let bit_offset = report.bits;
+                            report.bits = report.bits.saturating_add(bits);
+                            tlc.fields.push(ReportField {
+                                kind,
+                                report_id: id,
+                                bit_offset,
+                                bit_size: global.report_size,
+                                count: global.report_count,
+                                flags: item.data,
+                                logical_min: global.logical_min,
+                                logical_max: global.logical_max,
+                                usages: local.resolved(global.usage_page),
+                                collection: open.last().copied().unwrap_or((0, 0)),
+                            });
                         }
                     }
                     _ => {}
@@ -388,8 +519,8 @@ pub fn parse(bytes: &[u8]) -> Result<ReportDescriptor, DescError> {
         }
     }
 
-    if depth != 0 {
-        return Err(DescError::UnclosedCollections(depth));
+    if !open.is_empty() {
+        return Err(DescError::UnclosedCollections(open.len()));
     }
 
     for tlc in &mut collections {
@@ -514,6 +645,148 @@ mod tests {
         0x81, 0x00, //   Input (Data, Array)
         0xC0, // End Collection
     ];
+
+    /// HID LampArray (usage page 0x59, HID Usage Tables "Lighting and
+    /// Illumination"): the attributes report and a multi-update report for 4
+    /// lamps, written for this test from the usage table.
+    const LAMP_ARRAY: &[u8] = &[
+        0x05, 0x59, // Usage Page (Lighting and Illumination)
+        0x09, 0x01, // Usage (LampArray)
+        0xA1, 0x01, // Collection (Application)
+        0x85, 0x01, //   Report ID (1)
+        0x09, 0x02, //   Usage (LampArrayAttributesReport)
+        0xA1, 0x02, //   Collection (Logical)
+        0x09, 0x03, //     Usage (LampCount)
+        0x15, 0x00, //     Logical Minimum (0)
+        0x27, 0xFF, 0xFF, 0x00, 0x00, // Logical Maximum (65535)
+        0x75, 0x10, //     Report Size (16)
+        0x95, 0x01, //     Report Count (1)
+        0xB1, 0x03, //     Feature (Constant, Variable)
+        0x09, 0x04, //     Usage (BoundingBoxWidthInMicrometers)
+        0x09, 0x05, //     Usage (BoundingBoxHeightInMicrometers)
+        0x09, 0x06, //     Usage (BoundingBoxDepthInMicrometers)
+        0x09, 0x07, //     Usage (LampArrayKind)
+        0x09, 0x08, //     Usage (MinUpdateIntervalInMicroseconds)
+        0x27, 0xFF, 0xFF, 0xFF, 0x7F, // Logical Maximum (2^31 - 1)
+        0x75, 0x20, //     Report Size (32)
+        0x95, 0x05, //     Report Count (5)
+        0xB1, 0x03, //     Feature (Constant, Variable)
+        0xC0, //   End Collection
+        0x85, 0x04, //   Report ID (4)
+        0x09, 0x50, //   Usage (LampMultiUpdateReport)
+        0xA1, 0x02, //   Collection (Logical)
+        0x09, 0x03, //     Usage (LampCount)
+        0x09, 0x55, //     Usage (LampUpdateFlags)
+        0x25, 0x08, //     Logical Maximum (8)
+        0x75, 0x08, //     Report Size (8)
+        0x95, 0x02, //     Report Count (2)
+        0xB1, 0x02, //     Feature (Data, Variable)
+        0x09, 0x21, 0x09, 0x21, 0x09, 0x21, 0x09, 0x21, // Usage (LampId) x4
+        0x27, 0xFF, 0xFF, 0x00, 0x00, // Logical Maximum (65535)
+        0x75, 0x10, //     Report Size (16)
+        0x95, 0x04, //     Report Count (4)
+        0xB1, 0x02, //     Feature (Data, Variable)
+        0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54, // Red, Green, Blue, Intensity (lamp 0)
+        0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54, // lamp 1
+        0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54, // lamp 2
+        0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54, // lamp 3
+        0x26, 0xFF, 0x00, // Logical Maximum (255)
+        0x75, 0x08, //     Report Size (8)
+        0x95, 0x10, //     Report Count (16)
+        0xB1, 0x02, //     Feature (Data, Variable)
+        0xC0, //   End Collection
+        0xC0, // End Collection
+    ];
+
+    #[test]
+    fn lamp_array_fields() {
+        let d = parse(LAMP_ARRAY).unwrap();
+        let c = d.find(0x59, 0x01).unwrap();
+        assert_eq!(c.report_ids, vec![1, 4]);
+        // Report 1: 16 + 5 * 32 bits = 22 bytes + id; report 4: 2 * 8 + 4 * 16 + 16 * 8 bits.
+        let lengths: Vec<(u8, usize)> = c.reports.iter().map(|r| (r.id, r.byte_length())).collect();
+        assert_eq!(lengths, vec![(1, 23), (4, 27)]);
+        assert_eq!(c.feature_len, 27);
+        assert_eq!(c.fields.len(), 5);
+
+        let count = &c.fields[0];
+        assert_eq!(
+            (
+                count.kind,
+                count.report_id,
+                count.bit_offset,
+                count.bit_size,
+                count.count
+            ),
+            (ReportKind::Feature, 1, 0, 16, 1)
+        );
+        assert!(count.is_constant());
+        assert_eq!(count.collection, (0x59, 0x02));
+        assert_eq!(count.usage(0), Some((0x59, 0x03)));
+        assert_eq!((count.logical_min, count.logical_max), (0, 65535));
+
+        let attributes = &c.fields[1];
+        assert_eq!(
+            (attributes.bit_offset, attributes.bit_size, attributes.count),
+            (16, 32, 5)
+        );
+        assert_eq!(attributes.usage(0), Some((0x59, 0x04)));
+        assert_eq!(attributes.usage(4), Some((0x59, 0x08)));
+        assert_eq!(attributes.logical_max, i32::MAX);
+
+        // Report 4 starts again at bit 0.
+        let header = &c.fields[2];
+        assert_eq!((header.report_id, header.bit_offset, header.count), (4, 0, 2));
+        assert_eq!(header.collection, (0x59, 0x50));
+        assert_eq!(header.usage(1), Some((0x59, 0x55)));
+        let ids = &c.fields[3];
+        assert_eq!((ids.bit_offset, ids.bit_size, ids.count), (16, 16, 4));
+        assert_eq!(ids.usage(3), Some((0x59, 0x21)));
+        let channels = &c.fields[4];
+        assert_eq!(
+            (channels.bit_offset, channels.bit_size, channels.count),
+            (80, 8, 16)
+        );
+        assert_eq!(channels.usage(5), Some((0x59, 0x52)), "lamp 1, green");
+        assert_eq!(channels.usage(15), Some((0x59, 0x54)), "lamp 3, intensity");
+        assert!(!channels.is_constant());
+    }
+
+    #[test]
+    fn usage_ranges_and_extended_usages() {
+        let d = parse(KEYBOARD).unwrap();
+        let fields = &d.collections[0].fields;
+        let modifiers = &fields[0];
+        assert_eq!(
+            modifiers.usages,
+            vec![UsageRange {
+                page: 0x07,
+                min: 0xE0,
+                max: 0xE7
+            }]
+        );
+        assert_eq!(modifiers.usage(3), Some((0x07, 0xE3)));
+        assert!(fields[1].is_constant() && fields[1].usages.is_empty());
+        let leds = fields.iter().find(|f| f.kind == ReportKind::Output).unwrap();
+        assert_eq!((leds.bit_offset, leds.count), (0, 5));
+        assert_eq!(leds.usage(4), Some((0x08, 0x05)));
+        let keys = fields.last().unwrap();
+        assert_eq!(keys.flags & tags::FLAG_VARIABLE, 0, "array field");
+        assert_eq!((keys.bit_offset, keys.count, keys.logical_max), (16, 6, 0x65));
+
+        // An extended (4-byte) usage carries its own page.
+        let extended = [
+            0x05, 0x01, // Usage Page (Generic Desktop)
+            0x09, 0x00, // Usage (0)
+            0xA1, 0x01, // Collection (Application)
+            0x0B, 0x01, 0x00, 0x00, 0xFF, // Usage (0xFF00:0x0001)
+            0x75, 0x08, 0x95, 0x01, // Report Size (8), Report Count (1)
+            0x91, 0x02, //   Output (Data, Variable)
+            0xC0,
+        ];
+        let d = parse(&extended).unwrap();
+        assert_eq!(d.collections[0].fields[0].usage(0), Some((0xFF00, 0x0001)));
+    }
 
     #[test]
     fn keyboard() {

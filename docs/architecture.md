@@ -19,6 +19,8 @@ The host API itself is specified in [host-api/](host-api/).
 | `lightloom-setup` | elevated, one-shot | Installs PawnIO, the broker service and WinUSB bindings for user-approved VID:PIDs. The only UAC prompt Lightloom ever shows. |
 | `lightloom-ui` | user, optional | Tauri 2 tray shell around the same dashboard the daemon serves on `127.0.0.1:16138`; never on the critical path. |
 
+The dashboard itself is a static Svelte app (`ui/`) that lightloomd serves from `ui/` next to its executable; how the engine thread, the API security and the compatible listeners work is recorded in [ADR-0009](adr/0009-daemon-api-dashboard.md).
+
 No custom kernel driver, ever ([ADR-0007](adr/0007-no-custom-kernel-driver.md)).
 
 ## 2. Crates

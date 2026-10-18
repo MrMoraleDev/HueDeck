@@ -1,37 +1,33 @@
 <!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
 # Lightloom
 
-**Open-source RGB manager for Windows and Linux, compatible with the SignalRGB
-plugin, effect and component ecosystem.**
+**A standalone, open-source RGB manager for Windows (Linux next): one download,
+your lights, no account, no telemetry, no ads.** Devices are driven by Lightloom's own
+plugin library; effects are HTML5-canvas lightscripts; a local dashboard runs in
+your browser. Compatibility with SignalRGB's plugins and effects is an optional
+extra, never a requirement.
 
-Status: **pre-alpha, M3 (effects pipeline)**. Headless from the command line:
-Lightloom drives an MSI Mystic Light board with its own plugin, runs unmodified
-SignalRGB plugins from a local SignalRGB installation on real devices (MSI board,
-Razer mouse, SteelSeries headset, NZXT AIO lighting) with subdevices, channels and
-components, hotplug and HID record/replay, and renders lightscripts (HTML5 canvas
-effects, SignalRGB's format) in offscreen Chromium onto them. No dashboard, saved
-settings or installer yet. See [Milestones](#milestones).
+Status: **pre-alpha, M4 (daemon and dashboard)**. `lightloomd` drives the connected
+devices with their plugins, renders effects in offscreen Chromium, keeps settings in
+SQLite and serves the dashboard and a local API on `127.0.0.1:16138`. Its own plugin
+library covers only an MSI Mystic Light board so far; growing it is the current
+priority (see [How device support works](#how-device-support-works)). No installer
+yet. See [Milestones](#milestones).
 
 ## What Lightloom is
 
-Most of what makes an RGB manager useful is not its binary: it is the hundreds of
-small JavaScript device plugins (one per device family), the JSON component
-descriptors for fans and strips on ARGB headers, and the HTML5-canvas "lightscripts"
-that draw the animation. Lightloom implements the **same host API** those files were
-written against, so they run unmodified, and wraps it in a small, unprivileged,
-open daemon:
-
-- `lightloomd` - per-user daemon: device registry, layout and sampling, plugin host,
-  effect pipeline, persistence, local HTTP/WS API, dashboard.
-- `lightloom` - command-line client (`devices`, `light`, `rainbow`, `bench`,
-  `compat dry-run`, `import`, `udev`).
+- `lightloomd` - per-user daemon, unprivileged: device registry and plugin host,
+  layout and sampling, effect pipeline, persistence (SQLite), local HTTP/WS API and
+  the dashboard (`http://127.0.0.1:16138`).
+- `lightloom` - command-line tool (`devices`, `light`, `rainbow`, `effect`, `bench`,
+  `record`/`replay`, `compat dry-run`).
 - `lightloom-renderer` - effects run in real Chromium (CEF, offscreen) in their own
-  process and are delivered to the daemon as 320x200 frames through shared memory.
+  process and reach the daemon as 320x200 frames through shared memory.
 - `lightloom-iobroker` - **optional** Windows service for SMBus / GPU-I2C / SuperIO
   through [PawnIO](https://pawnio.eu/); installed only on explicit opt-in. Not
   needed on Linux and not needed for HID, USB, serial or network devices.
 
-No custom kernel driver, no account, no telemetry, no process killing, no
+No custom kernel driver, no account, no telemetry, no ads, no process killing, no
 marketplace.
 
 ## Architecture summary
@@ -59,7 +55,7 @@ marketplace.
 +-----------v--------------------+    +--------------v-----------------------------+
 | lightloom-renderer (user)        |    | lightloom-iobroker (Windows service,         |
 |  CEF offscreen Chromium        |    |  LocalSystem, OPTIONAL, opt-in install)    |
-|  320x200 @ 30 fps, sandbox on  |    |  PawnIO client (pinned modules), NvAPI I2C |
+|  320x200 @ 30 fps              |    |  PawnIO client (pinned modules), NvAPI I2C |
 |  URL filter = effect dir only  |    |  one global mutex per SMBus transaction,   |
 |  +1 browser per LCD face       |    |  allowlists, SPD write denial, audit log   |
 +--------------------------------+    +--------------------------------------------+
@@ -77,25 +73,27 @@ decision log D1-D18). Decisions: [docs/adr/](docs/adr/).
 
 ## How device support works
 
-Lightloom is a **compatible runtime**, not a plugin collection:
+A device plugin is one small JavaScript file per device *family*: it says which USB
+ids it drives and turns the LED colours Lightloom samples from the canvas into the
+packets the device expects. Supporting another model of a family Lightloom already
+has usually means adding its product id to that file. The host API is the one
+SignalRGB plugins are written against (documented in [docs/host-api/](docs/host-api/)),
+so both kinds run on the same loader.
 
-1. **Your own plugin and effect copies.** If you already use SignalRGB, the import
-   wizard reads the plugins, effects, components, channel assignments and layouts
-   from *your* installation and copies them into Lightloom's data directory, marking
-   them `imported / unsigned`. Lightloom never ships, downloads or redistributes
+1. **Lightloom's own plugin library** (`plugins/`, MIT) is what ships with Lightloom and
+   needs nothing else installed. Its protocols come from the devices' own traffic
+   (Lightloom records and replays every HID exchange: `lightloom light ... --record`,
+   `lightloom compat replay`), public standards (HID LampArray, QMK/VIA) and vendors'
+   published APIs (network lights). No code is copied from other RGB software.
+   Today it covers the MSI Mystic Light 185-byte boards (tested on `1462:7C91`);
+   Razer, NZXT Kraken, SteelSeries headsets, generic HID LampArray devices and
+   network lights (WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeelight) are next.
+2. **Your own plugins and effects**: `%APPDATA%\Lightloom\plugins` and `...\effects`.
+3. **Optional: your SignalRGB installation.** With the setting on, Lightloom also
+   uses the plugins, effects and components of a local SignalRGB installation, read
+   where they are (never copied, never changed), and can import its canvas layout
+   and channel setup. Lightloom never ships, downloads or redistributes
    WhirlwindFX-authored files.
-2. **Community repositories as sources.** Public plugin repositories (GitHub /
-   GitLab addon repos, SRGBmods, QMK plugin packs, ...) are pre-listed as *sources*.
-   Each is enabled only after you acknowledge its license; contents are hash-pinned
-   and updated only when you ask.
-3. **First-party plugins and effects.** A small set of MIT plugins (`plugins/`)
-   written in the same shape, CC0 starter effects (`effects/`) and an own component
-   library (`components/`) live in this repository and go through exactly the same
-   loader.
-4. **The Host API v1 spec** (`docs/host-api/`, Apache-2.0 OR MIT) documents the
-   contract so new
-   plugins can be written against Lightloom directly (`@lightloom/*` modules, or the
-   `@SignalRGB/*` specifiers for interoperability).
 
 Plugins the host does not understand fail loudly: an unknown host member is logged
 once as `API_GAP` and then throws, and `lightloom compat dry-run <dir>` reports the
@@ -106,33 +104,37 @@ gaps for a whole directory before you depend on it.
 There is no release yet. From source (stable Rust toolchain, Windows for now):
 
 ```text
-cargo build --release
+cargo build --release                          # lightloomd and lightloom
+cargo build --release -p lightloom-renderer --features cef   # effects (CMake + Ninja on PATH)
+cd ui && npm ci && npm run build               # the dashboard (ui/dist)
+target/release/lightloomd --open                 # devices, effects, API; opens http://127.0.0.1:16138
+```
+
+`lightloomd` finds the renderer, the dashboard, its plugins and starter effects next
+to its executable (in a source checkout: the tree's `plugins/`, `effects/` and
+`ui/dist`). Settings live in `%LOCALAPPDATA%\Lightloom` (database, API token) and
+`%APPDATA%\Lightloom\config.toml` (ports, frame rate, extra plugin directories,
+devices to leave alone); `--home DIR` keeps everything in one directory,
+`--dry-run` never writes to devices. Close other RGB software that owns the same
+devices: Lightloom leaves them alone while it runs and tells you so, it never
+terminates other applications.
+
+The command-line tool drives devices without the daemon (stop `lightloomd` first):
+
+```text
 target/release/lightloom devices                        # read-only: devices, collections, report lengths
 target/release/lightloom light red --dry-run            # read the device, print the packets, write nothing
 target/release/lightloom light "#00ff00" --restore-check  # hold a colour until Ctrl-C, then restore and verify
-target/release/lightloom rainbow --duration 60          # scrolling hues through the null renderer
-target/release/lightloom bench --mock 1462:7c91         # latency percentiles against a scripted device
-target/release/lightloom plugins --signalrgb            # which plugin would drive each connected device
-target/release/lightloom rainbow --signalrgb            # also use your SignalRGB plugins and channel setup (read in place)
+target/release/lightloom effect effects/plasma.html --prop speed=60   # render an effect onto every device
 target/release/lightloom light red --record t.json      # record every HID operation ...
 target/release/lightloom compat replay t.json           # ... and replay it against the plugins, no hardware
-target/release/lightloom compat dry-run "<your SignalRGB plugin directory>"
-target/release/lightloom effects                         # the effects in ./effects and their controls
-target/release/lightloom effect effects/plasma.html --prop speed=60 --signalrgb   # render an effect onto every device
+target/release/lightloom bench --mock 1462:7c91         # latency percentiles against a scripted device
 ```
 
-`light`, `rainbow` and `bench` look for plugins in `./plugins` (or `--plugins DIR`,
-`LIGHTLOOM_PLUGINS`); `--signalrgb` adds the plugins of a local SignalRGB
-installation, read where they are (never copied), and its component setup per
-channel. Devices plugged in, out or back in during a run are followed. Close
-other RGB software that owns the same devices first: Lightloom reports conflicting
-processes and refuses to start, it never terminates them.
-`lightloom effect` needs the effect renderer (`lightloom-renderer`, CEF), built
-separately with `cargo build --release -p lightloom-renderer --features cef` (CMake and
-Ninja on PATH; see [its README](crates/lightloom-renderer/README.md)). It is looked up
-next to `lightloom`, in `$LIGHTLOOM_RENDERER` or at `--renderer PATH`. `--layout FILE`
-places devices on the 320x200 canvas; results on the reference machine are in
-[docs/hardware/effects-m3.md](docs/hardware/effects-m3.md).
+`--signalrgb` adds a local SignalRGB installation's plugins and channel setup
+(read in place). Effects results on the reference machine are in
+[docs/hardware/effects-m3.md](docs/hardware/effects-m3.md); the daemon and dashboard
+in [docs/hardware/daemon-m4.md](docs/hardware/daemon-m4.md).
 
 ## Milestones
 
@@ -142,9 +144,10 @@ places devices on the 320x200 canvas; results on the reference machine are in
 | M1 | First light, headless: MSI Mystic Light board from the CLI | done |
 | M2 | Compatible plugin host, corpus harness, hotplug, conformance suite | done (physical unplug test pending) |
 | M3 | Effects pipeline: CEF renderer, layouts, sampling, `lightloom bench` | done |
-| M4 | Dashboard, SQLite persistence, local API, import wizard, MSI/winget | planned |
+| M4 | Daemon, SQLite persistence, local API, dashboard, import, installer | in progress: daemon, API, dashboard, SignalRGB import done; installer next |
+| Devices | Lightloom's own plugin library: Razer, NZXT, SteelSeries, MSI families, HID LampArray, network lights | in progress |
 | M5 | Privileged bus via `lightloom-iobroker` + PawnIO, NvAPI I2C, sensors | planned |
-| M6 | Audio/screen inputs, network plugins, LCD faces, macros, LampArray, OpenRGB SDK server | planned |
+| M6 | Audio/screen inputs, network device support, LCD faces, macros, OpenRGB SDK server | planned |
 | M7 | Linux backend, AppImage/Flatpak, 1.0 | planned |
 
 ## Repository layout

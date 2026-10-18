@@ -190,9 +190,12 @@ pub struct EffectArgs {
     /// The `huedeck-renderer` executable (default: $HUEDECK_RENDERER, else next to huedeck).
     #[arg(long, value_name = "PATH")]
     pub renderer: Option<PathBuf>,
-    /// Paint without GPU compositing (VMs, remote desktop).
+    /// Composite on the GPU. The default, software compositing, paints the
+    /// 320x200 view at a steadier cadence with less memory (docs/hardware/effects-m3.md)
+    /// and works in VMs and remote desktop sessions; GPU compositing can help
+    /// effects with heavy canvas filters.
     #[arg(long)]
-    pub software_compositing: bool,
+    pub gpu_compositing: bool,
 }
 
 impl Mode {
@@ -232,7 +235,7 @@ impl Mode {
                     effect,
                     fps: e.fps.round().clamp(1.0, 240.0) as u32,
                     properties: e.props.iter().cloned().collect(),
-                    software_compositing: e.software_compositing,
+                    software_compositing: !e.gpu_compositing,
                     work_dir,
                 }))
             }

@@ -1,51 +1,49 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Lightloom first-party plugin: MSI Mystic Light "185-byte" motherboard controller.
-// Target board for M1: MSI MAG B550 TOMAHAWK (MS-7C91), USB HID 1462:7C91.
+// Lightloom first-party plugin: MSI Mystic Light "185-byte" motherboard controller, per-LED mode.
+// Target board: MSI MAG B550 TOMAHAWK (MS-7C91), USB HID 1462:7C91.
 //
-// Written in the SignalRGB-compatible plugin shape (metadata exports + Validate /
-// Initialize / Render / Shutdown) so the same compat loader that later runs imported
-// third-party plugins runs this file. Clean-room: facts about the wire format come from
-// docs/hardware/msi-mystic-light-185.md (two independent public descriptions agree);
-// no code was copied from any other RGB project.
+// Written in the SignalRGB-compatible plugin shape (metadata exports + Validate / Initialize /
+// Render / Shutdown). Facts about the wire format come from docs/hardware/msi-mystic-light-185.md:
+// public documentation and Lightloom's own recordings of this board's traffic. No code was copied
+// from any other RGB project.
 //
-// Wire format in one paragraph (details and the "unverified" column in the hardware doc):
-// HID *feature* report id 0x52, 185 bytes including the report id. The payload is a table
-// of fixed-size zone records (10 bytes; the two JRAINBOW records and the JCORSAIR record are
-// 11 bytes), followed by one "save to flash" byte at offset 0xB8 (184). Each 10-byte record:
-//   +0 effect number (0x01 = static)      +1..+3 colour 1 R,G,B
-//   +4 bit0-1 speed, bit2-6 brightness, bit7 "sync with JRGB"
-//   +5..+7 colour 2 R,G,B                 +8 bit0-5 sync flags, bit7 "use my colour" flag
-//   +9 padding
+// The controller takes two HID feature reports:
+//   * 0x52, 185 bytes including the report id: one record per lighting zone (10 bytes; the two
+//     JRAINBOW records and the JCORSAIR record are 11) and a "save to flash" byte at 0xB8.
+//     Each 10-byte record: +0 effect, +1..+3 colour 1 (R, G, B), +4 options (bit 0-1 speed,
+//     bit 2-6 brightness, bit 7 "sync with JRGB"), +5..+7 colour 2, +8 sync flags (bit 0-5) and
+//     colour flag (bit 7), +9 padding. A JRAINBOW record adds the LED count of its strip at +10.
+//   * 0x53, 725 bytes: a per-LED colour stream of 240 LEDs, for zones in per-LED mode (0x25).
+// This plugin puts the onboard master zone in synchronised per-LED mode, so every other zone
+// follows it, and then sends one 0x53 report per frame: the 6 onboard LEDs, the two 12 V RGB
+// headers (JRGB1, JRGB2) and the LEDs of the strips on the two 5 V ARGB headers (JRAINBOW1,
+// JRAINBOW2), whose LED counts come from the channels' components.
 //
-// M1 policy (deliberately conservative - a wrong 185-byte packet can misconfigure the
-// controller, and byte 184 != 0 writes the configuration to flash):
-//   * Never write before a successful read of the current 0x52 report ("restore image").
-//   * Every packet we send is a COPY of the restore image; we overwrite only the six onboard
-//     zone records (static effect + our colour) and force the save flag to 0.
-//   * JRGB1/JRGB2 (12 V headers), JRAINBOW1/JRAINBOW2 (5 V ARGB headers), the Corsair slot and
-//     the unused onboard slots are left exactly as read. Channels for the ARGB headers (per-LED
-//     report 0x53) arrive in M2 - see the addChannel comment in Initialize().
-//   * Shutdown(false) writes the restore image back; Shutdown(true) (system suspend) paints the
-//     shutdown colour (black by default).
+// Policy (a wrong 0x52 packet can misconfigure the controller, and byte 0xB8 != 0 writes the
+// configuration to flash):
+//   * Nothing is written before the current 0x52 report has been read ("restore image").
+//   * The save byte is always 0.
+//   * Shutdown(false) blanks the stream and writes the restore image back, which also leaves
+//     per-LED mode; Shutdown(true) (system suspend) paints the shutdown colour.
 
 // ---------------------------------------------------------------------------------------------
 // Metadata (call-if-function exports, SignalRGB-compatible)
 // ---------------------------------------------------------------------------------------------
 export function Name() { return "MSI Mystic Light 185 (MAG B550 Tomahawk)"; }
 export function Publisher() { return "Lightloom"; }
-export function Version() { return "0.1.0"; }
+export function Version() { return "0.2.0"; }
 export function Documentation() { return "hardware/msi-mystic-light-185"; }
 export function VendorId() { return 0x1462; }
 export function ProductId() { return 0x7C91; }
 export function Type() { return "Hid"; }
 export function DeviceType() { return "motherboard"; }
-// Six onboard LEDs laid out in a row; the ARGB headers become channels in M2 (no canvas cells).
-export function Size() { return [ONBOARD_ZONES.length, 1]; }
+// The six onboard LEDs in a row; the headers are subdevices and channels with their own places.
+export function Size() { return [ONBOARD_LEDS, 1]; }
 export function DefaultPosition() { return [0, 0]; }
 export function DefaultScale() { return 8.0; }
-export function LedNames() { return ONBOARD_ZONES.map((zone) => zone.name); }
-export function LedPositions() { return ONBOARD_ZONES.map((zone, index) => [index, 0]); }
+export function LedNames() { return ONBOARD_NAMES; }
+export function LedPositions() { return ONBOARD_NAMES.map((name, index) => [index, 0]); }
 // No bundled artwork yet; an empty URL makes the host fall back to the DeviceType icon.
 export function ImageUrl() { return ""; }
 // MSI's own lighting services hold the HID handle; Lightloom reports them, never kills them.
@@ -69,122 +67,148 @@ export function ControllableParameters() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Report layout constants (offsets are into the 185-byte buffer, index 0 = report id)
+// Report layout
 // ---------------------------------------------------------------------------------------------
-const REPORT_ID = 0x52;
-const REPORT_LENGTH = 185;
-const SAVE_FLAG_OFFSET = 0xB8;          // 184: 0 = apply only, non-zero = persist to flash. Always 0 here.
+const CONFIG_ID = 0x52;
+const CONFIG_LENGTH = 185;
+const SAVE_FLAG_OFFSET = 0xB8;           // 0 = apply only, non-zero = persist to flash. Always 0 here.
+
+const STREAM_ID = 0x53;
+const STREAM_LENGTH = 725;
+// Report id, effect 0x25 (per-LED), area 0x06 (onboard; in synchronised mode it carries every
+// zone), start index 0, then a zero byte; 240 LEDs of R, G, B follow.
+const STREAM_HEADER = [STREAM_ID, 0x25, 0x06, 0x00, 0x00];
+const STREAM_LEDS = 240;
+
+// Stream order recorded on this board (2026-10-18): onboard LEDs 1-6, JRGB1, JRGB2, the LEDs of
+// the JRAINBOW1 strip, then those of the JRAINBOW2 strip; later slots stay black.
+const ONBOARD_LEDS = 6;
+const ONBOARD_NAMES = ["Onboard LED 1", "Onboard LED 2", "Onboard LED 3",
+  "Onboard LED 4", "Onboard LED 5", "Onboard LED 6"];
+// Subdevice ids and channel names are the ones SignalRGB setups use, so imported layouts and
+// channel setups apply to them.
+const HEADERS = [
+  { id: "12v RGB Header 1", name: "JRGB1 (12 V RGB header)" },
+  { id: "12v RGB Header 2", name: "JRGB2 (12 V RGB header)" },
+];
+const STRIPS = [
+  { channel: "JRainbow 1", record: 0x1F },
+  { channel: "JRainbow 2", record: 0x2A },
+];
+const STRIP_COUNT = 10;                  // LED count byte inside a JRAINBOW record
+const STRIP_LED_LIMIT = 120;             // LEDs one ARGB header takes
+const STRIP_LED_BUDGET = STREAM_LEDS - ONBOARD_LEDS - HEADERS.length;   // both strips together
+
+// The 0x52 packet that switches the controller to synchronised per-LED mode, record by record as
+// recorded on this board (2026-10-18). Every zone is static black except the onboard master zone
+// (0x4A): effect 0x25 (per-LED), options 0xA9 (JRGB sync), flags 0xBF (every sync flag and the
+// colour flag). The strip LED counts (+10 of the JRAINBOW records) are filled in per session.
+const ZONE_STATIC = (options) => [0x01, 0x00, 0x00, 0x00, options, 0x00, 0x00, 0x00, 0x80, 0x00];
+const MASTER_ZONE = 0x4A;
+const CONFIG_RECORDS = [
+  [0x01, ZONE_STATIC(0x08)],                                   // JRGB1
+  [0x0B, ZONE_STATIC(0x2A)],                                   // JPIPE1
+  [0x15, ZONE_STATIC(0x2A)],                                   // JPIPE2
+  [0x1F, [...ZONE_STATIC(0x29), 0x00]],                        // JRAINBOW1, +10 LED count
+  [0x2A, [...ZONE_STATIC(0x29), 0x00]],                        // JRAINBOW2, +10 LED count
+  [0x35, [0x01, 0x00, 0x00, 0x00, 0x29, 0x00, 0x00, 0x00, 0x82, 0x00, 0x01]],  // JCORSAIR
+  [0x40, ZONE_STATIC(0x28)],                                   // JCORSAIR outer
+  [MASTER_ZONE, [0x25, 0x00, 0x00, 0x00, 0xA9, 0x00, 0x00, 0x00, 0xBF, 0x00]], // onboard master
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) => [MASTER_ZONE + 10 * slot, ZONE_STATIC(0x28)]),
+  [0xAE, ZONE_STATIC(0x2A)],                                   // JRGB2
+];
 
 // Bytes whose GET value is not simply the last SET value (bench, 2026-10-18, this board; see the
-// hardware doc, section "Bench results"):
-//  * J_CORSAIR record +9 (0x3E) reads back as the written value + 4. SignalRGB writes 0x00 there
-//    and the controller then reports 0x04, so a naive read-modify-write grows it by 4 per session.
-//    Every packet therefore writes (read value - 4), which keeps the GET value stable.
-//  * Colour 2 (+5..+7) of an onboard record is not always retained (slot 6 reads back 0), so it is
-//    ignored when recognising our own packet in a GET.
+// hardware doc): the J_CORSAIR record +9 (0x3E) reads back as the written value + 4; colour 2 of
+// an onboard record is not always retained; the master zone's sync flags read back without the
+// flags of headers this board lacks (0xBF written, 0x87 read).
 const CORSAIR_FLAGS_OFFSET = 0x35 + 9;
 const READBACK_BIAS = 4;
+const MASTER_SYNC_OFFSET = MASTER_ZONE + 8;
 
-// Zone record field offsets (relative to the record start).
-const Z_EFFECT = 0;                      // effect number
-const Z_COLOR1 = 1;                      // +1 R, +2 G, +3 B
-const Z_OPTIONS = 4;                     // bit0-1 speed, bit2-6 brightness, bit7 JRGB sync
-const Z_COLOR2 = 5;                      // +5 R, +6 G, +7 B (second LED on boards with 2 LEDs per zone)
-const Z_SYNC = 8;                        // bit0-5 sync flags (onboard, rainbow1, rainbow2, corsair, pipe1, pipe2), bit7 colour flag
-// +9 padding: left untouched.
-
-const EFFECT_STATIC = 0x01;              // "Static" - the only effect used for direct zone colour
-const OPTIONS_STATIC = 0x28;             // speed 0, brightness 10/31, JRGB-sync clear (known-good value)
-const SYNC_NONE_OWN_COLOR = 0x80;        // no sync flags, colour flag set: this zone shows ITS colour bytes
-
-// Onboard LED zones we drive. The record table also holds JRGB1 (0x01), JPIPE1 (0x0B), JPIPE2 (0x15),
-// JRAINBOW1 (0x1F, 11 bytes), JRAINBOW2 (0x2A, 11 bytes), JCORSAIR/JRAINBOW3 (0x35, 11 bytes),
-// JCORSAIR outer (0x40), onboard slots 7..10 (0x86, 0x90, 0x9A, 0xA4) and JRGB2 (0xAE) - all untouched.
-// Which six of the ten onboard slots are wired on the B550 Tomahawk follows the SignalRGB
-// configuration table (slots 0x4A..0x7C) and is marked unverified in the hardware doc until the
-// M1 hardware test paints a distinct colour per LED.
-const ONBOARD_ZONES = [
-  { name: "Onboard LED 1", offset: 0x4A },
-  { name: "Onboard LED 2", offset: 0x54 },
-  { name: "Onboard LED 3", offset: 0x5E },
-  { name: "Onboard LED 4", offset: 0x68 },
-  { name: "Onboard LED 5", offset: 0x72 },
-  { name: "Onboard LED 6", offset: 0x7C },
-];
+// Output report 0x01 (64 bytes) 0xBA asks the controller whether the BIOS lets it drive the
+// onboard LEDs ("EZ LED Control"); the reply 0x5A carries 1 (on) or 0 (off) at byte 6.
+const COMMAND_LENGTH = 64;
+const EZ_LED_QUERY = 0xBA;
+const EZ_LED_REPLY = 0x5A;
+const EZ_LED_STATE = 6;
 
 // ---------------------------------------------------------------------------------------------
 // Plugin state
 // ---------------------------------------------------------------------------------------------
 let restoreImage = null;                 // 185-byte copy of report 0x52 as read in Initialize()
 let writesEnabled = false;               // true only after a valid restore image was captured
-let lastSent = null;                     // last packet we wrote (used to recognise our own state on re-Initialize)
-let lastSentAt = -Infinity;              // Date.now() of that write
+let lastConfig = null;                   // last 0x52 packet written (recognises our own state on re-Initialize)
+let configuredCounts = null;             // strip LED counts the controller is configured for
+let lastStream = null;                   // last 0x53 packet written
+let lastStreamAt = -Infinity;            // Date.now() of that write
+let wrote = false;                       // whether this session changed the controller at all
 
-// Render() resends an unchanged packet only once this much time has passed, so a static colour is
-// not pushed to the controller 30 times per second. A changed packet is sent immediately.
+// Render() resends an unchanged stream only once this much time has passed, so a static colour is
+// not pushed to the controller 30 times per second. A changed stream is sent immediately.
 const KEEPALIVE_MS = 1000;
 
 // ---------------------------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------------------------
-// Facts observed on this board (2026-10-17, read-only HidP_GetCaps probe): a single HID interface,
-// device path HID\VID_1462&PID_7C91\...&0&0000 (no &MI_xx, no &ColNN), usage_page 0x0001,
-// usage 0x0000, input/output 64 bytes, feature report maximum 725 bytes. The controller does NOT
-// use a vendor-defined usage page, so we select on the interface number only. A non-composite USB
-// device reports interface 0 (hidapi, SignalRGB and Lightloom agree; verified in M0). -1 is accepted
-// too: it is what a host reports for a HID transport without a USB interface.
+// A single HID interface (usage page 0x0001, usage 0x0000, feature reports up to 725 bytes): a
+// non-composite USB device reports interface 0; -1 is what a host reports for a HID transport
+// without a USB interface.
 export function Validate(endpoint) {
   return endpoint.interface === 0 || endpoint.interface === -1;
 }
 
 export function Initialize() {
   writesEnabled = false;
-  lastSentAt = -Infinity;                // the first Render() after (re-)Initialize always writes
+  configuredCounts = null;               // (re-)configure before the first frame
+  lastStreamAt = -Infinity;
 
   // GET_REPORT(Feature, 0x52). The host returns the report-id-prefixed byte array; the number of
   // bytes the device actually returned is getLastReadSize() when the host provides it. Both the
   // reported size and the array itself must cover all 185 bytes before we trust the image.
-  const image = device.get_report([REPORT_ID], REPORT_LENGTH);
+  const image = device.get_report([CONFIG_ID], CONFIG_LENGTH);
   const size = readSize(image);
-
-  if (size !== REPORT_LENGTH || !isByteArray(image, REPORT_LENGTH) || (image[0] & 0xFF) !== REPORT_ID) {
-    device.log(`MSI 185: GET feature report 0x52 returned ${size} bytes (expected ${REPORT_LENGTH}); ` +
+  if (size !== CONFIG_LENGTH || !isByteArray(image, CONFIG_LENGTH) || (image[0] & 0xFF) !== CONFIG_ID) {
+    device.log(`MSI 185: GET feature report 0x52 returned ${size} bytes (expected ${CONFIG_LENGTH}); ` +
                "no restore image, all writes disabled.", { toFile: true });
     return;
   }
-
   const current = [];
-  for (let i = 0; i < REPORT_LENGTH; i++) {
+  for (let i = 0; i < CONFIG_LENGTH; i++) {
     current.push(image[i] & 0xFF);
   }
 
   // The host calls Initialize() again after a system resume (and after a hot re-plug). When the
-  // controller still holds the packet WE wrote last (e.g. the suspend colour), the board's real
-  // "before Lightloom" state is the image captured the first time; keep it so that Shutdown(false)
-  // still restores the pre-run appearance. Anything else (cold boot, another application wrote
-  // in between) is a genuinely new state and becomes the restore image.
-  if (restoreImage === null || lastSent === null || !readsBackAs(current, lastSent)) {
+  // controller still holds the configuration WE wrote last, the board's real "before Lightloom"
+  // state is the image captured the first time; keep it so that Shutdown(false) still restores
+  // the pre-run appearance. Anything else (cold boot, another application wrote in between) is a
+  // genuinely new state and becomes the restore image.
+  if (restoreImage === null || lastConfig === null || !readsBackAs(current, lastConfig)) {
     restoreImage = current;
   }
   writesEnabled = true;
-  device.log("MSI 185: captured 185-byte restore image; direct zone mode enabled for 6 onboard LEDs.", { toFile: true });
 
-  // M2: ARGB headers become component channels driven by the per-LED feature report 0x53:
-  //   device.addChannel("JRAINBOW1", 120);
-  //   device.addChannel("JRAINBOW2", 120);
-  // That requires the 185-byte "switch to per-LED mode" record (effect 0x25 on the onboard zone 0,
-  // LED counts in the JRAINBOW records) and is intentionally not sent in M1.
+  for (const header of HEADERS) {
+    device.createSubdevice(header.id);
+    device.setSubdeviceName(header.id, header.name);
+    device.setSubdeviceSize(header.id, 1, 1);
+    device.setSubdeviceLeds(header.id, ["LED"], [[0, 0]]);
+  }
+  device.SetLedLimit(STRIP_LED_BUDGET);
+  for (const strip of STRIPS) {
+    device.addChannel(strip.channel, STRIP_LED_LIMIT);
+  }
+
+  configure(stripCounts());
+  checkEzLed();
+  device.log("MSI 185: captured the restore image; per-LED mode for the onboard LEDs, JRGB1/2 and JRAINBOW1/2.", { toFile: true });
 }
 
 export function Render() {
   if (!writesEnabled) {
     return;
   }
-  const packet = buildPacket(colourForLed);
-  if (lastSent !== null && sameBytes(packet, lastSent) && Date.now() - lastSentAt < KEEPALIVE_MS) {
-    return;
-  }
-  sendPacket(packet);
+  paint(colourSource());
 }
 
 export function Shutdown(SystemSuspending) {
@@ -193,30 +217,128 @@ export function Shutdown(SystemSuspending) {
   }
   if (SystemSuspending) {
     const rgb = hexToRgb(param("shutdownColor", "#000000"));
-    sendPacket(buildPacket(() => rgb));
+    paint(() => rgb);
     return;
   }
-  // Normal exit: put the controller back exactly as we found it (save flag forced to 0 so the
-  // restore never persists anything to flash). Nothing to undo when nothing was written: a
-  // restore would re-enter whatever mode the image holds (per-LED mode with no colour stream
-  // after SignalRGB, for example) although Lightloom never changed the board.
-  if (lastSent === null) {
+  // Normal exit: blank the stream, then put the configuration back exactly as we found it (save
+  // flag forced to 0), which also leaves per-LED mode. Nothing to undo when nothing was written.
+  if (!wrote) {
     return;
   }
-  sendPacket(writableFrom(restoreImage));
+  sendStream(blankStream());
+  sendConfig(writableFrom(restoreImage));
 }
 
 // ---------------------------------------------------------------------------------------------
-// Packet construction
+// Frames
 // ---------------------------------------------------------------------------------------------
-// Start from the restore image as it must be written and rewrite only the fields we understand.
-function buildPacket(colourFor) {
-  const packet = writableFrom(restoreImage);
-
-  for (let index = 0; index < ONBOARD_ZONES.length; index++) {
-    const rgb = colourFor(index);
-    writeStaticZone(packet, ONBOARD_ZONES[index].offset, rgb);
+// One frame: reconfigure when a strip's LED count changed, then send the stream unless it is
+// unchanged and was sent less than KEEPALIVE_MS ago.
+function paint(source) {
+  const counts = stripCounts();
+  if (configuredCounts === null || !sameValues(counts, configuredCounts)) {
+    configure(counts);
   }
+  if (configuredCounts === null) {
+    return;
+  }
+  const stream = buildStream(source, configuredCounts);
+  if (lastStream !== null && sameValues(stream, lastStream) && Date.now() - lastStreamAt < KEEPALIVE_MS) {
+    return;
+  }
+  sendStream(stream);
+}
+
+// Where each kind of LED takes its colour from: the canvas, or one colour for everything.
+function colourSource() {
+  if (param("LightingMode", "Canvas") === "Forced") {
+    const rgb = hexToRgb(param("forcedColor", "#009bde"));
+    return () => rgb;
+  }
+  return null;
+}
+
+// The 0x53 report for `counts` strip LEDs. `source` is null for the canvas, or a function that
+// returns the one colour every LED gets.
+function buildStream(source, counts) {
+  const packet = new Array(STREAM_LENGTH).fill(0);
+  STREAM_HEADER.forEach((value, index) => { packet[index] = value; });
+  let slot = 0;
+  const put = (rgb) => {
+    const offset = STREAM_HEADER.length + 3 * slot;
+    packet[offset] = rgb[0] & 0xFF;
+    packet[offset + 1] = rgb[1] & 0xFF;
+    packet[offset + 2] = rgb[2] & 0xFF;
+    slot++;
+  };
+  for (let x = 0; x < ONBOARD_LEDS; x++) {
+    put(source ? source() : rgbOrBlack(device.color(x, 0)));
+  }
+  for (const header of HEADERS) {
+    put(source ? source() : rgbOrBlack(device.subdeviceColor(header.id, 0, 0)));
+  }
+  STRIPS.forEach((strip, index) => {
+    const colours = source ? [] : channelColours(strip.channel);
+    for (let led = 0; led < counts[index]; led++) {
+      put(source ? source() : colours.slice(3 * led, 3 * led + 3).concat([0, 0, 0]));
+    }
+  });
+  return packet;
+}
+
+// Every LED black.
+function blankStream() {
+  const packet = new Array(STREAM_LENGTH).fill(0);
+  STREAM_HEADER.forEach((value, index) => { packet[index] = value; });
+  return packet;
+}
+
+// A 0x53 report that is zero after the report id, sent before every configuration as recorded
+// (what it does is not known).
+function resetStream() {
+  const packet = new Array(STREAM_LENGTH).fill(0);
+  packet[0] = STREAM_ID;
+  return packet;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------------------------
+// LED counts for the two strips as the controller is told them: what the channels' components
+// add up to, at least 1 (the smallest count seen on the wire), at most one header's limit, and
+// both together within what the stream has room for.
+function stripCounts() {
+  const counts = [];
+  let room = STRIP_LED_BUDGET;
+  STRIPS.forEach((strip, index) => {
+    const channel = device.channel(strip.channel);
+    const wanted = channel ? Number(channel.LedCount()) || 0 : 0;
+    const stripsAfter = STRIPS.length - 1 - index;
+    const count = Math.max(1, Math.min(wanted, STRIP_LED_LIMIT, room - stripsAfter));
+    counts.push(count);
+    room -= count;
+  });
+  return counts;
+}
+
+// As recorded: the reset 0x53 report, then the per-LED configuration.
+function configure(counts) {
+  const packet = configPacket(counts);
+  sendFeature(resetStream(), "0x53");
+  if (sendConfig(packet)) {
+    configuredCounts = counts.slice();
+    lastStream = null;                    // the next frame always goes out
+  }
+}
+
+function configPacket(counts) {
+  const packet = new Array(CONFIG_LENGTH).fill(0);
+  packet[0] = CONFIG_ID;
+  for (const [offset, bytes] of CONFIG_RECORDS) {
+    bytes.forEach((value, index) => { packet[offset + index] = value; });
+  }
+  STRIPS.forEach((strip, index) => { packet[strip.record + STRIP_COUNT] = counts[index]; });
+  packet[SAVE_FLAG_OFFSET] = 0x00;
   return packet;
 }
 
@@ -235,10 +357,10 @@ function readsBackAs(current, sent) {
   if (current.length !== sent.length) {
     return false;
   }
-  const ignored = new Set([SAVE_FLAG_OFFSET]);
-  for (const zone of ONBOARD_ZONES) {
+  const ignored = new Set([SAVE_FLAG_OFFSET, MASTER_SYNC_OFFSET]);
+  for (let slot = 0; slot < 10; slot++) {
     for (let i = 0; i < 3; i++) {
-      ignored.add(zone.offset + Z_COLOR2 + i);
+      ignored.add(MASTER_ZONE + 10 * slot + 5 + i);
     }
   }
   for (let i = 0; i < sent.length; i++) {
@@ -256,43 +378,63 @@ function readsBackAs(current, sent) {
   return true;
 }
 
-// Static effect with a single colour. Colour 2 is set to the same value so that boards wiring
-// two LEDs to one zone light uniformly. Byte +9 (padding) is not modified.
-function writeStaticZone(packet, offset, rgb) {
-  packet[offset + Z_EFFECT] = EFFECT_STATIC;
-  packet[offset + Z_COLOR1] = rgb[0] & 0xFF;
-  packet[offset + Z_COLOR1 + 1] = rgb[1] & 0xFF;
-  packet[offset + Z_COLOR1 + 2] = rgb[2] & 0xFF;
-  packet[offset + Z_OPTIONS] = OPTIONS_STATIC;
-  packet[offset + Z_COLOR2] = rgb[0] & 0xFF;
-  packet[offset + Z_COLOR2 + 1] = rgb[1] & 0xFF;
-  packet[offset + Z_COLOR2 + 2] = rgb[2] & 0xFF;
-  packet[offset + Z_SYNC] = SYNC_NONE_OWN_COLOR;
+// ---------------------------------------------------------------------------------------------
+// I/O
+// ---------------------------------------------------------------------------------------------
+function sendConfig(packet) {
+  if (!sendFeature(packet, "0x52")) {
+    return false;
+  }
+  lastConfig = packet.slice();
+  return true;
 }
 
-function colourForLed(index) {
-  if (param("LightingMode", "Canvas") === "Forced") {
-    return hexToRgb(param("forcedColor", "#009bde"));
+function sendStream(packet) {
+  if (sendFeature(packet, "0x53")) {
+    lastStream = packet.slice();
+    lastStreamAt = Date.now();
   }
-  const position = LedPositions()[index];
-  const rgb = device.color(position[0], position[1]);
-  return isByteArray(rgb, 3) ? rgb : [0, 0, 0];
 }
 
 // SET_REPORT(Feature). The host returns bytes written or -1; it never throws.
-function sendPacket(packet) {
-  const written = device.send_report(packet, REPORT_LENGTH);
-  if (written < 0) {
-    device.log("MSI 185: send_report(0x52) failed.", { toFile: true });
+function sendFeature(packet, label) {
+  if (device.send_report(packet, packet.length) < 0) {
+    device.log(`MSI 185: send_report(${label}) failed.`, { toFile: true });
+    return false;
+  }
+  wrote = true;
+  return true;
+}
+
+// Tells the user when the BIOS keeps the onboard LEDs off; changes nothing.
+function checkEzLed() {
+  const query = new Array(COMMAND_LENGTH).fill(0xCC);
+  query[0] = 0x01;
+  query[1] = EZ_LED_QUERY;
+  device.clearReadBuffer();
+  if (device.write(query, COMMAND_LENGTH) < 0) {
     return;
   }
-  lastSent = packet.slice();
-  lastSentAt = Date.now();
+  const reply = device.read([0x01], COMMAND_LENGTH, 100);
+  if (isByteArray(reply, EZ_LED_STATE + 1) && (reply[1] & 0xFF) === EZ_LED_REPLY && (reply[EZ_LED_STATE] & 0xFF) === 0) {
+    device.log("MSI 185: EZ LED Control is off in the BIOS, so the onboard LEDs stay dark; the headers still work.", { toFile: true });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------------------------
+// A channel's colours as a flat R, G, B array (empty for an unknown channel).
+function channelColours(name) {
+  const channel = device.channel(name);
+  const colours = channel ? channel.getColors("Inline", "RGB") : [];
+  return isByteArray(colours, 0) ? Array.from(colours, (value) => value & 0xFF) : [];
+}
+
+function rgbOrBlack(rgb) {
+  return isByteArray(rgb, 3) ? rgb : [0, 0, 0];
+}
+
 // Accepts plain arrays and typed arrays alike (the host may hand back either).
 function isByteArray(value, minLength) {
   return value != null && typeof value.length === "number" && value.length >= minLength;
@@ -305,7 +447,7 @@ function readSize(image) {
   return isByteArray(image, 0) ? image.length : 0;
 }
 
-function sameBytes(a, b) {
+function sameValues(a, b) {
   if (a.length !== b.length) {
     return false;
   }

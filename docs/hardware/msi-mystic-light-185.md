@@ -2,7 +2,8 @@
 
 # MSI Mystic Light "185-byte" motherboard controller (USB HID 1462:7C91)
 
-Hardware notes for the first-party plugin `plugins/msi-mystic-light-7c91/plugin.js` (milestone M1).
+Hardware notes for the first-party plugin `plugins/msi-mystic-light-7c91/plugin.js` (zone mode in
+M1, v0.1; per-LED mode since v0.2, see [Per-LED mode](#per-led-mode-what-the-plugin-does-since-v02-2026-10-18)).
 This page records **facts and their provenance**; everything in the "Unverified" column must be
 confirmed on the bench before the plugin relies on it. No code was copied from any source listed
 below; the tables are our own re-expression of publicly documented behaviour.
@@ -16,6 +17,7 @@ below; the tables are our own re-expression of publicly documented behaviour.
 | S3 | SignalRGB log files on this machine (`SignalRGB_2026101x_*.log`) | Behaviour observed on the actual board: USB path, product string, "PerLED" detection result, which configuration table applied | Observation. |
 | S4 | Read-only HID probe on this machine (`CM_Get_Device_Interface_List` + `HidP_GetCaps`, device opened with zero access, no I/O) | Interface/usage page/report lengths | Observation. |
 | S5 | USB-IF HID 1.11 specification | Feature report semantics (GET/SET_REPORT, report id as first byte) | Public standard. |
+| S6 | Lightloom's own recordings of this board's traffic in per-LED mode, decoded with the coordinate probe effect (2026-10-18) | Start sequence, per-LED configuration packet, colour stream layout, EZ LED reply, read-back of the configuration | Observation. |
 
 ## Device identity (observed, S3/S4)
 
@@ -131,7 +133,7 @@ per-LED mode with no colour stream — the LEDs may stay dark until the next reb
 owning application re-streams. This is faithful "restore what we read" behaviour, but it should be
 noted in the user documentation. **Unverified** until tried on the bench.
 
-## What the Lightloom M1 plugin does, exactly
+## What the plugin did in M1 (v0.1, zone mode; replaced by per-LED mode in v0.2)
 
 1. `Initialize()`: `device.get_report([0x52], 185)`; require `getLastReadSize() === 185` (or array
    length 185 when the host lacks the call), an array of at least 185 entries, and byte 0 == `0x52`;
@@ -149,13 +151,103 @@ noted in the user documentation. **Unverified** until tried on the bench.
 4. Never touched: JRGB1/JRGB2, JRAINBOW1/JRAINBOW2 (including their LED-count byte), Corsair slots,
    onboard slots 7..10, any `0x53` / `0x01` / Gen2 traffic.
 
-Golden packet: `plugins/msi-mystic-light-7c91/fixtures/expected-packet.json`
+Fixtures of the current plugin: `plugins/msi-mystic-light-7c91/fixtures/per-led.json`
 (test: `node --test "plugins/**/*.test.mjs"` from the repo root; Node >= 21 does not expand a bare
 directory argument).
 
+## Per-LED mode: what the plugin does since v0.2 (2026-10-18)
+
+Source S6 (own recordings): Lightloom recorded the board's traffic while another plugin
+drove it in per-LED mode, with the coordinate probe effect (`tools/device-probe/coords.html`,
+every canvas pixel encodes its position) and two layouts: everything at its default place,
+then the two 12 V header subdevices and the two JRAINBOW strips at distinct places
+(`lightloom effect ... --signalrgb --layout ... --record`). Every slot of the colour stream
+was matched to the canvas position it carried. The same recording of Lightloom's own plugin
+afterwards decodes identically.
+
+### Start sequence (as recorded; Lightloom reads 0x52 first)
+
+| # | Report | Bytes | Meaning |
+|---|--------|-------|---------|
+| 0 | GET feature `0x52` | 185 | the restore image (Lightloom only) |
+| 1 | SET feature `0x53` | `53` + 724 zero bytes | sent before every configuration; meaning unknown ("reset") |
+| 2 | SET feature `0x52` | the configuration below | synchronised per-LED mode |
+| 3 | output report `0x01` | `01 BA` + 62 × `CC` | EZ LED query |
+| 4 | input report `0x01` | `01 5A CC CC CC CC <state> CC ...` | `<state>` 1 = EZ LED Control on in the BIOS, 0 = off (onboard LEDs dark) |
+
+### The configuration packet (0x52)
+
+Every record static black (`01 00 00 00 <options> 00 00 00 80 00`) except the onboard
+master zone, which carries effect `0x25` with all sync flags set, so every other zone
+follows its stream:
+
+| Offset | Zone | Bytes |
+|--------|------|-------|
+| `0x01` | JRGB1 | `01 00 00 00 08 00 00 00 80 00` |
+| `0x0B`, `0x15` | JPIPE1, JPIPE2 | `01 00 00 00 2A 00 00 00 80 00` |
+| `0x1F`, `0x2A` | JRAINBOW1, JRAINBOW2 | `01 00 00 00 29 00 00 00 80 00 <LED count>` |
+| `0x35` | JCORSAIR | `01 00 00 00 29 00 00 00 82 00 01` |
+| `0x40` | JCORSAIR outer | `01 00 00 00 28 00 00 00 80 00` |
+| `0x4A` | onboard master | `25 00 00 00 A9 00 00 00 BF 00` |
+| `0x54` ... `0xA4` | onboard 1-9 | `01 00 00 00 28 00 00 00 80 00` |
+| `0xAE` | JRGB2 | `01 00 00 00 2A 00 00 00 80 00` |
+| `0xB8` | save flag | `00` |
+
+The LED counts are the strips' lengths: 60 each on the wire (the "Default Strip - 60"
+setup), 1 each before any strip length was known. Lightloom writes the channels' LED counts
+(at least 1, at most 120 per header, 232 for both) and sends the reset and the
+configuration again whenever a count changes.
+
+Read-back of this packet (GET right after it, S6): identical except `0x3E` (+4, as in zone
+mode) and the master zone's sync flags at `0x52`: written `0xBF`, read `0x87` (the flags
+of headers this board does not have are dropped). The plugin ignores `0x52` when it checks
+whether the board still holds its own configuration after a resume.
+
+### The colour stream (0x53, one per frame)
+
+`53 25 06 00 00`, then 240 LEDs of `R G B` (725 bytes). Effect `0x25`, area `0x06`
+(onboard), start index 0. In synchronised mode the one stream carries every zone, in this
+order:
+
+| Slots | LEDs |
+|-------|------|
+| 0-5 | onboard LEDs 1-6 (left to right as the board's LED names go) |
+| 6 | JRGB1 (12 V RGB header) |
+| 7 | JRGB2 |
+| 8 ... 8 + n1 - 1 | JRAINBOW1 strip, LED 0 first (n1 = its LED count in the configuration) |
+| then n2 slots | JRAINBOW2 strip |
+| the rest | black |
+
+The other plugin sent a stream every frame and, on shutdown, one black stream; Lightloom
+skips an unchanged stream for up to 1 s and, on exit, sends a black stream and then the
+restore image, which leaves per-LED mode.
+
+### Plugin layout
+
+- Device: the six onboard LEDs, `Size` 6 × 1 (names unchanged since v0.1).
+- Subdevices `12v RGB Header 1` and `12v RGB Header 2` (shown as "JRGB1/JRGB2 (12 V RGB
+  header)"), one LED each.
+- Channels `JRainbow 1` and `JRainbow 2`, 120 LEDs each, 232 together
+  (`SetLedLimit(232)`).
+- The ids and channel names are those of SignalRGB setups, so an imported layout and
+  channel setup apply to them unchanged.
+
+### Bench (2026-10-18, SignalRGB closed)
+
+| Check | Result |
+|-------|--------|
+| Start sequence and configuration vs the recording | byte-identical (reset, configuration with 60 + 60, EZ LED query) |
+| Probe decode of Lightloom's own stream | same slot order as above (JRGB1 at slot 6, JRGB2 at 7, strips at 8-67 and 68-127) |
+| `--restore-check` (0x52 and 0x53 before `Initialize` and after `Shutdown(false)`) | identical |
+| `lightloom effect effects/rainbow-wave.html`, 20 s | 582 frames, 586 SET_FEATUREs, 0 errors, canvas to wire p50 / p99 13 / 13 ms |
+
+A 725-byte SET_FEATURE takes about 12-13 ms on this board, against 3.6 ms for the
+185-byte report of zone mode; at 30 fps that is well inside the frame time.
+
 ## Safety rules (carry into the host and the CLI)
 
-- Never send a 0x52 packet that was not derived from a successful GET of the same report.
+- Nothing is sent before a successful GET of 0x52 (the restore image). The restore packet is
+  that image; the per-LED configuration is the packet recorded on the wire (S6).
 - Byte `0xB8` is always `0` — Lightloom never persists to the controller's flash.
 - Byte `0x3E` is written as the read value - 4 (see "Bench results": the controller reads it back
   as the written value + 4).

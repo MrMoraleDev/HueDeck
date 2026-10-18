@@ -258,8 +258,20 @@ fn replay(
             pid: d.pid,
             endpoints,
         };
+        let mut channel_components = std::collections::BTreeMap::new();
+        for (name, array) in &d.channels {
+            let (instances, notes) = huedeck_engine::parse_channel(&array.to_string())
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("{}: channel {name} in the trace", d.key))?;
+            for note in notes {
+                eprintln!("huedeck replay: {}: {name}: {note}", d.key);
+            }
+            channel_components.insert(name.clone(), instances);
+        }
         let opts = SessionOptions {
             parameters: trace.parameters.clone(),
+            system_info: trace.system_info.clone().map(Arc::new),
+            channel_components,
             ..SessionOptions::default()
         };
         handles.push(session::spawn(

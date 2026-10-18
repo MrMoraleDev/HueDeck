@@ -5,10 +5,10 @@
 //! table: Windows `GetSystemFirmwareTable('RSMB')` ([`parse_raw_smbios_data`]),
 //! Linux `/sys/firmware/dmi/tables/DMI` ([`parse_table`]).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What the firmware says about the machine.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemInfo {
     /// Baseboard (SMBIOS type 2).
     pub motherboard: BoardInfo,
@@ -19,7 +19,7 @@ pub struct SystemInfo {
 }
 
 /// SMBIOS type 2.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardInfo {
     /// `Micro-Star International Co., Ltd.`
     pub manufacturer: String,
@@ -30,7 +30,7 @@ pub struct BoardInfo {
 }
 
 /// SMBIOS type 0.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BiosInfo {
     /// Firmware vendor.
     pub vendor: String,
@@ -42,7 +42,7 @@ pub struct BiosInfo {
 }
 
 /// SMBIOS type 17 (one populated slot).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RamModule {
     /// Module manufacturer (often `Unknown` on consumer kits).
     pub manufacturer: String,

@@ -152,6 +152,9 @@ pub struct TracedDevice {
     /// `Render()` calls of its session; a replay renders as many.
     #[serde(default)]
     pub frames: u64,
+    /// Components assigned per channel (each a JSON array of component instances).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub channels: BTreeMap<String, serde_json::Value>,
 }
 
 /// A recording: the collections and every operation on them, in order.
@@ -169,6 +172,9 @@ pub struct HidTrace {
     /// Plugin parameter overrides of the recording.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub parameters: serde_json::Map<String, serde_json::Value>,
+    /// What `@SignalRGB/systeminfo` reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_info: Option<crate::smbios::SystemInfo>,
     /// The devices driven.
     #[serde(default)]
     pub devices: Vec<TracedDevice>,
@@ -185,6 +191,7 @@ impl Default for HidTrace {
             note: String::new(),
             canvas: None,
             parameters: serde_json::Map::new(),
+            system_info: None,
             devices: Vec::new(),
             endpoints: Vec::new(),
             events: Vec::new(),
@@ -301,8 +308,21 @@ impl RecordingHid {
                 pid,
                 paths: endpoints.iter().map(|e| e.path.clone()).collect(),
                 frames: 0,
+                channels: BTreeMap::new(),
             });
         }
+    }
+
+    /// The components on the channels of `key` (channel name -> JSON array of instances).
+    pub fn set_channels(&self, key: &str, channels: BTreeMap<String, serde_json::Value>) {
+        if let Some(d) = self.log.trace().devices.iter_mut().find(|d| d.key == key) {
+            d.channels = channels;
+        }
+    }
+
+    /// What `@SignalRGB/systeminfo` reports during the recording.
+    pub fn set_system_info(&self, info: Option<crate::smbios::SystemInfo>) {
+        self.log.trace().system_info = info;
     }
 
     /// How many `Render()` calls the session of `key` made.

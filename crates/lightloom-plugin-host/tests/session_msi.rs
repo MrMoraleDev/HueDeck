@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Golden test of a full device session (M1): the first-party MSI Mystic
 //! Light plugin runs through the same catalog → session → device-host path
 //! the CLI uses on hardware, against a scripted mock HID endpoint. Expected

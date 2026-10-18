@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The engine thread: owns the devices (one plugin session each), the canvas
 //! renderer and the database. The API reaches it only through [`Shared`]:
 //! requests go in with a reply channel, a fresh [`Snapshot`] comes out after

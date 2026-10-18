@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! HID backend traits.
 //!
 //! One [`HidEndpointInfo`] per HID *top-level collection* (TLC). On Windows a

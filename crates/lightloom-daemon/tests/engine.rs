@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The engine end to end on a scripted device: a small plugin drives a mock
 //! HID device while requests change the effect, brightness, placements,
 //! channel components, plugin parameters, layouts and the database, and the

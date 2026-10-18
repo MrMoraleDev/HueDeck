@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Research brief for M7. Produced 2026-10-18 by a research pass and an independent fact-check pass; facts carry inline provenance tags. -->
 
 # Lightloom M7: Linux backend research brief (topic: linux-backend), independently verified edition

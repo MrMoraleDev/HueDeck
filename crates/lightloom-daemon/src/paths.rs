@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Where the daemon keeps things.
 //!
 //! * **data** (machine-local): `state.sqlite`, the API token, the instance

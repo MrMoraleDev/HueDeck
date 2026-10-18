@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Router tests against a scripted backend: the guard (loopback Host, same
 //! Origin, token for mutations), every documented route, the compat envelope,
 //! the dashboard token and the preview payload.

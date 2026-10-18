@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Live daemon state: the snapshot (refetched on "state" events, and once a
 // second while devices run), the log lines, and the connection status.
 

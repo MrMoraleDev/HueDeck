@@ -2,8 +2,8 @@
   "name": "@lightloom/prelude",
   "private": true,
   "version": "0.1.0",
-  "description": "Plain-JavaScript host shims loaded into every Lightloom plugin context (SignalRGB-compatible surface). SPDX-License-Identifier: Apache-2.0 OR MIT",
-  "license": "Apache-2.0 OR MIT",
+  "description": "Plain-JavaScript host shims loaded into every Lightloom plugin context (SignalRGB-compatible surface). SPDX-License-Identifier: GPL-3.0-or-later",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "test": "node --test \"tests/**/*.test.{js,mjs}\""

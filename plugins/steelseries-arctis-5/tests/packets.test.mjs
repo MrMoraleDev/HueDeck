@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // SteelSeries Arctis 5 plugin: start, a green frame and the shutdown are what the headset
 // received in Lightloom's own recording (fixtures/recorded.json); each ear cup gets its own colour.

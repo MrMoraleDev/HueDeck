@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Native Windows HID backend (no hidapi).
 //!
 //! hidapi 2.6 enumerates every HID interface, and reads every device's USB

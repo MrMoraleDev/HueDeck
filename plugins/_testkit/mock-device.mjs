@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Tiny mock of the SignalRGB-compatible `device` global for first-party plugin tests
 // (Node 24, node:test). It records every I/O call so a test can assert the exact bytes a

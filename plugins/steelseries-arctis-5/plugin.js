@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Lightloom first-party plugin: SteelSeries Arctis 5 headset (2019 edition, USB 1038:12AA),
 // the two ear-cup lights.

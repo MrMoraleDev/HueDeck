@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // BinaryUtils: little/big-endian 16/32-bit packing helpers in the exact shape
 // SignalRGB-era plugins expect.

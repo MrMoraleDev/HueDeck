@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Keep in sync with `rust-version` in Cargo.toml [workspace.package].
 msrv = "1.89"
 # Unsafe is expected in HAL backends, but every block must say why.

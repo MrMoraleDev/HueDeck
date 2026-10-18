@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Corpus dry-run (`lightloom compat dry-run <dir>`).
 //!
 //! Every `*.js` file under a directory is loaded into a fresh runtime on its

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Facade for "@SignalRGB/appInfo" (Rust-backed; the real module reports the
 // Lightloom version plus `compat: "signalrgb-2.5"`, see architecture-synthesis).

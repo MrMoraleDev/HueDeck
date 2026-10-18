@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Other software holding the devices Lightloom drives: reported, never terminated.
 
 use lightloom_plugin_host::manager::Present;

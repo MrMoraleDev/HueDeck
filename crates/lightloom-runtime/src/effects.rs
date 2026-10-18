@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The effect library: lightscripts found in effect directories, with their
 //! metadata and a stable id.
 //!

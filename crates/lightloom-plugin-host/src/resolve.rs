@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Module-specifier resolution for the compat profile.
 //!
 //! Rules (synthesis §4 "Loading"):

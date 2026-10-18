@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Parses, then throws a SyntaxError at run time (Lightloom test fixture).
 const settings = JSON.parse("{");
 export function Name() { return "Edge Runtime SyntaxError"; }

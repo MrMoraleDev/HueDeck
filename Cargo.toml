@@ -7,11 +7,11 @@ default-members = ["crates/lightloom-cli", "crates/lightloom-daemon"]
 version = "0.0.1"
 edition = "2021"
 rust-version = "1.89"
-license = "Apache-2.0 OR MIT"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/MrMoraleDev/Lightloom"
 authors = ["Lightloom contributors"]
 homepage = "https://github.com/MrMoraleDev/Lightloom"
-description = "Lightloom — open source RGB manager, compatible with the SignalRGB plugin and lightscript ecosystem"
+description = "Lightloom — standalone open source RGB lighting manager: no account, no telemetry, no ads; runs SignalRGB-format plugins and effects"
 keywords = ["rgb", "led", "hid", "signalrgb", "lighting"]
 categories = ["hardware-support"]
 

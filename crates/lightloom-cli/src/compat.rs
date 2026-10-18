@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `lightloom compat …` — SignalRGB-compatibility tooling.
 //!
 //! `lightloom compat dry-run <dir> [--initialize] [--json out.json] [--jobs N]`

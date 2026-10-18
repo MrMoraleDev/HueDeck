@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Device sessions: one plugin driving one physical device.
 //!
 //! [`spawn`] starts a dedicated plugin thread with its own QuickJS runtime

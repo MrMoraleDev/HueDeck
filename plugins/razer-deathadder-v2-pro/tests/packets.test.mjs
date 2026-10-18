@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Razer DeathAdder V2 Pro plugin: the requests, a frame and the shutdown are what the mouse
 // received in Lightloom's own recording (fixtures/recorded.json); the transaction id is found by

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `lightloom devices`: enumerate HID devices read-only and print the
 //! SignalRGB-shaped endpoint tuples grouped by physical device.
 

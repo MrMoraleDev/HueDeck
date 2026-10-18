@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The CEF client against a stand-in renderer (`lightloom-renderer-fake`): frames
 //! flow into the store, a static page is kept alive, a crashed renderer is
 //! restarted, control values reach the renderer.

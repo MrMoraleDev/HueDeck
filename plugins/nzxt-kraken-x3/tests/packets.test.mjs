@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // NZXT Kraken X3 plugin: the packets match what the device received in Lightloom's own recording
 // (fixtures/recorded.json), the pump ring keeps the device's LED order, and the header channel

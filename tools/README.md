@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # tools/
 
 Developer and packaging helpers that are not part of the shipped binaries.
@@ -15,6 +15,6 @@ Conventions:
 
 - Small tools are Rust binaries in their own crate under `tools/<name>/` (not workspace
   default members); scripts that need no compilation may be Python 3.13 run with `-I`.
-- Every file carries `SPDX-License-Identifier: Apache-2.0 OR MIT`.
+- Every file carries `SPDX-License-Identifier: GPL-3.0-or-later`.
 - Tools never read WhirlwindFX-authored files from the repository; they operate on the
   user's own installation directories when a corpus is required.

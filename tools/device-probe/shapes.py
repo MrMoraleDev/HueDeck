@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Summarise a Lightloom HID trace: operations in order, grouped by packet "shape".
 
 Usage: python -I shapes.py <trace.json> [head_bytes]

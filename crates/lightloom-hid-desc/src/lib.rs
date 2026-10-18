@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! HID report-descriptor parser.
 //!
 //! Written from the USB HID 1.11 specification (§6.2.2 "Report Descriptor",

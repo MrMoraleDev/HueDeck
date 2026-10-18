@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- One effect control or plugin parameter: number, hue, boolean, color, combobox, text. -->
 <script lang="ts">
   interface Props {

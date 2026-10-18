@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Linux HAL backends (M7).
 //!
 //! Planned: hidapi `linux-native` (hidraw) with `lightloom-hid-desc` splitting

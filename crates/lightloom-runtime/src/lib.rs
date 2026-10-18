@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The device runtime `lightloom` (CLI runs) and `lightloomd` (the daemon) share:
 //!
 //! * [`hardware`]: the HID backend of this OS and the present devices a plugin claims;

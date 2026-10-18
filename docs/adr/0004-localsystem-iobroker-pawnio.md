@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # ADR-0004: Privileged bus access through an optional LocalSystem broker over PawnIO
 
 - Status: Accepted (2026-10-17); implemented in M5

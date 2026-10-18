@@ -1,5 +1,5 @@
 {
-  "$comment": "SPDX-License-Identifier: MIT. Golden packets for plugins/msi-mystic-light-7c91. Byte strings are upper-case hex, 185 bytes each, index 0 = report id 0x52. restoreImage is synthetic: byte i == i (filler that names its own offset), save flag 0xB8 non-zero on purpose. Generated independently of plugin.js; see docs/hardware/msi-mystic-light-185.md. Byte 0x3E (J_CORSAIR record +9) is written as the read value - 4: the controller reports the written value + 4 there (bench, 2026-10-18).",
+  "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Golden packets for plugins/msi-mystic-light-7c91. Byte strings are upper-case hex, 185 bytes each, index 0 = report id 0x52. restoreImage is synthetic: byte i == i (filler that names its own offset), save flag 0xB8 non-zero on purpose. Generated independently of plugin.js; see docs/hardware/msi-mystic-light-185.md. Byte 0x3E (J_CORSAIR record +9) is written as the read value - 4: the controller reports the written value + 4 there (bench, 2026-10-18).",
   "reportId": 82,
   "reportLength": 185,
   "onboardZoneOffsets": [

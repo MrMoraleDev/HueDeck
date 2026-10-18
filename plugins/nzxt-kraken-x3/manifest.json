@@ -3,7 +3,7 @@
   "id": "lightloom.nzxt-kraken-x3",
   "name": "NZXT Kraken X3",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "publisher": "Lightloom",
   "description": "Lighting of the NZXT Kraken X53, X63 and X73 coolers: the pump ring (8 LEDs), the logo, and the RGB header on the pump (up to 40 LEDs) as a channel. Pump and fan speeds are never touched. Protocol notes: docs/hardware/nzxt-kraken-x3.md.",
   "entry": "plugin.js",

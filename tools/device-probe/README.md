@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # tools/device-probe
 
 Helpers for learning a device's lighting protocol from its own traffic, so a Lightloom

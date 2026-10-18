@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Device-session robustness (M1 review): a panic in a native or a driver
 //! must not skip `Shutdown(false)`, and members a device session does not
 //! implement must throw `HostApiMissing` instead of answering with stub data.

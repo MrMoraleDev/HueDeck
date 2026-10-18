@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Imports a host-internal module by its internal name (Lightloom test fixture).
 import { BinaryUtils } from "lightloom:prelude/BinaryUtils.js";
 export function Name() { return "Edge Internal Import"; }

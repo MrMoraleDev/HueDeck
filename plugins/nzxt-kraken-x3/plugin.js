@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Lightloom first-party plugin: NZXT Kraken X53 / X63 / X73 ("X3") liquid coolers, lighting only.
 //

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The daemon's lifecycle states (docs/architecture.md §3).
 
 use std::fmt;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What the API exchanges with the daemon and with clients: the read model
 //! ([`Snapshot`]), the state-changing requests ([`Request`]), push events
 //! ([`Event`]) and errors ([`ApiError`]). JSON field names are camelCase.

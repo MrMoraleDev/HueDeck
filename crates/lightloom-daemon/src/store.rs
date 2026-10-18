@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Persistence: one SQLite database (`state.sqlite`, WAL) per user, per
 //! ADR-0008. Only the engine thread holds the connection.
 //!

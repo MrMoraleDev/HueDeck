@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // "@SignalRGB/base64" (also "@lightloom/base64") and the `base64` feature global.
 //

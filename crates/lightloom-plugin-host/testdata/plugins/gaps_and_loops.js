@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Touches undocumented host members and never returns from Initialize (Lightloom test fixture).
 export function Name() { return "Synthetic Gaps"; }
 export function VendorId() { return 0x1111; }

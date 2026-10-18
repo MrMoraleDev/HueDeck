@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! rquickjs loader + stub host against the synthetic fixtures in `testdata/`.
 
 use lightloom_plugin_host::dryrun::{dry_run, run_file, DryRunOptions, FileKind, FileReport};

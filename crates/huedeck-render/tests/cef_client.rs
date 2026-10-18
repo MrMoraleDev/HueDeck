@@ -86,6 +86,14 @@ fn a_crashed_renderer_is_restarted_holding_the_last_frame() {
     // While the renderer was gone the last frame was held, not replaced by black.
     let (_, frame) = store.latest();
     assert!(frame.pixel(0, 0).r > 0);
+    wait_until("the replacement's first frame", 30, || {
+        r.status().max_recovery_ms.is_some()
+    });
+    let ms = r.status().max_recovery_ms.unwrap();
+    assert!(
+        (900.0..10_000.0).contains(&ms),
+        "recovery took {ms} ms (restart delay 1 s)"
+    );
     r.stop();
     let _ = std::fs::remove_dir_all(&dir);
 }

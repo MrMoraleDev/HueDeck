@@ -40,6 +40,11 @@ Framework, in a **separate process** `lightloom-renderer`:
   M6.
 - `--software-compositing` fallback for VMs/RDP; if `on_paint` cadence stays below
   20 fps for 60 frames the engine downshifts to 15 fps and raises a warning.
+  (Amended in M3: software compositing became the default, because at 320x200 it paints
+  at a steadier cadence than GPU compositing, whose readback lands on the display's vsync
+  grid; GPU compositing is opt-in. Measurements in docs/hardware/effects-m3.md. The
+  sandbox is still off until the bootstrap executable can be signed; the URL filter and
+  the DNS block are in place.)
 - One extra windowless browser per LCD face, at the face's own resolution.
 - A `RendererClient` trait in `lightloom-render` keeps a `null` renderer (solid,
   rainbow, test pattern) for M1 and CI; a hi-res waitable timer provides the frame

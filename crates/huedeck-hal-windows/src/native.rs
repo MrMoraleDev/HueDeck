@@ -239,16 +239,17 @@ fn endpoint_info(
     }
     let caps = collection_caps(handle.0)?;
     let parsed = parse_hid_path(path);
-    // `MI_xx` when the path has one; a USB device without it is non-composite
-    // (interface 0, as hidapi and SignalRGB report); other transports get -1.
-    let interface_number = if parsed.interface_number >= 0 {
-        parsed.interface_number
-    } else if parsed.vid.is_some() {
-        0
-    } else {
-        HidEndpointInfo::UNKNOWN_INTERFACE
+    // `MI_xx` when the path names one (also for virtual collections a vendor driver
+    // re-exposes, e.g. Razer Synapse's RZVIRTUAL nodes); otherwise 0 for a
+    // non-composite USB device, as hidapi and SignalRGB report, and -1 for every
+    // other transport (docs/host-api/hid-usb.md, "Endpoint tuple semantics").
+    let usb = probe::hid_bus(path) == probe::HidBus::Usb;
+    let interface_number = match (parsed.interface_number, usb) {
+        (mi, _) if mi >= 0 => mi,
+        (_, true) => 0,
+        (_, false) => HidEndpointInfo::UNKNOWN_INTERFACE,
     };
-    let (serial, manufacturer, product) = if strings {
+    let (serial, mut manufacturer, product) = if strings {
         (
             hid_string(handle.0, HidD_GetSerialNumberString),
             hid_string(handle.0, HidD_GetManufacturerString),
@@ -257,6 +258,10 @@ fn endpoint_info(
     } else {
         Default::default()
     };
+    // Same fallback as hidapi for USB devices: the USB interface's INF manufacturer.
+    if strings && usb && manufacturer.is_empty() {
+        manufacturer = probe::parent_manufacturer(path).unwrap_or_default();
+    }
     Ok(Some(HidEndpointInfo {
         vid: attrs.VendorID,
         pid: attrs.ProductID,
@@ -310,10 +315,6 @@ impl NativeHidBackend {
                 let mut ep = ProbedEndpoint::from_info(info);
                 ep.usb_parent = own_usb_parent(probe::usb_parent(&ep.info.path), ep.info.vid, ep.info.pid);
                 ep.caps = Ok(lengths);
-                // Same fallback as hidapi: the USB interface's INF manufacturer.
-                if ep.info.manufacturer.is_empty() {
-                    ep.info.manufacturer = probe::parent_manufacturer(&ep.info.path).unwrap_or_default();
-                }
                 ep
             })
             .collect();

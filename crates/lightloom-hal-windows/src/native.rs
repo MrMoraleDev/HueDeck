@@ -42,8 +42,9 @@ use windows::Win32::Devices::HumanInterfaceDevice::{
     HIDD_ATTRIBUTES, HIDP_BUTTON_CAPS, HIDP_CAPS, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE,
-    ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, HANDLE, WIN32_ERROR,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_DEVICE_NOT_CONNECTED, ERROR_DEV_NOT_EXIST, ERROR_FILE_NOT_FOUND,
+    ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_SUCH_DEVICE, GENERIC_READ, GENERIC_WRITE, HANDLE,
+    WIN32_ERROR,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ,
@@ -91,9 +92,12 @@ fn map_win(context: &str, e: &windows::core::Error) -> HalError {
     if code == ERROR_ACCESS_DENIED.to_hresult() {
         HalError::PermissionDenied(text)
     } else if code == ERROR_DEVICE_NOT_CONNECTED.to_hresult()
-        || code == ERROR_GEN_FAILURE.to_hresult()
+        || code == ERROR_NO_SUCH_DEVICE.to_hresult()
+        || code == ERROR_DEV_NOT_EXIST.to_hresult()
         || code == ERROR_FILE_NOT_FOUND.to_hresult()
     {
+        // The device is gone. ERROR_GEN_FAILURE is not among these: a present
+        // device returns it when it stalls a report it does not support.
         HalError::Disconnected
     } else {
         HalError::Backend(text)

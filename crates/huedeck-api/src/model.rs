@@ -299,8 +299,9 @@ pub enum Request {
         /// GPU compositing for effects.
         gpu_compositing: Option<bool>,
     },
-    /// Import SignalRGB's canvas placements as a layout (read in place).
-    ImportSignalRgbLayout {
+    /// Import the local SignalRGB setup (read in place): its canvas placements
+    /// as a layout, and the component arrays of its channels.
+    ImportSignalRgb {
         /// Layout name (default `SignalRGB`).
         name: Option<String>,
     },
@@ -343,7 +344,7 @@ impl Request {
             Request::CanvasEvent { .. } => "canvasEvent",
             Request::CanvasTap { .. } => "canvasTap",
             Request::SetSettings { .. } => "setSettings",
-            Request::ImportSignalRgbLayout { .. } => "importSignalRgbLayout",
+            Request::ImportSignalRgb { .. } => "importSignalRgb",
             Request::GetLayout { .. } => "getLayout",
             Request::ListComponents => "listComponents",
             Request::Export => "export",

@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "huedeck-daemon"
-description = "huedeckd: the HueDeck per-user daemon"
+description = "huedeckd: the HueDeck per-user daemon (devices, effects, local API, dashboard)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,4 +28,17 @@ serde_json = { workspace = true }
 humantime = { workspace = true }
 rusqlite = { workspace = true }
 rusqlite_migration = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+arc-swap = { workspace = true }
+uuid = { workspace = true }
+toml = { workspace = true }
+huedeck-api = { path = "../huedeck-api" }
 huedeck-engine = { path = "../huedeck-engine" }
+huedeck-hal = { path = "../huedeck-hal" }
+huedeck-plugin-host = { path = "../huedeck-plugin-host" }
+huedeck-render = { path = "../huedeck-render" }
+huedeck-runtime = { path = "../huedeck-runtime" }
+
+[dev-dependencies]
+huedeck-hal = { path = "../huedeck-hal", features = ["mock"] }

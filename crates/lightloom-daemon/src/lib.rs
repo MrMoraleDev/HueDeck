@@ -91,8 +91,9 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
         })?;
 
     let engine = engine::start(engine_opts)?;
+    let shared = engine.shared();
     let ctx = ApiContext {
-        backend: engine.shared(),
+        backend: shared.clone(),
         token,
         ui_dir,
         open_compat_mutations: api.compat_open_mutations,
@@ -126,7 +127,10 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
         if opts.open_dashboard {
             open_in_browser(&url);
         }
-        wait_for_stop().await;
+        tokio::select! {
+            _ = wait_for_stop() => {}
+            _ = shared.shutdown_requested() => {}
+        }
         tracing::info!("stopping");
         let _ = stop_tx.send(true);
         for t in tasks {
@@ -151,12 +155,28 @@ async fn serve(listener: TcpListener, router: axum::Router, mut stop: watch::Rec
     }
 }
 
-/// Serve on `port` once it is free (another application, typically SignalRGB,
-/// may own it); try again every [`COMPAT_RETRY`].
+/// Whether another application listens on `port` on any address. SignalRGB
+/// listens on the IPv6 wildcard with address reuse, so Windows would still let
+/// us bind `127.0.0.1` and take IPv4 loopback clients away from it; the
+/// listener table tells.
+fn port_taken_elsewhere(port: u16) -> bool {
+    !lightloom_runtime::system::other_listeners(port).is_empty()
+}
+
+/// Serve on `port` once no other application (typically SignalRGB) listens on
+/// it; try again every [`COMPAT_RETRY`].
 async fn serve_when_free(port: u16, router: axum::Router, mut stop: watch::Receiver<bool>) {
     let mut warned = false;
     loop {
-        match TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await {
+        let bound = if port_taken_elsewhere(port) {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "another application listens on it",
+            ))
+        } else {
+            TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await
+        };
+        match bound {
             Ok(listener) => {
                 tracing::info!("SignalRGB-compatible listener on 127.0.0.1:{port}");
                 serve(listener, router, stop).await;

@@ -25,7 +25,7 @@
 
 use crate::catalog::CatalogEntry;
 use crate::children::ChildSetup;
-pub use crate::children::{EndpointKind, EndpointView};
+pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
@@ -428,6 +428,8 @@ struct LiveStats {
     first_write_us: AtomicU64,
     /// The device and its children as canvas endpoints (empty until `Initialize()` ran).
     endpoints: std::sync::Mutex<Arc<Vec<EndpointView>>>,
+    /// The device's channels (empty until `Initialize()` ran).
+    channels: std::sync::Mutex<Arc<Vec<ChannelInfo>>>,
 }
 
 /// Counters readable while the session runs.
@@ -458,11 +460,16 @@ impl LiveStats {
         Arc::clone(&self.endpoints.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
-    /// Replace the endpoint views when they changed.
-    fn publish_endpoints(&self, views: Vec<EndpointView>) {
+    /// Replace the endpoint views and channel list when they changed.
+    fn publish_endpoints(&self, (views, channels): (Vec<EndpointView>, Vec<ChannelInfo>)) {
         let mut slot = self.endpoints.lock().unwrap_or_else(|e| e.into_inner());
         if **slot != views {
             *slot = Arc::new(views);
+        }
+        drop(slot);
+        let mut slot = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        if **slot != channels {
+            *slot = Arc::new(channels);
         }
     }
 
@@ -543,6 +550,11 @@ impl SessionHandle {
         self.live.endpoints()
     }
 
+    /// The device's channels, updated with [`SessionHandle::endpoints`].
+    pub fn channels(&self) -> Arc<Vec<ChannelInfo>> {
+        Arc::clone(&self.live.channels.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
     /// Ask the session to finish its current frame, shut down and return.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
@@ -587,6 +599,7 @@ pub fn spawn(
         hid_disconnected: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
         endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
+        channels: std::sync::Mutex::new(Arc::new(Vec::new())),
     });
     let key = device.key.clone();
     let started = Instant::now();
@@ -872,7 +885,10 @@ fn drive(
     }
 
     live.set_state(SessionState::Running);
-    live.publish_endpoints(lock_device(shared).endpoint_views(&device.key));
+    {
+        let dev = lock_device(shared);
+        live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+    }
     let mut last_seq = 0;
     let mut consecutive_timeouts = 0u32;
     while !stop.load(Ordering::Acquire) {
@@ -890,7 +906,10 @@ fn drive(
             controlled = true;
         }
         if controlled || report.frames % 30 == 0 {
-            live.publish_endpoints(lock_device(shared).endpoint_views(&device.key));
+            {
+                let dev = lock_device(shared);
+                live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+            }
         }
         let (_, frame, captured) = frames.latest_stamped();
         lock_device(shared).set_frame_at(frame, captured);

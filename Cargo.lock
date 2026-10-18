@@ -734,6 +734,10 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "huedeck-hal",
+ "huedeck-hal-windows",
+ "huedeck-plugin-host",
+ "serde_json",
  "thiserror",
 ]
 

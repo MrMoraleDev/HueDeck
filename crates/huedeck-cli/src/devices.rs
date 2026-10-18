@@ -190,6 +190,7 @@ mod tests {
             usage: 0x0000,
             collection: 1,
             report_lengths: ReportLengths::default(),
+            feature_reports: Vec::new(),
         });
         a.usb_parent = Ok(r"USB\VID_1462&PID_7C91\A00000000001".into());
         a.caps = Ok(ReportLengths {

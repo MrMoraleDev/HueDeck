@@ -7,13 +7,14 @@
 //! lengths at zero; [`WindowsHidBackend::enumerate_grouped`] fills them from
 //! `HIDP_CAPS` through a zero-access handle (see [`crate::probe`]), and
 //! [`HidBackend::open`] reads them from `HIDP_CAPS` too (falling back to the
-//! reconstructed report descriptor).
+//! reconstructed report descriptor) and lists the declared feature reports.
 
 use crate::group::{group_endpoints, own_usb_parent, DeviceGroup, ProbedEndpoint};
 use crate::path::parse_hid_path;
 use crate::probe;
-use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidHandle, ReportLengths};
+use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidHandle, ReportLengths, ReportSpec};
 use huedeck_hal::{HalError, HalResult};
+use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::sync::Mutex;
 
@@ -34,8 +35,11 @@ fn map_err(e: hidapi::HidError) -> HalError {
     }
 }
 
-/// Report lengths of `info`'s collection from hidapi's reconstructed report descriptor.
-fn descriptor_lengths(device: &hidapi::HidDevice, info: &HidEndpointInfo) -> Option<ReportLengths> {
+/// `info`'s top-level collection from hidapi's reconstructed report descriptor.
+fn descriptor_tlc(
+    device: &hidapi::HidDevice,
+    info: &HidEndpointInfo,
+) -> Option<huedeck_hid_desc::TopLevelCollection> {
     let mut buf = vec![0u8; MAX_REPORT_DESCRIPTOR];
     let n = device
         .get_report_descriptor(&mut buf)
@@ -46,14 +50,25 @@ fn descriptor_lengths(device: &hidapi::HidDevice, info: &HidEndpointInfo) -> Opt
         .ok()?;
     // On Windows each `ColNN` path has its own preparsed data, so the
     // reconstructed descriptor holds exactly this one TLC.
-    let tlc = desc
-        .find(info.usage_page, info.usage)
-        .or_else(|| desc.collections.first())?;
-    Some(ReportLengths {
-        input: tlc.input_len,
-        output: tlc.output_len,
-        feature: tlc.feature_len,
-    })
+    desc.find(info.usage_page, info.usage)
+        .or_else(|| desc.collections.first())
+        .cloned()
+}
+
+/// Feature reports a collection declares, ascending by id.
+fn feature_reports(tlc: &huedeck_hid_desc::TopLevelCollection) -> Vec<ReportSpec> {
+    let mut out: Vec<ReportSpec> = tlc
+        .reports
+        .iter()
+        .filter(|r| r.kind == huedeck_hid_desc::ReportKind::Feature)
+        .map(|r| ReportSpec {
+            id: r.id,
+            len: r.byte_length(),
+        })
+        .collect();
+    out.sort_by_key(|r| r.id);
+    out.dedup_by_key(|r| r.id);
+    out
 }
 
 /// hidapi `windows-native` backend.
@@ -68,9 +83,14 @@ impl std::fmt::Debug for WindowsHidBackend {
 }
 
 impl WindowsHidBackend {
-    /// Initialise hidapi.
+    /// Initialise hidapi (hidapi 2.6 enumerates every HID interface here).
     pub fn new() -> HalResult<Self> {
+        let started = std::time::Instant::now();
         let api = hidapi::HidApi::new().map_err(map_err)?;
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+            "hidapi initialised"
+        );
         Ok(Self { api: Mutex::new(api) })
     }
 
@@ -96,6 +116,7 @@ impl WindowsHidBackend {
             usage: d.usage(),
             collection: parsed.collection,
             report_lengths: ReportLengths::default(),
+            feature_reports: Vec::new(),
         }
     }
 
@@ -103,7 +124,46 @@ impl WindowsHidBackend {
     /// endpoints by physical device. See [`crate::group`] for the identity
     /// rules and [`crate::probe`] for what "read-only" means here.
     pub fn enumerate_grouped(&self) -> HalResult<Vec<DeviceGroup>> {
-        let endpoints = self.enumerate()?;
+        Ok(Self::probe_and_group(self.enumerate()?))
+    }
+
+    /// [`WindowsHidBackend::enumerate_grouped`] restricted to `wanted` `(vid, pid)`
+    /// pairs (the devices a host has plugins for). The present pairs are read
+    /// from the interface paths first ([`probe::present_hid`], nothing opened);
+    /// hidapi then reads strings and usages, and the probes run, only for
+    /// matching collections. Falls back to a full enumeration when a path's
+    /// VID/PID cannot be parsed.
+    pub fn enumerate_grouped_for(&self, wanted: &BTreeSet<(u16, u16)>) -> HalResult<Vec<DeviceGroup>> {
+        let started = std::time::Instant::now();
+        let present = match probe::present_hid() {
+            Ok(p) if p.unparsed == 0 => p,
+            other => {
+                tracing::debug!(?other, "falling back to a full HID enumeration");
+                let mut groups = self.enumerate_grouped()?;
+                groups.retain(|g| wanted.contains(&(g.key.vid, g.key.pid)));
+                return Ok(groups);
+            }
+        };
+        let endpoints = {
+            let mut api = self.api.lock().unwrap_or_else(|e| e.into_inner());
+            api.reset_devices().map_err(map_err)?;
+            for (vid, pid) in present.keys.intersection(wanted) {
+                api.add_devices(*vid, *pid).map_err(map_err)?;
+            }
+            api.device_list().map(Self::info_from).collect::<Vec<_>>()
+        };
+        let listed = started.elapsed();
+        let groups = Self::probe_and_group(endpoints);
+        tracing::debug!(
+            list_ms = listed.as_secs_f64() * 1000.0,
+            total_ms = started.elapsed().as_secs_f64() * 1000.0,
+            groups = groups.len(),
+            "filtered HID enumeration"
+        );
+        Ok(groups)
+    }
+
+    fn probe_and_group(endpoints: Vec<HidEndpointInfo>) -> Vec<DeviceGroup> {
         let probed = endpoints
             .into_iter()
             .map(|info| {
@@ -126,7 +186,7 @@ impl WindowsHidBackend {
                 ep
             })
             .collect();
-        Ok(group_endpoints(probed))
+        group_endpoints(probed)
     }
 }
 
@@ -152,16 +212,30 @@ impl HidBackend for WindowsHidBackend {
         drop(api);
 
         // Report lengths: HIDP_CAPS through a zero-access handle (exactly what Windows
-        // enforces for HidD_Get/SetFeature and WriteFile), else the reconstructed descriptor.
+        // enforces for HidD_Get/SetFeature and WriteFile), else the reconstructed
+        // descriptor, which also lists the feature reports by id.
+        let tlc = descriptor_tlc(&device, &info);
+        info.feature_reports = tlc.as_ref().map(feature_reports).unwrap_or_default();
         match probe::read_caps(path) {
             Ok(caps) => info.report_lengths = caps.lengths,
             Err(e) => {
-                tracing::debug!(path, error = %e, "HIDP_CAPS unavailable, parsing the report descriptor");
-                info.report_lengths = descriptor_lengths(&device, &info).unwrap_or_default();
+                tracing::debug!(path, error = %e, "HIDP_CAPS unavailable, using the report descriptor");
+                info.report_lengths = tlc
+                    .map(|t| ReportLengths {
+                        input: t.input_len,
+                        output: t.output_len,
+                        feature: t.feature_len,
+                    })
+                    .unwrap_or_default();
             }
         }
         device.set_blocking_mode(true).map_err(map_err)?;
-        tracing::debug!(path, report_lengths = ?info.report_lengths, "opened HID endpoint");
+        tracing::debug!(
+            path,
+            report_lengths = ?info.report_lengths,
+            feature_reports = ?info.feature_reports,
+            "opened HID endpoint"
+        );
         Ok(Box::new(WindowsHidHandle { device, info }))
     }
 }

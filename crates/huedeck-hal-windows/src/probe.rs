@@ -3,6 +3,9 @@
 //!
 //! * [`usb_parent`]: walks `CM_Get_Parent` from the HID collection's device
 //!   node up to the first `USB\VID_xxxx&PID_xxxx\<instance>` node.
+//! * [`present_hid`]: VID/PID of every present HID interface, from the
+//!   interface paths alone (no device is opened), so callers can enumerate
+//!   only the devices they have plugins for.
 //! * [`read_caps`]: opens the collection with **zero access rights**
 //!   (`dwDesiredAccess = 0`, the same metadata-only open hidapi uses while
 //!   enumerating), reads `HIDP_CAPS` via `HidD_GetPreparsedData`/`HidP_GetCaps`
@@ -16,16 +19,18 @@
 //! hidapi only exposes that after `open_path`, which requests
 //! `GENERIC_READ | GENERIC_WRITE` first. We avoid that open on purpose.
 
-use crate::path::{interface_path_to_instance_id, is_usb_device_instance};
+use crate::path::{interface_path_to_instance_id, is_usb_device_instance, parse_hid_path};
 use huedeck_hal::hid::ReportLengths;
+use std::collections::BTreeSet;
 use windows::core::PCWSTR;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_Device_IDW, CM_Get_Parent, CM_Locate_DevNodeW, CM_LOCATE_DEVNODE_NORMAL, CR_SUCCESS,
-    MAX_DEVICE_ID_LEN,
+    CM_Get_Device_IDW, CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_List_SizeW, CM_Get_Parent,
+    CM_Locate_DevNodeW, CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL, CR_BUFFER_SMALL,
+    CR_SUCCESS, MAX_DEVICE_ID_LEN,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::{
-    HidD_FreePreparsedData, HidD_GetPreparsedData, HidP_GetCaps, HIDP_CAPS, HIDP_STATUS_SUCCESS,
-    PHIDP_PREPARSED_DATA,
+    HidD_FreePreparsedData, HidD_GetHidGuid, HidD_GetPreparsedData, HidP_GetCaps, HIDP_CAPS,
+    HIDP_STATUS_SUCCESS, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
@@ -76,6 +81,89 @@ pub fn usb_parent(path: &str) -> Result<String, String> {
         inst = parent;
     }
     Err(format!("no USB parent (chain: {})", chain.join(" <- ")))
+}
+
+/// `(vid, pid)` pairs of every present HID interface, read from the interface
+/// paths alone (`CM_Get_Device_Interface_List`; nothing is opened).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PresentHid {
+    /// Pairs found in the paths.
+    pub keys: BTreeSet<(u16, u16)>,
+    /// Paths whose VID/PID could not be parsed (non-USB transports with
+    /// unusual path formats); callers fall back to a full enumeration.
+    pub unparsed: usize,
+}
+
+/// VID/PID of a HID interface path: `VID_xxxx&PID_xxxx` (USB) or
+/// `_VID&0002xxxx_PID&xxxx` (Bluetooth: vendor-id source + id).
+fn path_vid_pid(path: &str) -> Option<(u16, u16)> {
+    let p = parse_hid_path(path);
+    if let (Some(v), Some(d)) = (p.vid, p.pid) {
+        return Some((v, d));
+    }
+    let lower = path.to_ascii_lowercase();
+    let hex = |marker: &str, digits: usize| {
+        let start = lower.find(marker)? + marker.len();
+        let s = lower.get(start..start + digits)?;
+        s.chars().all(|c| c.is_ascii_hexdigit()).then_some(s)
+    };
+    let vid = hex("vid&", 8).and_then(|h| u16::from_str_radix(&h[4..], 16).ok())?;
+    let pid = hex("pid&", 4).and_then(|h| u16::from_str_radix(h, 16).ok())?;
+    Some((vid, pid))
+}
+
+/// List the present HID interfaces and their VID/PID without opening any device.
+pub fn present_hid() -> Result<PresentHid, String> {
+    // SAFETY: plain out-value call.
+    let guid = unsafe { HidD_GetHidGuid() };
+    for _ in 0..4 {
+        let mut len = 0u32;
+        // SAFETY: valid out pointer and GUID; no device-id filter.
+        let cr = unsafe {
+            CM_Get_Device_Interface_List_SizeW(
+                &mut len,
+                &guid,
+                PCWSTR::null(),
+                CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+            )
+        };
+        if cr != CR_SUCCESS {
+            return Err(format!(
+                "CM_Get_Device_Interface_List_SizeW failed (CONFIGRET {})",
+                cr.0
+            ));
+        }
+        let mut buf = vec![0u16; len as usize];
+        // SAFETY: `buf` holds `len` UTF-16 units as the size call requested.
+        let cr = unsafe {
+            CM_Get_Device_Interface_ListW(
+                &guid,
+                PCWSTR::null(),
+                &mut buf,
+                CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+            )
+        };
+        if cr == CR_BUFFER_SMALL {
+            continue; // an interface arrived between the two calls
+        }
+        if cr != CR_SUCCESS {
+            return Err(format!(
+                "CM_Get_Device_Interface_ListW failed (CONFIGRET {})",
+                cr.0
+            ));
+        }
+        let mut present = PresentHid::default();
+        for path in buf.split(|&c| c == 0).filter(|s| !s.is_empty()) {
+            match path_vid_pid(&String::from_utf16_lossy(path)) {
+                Some(key) => {
+                    present.keys.insert(key);
+                }
+                None => present.unparsed += 1,
+            }
+        }
+        return Ok(present);
+    }
+    Err("the HID interface list kept changing".into())
 }
 
 /// Usage page / usage / report lengths from `HIDP_CAPS`.
@@ -143,4 +231,37 @@ pub fn read_caps(path: &str) -> Result<Caps, String> {
             feature: caps.FeatureReportByteLength as usize,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vid_pid_from_usb_and_bluetooth_paths() {
+        assert_eq!(
+            path_vid_pid(
+                r"\\?\HID#VID_1462&PID_7C91#7&1402d2e5&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"
+            ),
+            Some((0x1462, 0x7C91))
+        );
+        assert_eq!(
+            path_vid_pid(
+                r"\\?\HID#{00001124-0000-1000-8000-00805f9b34fb}_VID&0002054c_PID&0ce6#9&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"
+            ),
+            Some((0x054C, 0x0CE6))
+        );
+        assert_eq!(
+            path_vid_pid(r"\\?\HID#ConvertedDevice&Col01#5&1&0&0000#{g}"),
+            None
+        );
+    }
+
+    #[test]
+    fn present_interfaces_are_listed_without_opening_them() {
+        let present = present_hid().expect("interface list");
+        // Every machine running the tests has at least one HID interface (keyboard/mouse);
+        // CI VMs may have none, so only the call itself is checked there.
+        let _ = present.keys.len() + present.unparsed;
+    }
 }

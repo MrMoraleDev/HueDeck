@@ -3,15 +3,16 @@
 //!
 //! hidapi's Windows backend already exposes one entry per top-level
 //! collection (each is its own device-interface path), so enumeration maps
-//! 1:1 onto [`HidEndpointInfo`]. Report lengths are read from the report
-//! descriptor when an endpoint is opened (hidapi does not expose them at
-//! enumeration time without opening the device, which could disturb devices
-//! another process holds exclusively).
+//! 1:1 onto [`HidEndpointInfo`]. [`HidBackend::enumerate`] leaves report
+//! lengths at zero; [`WindowsHidBackend::enumerate_grouped`] fills them from
+//! `HIDP_CAPS` through a zero-access handle (see [`crate::probe`]), and
+//! [`HidBackend::open`] reads them from the reconstructed report descriptor.
 
+use crate::group::{group_endpoints, own_usb_parent, DeviceGroup, ProbedEndpoint};
 use crate::path::parse_hid_path;
+use crate::probe;
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidHandle, ReportLengths};
-use lightloom_hal::{DeviceKey, HalError, HalResult};
-use std::collections::BTreeMap;
+use lightloom_hal::{HalError, HalResult};
 use std::ffi::CString;
 use std::sync::Mutex;
 
@@ -30,15 +31,6 @@ fn map_err(e: hidapi::HidError) -> HalError {
     } else {
         HalError::Backend(text)
     }
-}
-
-/// Endpoints of one physical device.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DeviceGroup {
-    /// `vid:pid:serial`, or `vid:pid:<instance prefix>` when the device has no serial.
-    pub key: DeviceKey,
-    /// Top-level collections, in enumeration order.
-    pub endpoints: Vec<HidEndpointInfo>,
 }
 
 /// hidapi `windows-native` backend.
@@ -69,7 +61,9 @@ impl WindowsHidBackend {
             manufacturer: d.manufacturer_string().unwrap_or("").to_string(),
             product: d.product_string().unwrap_or("").to_string(),
             path,
-            // hidapi reports -1 when the path has no MI_xx; prefer our parse when they disagree.
+            // hidapi windows-native: MI_xx from the hardware ids; a non-composite
+            // USB device reports 0 (matches SignalRGB, see `path` docs); only
+            // non-USB transports keep -1. Fall back to the path parse otherwise.
             interface_number: if d.interface_number() >= 0 {
                 d.interface_number()
             } else {
@@ -82,30 +76,34 @@ impl WindowsHidBackend {
         }
     }
 
-    /// Enumerate and group endpoints by parent device.
-    ///
-    /// Grouping uses the USB serial when present, otherwise the shared
-    /// instance-id prefix of the HID path. Exact grouping across interfaces of
-    /// a composite device without a serial needs `CM_Get_Parent` (M2).
+    /// Enumerate, probe (USB parent + `HIDP_CAPS`, read-only) and group
+    /// endpoints by physical device. See [`crate::group`] for the identity
+    /// rules and [`crate::probe`] for what "read-only" means here.
     pub fn enumerate_grouped(&self) -> HalResult<Vec<DeviceGroup>> {
         let endpoints = self.enumerate()?;
-        let mut groups: BTreeMap<DeviceKey, Vec<HidEndpointInfo>> = BTreeMap::new();
-        for ep in endpoints {
-            let key = if ep.serial.is_empty() {
-                let hint = parse_hid_path(&ep.path)
-                    .instance_prefix()
-                    .unwrap_or("")
-                    .to_string();
-                DeviceKey::new(ep.vid, ep.pid, hint)
-            } else {
-                ep.key()
-            };
-            groups.entry(key).or_default().push(ep);
-        }
-        Ok(groups
+        let probed = endpoints
             .into_iter()
-            .map(|(key, endpoints)| DeviceGroup { key, endpoints })
-            .collect())
+            .map(|info| {
+                let mut ep = ProbedEndpoint::from_info(info);
+                ep.usb_parent = own_usb_parent(probe::usb_parent(&ep.info.path), ep.info.vid, ep.info.pid);
+                ep.caps = probe::read_caps(&ep.info.path).map(|c| {
+                    if (c.usage_page, c.usage) != (ep.info.usage_page, ep.info.usage) {
+                        tracing::debug!(
+                            path = %ep.info.path,
+                            caps_page = c.usage_page,
+                            caps_usage = c.usage,
+                            "HIDP_CAPS usage differs from hidapi enumeration"
+                        );
+                    }
+                    c.lengths
+                });
+                if let Ok(lengths) = &ep.caps {
+                    ep.info.report_lengths = *lengths;
+                }
+                ep
+            })
+            .collect();
+        Ok(group_endpoints(probed))
     }
 }
 
@@ -136,10 +134,11 @@ impl HidBackend for WindowsHidBackend {
         match device.get_report_descriptor(&mut buf) {
             Ok(n) => match lightloom_hid_desc::parse(&buf[..n]) {
                 Ok(desc) => {
+                    // On Windows each `ColNN` path has its own preparsed data, so the
+                    // reconstructed descriptor holds exactly this one TLC.
                     let tlc = desc
-                        .collection(info.collection)
-                        .filter(|c| c.usage_page == info.usage_page && c.usage == info.usage)
-                        .or_else(|| desc.find(info.usage_page, info.usage));
+                        .find(info.usage_page, info.usage)
+                        .or_else(|| desc.collections.first());
                     if let Some(c) = tlc {
                         info.report_lengths = ReportLengths {
                             input: c.input_len,

@@ -189,6 +189,14 @@ impl Placement {
         }
     }
 
+    /// The colour every LED shows in [`LightingMode::Forced`] (an unparsable
+    /// `forced_color` is black); `None` when the endpoint samples the canvas.
+    /// A forced endpoint lights even when disabled.
+    pub fn forced(&self) -> Option<crate::color::Rgb> {
+        (self.lighting_mode == LightingMode::Forced)
+            .then(|| crate::color::Rgb::from_hex(&self.forced_color).unwrap_or(crate::color::Rgb::BLACK))
+    }
+
     /// Rotation normalised into `0..360`.
     pub fn rotation_normalized(&self) -> f32 {
         self.rotation.rem_euclid(360.0)

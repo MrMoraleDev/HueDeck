@@ -75,6 +75,14 @@ enum Command {
         #[command(flatten)]
         run: run::RunArgs,
     },
+    /// List the plugins found and which one would drive each connected device (read-only).
+    Plugins {
+        #[command(flatten)]
+        catalog: run::CatalogArgs,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// SignalRGB-compatibility tooling.
     Compat {
         #[command(subcommand)]
@@ -103,6 +111,7 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
             mock,
             run,
         } => run::run(run::Mode::Bench { fps, seconds, mock }, &run),
+        Command::Plugins { catalog, json } => run::list_plugins(&catalog, json).map(|_| run::Outcome::Clean),
         Command::Compat { command } => compat::run(command).map(|_| run::Outcome::Clean),
     }
 }
@@ -155,6 +164,7 @@ mod tests {
                 assert_eq!(color, lightloom_engine::Rgb::new(255, 0, 0));
                 assert!(run.dry_run);
                 assert_eq!(run.devices, vec!["1462:7c91".to_string()]);
+                assert!(!run.catalog.signalrgb);
                 assert_eq!(
                     run.restore_check,
                     vec![run::RestoreArg::Report(
@@ -186,6 +196,11 @@ mod tests {
             matches!(cli.command, Command::Rainbow { ref run, .. } if run.restore_check == vec![run::RestoreArg::Auto])
         );
         assert!(Cli::try_parse_from(["lightloom", "light", "notacolour"]).is_err());
+        let cli =
+            Cli::try_parse_from(["lightloom", "plugins", "--signalrgb", "--plugins", "x", "--json"]).unwrap();
+        assert!(
+            matches!(cli.command, Command::Plugins { ref catalog, json: true } if catalog.signalrgb && catalog.plugin_dirs.len() == 1)
+        );
         // Out-of-range times and rates are rejected before anything starts.
         assert!(Cli::try_parse_from(["lightloom", "light", "red", "--duration", "1e30"]).is_err());
         assert!(Cli::try_parse_from(["lightloom", "light", "red", "--duration", "0"]).is_err());

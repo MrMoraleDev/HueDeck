@@ -22,6 +22,7 @@ use crate::dryrun::collect_js_files;
 use crate::meta::{PluginMeta, PluginType};
 use crate::runtime::{run_isolated, PluginRuntime, RuntimeOptions};
 use crate::PluginIndex;
+use lightloom_hal::hid::HidEndpointInfo;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -33,7 +34,7 @@ use std::time::{Duration, UNIX_EPOCH};
 const SKIP_DIRS: &[&str] = &["tests", "test", "fixtures", "_testkit", "node_modules", ".git"];
 
 /// Bumped whenever what the cache stores (or how metadata is read) changes.
-const INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
 
 /// One discovered plugin.
 #[derive(Clone, Debug)]
@@ -293,6 +294,22 @@ impl Catalog {
         let path = self.index.lookup(vid, pid)?;
         self.entries.iter().rev().find(|e| e.meta.source_path == path)
     }
+
+    /// The plugin for a device: the one owning `(vid, pid)`, else the last
+    /// scanned plugin whose `HidUsages()` names the usage page and usage of
+    /// one of the device's HID collections (a generic driver, e.g. HID
+    /// LampArray).
+    pub fn lookup_device(&self, vid: u16, pid: u16, endpoints: &[HidEndpointInfo]) -> Option<&CatalogEntry> {
+        self.lookup(vid, pid).or_else(|| {
+            self.entries.iter().rev().find(|e| {
+                e.meta.hid_usages.iter().any(|[page, usage]| {
+                    endpoints
+                        .iter()
+                        .any(|ep| ep.usage_page == *page && ep.usage == *usage)
+                })
+            })
+        })
+    }
 }
 
 /// Load `file` with the stub host and read its metadata.
@@ -322,7 +339,7 @@ fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
         Loaded::Meta(meta) => *meta,
         Loaded::Failed(why) => return Err(why),
     };
-    if meta.product_ids.is_empty() || meta.vendor_id == 0 {
+    if (meta.product_ids.is_empty() || meta.vendor_id == 0) && meta.hid_usages.is_empty() {
         return Err("no VendorId/ProductId exports (helper module?)".into());
     }
     // Hybrid plugins also need libusb bulk/control transfers, which device
@@ -507,6 +524,40 @@ mod tests {
         );
         assert!(third.lookup(0x1234, 2).is_none());
         assert!(third.lookup(0x1234, 3).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generic_plugins_are_found_by_hid_usage_after_vid_pid() {
+        let dir = scratch("usage");
+        std::fs::write(dir.join("specific.js"), plugin_source(7)).unwrap();
+        std::fs::write(
+            dir.join("generic.js"),
+            "export function Name() { return 'Generic'; }\n\
+             export function HidUsages() { return [[0x59, 0x01]]; }\n\
+             export function Validate() { return true; }\n\
+             export function Render() {}\n",
+        )
+        .unwrap();
+        let catalog = Catalog::scan(std::slice::from_ref(&dir), Duration::from_secs(10));
+        assert_eq!(catalog.entries().len(), 2, "{:?}", catalog.skipped());
+        let endpoint = |page: u16, usage: u16| HidEndpointInfo {
+            usage_page: page,
+            usage,
+            ..HidEndpointInfo::default()
+        };
+        let lamp_array = [endpoint(0x01, 0x02), endpoint(0x59, 0x01)];
+        let generic = catalog.lookup_device(0x9999, 1, &lamp_array).unwrap();
+        assert_eq!(generic.meta.name, "Generic");
+        assert_eq!(generic.meta.hid_usages, vec![[0x59, 0x01]]);
+        // A plugin that claims the device by VID:PID wins.
+        assert_eq!(
+            catalog.lookup_device(0x1234, 7, &lamp_array).unwrap().meta.name,
+            "P 0x0007"
+        );
+        assert!(catalog
+            .lookup_device(0x9999, 1, &[endpoint(0x01, 0x02)])
+            .is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

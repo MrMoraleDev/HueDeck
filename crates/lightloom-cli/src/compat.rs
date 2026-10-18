@@ -247,19 +247,19 @@ fn replay(
                 d.sessions
             );
         }
+        let endpoints: Vec<_> = d
+            .paths
+            .iter()
+            .filter_map(|p| trace.endpoints.iter().find(|e| &e.path == p).cloned())
+            .collect();
         let plugin = catalog
-            .lookup(d.vid, d.pid)
+            .lookup_device(d.vid, d.pid, &endpoints)
             .with_context(|| format!("no plugin claims {} (use --plugins DIR or --signalrgb)", d.key))?
             .clone();
         eprintln!(
             "lightloom replay: {} -> {} ({} frames)",
             d.key, plugin.meta.name, d.frames
         );
-        let endpoints = d
-            .paths
-            .iter()
-            .filter_map(|p| trace.endpoints.iter().find(|e| &e.path == p).cloned())
-            .collect();
         let device = SessionDevice {
             key: d.key.clone(),
             vid: d.vid,

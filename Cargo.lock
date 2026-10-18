@@ -1070,6 +1070,7 @@ version = "0.0.1"
 dependencies = [
  "lightloom-engine",
  "lightloom-hal",
+ "lightloom-hid-desc",
  "rquickjs",
  "serde",
  "serde_json",

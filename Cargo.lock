@@ -790,6 +790,7 @@ dependencies = [
  "lightloom-hal-windows",
  "lightloom-plugin-host",
  "lightloom-render",
+ "lightloom-runtime",
  "serde",
  "serde_json",
  "thiserror",
@@ -928,6 +929,20 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+]
+
+[[package]]
+name = "lightloom-runtime"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "lightloom-effects",
+ "lightloom-engine",
+ "lightloom-hal",
+ "lightloom-hal-windows",
+ "lightloom-plugin-host",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

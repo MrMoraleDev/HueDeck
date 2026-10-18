@@ -162,7 +162,7 @@ pub fn to_json(groups: &[DeviceGroup]) -> Value {
 /// native one (same results; kept for comparison while the native backend is new).
 #[cfg(windows)]
 pub fn use_hidapi() -> bool {
-    std::env::var("LIGHTLOOM_HID_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("hidapi"))
+    lightloom_runtime::hardware::use_hidapi()
 }
 
 /// Enumerate on this OS.

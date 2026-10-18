@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+[package]
+publish = false
+name = "lightloom-runtime"
+description = "Lightloom device runtime shared by lightloom and lightloomd: HID enumeration for the plugin catalog, hotplug, conflicting software, SignalRGB setup read in place"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+lightloom-hal = { path = "../lightloom-hal" }
+lightloom-hal-windows = { path = "../lightloom-hal-windows" }
+lightloom-plugin-host = { path = "../lightloom-plugin-host" }
+lightloom-engine = { path = "../lightloom-engine" }
+lightloom-effects = { path = "../lightloom-effects" }

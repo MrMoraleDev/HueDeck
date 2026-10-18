@@ -21,6 +21,12 @@ packaging, M7 Linux packaging) drop files into known places.
 
 ## Windows (MSI, winget)
 
+- The **portable build** is what the release workflow publishes today: one directory
+  (zipped) staged by `tools/package/stage-windows.ps1` with `lightloomd.exe`, `lightloom.exe`,
+  `lightloom-renderer.exe` and its CEF runtime, `ui/`, `plugins/`, `effects/`, the license
+  texts and `THIRD-PARTY/CEF-Chromium-CREDITS.html`. Unzip anywhere and run
+  `lightloomd.exe --open`; settings go to `%LOCALAPPDATA%\Lightloom` and `%APPDATA%\Lightloom`.
+  About 400 MB unpacked, most of it Chromium.
 - The MSI installs `lightloomd.exe`, `lightloom.exe`, `lightloom-renderer.exe` plus the CEF
   runtime under `%ProgramFiles%\Lightloom`, registers the `lightloom://` URL scheme and an
   optional per-user autostart entry. It never installs a kernel driver.

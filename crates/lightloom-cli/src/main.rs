@@ -145,8 +145,7 @@ mod tests {
             "--dry-run",
             "--device",
             "1462:7c91",
-            "--restore-check",
-            "0x52:185",
+            "--restore-check=0x52:185",
             "--param",
             "LightingMode=Forced",
         ])
@@ -156,7 +155,15 @@ mod tests {
                 assert_eq!(color, lightloom_engine::Rgb::new(255, 0, 0));
                 assert!(run.dry_run);
                 assert_eq!(run.devices, vec!["1462:7c91".to_string()]);
-                assert_eq!(run.restore_check.map(|p| (p.report_id, p.len)), Some((0x52, 185)));
+                assert_eq!(
+                    run.restore_check,
+                    vec![run::RestoreArg::Report(
+                        lightloom_plugin_host::session::RestoreProbe {
+                            report_id: 0x52,
+                            len: 185
+                        }
+                    )]
+                );
                 assert_eq!(run.params.len(), 1);
             }
             other => panic!("unexpected {other:?}"),
@@ -173,6 +180,11 @@ mod tests {
                 ..
             }
         ));
+        // `--restore-check` alone means every declared feature report; it never eats the next token.
+        let cli = Cli::try_parse_from(["lightloom", "rainbow", "--restore-check", "--fps", "60"]).unwrap();
+        assert!(
+            matches!(cli.command, Command::Rainbow { ref run, .. } if run.restore_check == vec![run::RestoreArg::Auto])
+        );
         assert!(Cli::try_parse_from(["lightloom", "light", "notacolour"]).is_err());
         assert!(Cli::try_parse_from(["lightloom", "light", "red", "--brightness", "101"]).is_err());
     }

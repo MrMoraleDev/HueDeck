@@ -27,6 +27,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// RGB software that holds the devices Lightloom drives. Reported, never terminated.
+#[cfg(windows)]
 pub const KNOWN_CONFLICTS: &[&str] = &["SignalRgb.exe", "OpenRGB.exe"];
 
 /// Options shared by `light`, `rainbow` and `bench`.
@@ -333,6 +334,8 @@ struct Target {
     plugin: CatalogEntry,
 }
 
+// Used by the Windows device path (and tests); Linux drives no hardware yet.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn matches_filter(key: &str, filters: &[String]) -> bool {
     filters.is_empty()
         || filters.iter().any(|f| {

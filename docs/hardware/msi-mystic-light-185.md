@@ -33,8 +33,10 @@ below; the tables are our own re-expression of publicly documented behaviour.
 | SignalRGB `Validate` | accepts `endpoint.interface === 0 \|\| === 2`; usage page ignored | S2 |
 | SignalRGB runtime result on this board | "Motherboard is PerLED", "Using Configuration Override" (table entry `MAG B550 TOMAHAWK (MS-7C91)`: 6 onboard LEDs, 2 RGB headers, 2 ARGB headers, 0 JPIPE, 0 Corsair) | S3 |
 
-Lightloom consequence: `Validate` selects on the interface number only (`0`, or `-1` when the host
-reports a path without `&MI_xx`). Selecting on a vendor usage page would reject this device.
+Lightloom consequence: `Validate` selects on the interface number only. This non-composite USB device
+reports interface `0` (hidapi, SignalRGB and Lightloom agree; see `docs/host-api/hid-usb.md`,
+"Endpoint tuple semantics"); `-1` is accepted too, for transports without a USB interface.
+Selecting on a vendor usage page would reject this device.
 
 ## Report inventory
 
@@ -155,17 +157,59 @@ directory argument).
 
 - Never send a 0x52 packet that was not derived from a successful GET of the same report.
 - Byte `0xB8` is always `0` — Lightloom never persists to the controller's flash.
-- SignalRGB / MSI Center / LEDKeeper must not be running; they are listed in
-  `ConflictingProcesses()` and reported, never killed.
+- Byte `0x3E` is written as the read value - 4 (see "Bench results": the controller reads it back
+  as the written value + 4).
+- Nothing is written on `Shutdown(false)` when the session never wrote.
+- Other lighting software must not be running. The host reports SignalRGB and OpenRGB itself;
+  the plugin's `ConflictingProcesses()` adds MSI's lighting services `LEDKeeper.exe`,
+  `LEDKeeper2.exe`, `LightKeeperService.exe` and `LightKeeperService2.exe` (names from public
+  reports, not verified on this machine, where MSI Center is not installed). Conflicts are
+  reported, never killed.
 - `--dry-run` in the CLI prints the packet diff against the restore image instead of sending.
 - A `send_report` return of `-1` is logged; the plugin keeps running (next frame retries).
 
 ## Open questions for the M1 bench session
 
-| Question | How to resolve |
-|----------|----------------|
-| Which 6 of the 10 onboard slots are wired (0..5 vs 1..6)? | Paint a distinct colour per slot in dry-run → live, observe. |
-| Does the board accept static colour on a slot while the restore image's master slot (0x4A) still says `0x25`? | Compare behaviour after a cold boot (image from firmware) vs after SignalRGB (image in per-LED mode). |
-| Brightness field: is `0x28` full brightness? What does MSI Center write at 100 %? | Read 0x52 after setting 100 % in MSI Center (needs MSI Center installed; optional). |
-| Does GET 0x52 return exactly 185 bytes through hidapi (`hid_get_feature_report`) on Windows? | `lightloom devices --probe` logs `getLastReadSize()`. |
-| Does `Shutdown(false)` really restore the pre-run appearance? | Diff GET 0x52 before/after a run; visual check. |
+| Question | Status after the 2026-10-18 bench |
+|----------|-----------------------------------|
+| Which 6 of the 10 onboard slots are wired (0..5 vs 1..6)? | **Open.** The rainbow was visible on the board's LEDs (user report); a per-slot colour test is still to do. |
+| Does the board accept static colour on a slot while the restore image's master slot (0x4A) still says `0x25`? | **Yes.** After SignalRGB the image held `0x25` (per-LED mode) on `0x4A`; our packet (static on the six onboard records) was applied and read back. |
+| Brightness field: is `0x28` full brightness? What does MSI Center write at 100 %? | Open (MSI Center not installed). `0x28` = brightness 10 of a 0-10 scale per S1; the board lit visibly. |
+| Does GET 0x52 return exactly 185 bytes on Windows? | **Yes**, 185 bytes. Windows refuses GET_FEATURE buffers shorter than the collection's longest feature report (725), so the host retries with 725 and passes the real size to `getLastReadSize()`. |
+| Does `Shutdown(false)` really restore the pre-run appearance? | **Yes** at protocol level: GET of 0x52 and 0x53 before `Initialize` and after `Shutdown` are byte-identical (once the 0x3E read-back bias is handled). |
+
+## Bench results (2026-10-18)
+
+Setup: MSI MAG B550 TOMAHAWK (1462:7C91), Windows 11, SignalRGB closed for the runs and relaunched
+afterwards. Commands: `lightloom light|rainbow --restore-check`, with and without `--dry-run`.
+
+**State left by SignalRGB.** The 0x52 image read after closing SignalRGB has effect `0x25`
+(per-LED stream mode) on `J_ONBOARD_LED_0` (`0x4A`), options `0xA9`, sync flags `0x87`; every other
+record is static (`0x01`). JRAINBOW1/2 report 60 LEDs (`0x3C` at `0x29` and `0x34`).
+
+**Packets are applied.** A GET right after a live run that left the board red (`--keep`) returns the
+six onboard records exactly as sent (`01 FF 00 00 28 FF 00 00 80 00`). Two exceptions:
+
+| Offset | Written | Read back | Explanation |
+|--------|---------|-----------|-------------|
+| `0x3E` (J_CORSAIR record +9) | `v` | `v + 4` | Firmware behaviour, seen on every write (0x04 → 0x08 → 0x0C … 0x24 over successive sessions that wrote the read value back). SignalRGB writes `0x00` there and the controller reports `0x04`. The plugin now writes `read - 4`, which keeps the value stable across sessions. |
+| `0x81` (slot 6 colour 2, red) | `0xFF` | `0x00` | Slot 6 does not retain colour 2 (probably a single-LED slot). Ignored when the plugin recognises its own packet on re-`Initialize`. |
+
+GETs alone change nothing (dry-run sessions read identical images before and after).
+
+**Restore.** With both quirks handled, `--restore-check` (every feature report the descriptor
+declares: 0x52 and 0x53) is byte-identical before `Initialize` and after `Shutdown(false)`, for
+normal ends, `--duration` and Ctrl-Break.
+
+**Performance** (release build; 30 fps rainbow; one 185-byte SET_FEATURE per frame because every
+frame changes):
+
+| Run | Frames | HID errors | Render p50 / p99 / max | SET_FEATURE p50 / p99 | Peak RSS |
+|-----|--------|------------|------------------------|-----------------------|----------|
+| 10 min (hidapi backend) | 17 989 | 0 | 3.75 / 4.28 / 7.86 ms | 3.62 / 4.11 ms | 10.6 MB |
+| 60 s (native backend) | 1 798 | 0 | 3.74 / 4.25 / 4.44 ms | 3.60 / 4.10 ms | 10.5 MB |
+
+`Render()` time is dominated by the USB control transfer (Windows pads the 185-byte report to the
+collection's 725-byte feature length). Command start to the first write (`lightloom light`): 431 ms
+with the hidapi backend (its context enumerates and reads strings of every HID device first),
+**56-58 ms** with the native backend.

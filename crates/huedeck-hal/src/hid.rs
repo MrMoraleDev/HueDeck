@@ -141,11 +141,14 @@ pub trait HidHandle: Send {
     /// Static information about this endpoint.
     fn info(&self) -> &HidEndpointInfo;
 
-    /// Write an output report. Returns the number of bytes written.
+    /// Write an output report. Returns `data.len()` on success (backends may
+    /// pad the transfer to the collection's output report length).
     fn write(&mut self, data: &[u8]) -> HalResult<usize>;
 
     /// Read an input report, waiting at most `timeout_ms` (`0` = non-blocking
-    /// poll, `-1` = block). Returns `Ok(0)` on timeout.
+    /// poll, `-1` = block). The report id comes first, `0x00` when the
+    /// collection uses unnumbered reports, as SignalRGB plugins expect
+    /// (hid-usb.md). Returns the bytes stored, `Ok(0)` on timeout.
     fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> HalResult<usize>;
 
     /// SET_REPORT(Feature). Returns the number of bytes sent.

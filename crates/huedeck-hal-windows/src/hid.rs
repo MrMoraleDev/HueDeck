@@ -215,6 +215,7 @@ impl HidBackend for WindowsHidBackend {
         // enforces for HidD_Get/SetFeature and WriteFile), else the reconstructed
         // descriptor, which also lists the feature reports by id.
         let tlc = descriptor_tlc(&device, &info);
+        let tlc_numbered = tlc.as_ref().is_none_or(|t| t.uses_report_ids());
         info.feature_reports = tlc.as_ref().map(feature_reports).unwrap_or_default();
         match probe::read_caps(path) {
             Ok(caps) => info.report_lengths = caps.lengths,
@@ -236,7 +237,13 @@ impl HidBackend for WindowsHidBackend {
             feature_reports = ?info.feature_reports,
             "opened HID endpoint"
         );
-        Ok(Box::new(WindowsHidHandle { device, info }))
+        // hidapi strips the leading 0x00 of unnumbered input reports; the HAL contract keeps it.
+        let numbered = tlc_numbered;
+        Ok(Box::new(WindowsHidHandle {
+            device,
+            info,
+            numbered,
+        }))
     }
 }
 
@@ -244,6 +251,8 @@ impl HidBackend for WindowsHidBackend {
 pub struct WindowsHidHandle {
     device: hidapi::HidDevice,
     info: HidEndpointInfo,
+    /// Whether the collection uses report ids (unknown counts as numbered).
+    numbered: bool,
 }
 
 impl HidHandle for WindowsHidHandle {
@@ -252,11 +261,25 @@ impl HidHandle for WindowsHidHandle {
     }
 
     fn write(&mut self, data: &[u8]) -> HalResult<usize> {
-        self.device.write(data).map_err(map_err)
+        // hidapi returns the padded length, or 0 when WriteFile completed synchronously.
+        self.device.write(data).map_err(map_err)?;
+        Ok(data.len())
     }
 
     fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> HalResult<usize> {
-        self.device.read_timeout(buf, timeout_ms).map_err(map_err)
+        if self.numbered || buf.is_empty() {
+            return self.device.read_timeout(buf, timeout_ms).map_err(map_err);
+        }
+        // Unnumbered collection: hidapi stripped the 0x00 report id; put it back.
+        let n = self
+            .device
+            .read_timeout(&mut buf[1..], timeout_ms)
+            .map_err(map_err)?;
+        if n == 0 {
+            return Ok(0);
+        }
+        buf[0] = 0;
+        Ok(n + 1)
     }
 
     fn send_feature_report(&mut self, data: &[u8]) -> HalResult<usize> {

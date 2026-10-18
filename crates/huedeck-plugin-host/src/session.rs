@@ -830,13 +830,16 @@ fn drive(
         lock_device(shared).set_frame(frame);
         let t = Instant::now();
         let result = rt.call_export_until("Render", CallArgs::None, budgets.render_budget(), stop);
+        // Cut short by a stop request (it outlived STOP_GRACE): not the plugin's
+        // fault, and not a whole frame.
+        if matches!(&result, Err(e) if e.is_stop()) {
+            break;
+        }
         lifecycle.render.record(t.elapsed());
         report.frames += 1;
         live.frames.fetch_add(1, Ordering::Relaxed);
         match result {
             Ok(_) => consecutive_timeouts = 0,
-            // Cut short by a stop request: not the plugin's fault, and the loop ends.
-            Err(e) if e.is_stop() => break,
             Err(e) => {
                 report.render_errors += 1;
                 live.render_errors.fetch_add(1, Ordering::Relaxed);

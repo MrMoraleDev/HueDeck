@@ -357,3 +357,14 @@ test("repeated sessions keep 0x3E stable on a controller that adds 4 on read-bac
   }
   assert.equal(image[CORSAIR_FLAGS], RESTORE[CORSAIR_FLAGS], "no drift across sessions");
 });
+
+test("Shutdown(false) writes nothing when the session never wrote", async () => {
+  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [255, 0, 0]);
+  try {
+    plugin.Initialize();
+    plugin.Shutdown(false);                    // e.g. Ctrl-C before the first Render
+    assert.equal(device.sent.length, 0);
+  } finally {
+    restoreGlobals();
+  }
+});

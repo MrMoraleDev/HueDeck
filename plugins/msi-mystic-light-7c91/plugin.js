@@ -197,7 +197,12 @@ export function Shutdown(SystemSuspending) {
     return;
   }
   // Normal exit: put the controller back exactly as we found it (save flag forced to 0 so the
-  // restore never persists anything to flash).
+  // restore never persists anything to flash). Nothing to undo when nothing was written: a
+  // restore would re-enter whatever mode the image holds (per-LED mode with no colour stream
+  // after SignalRGB, for example) although Lightloom never changed the board.
+  if (lastSent === null) {
+    return;
+  }
   sendPacket(writableFrom(restoreImage));
 }
 

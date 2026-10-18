@@ -46,10 +46,12 @@ uuid = { version = "1", features = ["v4", "serde"] }
 hex = "0.4"
 sha2 = "0.10"
 bytes = "1"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_Properties", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_Security"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_Properties", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_ProcessStatus"] }
 windows-service = "0.8"
 libc = "0.2"
 humantime = "2"
+# Ctrl-C / Ctrl-Break handling in the CLI (restores device state on interrupt).
+ctrlc = "3.4"
 # SPIKE A (lightloom-renderer): CEF offscreen Chromium + memory-mapped shm ring. CEF itself is BSD-3.
 cef = { version = "=154.5.0", default-features = false }
 memmap2 = "0.9"

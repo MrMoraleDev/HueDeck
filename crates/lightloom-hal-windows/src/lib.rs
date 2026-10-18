@@ -13,6 +13,8 @@
 //!   parent → serial → instance prefix), SignalRGB-shaped `vid:pid:serial` keys.
 //! * [`probe`] (Windows only): read-only `CM_Get_Parent` walk and
 //!   zero-access `HIDP_CAPS` report lengths.
+//! * [`system`] (Windows only): running process names (conflict reporting) and
+//!   this process's working set.
 //!
 //! Hotplug (`CM_Register_Notification`), raw USB (`nusb`), serial, LampArray and the broker
 //! client follow in later milestones.
@@ -26,6 +28,8 @@ pub mod path;
 pub mod hid;
 #[cfg(windows)]
 pub mod probe;
+#[cfg(windows)]
+pub mod system;
 
 #[cfg(windows)]
 pub use hid::WindowsHidBackend;

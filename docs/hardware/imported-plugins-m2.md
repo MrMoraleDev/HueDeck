@@ -46,8 +46,13 @@ packet is reproduced.
 | SteelSeries Arctis 5 `1038:12aa` | 2800 | 2800 | identical |
 | Razer DeathAdder V2 Pro `1532:007c` | 212 | 212 | identical (request/response protocol answered from the trace) |
 
-The trace carries what `@SignalRGB/systeminfo` reported and the channel setup, so
-the MSI plugin takes the same path. Plugins that act on wall-clock time (battery
+Three devices recorded together (MSI, Razer, Kraken; 14 s, `--restore-check`,
+384 / 158 / 400 frames) also replay packet for packet: each replayed session stops
+as soon as it has rendered its recorded frames.
+
+The trace carries what `@SignalRGB/systeminfo` reported, the channel setup and the
+run options that change what plugins send (brightness, `--keep`, restore-check
+reads), so the MSI plugin takes the same path. Plugins that act on wall-clock time (battery
 polls every N seconds) can diverge on longer recordings; the report shows the
 first differing packet per collection.
 

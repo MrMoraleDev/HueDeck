@@ -97,6 +97,14 @@ impl WindowsHidBackend {
     fn info_from(d: &hidapi::DeviceInfo) -> HidEndpointInfo {
         let path = d.path().to_string_lossy().into_owned();
         let parsed = parse_hid_path(&path);
+        // hidapi windows-native: MI_xx from the hardware ids, 0 for a non-composite
+        // USB device (as SignalRGB reports). It also reports 0 for transports it
+        // mistakes for USB (see `probe::hid_bus`), so its value is kept for USB
+        // collections only; otherwise `MI_xx` from the path or -1.
+        let interface_number = match (probe::hid_bus(&path), d.interface_number()) {
+            (probe::HidBus::Usb, n) if n >= 0 => n,
+            _ => parsed.interface_number,
+        };
         HidEndpointInfo {
             vid: d.vendor_id(),
             pid: d.product_id(),
@@ -104,14 +112,7 @@ impl WindowsHidBackend {
             manufacturer: d.manufacturer_string().unwrap_or("").to_string(),
             product: d.product_string().unwrap_or("").to_string(),
             path,
-            // hidapi windows-native: MI_xx from the hardware ids; a non-composite
-            // USB device reports 0 (matches SignalRGB, see `path` docs); only
-            // non-USB transports keep -1. Fall back to the path parse otherwise.
-            interface_number: if d.interface_number() >= 0 {
-                d.interface_number()
-            } else {
-                parsed.interface_number
-            },
+            interface_number,
             usage_page: d.usage_page(),
             usage: d.usage(),
             collection: parsed.collection,

@@ -196,6 +196,7 @@ impl MockHid {
             usage,
             collection,
             report_lengths,
+            feature_reports: Vec::new(),
         }
     }
 

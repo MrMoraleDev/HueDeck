@@ -75,6 +75,16 @@ const REPORT_ID = 0x52;
 const REPORT_LENGTH = 185;
 const SAVE_FLAG_OFFSET = 0xB8;          // 184: 0 = apply only, non-zero = persist to flash. Always 0 here.
 
+// Bytes whose GET value is not simply the last SET value (bench, 2026-10-18, this board; see the
+// hardware doc, section "Bench results"):
+//  * J_CORSAIR record +9 (0x3E) reads back as the written value + 4. SignalRGB writes 0x00 there
+//    and the controller then reports 0x04, so a naive read-modify-write grows it by 4 per session.
+//    Every packet therefore writes (read value - 4), which keeps the GET value stable.
+//  * Colour 2 (+5..+7) of an onboard record is not always retained (slot 6 reads back 0), so it is
+//    ignored when recognising our own packet in a GET.
+const CORSAIR_FLAGS_OFFSET = 0x35 + 9;
+const READBACK_BIAS = 4;
+
 // Zone record field offsets (relative to the record start).
 const Z_EFFECT = 0;                      // effect number
 const Z_COLOR1 = 1;                      // +1 R, +2 G, +3 B
@@ -108,6 +118,11 @@ const ONBOARD_ZONES = [
 let restoreImage = null;                 // 185-byte copy of report 0x52 as read in Initialize()
 let writesEnabled = false;               // true only after a valid restore image was captured
 let lastSent = null;                     // last packet we wrote (used to recognise our own state on re-Initialize)
+let lastSentAt = -Infinity;              // Date.now() of that write
+
+// Render() resends an unchanged packet only once this much time has passed, so a static colour is
+// not pushed to the controller 30 times per second. A changed packet is sent immediately.
+const KEEPALIVE_MS = 1000;
 
 // ---------------------------------------------------------------------------------------------
 // Lifecycle
@@ -115,15 +130,16 @@ let lastSent = null;                     // last packet we wrote (used to recogn
 // Facts observed on this board (2026-10-17, read-only HidP_GetCaps probe): a single HID interface,
 // device path HID\VID_1462&PID_7C91\...&0&0000 (no &MI_xx, no &ColNN), usage_page 0x0001,
 // usage 0x0000, input/output 64 bytes, feature report maximum 725 bytes. The controller does NOT
-// use a vendor-defined usage page, so we select on the interface number only. SignalRGB's plugin
-// accepts interface 0 or 2 and ignores the usage page; HueDeck's host reports -1 for a HID path
-// without an &MI_xx suffix, so both spellings of "the only interface" are accepted.
+// use a vendor-defined usage page, so we select on the interface number only. A non-composite USB
+// device reports interface 0 (hidapi, SignalRGB and HueDeck agree; verified in M0). -1 is accepted
+// too: it is what a host reports for a HID transport without a USB interface.
 export function Validate(endpoint) {
   return endpoint.interface === 0 || endpoint.interface === -1;
 }
 
 export function Initialize() {
   writesEnabled = false;
+  lastSentAt = -Infinity;                // the first Render() after (re-)Initialize always writes
 
   // GET_REPORT(Feature, 0x52). The host returns the report-id-prefixed byte array; the number of
   // bytes the device actually returned is getLastReadSize() when the host provides it. Both the
@@ -147,7 +163,7 @@ export function Initialize() {
   // "before HueDeck" state is the image captured the first time; keep it so that Shutdown(false)
   // still restores the pre-run appearance. Anything else (cold boot, another application wrote
   // in between) is a genuinely new state and becomes the restore image.
-  if (restoreImage === null || lastSent === null || !sameBytes(current, lastSent)) {
+  if (restoreImage === null || lastSent === null || !readsBackAs(current, lastSent)) {
     restoreImage = current;
   }
   writesEnabled = true;
@@ -164,7 +180,11 @@ export function Render() {
   if (!writesEnabled) {
     return;
   }
-  sendPacket(buildPacket(colourForLed));
+  const packet = buildPacket(colourForLed);
+  if (lastSent !== null && sameBytes(packet, lastSent) && Date.now() - lastSentAt < KEEPALIVE_MS) {
+    return;
+  }
+  sendPacket(packet);
 }
 
 export function Shutdown(SystemSuspending) {
@@ -177,26 +197,63 @@ export function Shutdown(SystemSuspending) {
     return;
   }
   // Normal exit: put the controller back exactly as we found it (save flag forced to 0 so the
-  // restore never persists anything to flash).
-  const packet = restoreImage.slice();
-  packet[SAVE_FLAG_OFFSET] = 0x00;
-  sendPacket(packet);
+  // restore never persists anything to flash). Nothing to undo when nothing was written: a
+  // restore would re-enter whatever mode the image holds (per-LED mode with no colour stream
+  // after SignalRGB, for example) although HueDeck never changed the board.
+  if (lastSent === null) {
+    return;
+  }
+  sendPacket(writableFrom(restoreImage));
 }
 
 // ---------------------------------------------------------------------------------------------
 // Packet construction
 // ---------------------------------------------------------------------------------------------
-// Start from a copy of the restore image and rewrite only the fields we understand.
+// Start from the restore image as it must be written and rewrite only the fields we understand.
 function buildPacket(colourFor) {
-  const packet = restoreImage.slice();
+  const packet = writableFrom(restoreImage);
 
   for (let index = 0; index < ONBOARD_ZONES.length; index++) {
     const rgb = colourFor(index);
     writeStaticZone(packet, ONBOARD_ZONES[index].offset, rgb);
   }
-
-  packet[SAVE_FLAG_OFFSET] = 0x00;
   return packet;
+}
+
+// The bytes to SET so that a later GET returns `image`: the save flag cleared and the read-back
+// bias of the J_CORSAIR flags byte removed.
+function writableFrom(image) {
+  const packet = image.slice();
+  packet[SAVE_FLAG_OFFSET] = 0x00;
+  const flags = packet[CORSAIR_FLAGS_OFFSET] & 0xFF;
+  packet[CORSAIR_FLAGS_OFFSET] = flags >= READBACK_BIAS ? flags - READBACK_BIAS : flags;
+  return packet;
+}
+
+// Whether `current` (a GET) is what the controller reports after we SET `sent`.
+function readsBackAs(current, sent) {
+  if (current.length !== sent.length) {
+    return false;
+  }
+  const ignored = new Set([SAVE_FLAG_OFFSET]);
+  for (const zone of ONBOARD_ZONES) {
+    for (let i = 0; i < 3; i++) {
+      ignored.add(zone.offset + Z_COLOR2 + i);
+    }
+  }
+  for (let i = 0; i < sent.length; i++) {
+    if (ignored.has(i)) {
+      continue;
+    }
+    let expected = sent[i] & 0xFF;
+    if (i === CORSAIR_FLAGS_OFFSET) {
+      expected = (expected + READBACK_BIAS) & 0xFF;
+    }
+    if ((current[i] & 0xFF) !== expected) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Static effect with a single colour. Colour 2 is set to the same value so that boards wiring
@@ -230,6 +287,7 @@ function sendPacket(packet) {
     return;
   }
   lastSent = packet.slice();
+  lastSentAt = Date.now();
 }
 
 // ---------------------------------------------------------------------------------------------

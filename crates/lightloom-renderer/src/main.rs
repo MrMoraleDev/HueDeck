@@ -1,25 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-//! `lightloom-renderer` — CEF offscreen renderer process (M3).
+//! `lightloom-renderer` — CEF offscreen renderer process (SPIKE A).
 //!
-//! Will host a windowless Chromium browser per effect (plus one per LCD
-//! face), copy each `on_paint` BGRA buffer into the next shm slot described
-//! by `lightloom_protocol::shm`, and signal the sequence number on the control
-//! pipe. The same executable serves as the CEF subprocess.
-//!
-//! M0 stub: prints the shm geometry it will produce and exits.
+//! Hosts one windowless Chromium browser (CEF, Alloy style) on an effect's `file://` URL at
+//! 320x200, copies every `OnPaint` BGRA buffer into the shm ring described by
+//! `lightloom_protocol::shm`, and after `--frames` frames prints paint-interval statistics as
+//! JSON. The same executable serves as every Chromium subprocess (`--type=renderer|gpu-process|
+//! utility|...`) through `cef::execute_process`. See README.md.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
 
-use lightloom_protocol::shm::{FrameHeader, CANVAS_HEIGHT, CANVAS_WIDTH, SLOT_COUNT};
+#[cfg(feature = "cef")]
+mod cef_host;
 
-fn main() {
-    let header = FrameHeader::new(CANVAS_WIDTH, CANVAS_HEIGHT);
-    println!(
-        "lightloom-renderer {} (stub; CEF OSR lands in M3): {}x{} BGRA, {} slots, {} bytes shm",
-        env!("CARGO_PKG_VERSION"),
-        header.width,
-        header.height,
-        SLOT_COUNT,
-        header.total_bytes()
-    );
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    #[cfg(feature = "cef")]
+    {
+        // Chromium subprocesses carry `--type=...`; they must not see our CLI parser.
+        if let Some(code) = cef_host::run_subprocess_if_any(std::ptr::null_mut()) {
+            std::process::exit(code);
+        }
+    }
+
+    let args = <lightloom_renderer::cli::Args as clap::Parser>::parse();
+
+    #[cfg(feature = "cef")]
+    {
+        ExitCode::from(cef_host::run(args, std::ptr::null_mut()))
+    }
+
+    #[cfg(not(feature = "cef"))]
+    {
+        let _ = args;
+        eprintln!(
+            "lightloom-renderer was built without the `cef` feature; rebuild with `--features cef` \
+             (needs the CEF binary distribution, see crates/lightloom-renderer/README.md)"
+        );
+        ExitCode::from(2)
+    }
 }

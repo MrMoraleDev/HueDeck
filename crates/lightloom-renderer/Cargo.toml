@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "lightloom-renderer"
-description = "lightloom-renderer: CEF offscreen Chromium process rendering lightscripts at 320x200 into shared memory (stub until M3)"
+description = "lightloom-renderer: CEF offscreen Chromium process rendering lightscripts at 320x200 into shared memory (SPIKE A)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,11 +10,43 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 homepage.workspace = true
+build = "build.rs"
 
+# The library holds everything that does not need Chromium (shm ring writer/reader, paint
+# statistics, PNG snapshots, engine bootstrap JS, CLI). It never references the `cef` crate, so
+# its test binaries do not import libcef.dll and run anywhere.
+[lib]
+name = "lightloom_renderer"
+path = "src/lib.rs"
+
+# The binary is the CEF host (browser process and, via `cef::execute_process`, every Chromium
+# subprocess). `test = false`: with the `cef` feature its test harness would import libcef.dll,
+# which only sits next to the exe in target/<profile>/, not in target/<profile>/deps/.
 [[bin]]
 name = "lightloom-renderer"
 path = "src/main.rs"
+test = false
+
+[features]
+# `cef` pulls real Chromium: cef-dll-sys resolves the CEF binary distribution (CEF_PATH, or a
+# ~170 MB download into OUT_DIR), builds libcef_dll_wrapper with CMake + Ninja and copies the
+# runtime files (libcef.dll, *.pak, icudtl.dat, locales/ ...) next to the exe. OFF by default so
+# workspace-wide builds, tests and CI never download or build Chromium: build the real renderer
+# with `cargo build -p lightloom-renderer --features cef`. Without it the library (ring, sink,
+# stats, snapshots, injection, CLI) is fully built and tested, and the binary only prints a
+# "built without cef" error.
+default = []
+cef = ["dep:cef"]
 
 [dependencies]
 lightloom-protocol = { path = "../lightloom-protocol" }
-# TODO(M3): cef = "154.5.0+154.0.34" (not a workspace pin yet; added with SPIKE A).
+lightloom-effects = { path = "../lightloom-effects" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = { workspace = true }
+sha2 = { workspace = true }
+memmap2 = { workspace = true }
+image = { workspace = true }
+cef = { workspace = true, optional = true }

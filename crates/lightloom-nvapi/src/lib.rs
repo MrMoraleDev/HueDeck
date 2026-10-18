@@ -35,8 +35,9 @@ pub enum NvStatus {
     InvalidArgument = -5,
     /// GPU handle invalid.
     InvalidHandle = -8,
-    /// I2C NACK / device not present.
-    I2cNack = -39, // placeholder; TODO(M5): confirm against the public nvapi_lite_common.h value
+    /// Port id not found (`NVAPI_PORTID_NOT_FOUND`). NvAPI has no dedicated I2C NACK
+    /// status: a missing device surfaces as [`NvapiStatus::Error`] or as this code.
+    PortIdNotFound = -105,
 }
 
 /// Error type of the (future) loader.

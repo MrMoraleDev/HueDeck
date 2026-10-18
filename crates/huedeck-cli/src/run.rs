@@ -11,6 +11,7 @@ use anyhow::{bail, Context};
 use clap::Args;
 use huedeck_engine::{ComponentInstance, FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
 use huedeck_hal::mock::MockHid;
+use huedeck_hal::trace::RecordingHid;
 use huedeck_hal::{HidBackend, ReportLengths};
 use huedeck_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use huedeck_plugin_host::device::{Brightness, IoKind, LogSink, WriteMode};
@@ -43,6 +44,11 @@ pub struct RunArgs {
     /// Read devices but never write; print the packets that would be sent.
     #[arg(long)]
     pub dry_run: bool,
+    /// Record every HID operation and what the devices answered into FILE
+    /// (JSON), for `huedeck compat replay`. Record with `light` (a solid
+    /// colour) to get a trace that replays exactly.
+    #[arg(long, value_name = "FILE")]
+    pub record: Option<PathBuf>,
     /// Stop after this many seconds (default: until Ctrl-C; `bench` uses --seconds).
     #[arg(long, value_name = "SECS", value_parser = parse_secs)]
     pub duration: Option<f64>,
@@ -367,7 +373,7 @@ fn matches_filter(key: &str, filters: &[String]) -> bool {
 
 /// A scripted device that answers every feature-report id with 1024 zero bytes
 /// (report id first), so any HID plugin can run its Initialize against it.
-fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid>, SessionDevice)> {
+pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid>, SessionDevice)> {
     let info = MockHid::endpoint_info(
         vid,
         pid,
@@ -848,6 +854,32 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         }
     };
 
+    let recorder = args.record.as_ref().map(|_| {
+        let r = Arc::new(RecordingHid::new(
+            Arc::clone(&backend),
+            format!(
+                "huedeck {} {}",
+                mode.name(),
+                std::env::args().skip(2).collect::<Vec<_>>().join(" ")
+            ),
+        ));
+        r.set_conditions(
+            match mode {
+                Mode::Light(c) => Some(c.to_hex()),
+                _ => None,
+            },
+            args.params.iter().cloned().collect(),
+        );
+        for t in &initial {
+            r.note_device(&t.device.key, t.device.vid, t.device.pid, &t.device.endpoints);
+        }
+        r
+    });
+    let backend: Arc<dyn HidBackend> = match &recorder {
+        Some(r) => r.clone(),
+        None => backend,
+    };
+
     if hardware.is_some() {
         let conflicts = running_conflicts(&initial)?;
         if !conflicts.is_empty() && !args.ignore_conflicts {
@@ -964,6 +996,11 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                 settle = None;
                 match hw.targets(&catalog, &args.devices) {
                     Ok((present, _)) => {
+                        if let Some(r) = &recorder {
+                            for t in &present {
+                                r.note_device(&t.device.key, t.device.vid, t.device.pid, &t.device.endpoints);
+                            }
+                        }
                         for change in manager.reconcile(present) {
                             print_change(&mode, &change);
                         }
@@ -988,6 +1025,20 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     renderer.stop();
     interrupt.finished();
     max_rss = max_rss.max(rss_bytes());
+    if let (Some(r), Some(path)) = (&recorder, &args.record) {
+        for s in &sessions {
+            r.set_frames(&s.device, s.frames);
+        }
+        let trace = r.trace();
+        std::fs::write(path, serde_json::to_string_pretty(&trace)?)
+            .with_context(|| format!("writing {}", path.display()))?;
+        eprintln!(
+            "huedeck {}: recorded {} HID operations to {}",
+            mode.name(),
+            trace.events.len(),
+            path.display()
+        );
+    }
     for f in &failed_sessions {
         eprintln!("huedeck: session {f}");
     }
@@ -1262,6 +1313,7 @@ mod tests {
                 no_plugin_cache: true,
             },
             dry_run: false,
+            record: None,
             duration: None,
             keep: false,
             ignore_conflicts: false,

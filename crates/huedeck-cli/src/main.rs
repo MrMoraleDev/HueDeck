@@ -112,7 +112,13 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
             run,
         } => run::run(run::Mode::Bench { fps, seconds, mock }, &run),
         Command::Plugins { catalog, json } => run::list_plugins(&catalog, json).map(|_| run::Outcome::Clean),
-        Command::Compat { command } => compat::run(command).map(|_| run::Outcome::Clean),
+        Command::Compat { command } => compat::run(command).map(|clean| {
+            if clean {
+                run::Outcome::Clean
+            } else {
+                run::Outcome::Failed
+            }
+        }),
     }
 }
 

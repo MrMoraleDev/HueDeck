@@ -28,13 +28,19 @@ pub struct ReportLengths {
 /// `Validate(endpoint)` and `set_endpoint(...)` operate on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HidEndpointTuple {
-    /// USB interface number (`MI_xx`), or `-1` when unknown (single-interface device).
+    /// USB interface number (`bInterfaceNumber`, Windows `MI_xx`). A
+    /// non-composite USB device (no `MI_xx`) reports `0`, as hidapi and
+    /// SignalRGB do; `-1` only when the transport has no USB interface (e.g.
+    /// Bluetooth HID).
     pub interface: i32,
     /// HID usage of the top-level collection.
     pub usage: u16,
     /// HID usage page of the top-level collection.
     pub usage_page: u16,
-    /// 0-based index of the top-level collection within the interface.
+    /// Top-level-collection number within the interface as SignalRGB reports
+    /// it: the Windows `ColNN` number (two hex digits, 1-based: `Col05` → 5,
+    /// `Col0A` → 10), `0` when the interface has a single collection (no
+    /// `ColNN`). See `huedeck_hal_windows::path` for the evidence.
     pub collection: u16,
 }
 
@@ -70,7 +76,8 @@ pub struct HidEndpointInfo {
     pub usage_page: u16,
     /// Usage of the top-level collection.
     pub usage: u16,
-    /// 0-based top-level-collection index within the interface.
+    /// Top-level-collection number ([`HidEndpointTuple::collection`] semantics:
+    /// the `ColNN` number, `0` when absent).
     pub collection: u16,
     /// Report sizes (may be all-zero until the endpoint is opened on
     /// backends that only learn them from the report descriptor).
@@ -78,10 +85,15 @@ pub struct HidEndpointInfo {
 }
 
 impl HidEndpointInfo {
-    /// Interface number reported when the OS path carries no `MI_xx` part.
+    /// Interface number reported when the transport has no USB interface
+    /// number (e.g. Bluetooth HID). A non-composite USB device reports `0`.
     pub const UNKNOWN_INTERFACE: i32 = -1;
 
-    /// `vid:pid:serial` identity of the owning device.
+    /// `vid:pid:serial` built from the HID-reported serial string. On Windows
+    /// that string can be empty (e.g. DualSense, Sonix keyboards) while
+    /// SignalRGB keys the device by its USB parent instance id; use the
+    /// backend's device grouping (`huedeck_hal_windows::group`) for the
+    /// SignalRGB-shaped key.
     pub fn key(&self) -> DeviceKey {
         DeviceKey::new(self.vid, self.pid, self.serial.clone())
     }

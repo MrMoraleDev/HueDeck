@@ -3,7 +3,7 @@
 //!
 //! The runtime applies the call-if-function rule inside the engine and hands
 //! over a JSON object `{ exports, errors, lifecycle, hooks, names }`
-//! (see `js/stub_host.js`, `readMeta`). This module turns it into the typed
+//! (see `js/host.js`, `readMeta`). This module turns it into the typed
 //! model leniently: malformed fields fall back to their defaults and are
 //! reported as warnings instead of rejecting the plugin, so the corpus
 //! dry-run can count every problem at once.

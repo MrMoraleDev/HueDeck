@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.sony-dualsense",
+  "name": "Sony DualSense",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "The light bar of the Sony DualSense controller over USB (054C:0CE6; DualSense Edge 054C:0DF2 untested). Volume, audio routing, vibration, triggers, the microphone LED and the player LEDs are never touched. Protocol notes: docs/hardware/sony-dualsense.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    { "vid": "0x054C", "pids": ["0x0CE6", "0x0DF2"], "transport": "hid", "interfaces": [3], "tested": [] }
+  ],
+  "permissions": ["hid"],
+  "keywords": ["sony", "playstation", "dualsense", "controller", "gamepad", "lightbar"]
+}

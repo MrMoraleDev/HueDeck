@@ -27,6 +27,7 @@ pub mod sensors;
 pub mod serial;
 pub mod smbios;
 pub mod smbus;
+pub mod trace;
 pub mod usb;
 
 #[cfg(any(test, feature = "mock"))]

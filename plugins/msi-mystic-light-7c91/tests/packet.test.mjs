@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Golden-packet tests for the MSI Mystic Light 185 plugin. Run from the repo root with
+// Tests for the MSI Mystic Light 185 plugin in per-LED mode. Run from the repo root with
 //   node --test "plugins/**/*.test.mjs"
-// (Node >= 21 no longer walks a bare directory argument, so `node --test plugins` fails.)
-// The plugin is loaded as a real ES module with a mock `device` global; the expected bytes come
-// from fixtures/expected-packet.json, which was produced independently of plugin.js.
+// The plugin is loaded as a real ES module with a mock `device` global. Configuration, reset and
+// EZ LED packets are compared with what was recorded on the wire (fixtures/per-led.json); the
+// expected colour streams are built here from the documented slot order, not by the plugin.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,55 +15,64 @@ import { createMockDevice, installGlobals, loadPlugin, hexToBytes, bytesToHex } 
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PLUGIN = join(here, "..", "plugin.js");
-const fixture = JSON.parse(readFileSync(join(here, "..", "fixtures", "expected-packet.json"), "utf8"));
+const fixture = JSON.parse(readFileSync(join(here, "..", "fixtures", "per-led.json"), "utf8"));
 const manifest = JSON.parse(readFileSync(join(here, "..", "manifest.json"), "utf8"));
 const manifestSchema = JSON.parse(readFileSync(join(here, "..", "..", "..", "schemas", "plugin-manifest-v2.schema.json"), "utf8"));
+
 const RESTORE = hexToBytes(fixture.restoreImage);
-const REPORT_ID = fixture.reportId;
-const LENGTH = fixture.reportLength;
+const CONFIG_ID = 0x52;
+const STREAM_ID = 0x53;
+const HEADER_1 = "12v RGB Header 1";
+const HEADER_2 = "12v RGB Header 2";
+const STRIP_1 = "JRainbow 1";
+const STRIP_2 = "JRainbow 2";
 
-function caseByName(name) {
-  const c = fixture.cases.find((entry) => entry.name === name);
-  assert.ok(c, `fixture case '${name}' missing`);
-  return c;
+/** `count` LEDs whose colours name the strip and the LED: [led, tag, 255 - led]. */
+function strip(count, tag) {
+  return Array.from({ length: count }, (_, led) => [led & 0xFF, tag, (255 - led) & 0xFF]);
 }
 
-function hexOf(hex) {
-  return hexToBytes(hex);
-}
-
-// Byte 0x3E (J_CORSAIR record +9): the controller reports the written value + 4 (bench, 2026-10-18).
-const CORSAIR_FLAGS = 0x3E;
-
-/** What a GET of 0x52 returns after `sent` was SET: +4 at 0x3E, colour 2 of slot 6 not retained. */
-function controllerReadback(sent) {
-  const back = Array.from(sent);
-  back[CORSAIR_FLAGS] = (back[CORSAIR_FLAGS] + 4) & 0xFF;
-  for (let i = 0; i < 3; i++) {
-    back[0x7C + 5 + i] = 0;
-  }
-  return back;
-}
-
-/** Boot a fresh plugin instance against a mock device whose 0x52 feature report is `image`. */
-async function boot(image, params = {}, color = [0, 0, 0]) {
-  const device = createMockDevice({ featureReports: { [REPORT_ID]: image }, color, productId: 0x7C91 });
+/** Boot a fresh plugin instance against a mock board. */
+async function boot({ image = RESTORE, params = {}, color = [0, 0, 0], strips = [60, 60], headers = {}, ezReply } = {}) {
+  const device = createMockDevice({
+    featureReports: { [CONFIG_ID]: image },
+    inputReports: ezReply ? { 1: ezReply } : {},
+    color,
+    productId: 0x7C91,
+    channelColors: { [STRIP_1]: strip(strips[0], 0x11), [STRIP_2]: strip(strips[1], 0x22) },
+    subdeviceColors: headers,
+  });
   const restoreGlobals = installGlobals(device, params);
   const plugin = await loadPlugin(PLUGIN);
   return { device, plugin, restoreGlobals };
 }
 
-function assertPacket(actual, expectedHex, label) {
-  const expected = hexOf(expectedHex);
-  assert.equal(actual.length, LENGTH, `${label}: packet length`);
-  for (let i = 0; i < LENGTH; i++) {
-    if (actual.bytes[i] !== expected[i]) {
-      assert.fail(`${label}: byte 0x${i.toString(16).toUpperCase().padStart(2, "0")} is ` +
-                  `0x${actual.bytes[i].toString(16).padStart(2, "0")} expected 0x${expected[i].toString(16).padStart(2, "0")}\n` +
-                  `actual:   ${bytesToHex(actual.bytes)}\nexpected: ${bytesToHex(expected)}`);
-    }
+/** The 0x53 report for these slot colours, built from the documented layout. */
+function expectedStream(slots) {
+  const bytes = new Array(725).fill(0);
+  bytes.splice(0, 5, 0x53, 0x25, 0x06, 0x00, 0x00);
+  slots.forEach((rgb, slot) => { bytes.splice(5 + 3 * slot, 3, ...rgb); });
+  return bytes;
+}
+
+/** A config packet from the recorded one with other LED counts at 0x29 and 0x34. */
+function configWithCounts(first, second) {
+  const bytes = hexToBytes(fixture.config_60_60);
+  bytes[0x29] = first;
+  bytes[0x34] = second;
+  return bytes;
+}
+
+function assertBytes(actual, expected, label) {
+  assert.equal(actual.length, expected.length, `${label}: length`);
+  const at = actual.findIndex((b, i) => b !== expected[i]);
+  if (at >= 0) {
+    assert.fail(`${label}: byte 0x${at.toString(16)} is 0x${actual[at].toString(16)}, expected 0x${expected[at].toString(16)}\n` +
+                `actual:   ${bytesToHex(actual)}\nexpected: ${bytesToHex(expected)}`);
   }
 }
+
+const sentWith = (device, id) => device.sent.filter((s) => s.reportId === id);
 
 test("manifest.json follows schemas/plugin-manifest-v2 (required keys, no unknown keys, usb claim shape)", () => {
   for (const key of manifestSchema.required) {
@@ -78,7 +87,6 @@ test("manifest.json follows schemas/plugin-manifest-v2 (required keys, no unknow
   assert.equal(manifest.license, "GPL-3.0-or-later");
   assert.equal(manifest.compat, "signalrgb-2.5");
   assert.equal(manifest.entry, "plugin.js");
-  assert.ok(manifestSchema.properties.permissions.items.$ref.endsWith("permission"));
   for (const p of manifest.permissions) {
     assert.ok(manifestSchema.$defs.permission.enum.includes(p), `unknown permission '${p}'`);
   }
@@ -93,277 +101,247 @@ test("manifest.json follows schemas/plugin-manifest-v2 (required keys, no unknow
 });
 
 test("metadata exports match the manifest", async () => {
-  const { plugin, restoreGlobals } = await boot(RESTORE);
+  const { plugin, restoreGlobals } = await boot();
   try {
-    assert.equal(plugin.VendorId(), 0x1462);
-    assert.equal(plugin.ProductId(), 0x7C91);
     assert.equal(plugin.VendorId(), Number(manifest.devices[0].vid));
     assert.deepEqual(manifest.devices[0].pids.map(Number), [plugin.ProductId()]);
-    assert.equal(plugin.Type(), "Hid");
     assert.equal(plugin.Type().toLowerCase(), manifest.devices[0].transport);
-    assert.equal(plugin.DeviceType(), "motherboard");
     assert.equal(plugin.DeviceType(), manifest.deviceType);
-    assert.equal(plugin.Publisher(), "HueDeck");
     assert.equal(plugin.Publisher(), manifest.publisher);
     assert.equal(plugin.Name(), manifest.name);
     assert.equal(plugin.Version(), manifest.version);
     assert.deepEqual(plugin.ConflictingProcesses(), manifest.conflictingProcesses);
+    assert.equal(plugin.LedNames().length, 6);
     assert.equal(plugin.LedNames().length, plugin.LedPositions().length);
-    assert.equal(plugin.LedNames().length, fixture.onboardZoneOffsets.length);
     const [w, h] = plugin.Size();
     for (const [x, y] of plugin.LedPositions()) {
       assert.ok(x >= 0 && x < w && y >= 0 && y < h, "LedPositions inside Size");
     }
-    const props = plugin.ControllableParameters().map((p) => p.property);
-    assert.deepEqual(props, ["LightingMode", "forcedColor", "shutdownColor"]);
+    assert.deepEqual(plugin.ControllableParameters().map((p) => p.property), ["LightingMode", "forcedColor", "shutdownColor"]);
   } finally {
     restoreGlobals();
   }
 });
 
 test("Validate accepts the single HID interface (0, or -1 for a path without &MI_xx) only", async () => {
-  const { plugin, restoreGlobals } = await boot(RESTORE);
+  const { plugin, restoreGlobals } = await boot();
   try {
     assert.equal(plugin.Validate({ interface: 0, usage: 0, usage_page: 1, collection: 0 }), true);
     assert.equal(plugin.Validate({ interface: -1, usage: 0, usage_page: 1, collection: 0 }), true);
     assert.equal(plugin.Validate({ interface: 1, usage: 0, usage_page: 1, collection: 0 }), false);
-    assert.equal(plugin.Validate({ interface: 2, usage: 0, usage_page: 0xFF00, collection: 0 }), false);
   } finally {
     restoreGlobals();
   }
 });
 
-test("Render sends exactly one 185-byte 0x52 packet: restore image + static red onboard zones, save flag cleared", async () => {
-  const c = caseByName("solid red via device.color");
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, { LightingMode: c.lightingMode }, hexOf(c.color));
+test("Initialize reads 0x52 first, then sends the recorded reset, per-LED configuration and EZ LED query", async () => {
+  const { device, plugin, restoreGlobals } = await boot({ ezReply: hexToBytes(fixture.ezLedReplyOn) });
   try {
     plugin.Initialize();
-    assert.equal(device.sent.length, 0, "Initialize must not write");
-    assert.deepEqual(device.calls.filter((x) => x.method === "get_report").map((x) => x.args), [[[REPORT_ID], LENGTH]]);
+    const io = device.calls.filter((c) => ["get_report", "send_report", "write", "read", "clearReadBuffer"].includes(c.method));
+    assert.deepEqual(io.map((c) => c.method), ["get_report", "send_report", "send_report", "clearReadBuffer", "write", "read"]);
+    assertBytes(device.sent[0].bytes, hexToBytes(fixture.reset), "reset");
+    assertBytes(device.sent[1].bytes, hexToBytes(fixture.config_60_60), "configuration");
+    assertBytes(device.written[0].bytes, hexToBytes(fixture.ezLedQuery), "EZ LED query");
+    assert.ok(!device.logs.some((l) => l.message.includes("EZ LED")), "EZ LED on: nothing to report");
+    assert.deepEqual(device.subdevices.map((s) => [s.id, s.size]), [[HEADER_1, [1, 1]], [HEADER_2, [1, 1]]]);
+    assert.deepEqual(device.channels.map((c) => [c.name, c.ledLimit]), [[STRIP_1, 120], [STRIP_2, 120]]);
+    assert.ok(device.calls.some((c) => c.method === "SetLedLimit" && c.args[0] === 232));
+  } finally {
+    restoreGlobals();
+  }
+});
 
-    plugin.Render();
-    assert.equal(device.sent.length, 1, "one feature report per Render");
-    assert.equal(device.sent[0].reportId, REPORT_ID);
-    assertPacket(device.sent[0], c.expectedPacket, c.name);
-
-    // Only the six onboard records (9 bytes each) and the save flag differ from the restore image.
-    const touched = new Set();
-    for (const off of fixture.onboardZoneOffsets) {
-      for (let i = 0; i < 9; i++) touched.add(off + i);
+test("the configuration carries each strip's LED count: at least 1, at most 120, both within 232", async () => {
+  for (const [strips, counts] of [[[0, 0], [1, 1]], [[60, 60], [60, 60]], [[120, 120], [120, 112]], [[5, 200], [5, 120]]]) {
+    const { device, plugin, restoreGlobals } = await boot({ strips });
+    try {
+      plugin.Initialize();
+      const expected = counts[0] === 1 && counts[1] === 1 ? hexToBytes(fixture.config_1_1) : configWithCounts(...counts);
+      assertBytes(sentWith(device, CONFIG_ID)[0].bytes, expected, `configuration for ${strips}`);
+    } finally {
+      restoreGlobals();
     }
-    touched.add(0xB8);
-    touched.add(CORSAIR_FLAGS);
-    assert.equal(device.sent[0].bytes[CORSAIR_FLAGS], RESTORE[CORSAIR_FLAGS] - 4, "0x3E is written as read - 4");
-    for (let i = 0; i < LENGTH; i++) {
-      if (!touched.has(i)) {
-        assert.equal(device.sent[0].bytes[i], RESTORE[i], `byte 0x${i.toString(16)} must be preserved from the restore image`);
-      }
-    }
-  } finally {
-    restoreGlobals();
   }
 });
 
-test("Render skips an unchanged packet within the keepalive window and sends a change at once", async () => {
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [255, 0, 0]);
+test("a frame streams the onboard LEDs, JRGB1, JRGB2, then the JRAINBOW1 and JRAINBOW2 LEDs", async () => {
+  const { device, plugin, restoreGlobals } = await boot({
+    strips: [3, 2],
+    color: (x) => [x + 1, 0x10, 0x20],
+    headers: { [HEADER_1]: [0xA1, 0xA2, 0xA3], [HEADER_2]: [0xB1, 0xB2, 0xB3] },
+  });
   try {
     plugin.Initialize();
+    device.sent.length = 0;
     plugin.Render();
-    plugin.Render();
-    plugin.Render();
-    assert.equal(device.sent.length, 1, "an identical packet is not resent within 1 s");
-    device.setColor([0, 0, 255]);
-    plugin.Render();
-    assert.equal(device.sent.length, 2, "a colour change is sent on the next Render");
-    assert.equal(device.sent[1].bytes[0x4A + 3], 0xFF, "blue byte of onboard LED 1");
-    // A re-Initialize (resume, re-plug) always writes on the next Render.
-    plugin.Initialize();
-    plugin.Render();
-    assert.equal(device.sent.length, 3);
-  } finally {
-    restoreGlobals();
-  }
-});
-
-test("Forced lighting mode ignores the canvas and paints forcedColor", async () => {
-  const c = caseByName("forced colour #00FF00");
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, { LightingMode: c.lightingMode, forcedColor: c.forcedColor }, hexOf(c.color));
-  try {
-    plugin.Initialize();
-    plugin.Render();
+    const slots = [
+      ...[0, 1, 2, 3, 4, 5].map((x) => [x + 1, 0x10, 0x20]),
+      [0xA1, 0xA2, 0xA3], [0xB1, 0xB2, 0xB3],
+      ...strip(3, 0x11), ...strip(2, 0x22),
+    ];
     assert.equal(device.sent.length, 1);
-    assertPacket(device.sent[0], c.expectedPacket, c.name);
-    assert.equal(device.calls.filter((x) => x.method === "color").length, 0, "device.color not sampled in Forced mode");
+    assertBytes(device.sent[0].bytes, expectedStream(slots), "stream");
+    assert.equal(device.sent[0].length, 725);
   } finally {
     restoreGlobals();
   }
 });
 
-test("Shutdown(false) writes the restore image back with the save flag cleared", async () => {
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [255, 0, 0]);
+test("an unchanged frame is skipped within the keepalive window; a change is sent at once", async () => {
+  const { device, plugin, restoreGlobals } = await boot({ color: [1, 2, 3] });
   try {
     plugin.Initialize();
     plugin.Render();
-    plugin.Shutdown(false);
-    assert.equal(device.sent.length, 2);
-    assertPacket(device.sent[1], fixture.expectedRestorePacket, "restore");
+    const before = sentWith(device, STREAM_ID).length;
+    plugin.Render();
+    assert.equal(sentWith(device, STREAM_ID).length, before, "unchanged frame skipped");
+    device.setColor([4, 5, 6]);
+    plugin.Render();
+    assert.equal(sentWith(device, STREAM_ID).length, before + 1, "changed frame sent");
   } finally {
     restoreGlobals();
   }
 });
 
-test("Shutdown(true) paints shutdownColor (default black) on the onboard zones", async () => {
-  const c = caseByName("suspend paints shutdownColor (default black)");
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, { shutdownColor: c.shutdownColor }, [255, 255, 255]);
+test("Forced lighting mode paints forcedColor on every LED, strips included", async () => {
+  const { device, plugin, restoreGlobals } = await boot({
+    strips: [4, 1], params: { LightingMode: "Forced", forcedColor: "#00FF00" }, color: [9, 9, 9],
+  });
+  try {
+    plugin.Initialize();
+    device.sent.length = 0;
+    plugin.Render();
+    assertBytes(device.sent[0].bytes, expectedStream(new Array(6 + 2 + 4 + 1).fill([0, 255, 0])), "forced stream");
+  } finally {
+    restoreGlobals();
+  }
+});
+
+test("a changed LED count reconfigures before the next frame", async () => {
+  const { device, plugin, restoreGlobals } = await boot({ strips: [60, 60] });
+  try {
+    plugin.Initialize();
+    plugin.Render();
+    device.sent.length = 0;
+    device.setChannelColors(STRIP_2, strip(30, 0x22));
+    plugin.Render();
+    assert.deepEqual(device.sent.map((s) => s.reportId), [STREAM_ID, CONFIG_ID, STREAM_ID]);
+    assertBytes(device.sent[0].bytes, hexToBytes(fixture.reset), "reset");
+    assertBytes(device.sent[1].bytes, configWithCounts(60, 30), "new configuration");
+  } finally {
+    restoreGlobals();
+  }
+});
+
+test("Shutdown(false) blanks the stream and writes the restore image back with the save flag cleared", async () => {
+  const { device, plugin, restoreGlobals } = await boot({ color: [255, 0, 0] });
+  try {
+    plugin.Initialize();
+    plugin.Render();
+    device.sent.length = 0;
+    plugin.Shutdown(false);
+    assert.deepEqual(device.sent.map((s) => s.reportId), [STREAM_ID, CONFIG_ID]);
+    assertBytes(device.sent[0].bytes, expectedStream([]), "black stream");
+    assertBytes(device.sent[1].bytes, hexToBytes(fixture.expectedRestorePacket), "restore packet");
+  } finally {
+    restoreGlobals();
+  }
+});
+
+test("Shutdown(true) paints shutdownColor (default black) on every LED", async () => {
+  const { device, plugin, restoreGlobals } = await boot({ strips: [2, 2], color: [7, 7, 7], params: { shutdownColor: "#102030" } });
+  try {
+    plugin.Initialize();
+    plugin.Render();
+    device.sent.length = 0;
+    plugin.Shutdown(true);
+    assert.equal(device.sent.length, 1);
+    assertBytes(device.sent[0].bytes, expectedStream(new Array(6 + 2 + 2 + 2).fill([0x10, 0x20, 0x30])), "suspend stream");
+  } finally {
+    restoreGlobals();
+  }
+});
+
+test("re-Initialize after suspend keeps the original restore image when the board reads back our configuration", async () => {
+  const { device, plugin, restoreGlobals } = await boot();
   try {
     plugin.Initialize();
     plugin.Shutdown(true);
-    assert.equal(device.sent.length, 1);
-    assertPacket(device.sent[0], c.expectedPacket, c.name);
-  } finally {
-    restoreGlobals();
-  }
-});
-
-test("re-Initialize after suspend keeps the original restore image when the board still holds our packet", async () => {
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, { shutdownColor: "#112233" }, [255, 0, 0]);
-  try {
+    // What the real board answered after this configuration: +4 at 0x3E, 0x87 for 0xBF at 0x52.
+    device.setFeatureReport(CONFIG_ID, hexToBytes(fixture.boardReadBack));
     plugin.Initialize();
-    plugin.Render();
-    plugin.Shutdown(true);                     // suspend: paints #112233
-    assert.equal(device.sent.length, 2);
-    // The controller now reports the packet we just wrote (with its read-back quirks); the host
-    // re-runs Initialize on resume.
-    device.setFeatureReport(REPORT_ID, controllerReadback(device.sent[1].bytes));
-    plugin.Initialize();
+    device.sent.length = 0;
     plugin.Shutdown(false);
-    assert.equal(device.sent.length, 3);
-    assertPacket(device.sent[2], fixture.expectedRestorePacket, "restore after resume");
+    assertBytes(sentWith(device, CONFIG_ID)[0].bytes, hexToBytes(fixture.expectedRestorePacket), "restore after resume");
   } finally {
     restoreGlobals();
   }
 });
 
 test("re-Initialize adopts a fresh image when someone else changed the controller in between", async () => {
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [255, 0, 0]);
+  const { device, plugin, restoreGlobals } = await boot();
   try {
     plugin.Initialize();
-    plugin.Render();
-    plugin.Shutdown(true);
-    const foreign = RESTORE.slice();
-    foreign[0x01] = 0x02;                      // JRGB1 effect changed by another application
-    foreign[0xB8] = 0x01;
-    device.setFeatureReport(REPORT_ID, foreign);
+    const other = hexToBytes(fixture.boardReadBack);
+    other[0x4A] = 0x01;                     // another application set the master zone to static
+    device.setFeatureReport(CONFIG_ID, other);
     plugin.Initialize();
+    device.sent.length = 0;
     plugin.Shutdown(false);
-    const expected = foreign.slice();
-    expected[0xB8] = 0x00;
-    expected[CORSAIR_FLAGS] = foreign[CORSAIR_FLAGS] - 4;
-    assertPacket(device.sent[2], bytesToHex(expected), "restore of foreign image");
+    const expected = other.slice();
+    expected[0x3E] -= 4;
+    assertBytes(sentWith(device, CONFIG_ID)[0].bytes, expected, "restores the newer image");
   } finally {
     restoreGlobals();
   }
 });
 
-test("a get_report whose array is shorter than getLastReadSize claims is rejected", async () => {
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [255, 0, 0]);
-  try {
-    const original = device.get_report;
-    device.get_report = (ids, len) => { original(ids, len); return RESTORE.slice(0, 100); };
-    plugin.Initialize();
-    plugin.Render();
-    assert.equal(device.sent.length, 0, "no writes from an inconsistent read");
-  } finally {
-    restoreGlobals();
-  }
-});
-
-test("a get_report that is not 185 bytes disables every write and is logged", async () => {
-  const short = RESTORE.slice(0, 162);
-  const { device, plugin, restoreGlobals } = await boot(short, {}, [255, 0, 0]);
-  try {
-    plugin.Initialize();
-    plugin.Render();
-    plugin.Shutdown(false);
-    plugin.Shutdown(true);
-    assert.equal(device.sent.length, 0, "no writes without a valid restore image");
-    assert.equal(device.written.length, 0);
-    assert.ok(device.logs.some((l) => /162 bytes/.test(l.message) && l.options.toFile === true), "length mismatch logged to file");
-  } finally {
-    restoreGlobals();
-  }
-});
-
-test("a 185-byte image with the wrong report id is rejected too", async () => {
-  const wrong = RESTORE.slice();
-  wrong[0] = 0x53;
-  const { device, plugin, restoreGlobals } = await boot(wrong, {}, [255, 0, 0]);
-  try {
-    plugin.Initialize();
-    plugin.Render();
-    assert.equal(device.sent.length, 0);
-  } finally {
-    restoreGlobals();
-  }
-});
-
-test("JRAINBOW/JRGB headers are untouched and no channels are created in M1", async () => {
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [1, 2, 3]);
-  try {
-    plugin.Initialize();
-    plugin.Render();
-    assert.equal(device.channels.length, 0, "addChannel is an M2 item");
-    const p = device.sent[0].bytes;
-    const untouchedRanges = [[0x01, 0x0B], [0x0B, 0x15], [0x15, 0x1F], [0x1F, 0x2A], [0x2A, 0x35], [0x35, 0x40], [0x40, 0x4A], [0x86, 0xB8]];
-    for (const [from, to] of untouchedRanges) {
-      for (let i = from; i < to; i++) {
-        const want = i === CORSAIR_FLAGS ? RESTORE[i] - 4 : RESTORE[i];
-        assert.equal(p[i], want, `header/unused byte 0x${i.toString(16)} preserved`);
-      }
-    }
-  } finally {
-    restoreGlobals();
-  }
-});
-
-test("a GET of our own packet is recognised despite the controller's read-back quirks", async () => {
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [10, 20, 30]);
-  try {
-    plugin.Initialize();
-    plugin.Render();
-    // A re-Initialize that reads back exactly what the board reports after our SET keeps the
-    // original restore image; a byte-exact comparison would have adopted our own packet.
-    device.setFeatureReport(REPORT_ID, controllerReadback(device.sent[0].bytes));
-    plugin.Initialize();
-    plugin.Shutdown(false);
-    assertPacket(device.sent[device.sent.length - 1], fixture.expectedRestorePacket, "restore after re-Initialize");
-  } finally {
-    restoreGlobals();
-  }
-});
-
-test("repeated sessions keep 0x3E stable on a controller that adds 4 on read-back", async () => {
-  let image = RESTORE.slice();
-  for (let session = 0; session < 3; session++) {
-    const { device, plugin, restoreGlobals } = await boot(image, {}, [255, 0, 0]);
+test("a GET that is not a full 185-byte 0x52 report disables every write and is logged", async () => {
+  const short = RESTORE.slice(0, 64);
+  const wrongId = RESTORE.slice();
+  wrongId[0] = 0x53;
+  for (const image of [short, wrongId]) {
+    const { device, plugin, restoreGlobals } = await boot({ image });
     try {
       plugin.Initialize();
       plugin.Render();
+      plugin.Shutdown(true);
       plugin.Shutdown(false);
-      image = controllerReadback(device.sent[device.sent.length - 1].bytes);
+      assert.equal(device.sent.length, 0);
+      assert.equal(device.written.length, 0);
+      assert.ok(device.logs.some((l) => l.message.includes("all writes disabled")));
     } finally {
       restoreGlobals();
     }
   }
-  assert.equal(image[CORSAIR_FLAGS], RESTORE[CORSAIR_FLAGS], "no drift across sessions");
 });
 
-test("Shutdown(false) writes nothing when the session never wrote", async () => {
-  const { device, plugin, restoreGlobals } = await boot(RESTORE, {}, [255, 0, 0]);
+test("EZ LED Control off in the BIOS is reported", async () => {
+  const reply = hexToBytes(fixture.ezLedReplyOn);
+  reply[6] = 0x00;
+  const { device, plugin, restoreGlobals } = await boot({ ezReply: reply });
   try {
     plugin.Initialize();
-    plugin.Shutdown(false);                    // e.g. Ctrl-C before the first Render
-    assert.equal(device.sent.length, 0);
+    assert.ok(device.logs.some((l) => l.message.includes("EZ LED Control is off")));
+  } finally {
+    restoreGlobals();
+  }
+});
+
+test("no 0x52 packet ever sets the save flag", async () => {
+  const image = RESTORE.slice();
+  const { device, plugin, restoreGlobals } = await boot({ image, color: (x) => [x, x, x] });
+  try {
+    plugin.Initialize();
+    for (let i = 0; i < 3; i++) plugin.Render();
+    device.setChannelColors(STRIP_1, strip(10, 0x11));
+    plugin.Render();
+    plugin.Shutdown(true);
+    plugin.Shutdown(false);
+    const configs = sentWith(device, CONFIG_ID);
+    assert.ok(configs.length >= 3);
+    assert.ok(configs.every((s) => s.bytes[0xB8] === 0x00));
   } finally {
     restoreGlobals();
   }

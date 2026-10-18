@@ -32,7 +32,7 @@ pub mod usb;
 pub mod mock;
 
 pub use error::{HalError, HalResult};
-pub use hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportLengths};
+pub use hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportLengths, ReportSpec};
 pub use hotplug::{DeviceClass, DeviceEvent, HotplugSource};
 pub use key::{DeviceKey, EndpointUid};
 pub use serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};

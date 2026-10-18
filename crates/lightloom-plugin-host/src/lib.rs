@@ -10,25 +10,34 @@
 //! * [`loader`]: the [`Loader`] trait plus the VID:PID
 //!   [`PluginIndex`] with SignalRGB's last-scanned-wins rule.
 //!
-//! rquickjs-backed pieces (M0 spike B):
+//! rquickjs-backed pieces:
 //!
 //! * [`runtime`]: one QuickJS-NG runtime + context per plugin on its own OS
 //!   thread, 64 MiB heap cap, deadline-driven interrupt handler, the
 //!   `@SignalRGB/*` resolver/loader over the embedded `prelude/`, and the
-//!   recording stub host (`js/stub_host.js`).
+//!   compat host module (`js/host.js`: recording stubs, or device natives).
+//! * [`device`]: the native backing of `device.*` for a real device (HID I/O
+//!   through lightloom-hal, canvas sampling, I/O statistics, dry-run writes).
+//! * [`session`]: one device session = one plugin thread running
+//!   Validate → Initialize → Render per frame → Shutdown.
+//! * [`catalog`]: plugin discovery over plugin directories (VID:PID index).
+//! * [`stats`]: fixed-memory latency histograms for long-running sessions.
 //! * [`exports`]: namespace JSON → [`PluginMeta`].
 //! * [`dryrun`]: the `lightloom compat dry-run` corpus harness.
-// TODO(M1/M2): replace the stub host with real `device.*` / `bus.*` objects
-// backed by lightloom-hal, and the dry-run loop with the engine's plugin threads.
+// TODO(M2): `bus.*` (SMBus), channels/components, subdevices, hotplug, watchdog fault policy.
 
 #![forbid(unsafe_code)]
 
+pub mod catalog;
+pub mod device;
 pub mod dryrun;
 pub mod exports;
 pub mod loader;
 pub mod meta;
 pub mod resolve;
 pub mod runtime;
+pub mod session;
+pub mod stats;
 
 pub use loader::{Loader, LoaderError, PluginIndex};
 pub use meta::{ControllableParameter, DeviceType, PluginMeta, PluginType, ProductIdExport};

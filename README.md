@@ -100,28 +100,30 @@ gaps for a whole directory before you depend on it.
 
 ## Quick start
 
-> Placeholder. There is no release yet; these commands describe the intended M1
-> surface and will be updated when the first build is published.
+There is no release yet. From source (stable Rust toolchain, Windows for now):
 
 ```text
-# Windows (MSI) / Linux (AppImage, Flatpak) packages: not yet published.
-# From source (requires a stable Rust toolchain; CEF is fetched at build time):
 cargo build --release
-./target/release/lightloom devices          # list detected devices and endpoints
-./target/release/lightloom light 1462:7C91 --color ff0000
-./target/release/lightloom rainbow --fps 30 --minutes 1 --stats
-./target/release/lightloom compat dry-run "<your plugin directory>"
+target/release/lightloom devices                        # read-only: devices, collections, report lengths
+target/release/lightloom light red --dry-run            # read the device, print the packets, write nothing
+target/release/lightloom light "#00ff00" --restore-check  # hold a colour until Ctrl-C, then restore and verify
+target/release/lightloom rainbow --duration 60          # scrolling hues through the null renderer
+target/release/lightloom bench --mock 1462:7c91         # latency percentiles against a scripted device
+target/release/lightloom compat dry-run "<your SignalRGB plugin directory>"
 ```
 
-Close any other RGB software that owns the same devices first; Lightloom reports
-conflicting processes with a "close" button and never kills them.
+`light`, `rainbow` and `bench` look for plugins in `./plugins` (or `--plugins DIR`,
+`LIGHTLOOM_PLUGINS`). Close other RGB software that owns the same devices first:
+Lightloom reports conflicting processes and refuses to start, it never terminates them.
+The effect renderer (`lightloom-renderer`, CEF) is built separately with
+`cargo build -p lightloom-renderer --features cef`; see its README.
 
 ## Milestones
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M0 | Workspace, pins, cargo-deny, CI (mock HAL), HAL traits, ADRs, Host API spec, CEF and rquickjs spikes | in progress |
-| M1 | First light, headless: MSI Mystic Light board from the CLI | planned |
+| M0 | Workspace, pins, cargo-deny, CI (mock HAL), HAL traits, ADRs, Host API spec, CEF and rquickjs spikes | done |
+| M1 | First light, headless: MSI Mystic Light board from the CLI | done |
 | M2 | Compatible plugin host, corpus harness, hotplug, conformance suite | planned |
 | M3 | Effects pipeline: CEF renderer, layouts, sampling, `lightloom bench` | planned |
 | M4 | Dashboard, SQLite persistence, local API, import wizard, MSI/winget | planned |

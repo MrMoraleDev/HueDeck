@@ -1,0 +1,845 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//! rquickjs (QuickJS-NG) plugin runtime — M0 spike B.
+//!
+//! * One [`rquickjs::Runtime`] + [`rquickjs::Context`] per plugin, created and
+//!   dropped on a dedicated OS thread ([`run_isolated`]); nothing JS-related
+//!   ever crosses a thread boundary.
+//! * Memory limit ([`DEFAULT_MEMORY_LIMIT`], 64 MiB) and an interrupt handler
+//!   driven by a [`Deadline`] that the caller arms per phase.
+//! * [`HostResolver`] / [`HostLoader`]: `@SignalRGB/<name>` and
+//!   `@SignalRGB/<name>.js` (plus the `@lightloom/` alias) resolve to the
+//!   embedded `prelude/` files; relative imports resolve against the importing
+//!   file inside the plugin root (lexically, see [`crate::resolve`]).
+//! * The stub host (`js/stub_host.js`) is evaluated before the plugin module.
+//! * An interrupt that QuickJS swallows (a promise job cut off by the
+//!   deadline is drained by `execute_pending_job`) is still reported as a
+//!   `Timeout`: the deadline remembers that it fired ([`Deadline::fired`]).
+
+use crate::exports::{read_exports, ExportsReading};
+use crate::resolve::{ModuleResolver, ResolveError, ResolvedModule};
+use rquickjs::loader::{ImportAttributes, Loader as JsLoader, Resolver};
+use rquickjs::{Coerced, Context, Ctx, FromJs, Function, Module, Object, Runtime, Value};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Per-plugin heap cap (synthesis D-rules: 64 MB).
+pub const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+/// QuickJS stack limit; the plugin thread gets [`PLUGIN_THREAD_STACK`].
+pub const DEFAULT_MAX_STACK: usize = 4 * 1024 * 1024;
+/// OS stack of a plugin thread.
+pub const PLUGIN_THREAD_STACK: usize = 16 * 1024 * 1024;
+
+/// Prefix of host-internal module names (never a file path).
+pub const INTERNAL_PREFIX: &str = "lightloom:";
+/// Internal module standing in for an unknown `@SignalRGB/<x>` import: it
+/// throws `HostApiMissing` when evaluated (prelude/modules/README.md rule 4).
+const MISSING_PREFIX: &str = "lightloom:missing:";
+const STUB_HOST_NAME: &str = "lightloom:host/stub_host.js";
+const STUB_HOST_SOURCE: &str = include_str!("../js/stub_host.js");
+
+/// `prelude/` files embedded at build time, by internal module name.
+pub const PRELUDE_MODULES: &[(&str, &str)] = &[
+    (
+        "lightloom:prelude/Errors.js",
+        include_str!("../../../prelude/Errors.js"),
+    ),
+    (
+        "lightloom:prelude/base64.js",
+        include_str!("../../../prelude/base64.js"),
+    ),
+    (
+        "lightloom:prelude/BinaryUtils.js",
+        include_str!("../../../prelude/BinaryUtils.js"),
+    ),
+    (
+        "lightloom:prelude/createColorArray.js",
+        include_str!("../../../prelude/createColorArray.js"),
+    ),
+    (
+        "lightloom:prelude/hexToRgb.js",
+        include_str!("../../../prelude/hexToRgb.js"),
+    ),
+    (
+        "lightloom:prelude/HostApiMissing.js",
+        include_str!("../../../prelude/HostApiMissing.js"),
+    ),
+    (
+        "lightloom:prelude/modules/udp.js",
+        include_str!("../../../prelude/modules/udp.js"),
+    ),
+    (
+        "lightloom:prelude/modules/tcp.js",
+        include_str!("../../../prelude/modules/tcp.js"),
+    ),
+    (
+        "lightloom:prelude/modules/serial.js",
+        include_str!("../../../prelude/modules/serial.js"),
+    ),
+    (
+        "lightloom:prelude/modules/lcd.js",
+        include_str!("../../../prelude/modules/lcd.js"),
+    ),
+    (
+        "lightloom:prelude/modules/permissions.js",
+        include_str!("../../../prelude/modules/permissions.js"),
+    ),
+    (
+        "lightloom:prelude/modules/systeminfo.js",
+        include_str!("../../../prelude/modules/systeminfo.js"),
+    ),
+    (
+        "lightloom:prelude/modules/DeviceDiscovery.js",
+        include_str!("../../../prelude/modules/DeviceDiscovery.js"),
+    ),
+    (
+        "lightloom:prelude/modules/performance.js",
+        include_str!("../../../prelude/modules/performance.js"),
+    ),
+    (
+        "lightloom:prelude/modules/appInfo.js",
+        include_str!("../../../prelude/modules/appInfo.js"),
+    ),
+];
+
+/// Rust-backed `@SignalRGB/*` modules (facade in `prelude/modules/`, stub in the stub host).
+const NATIVE_MODULES: &[&str] = &[
+    "udp",
+    "tcp",
+    "serial",
+    "lcd",
+    "permissions",
+    "systeminfo",
+    "DeviceDiscovery",
+    "performance",
+    "appInfo",
+];
+
+fn prelude_source(name: &str) -> Option<&'static str> {
+    PRELUDE_MODULES.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+}
+
+/// Internal module name a host shim resolves to.
+pub fn host_shim_module(shim: &str, module_stubs: bool) -> String {
+    if NATIVE_MODULES.contains(&shim) {
+        if module_stubs {
+            format!("lightloom:stub/{shim}.js")
+        } else {
+            format!("lightloom:prelude/modules/{shim}.js")
+        }
+    } else {
+        format!("lightloom:prelude/{shim}.js")
+    }
+}
+
+/// Runtime configuration.
+#[derive(Clone, Debug)]
+pub struct RuntimeOptions {
+    /// Heap cap in bytes.
+    pub memory_limit: usize,
+    /// QuickJS stack cap in bytes.
+    pub max_stack_size: usize,
+    /// Relative imports may not leave this directory (default: the plugin's own directory).
+    pub plugin_root: Option<PathBuf>,
+    /// Back the Rust-backed `@SignalRGB/*` modules with recording stubs instead
+    /// of the throwing `prelude/modules/*` facades.
+    pub module_stubs: bool,
+}
+
+impl Default for RuntimeOptions {
+    fn default() -> Self {
+        Self {
+            memory_limit: DEFAULT_MEMORY_LIMIT,
+            max_stack_size: DEFAULT_MAX_STACK,
+            plugin_root: None,
+            module_stubs: true,
+        }
+    }
+}
+
+/// Watchdog deadline shared with the interrupt handler.
+///
+/// The interrupt handler calls [`Deadline::poll`]. Once that has interrupted
+/// the engine, [`Deadline::fired`] stays true until the next [`Deadline::arm`],
+/// so a cut-off promise job (whose exception `execute_pending_job` drains) is
+/// still reported as a timeout.
+#[derive(Clone, Debug, Default)]
+pub struct Deadline(Arc<DeadlineState>);
+
+#[derive(Debug, Default)]
+struct DeadlineState {
+    at: Mutex<Option<Instant>>,
+    fired: AtomicBool,
+}
+
+impl Deadline {
+    /// Arm: the engine is interrupted once `budget` has elapsed from now
+    /// (a budget too large to represent means no deadline).
+    pub fn arm(&self, budget: Duration) {
+        *self.0.at.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now().checked_add(budget);
+        self.0.fired.store(false, Ordering::Relaxed);
+    }
+
+    /// Disarm (keeps [`Deadline::fired`] until the next arm).
+    pub fn clear(&self) {
+        *self.0.at.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Whether the armed deadline has passed.
+    pub fn expired(&self) -> bool {
+        self.0
+            .at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some_and(|d| Instant::now() >= d)
+    }
+
+    /// Interrupt-handler hook: `true` (and remembered) once the deadline has passed.
+    pub fn poll(&self) -> bool {
+        let expired = self.expired();
+        if expired {
+            self.0.fired.store(true, Ordering::Relaxed);
+        }
+        expired
+    }
+
+    /// Whether the interrupt handler cut the engine off since the last [`Deadline::arm`].
+    pub fn fired(&self) -> bool {
+        self.0.fired.load(Ordering::Relaxed)
+    }
+}
+
+/// Specifiers the resolver refused (`import:<specifier>`), shared with the caller.
+pub type GapLog = Arc<Mutex<Vec<String>>>;
+
+/// Plugin module names whose imports the resolver was asked to resolve.
+///
+/// QuickJS resolves a module's imports only after the whole module parsed and
+/// compiled (`js_resolve_module` runs after `js_create_function`), so a name in
+/// this set means "that file compiled"; a later failure is in a dependency.
+pub type BaseLog = Arc<Mutex<BTreeSet<String>>>;
+
+/// Module resolver: host shims, prelude-internal relative imports, plugin-relative imports.
+pub struct HostResolver {
+    plugin: ModuleResolver,
+    module_stubs: bool,
+    gaps: GapLog,
+    bases: BaseLog,
+}
+
+impl HostResolver {
+    /// Resolver for plugins under `root`.
+    pub fn new(root: &Path, module_stubs: bool, gaps: GapLog) -> Self {
+        Self {
+            plugin: ModuleResolver::new(root),
+            module_stubs,
+            gaps,
+            bases: BaseLog::default(),
+        }
+    }
+
+    /// Record every plugin module whose imports get resolved into `bases`.
+    pub fn with_base_log(mut self, bases: BaseLog) -> Self {
+        self.bases = bases;
+        self
+    }
+
+    fn gap(&self, specifier: &str) {
+        if let Ok(mut g) = self.gaps.lock() {
+            g.push(format!("import:{specifier}"));
+        }
+    }
+
+    fn internal_relative(base: &str, name: &str) -> String {
+        let mut parts: Vec<&str> = base[INTERNAL_PREFIX.len()..].split('/').collect();
+        parts.pop();
+        for seg in name.split('/') {
+            match seg {
+                "." | "" => {}
+                ".." => {
+                    parts.pop();
+                }
+                s => parts.push(s),
+            }
+        }
+        format!("{INTERNAL_PREFIX}{}", parts.join("/"))
+    }
+
+    /// Resolve without an engine context (used by [`Resolver::resolve`] and tests).
+    ///
+    /// Host-internal names (`lightloom:…`) are only reachable from host-internal
+    /// modules; plugin code gets `@SignalRGB/*`, `@lightloom/*` and relative files.
+    pub fn resolve_name(&self, base: &str, name: &str) -> Result<String, String> {
+        if base.starts_with(INTERNAL_PREFIX) {
+            if name.starts_with(INTERNAL_PREFIX) {
+                return Ok(name.to_string());
+            }
+            if name.starts_with("./") || name.starts_with("../") {
+                let joined = Self::internal_relative(base, name);
+                return if prelude_source(&joined).is_some() {
+                    Ok(joined)
+                } else {
+                    Err(format!("unknown prelude module {joined}"))
+                };
+            }
+            return Err(format!("prelude module {base} imports unsupported \"{name}\""));
+        }
+        if let Ok(mut b) = self.bases.lock() {
+            b.insert(base.to_string());
+        }
+        match self.plugin.resolve(Path::new(base), name) {
+            Ok(ResolvedModule::HostShim(shim)) => Ok(host_shim_module(&shim, self.module_stubs)),
+            Ok(ResolvedModule::File(p)) => Ok(p.to_string_lossy().into_owned()),
+            // prelude/modules/README.md rule 4: an unknown host module is an
+            // API gap whose import throws HostApiMissing at evaluation time.
+            Err(ResolveError::UnknownHostModule(_)) => {
+                self.gap(name);
+                Ok(format!("{MISSING_PREFIX}{name}"))
+            }
+            Err(e) => {
+                self.gap(name);
+                Err(e.to_string())
+            }
+        }
+    }
+}
+
+impl Resolver for HostResolver {
+    fn resolve<'js>(
+        &mut self,
+        _ctx: &Ctx<'js>,
+        base: &str,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<String> {
+        self.resolve_name(base, name)
+            .map_err(|msg| rquickjs::Error::new_resolving_message(base, name, msg))
+    }
+}
+
+/// Module loader: embedded prelude, generated stub modules, plugin files.
+#[derive(Debug, Default)]
+pub struct HostLoader;
+
+/// Read a plugin source file, dropping a UTF-8 BOM.
+pub fn read_source(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut bytes = std::fs::read(path)?;
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        bytes.drain(..3);
+    }
+    Ok(bytes)
+}
+
+impl JsLoader for HostLoader {
+    fn load<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<Module<'js, rquickjs::module::Declared>> {
+        if let Some(shim) = name
+            .strip_prefix("lightloom:stub/")
+            .and_then(|s| s.strip_suffix(".js"))
+        {
+            let src = format!("export default globalThis.__lightloomHost.modules[{shim:?}];\n");
+            return Module::declare(ctx.clone(), name, src);
+        }
+        if let Some(spec) = name.strip_prefix(MISSING_PREFIX) {
+            let src = format!(
+                "import {{ HostApiMissing }} from \"lightloom:prelude/HostApiMissing.js\";\n\
+                 throw new HostApiMissing({spec:?}, {{ hint: \"no such host module\" }});\n\
+                 export default undefined;\n"
+            );
+            return Module::declare(ctx.clone(), name, src);
+        }
+        if let Some(src) = prelude_source(name) {
+            return Module::declare(ctx.clone(), name, src);
+        }
+        if name.starts_with(INTERNAL_PREFIX) {
+            return Err(rquickjs::Error::new_loading_message(name, "unknown host module"));
+        }
+        let src = read_source(Path::new(name))
+            .map_err(|e| rquickjs::Error::new_loading_message(name, e.to_string()))?;
+        Module::declare(ctx.clone(), name, src)
+    }
+}
+
+/// A JS exception (or host error) flattened to text.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct JsFailure {
+    /// `error.name` (`TypeError`, `HostApiMissing`, …) or a host class:
+    /// `Timeout`, `OutOfMemory`, `PromisePending`, `Throw` (a non-Error value
+    /// was thrown), `HostError`, `IoError`, `HostPanic`.
+    pub class: String,
+    /// `error.message`.
+    pub message: String,
+}
+
+impl std::fmt::Display for JsFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.class, self.message)
+    }
+}
+
+impl JsFailure {
+    fn timeout(during: &str) -> Self {
+        JsFailure {
+            class: "Timeout".into(),
+            message: format!("interrupted ({during} exceeded its deadline)"),
+        }
+    }
+}
+
+/// Turn an rquickjs error into a [`JsFailure`], consuming the pending exception.
+///
+/// Classes added by the host: `Timeout` (the deadline fired during the
+/// phase), `OutOfMemory`, `PromisePending` (an awaited promise can never
+/// settle: no job left to run), `HostError` (anything else on the Rust side).
+pub fn failure(ctx: &Ctx<'_>, err: rquickjs::Error, deadline: &Deadline) -> JsFailure {
+    let mut f = match err {
+        rquickjs::Error::Exception => {
+            let v = ctx.catch();
+            exception_failure(ctx, v)
+        }
+        rquickjs::Error::WouldBlock => JsFailure {
+            class: "PromisePending".into(),
+            message: "the returned promise never settled (no pending jobs left)".into(),
+        },
+        other => JsFailure {
+            class: "HostError".into(),
+            message: other.to_string(),
+        },
+    };
+    if deadline.fired() || (f.message.contains("interrupted") && deadline.expired()) {
+        if !f.message.contains("interrupted") {
+            f.message = format!("interrupted; {}", f.message);
+        }
+        f.class = "Timeout".into();
+    } else if f.message.contains("out of memory") {
+        f.class = "OutOfMemory".into();
+    }
+    f
+}
+
+/// `r.ok()`, clearing the exception a failed engine call leaves pending so it
+/// cannot be picked up by a later, unrelated [`failure`].
+fn ok_or_catch<T>(ctx: &Ctx<'_>, r: rquickjs::Result<T>) -> Option<T> {
+    r.map_err(|e| {
+        if matches!(e, rquickjs::Error::Exception) {
+            drop(ctx.catch());
+        }
+    })
+    .ok()
+}
+
+fn exception_failure<'js>(ctx: &Ctx<'js>, v: Value<'js>) -> JsFailure {
+    if let Some(o) = v.as_object() {
+        let field = |key: &str| {
+            ok_or_catch(ctx, o.get::<_, Value>(key))
+                .filter(|x| !x.is_undefined() && !x.is_null())
+                .and_then(|x| ok_or_catch(ctx, Coerced::<String>::from_js(ctx, x)))
+                .map(|c| c.0)
+        };
+        match (field("name"), field("message")) {
+            (Some(class), message) => {
+                return JsFailure {
+                    class,
+                    message: message.unwrap_or_default(),
+                }
+            }
+            // `throw { message: "…" }`: not an Error, but keep its text.
+            (None, Some(message)) => {
+                return JsFailure {
+                    class: "Throw".into(),
+                    message,
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    let text = ok_or_catch(ctx, Coerced::<String>::from_js(ctx, v))
+        .map(|c| c.0)
+        .unwrap_or_else(|| "<unprintable exception>".into());
+    JsFailure {
+        class: "Throw".into(),
+        message: text,
+    }
+}
+
+/// Stub-host state read back after a run.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HostRecord {
+    /// `object.member` → access count, for members outside the documented surface.
+    pub gaps: BTreeMap<String, u64>,
+    /// `controller.field` / `discovery.field` → read count, for plugin-defined
+    /// data the stub objects do not carry (not host API gaps).
+    #[serde(default)]
+    pub fields: BTreeMap<String, u64>,
+    /// `object.member` → call count, for documented host members.
+    #[serde(default)]
+    pub calls: BTreeMap<String, u64>,
+    /// Lines written through `console.*`, `device.log`, `bus.log`, `service.log`.
+    #[serde(rename = "consoleLines")]
+    pub console_lines: u64,
+    /// The first 20 of those lines.
+    #[serde(rename = "logTail")]
+    pub log_tail: Vec<String>,
+}
+
+/// One plugin loaded into its own runtime (lives on the plugin thread).
+pub struct PluginRuntime {
+    // Field order matters: the context must drop before the runtime.
+    context: Context,
+    runtime: Runtime,
+    deadline: Deadline,
+    gaps: GapLog,
+    bases: BaseLog,
+    path: PathBuf,
+}
+
+/// `globalThis.__lightloomHost` (installed non-writable by the stub host).
+fn host_object<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
+    ctx.globals().get("__lightloomHost")
+}
+
+/// The evaluated plugin namespace kept by the stub host.
+fn plugin_namespace<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
+    host_object(ctx)?.get::<_, Function>("namespace")?.call(())
+}
+
+/// Outcome of [`PluginRuntime::load`].
+pub struct Loaded {
+    /// Whether the file itself compiled: false only for a `SyntaxError` raised
+    /// before any of its imports was resolved (dependency, link and run-time
+    /// errors leave it true).
+    pub parsed: bool,
+    /// Module failure (parse, link or top-level throw).
+    pub error: Option<JsFailure>,
+    /// Namespace reading when evaluation succeeded.
+    pub exports: Option<ExportsReading>,
+}
+
+impl PluginRuntime {
+    /// Create the runtime and context and install the stub host.
+    pub fn new(path: &Path, opts: &RuntimeOptions) -> Result<Self, JsFailure> {
+        let host_err = |e: rquickjs::Error| JsFailure {
+            class: "HostError".into(),
+            message: e.to_string(),
+        };
+        let runtime = Runtime::new().map_err(host_err)?;
+        runtime.set_memory_limit(opts.memory_limit);
+        runtime.set_max_stack_size(opts.max_stack_size);
+        let deadline = Deadline::default();
+        let d = deadline.clone();
+        runtime.set_interrupt_handler(Some(Box::new(move || d.poll())));
+        let root = opts
+            .plugin_root
+            .clone()
+            .or_else(|| path.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        let gaps: GapLog = Arc::default();
+        let bases: BaseLog = Arc::default();
+        runtime.set_loader(
+            HostResolver::new(&root, opts.module_stubs, gaps.clone()).with_base_log(bases.clone()),
+            HostLoader,
+        );
+        let context = Context::full(&runtime).map_err(host_err)?;
+        let this = Self {
+            context,
+            runtime,
+            deadline,
+            gaps,
+            bases,
+            path: path.to_path_buf(),
+        };
+        let plugin = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        this.context.with(|ctx| -> Result<(), JsFailure> {
+            let d = &this.deadline;
+            let cfg = Object::new(ctx.clone()).map_err(|e| failure(&ctx, e, d))?;
+            cfg.set("plugin", plugin).map_err(|e| failure(&ctx, e, d))?;
+            ctx.globals()
+                .set("__lightloomConfig", cfg)
+                .map_err(|e| failure(&ctx, e, d))?;
+            Module::evaluate(ctx.clone(), STUB_HOST_NAME, STUB_HOST_SOURCE)
+                .and_then(|p| p.finish::<()>())
+                .map_err(|e| failure(&ctx, e, d))
+        })?;
+        Ok(this)
+    }
+
+    /// The watchdog of this runtime.
+    pub fn deadline(&self) -> &Deadline {
+        &self.deadline
+    }
+
+    /// Bytes currently allocated by the engine.
+    pub fn memory_used(&self) -> i64 {
+        self.runtime.memory_usage().malloc_size
+    }
+
+    /// Parse and evaluate the plugin module under `budget`, then read its namespace.
+    pub fn load(&self, budget: Duration) -> Loaded {
+        let source = match read_source(&self.path) {
+            Ok(s) => s,
+            Err(e) => {
+                return Loaded {
+                    parsed: false,
+                    error: Some(JsFailure {
+                        class: "IoError".into(),
+                        message: e.to_string(),
+                    }),
+                    exports: None,
+                }
+            }
+        };
+        let name = self.path.to_string_lossy().into_owned();
+        let deadline = &self.deadline;
+        deadline.arm(budget);
+        let out = self.context.with(|ctx| {
+            let fail = |error: JsFailure, parsed: bool| Loaded {
+                parsed,
+                error: Some(error),
+                exports: None,
+            };
+            let declared = match Module::declare(ctx.clone(), name.as_str(), source) {
+                Ok(m) => m,
+                Err(e) => {
+                    let f = failure(&ctx, e, deadline);
+                    // A resolver call from this module means the file itself
+                    // compiled and the failure lies in a dependency.
+                    let compiled = self.bases.lock().is_ok_and(|b| b.contains(&name));
+                    let parsed = compiled || f.class != "SyntaxError";
+                    return fail(f, parsed);
+                }
+            };
+            // The whole module graph compiled; from here on failures are link
+            // errors (`SyntaxError: Could not find export ...`) or evaluation errors.
+            let module = match declared.eval().and_then(|(m, p)| p.finish::<()>().map(|_| m)) {
+                Ok(m) => m,
+                Err(e) => return fail(failure(&ctx, e, deadline), true),
+            };
+            let read = module.namespace().and_then(|ns| {
+                let host = host_object(&ctx)?;
+                let json: String = host.get::<_, Function>("readMeta")?.call((ns.clone(),))?;
+                // Keep the namespace for lifecycle calls, out of reach of plugin code.
+                host.get::<_, Function>("setNamespace")?.call::<_, ()>((ns,))?;
+                Ok(json)
+            });
+            match read {
+                // A promise job of the module body ran into the deadline.
+                Ok(_) if deadline.fired() => fail(JsFailure::timeout("module evaluation"), true),
+                Ok(json) => {
+                    let v: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+                    Loaded {
+                        parsed: true,
+                        error: None,
+                        exports: Some(read_exports(&self.path, &v)),
+                    }
+                }
+                Err(e) => fail(failure(&ctx, e, deadline), true),
+            }
+        });
+        deadline.clear();
+        out
+    }
+
+    /// Bind ControllableParameters defaults as globals and set `device.productId()`, under `budget`.
+    pub fn prepare_device(&self, vendor_id: u16, product_id: u16, budget: Duration) -> Result<(), JsFailure> {
+        let deadline = &self.deadline;
+        deadline.arm(budget);
+        let r = self.context.with(|ctx| {
+            let run = || -> rquickjs::Result<()> {
+                let host = host_object(&ctx)?;
+                let ns = plugin_namespace(&ctx)?;
+                host.get::<_, Function>("setIds")?
+                    .call::<_, ()>((vendor_id, product_id))?;
+                let params: Value = match ns.get::<_, Value>("ControllableParameters")? {
+                    v if v.is_function() => v
+                        .as_function()
+                        .map(|f| f.call::<_, Value>(()))
+                        .transpose()?
+                        .unwrap_or(v),
+                    v => v,
+                };
+                host.get::<_, Function>("applyParameters")?
+                    .call::<_, ()>((params,))
+            };
+            match run().map_err(|e| failure(&ctx, e, deadline)) {
+                Ok(()) if deadline.fired() => Err(JsFailure::timeout("ControllableParameters")),
+                r => r,
+            }
+        });
+        deadline.clear();
+        r
+    }
+
+    /// Call a lifecycle export (`Initialize`, `Shutdown`, `Render`, …) under `budget`.
+    /// A missing (or non-function) export is `Ok(false)`. Promise jobs the call
+    /// queued are run to completion inside the same budget.
+    pub fn call_export(&self, export: &str, args: CallArgs, budget: Duration) -> Result<bool, JsFailure> {
+        let deadline = &self.deadline;
+        deadline.arm(budget);
+        let r = self.context.with(|ctx| {
+            let run = || -> rquickjs::Result<bool> {
+                let ns = plugin_namespace(&ctx)?;
+                let Some(f) = ns.get::<_, Value>(export)?.into_function() else {
+                    return Ok(false);
+                };
+                let ret: Value = match args {
+                    CallArgs::None => f.call(())?,
+                    CallArgs::Bool(b) => f.call((b,))?,
+                    CallArgs::FreeBus => {
+                        let bus: Value = host_object(&ctx)?.get::<_, Function>("freeBus")?.call(())?;
+                        f.call((bus,))?
+                    }
+                };
+                // Drive promises an async export may have returned.
+                if let Some(p) = ret.as_promise() {
+                    p.finish::<Value>()?;
+                }
+                // Exceptions of queued jobs are drained here (unhandled
+                // rejections); a job cut off by the deadline shows up in `fired`.
+                while ctx.execute_pending_job() {}
+                Ok(true)
+            };
+            match run().map_err(|e| failure(&ctx, e, deadline)) {
+                Ok(_) if deadline.fired() => Err(JsFailure::timeout(export)),
+                r => r,
+            }
+        });
+        deadline.clear();
+        r
+    }
+
+    /// Stub-host record plus specifiers the resolver refused.
+    pub fn record(&self) -> HostRecord {
+        // Host code only, but it iterates Maps whose prototype a plugin could patch.
+        self.deadline.arm(Duration::from_secs(1));
+        let mut rec = self.context.with(|ctx| {
+            host_object(&ctx)
+                .and_then(|h| h.get::<_, Function>("report"))
+                .and_then(|f| f.call::<_, String>(()))
+                .ok()
+                .and_then(|s| serde_json::from_str::<HostRecord>(&s).ok())
+                .unwrap_or_default()
+        });
+        self.deadline.clear();
+        if let Ok(g) = self.gaps.lock() {
+            for k in g.iter() {
+                *rec.gaps.entry(k.clone()).or_default() += 1;
+            }
+        }
+        rec
+    }
+}
+
+/// Arguments for [`PluginRuntime::call_export`].
+#[derive(Clone, Copy, Debug)]
+pub enum CallArgs {
+    /// `()`.
+    None,
+    /// `(bool)` — `Shutdown(SystemSuspending)`.
+    Bool(bool),
+    /// `(bus)` — `Scan(FreeAddressBus)`.
+    FreeBus,
+}
+
+/// Run `f` on a fresh OS thread (scoped, large stack) and return its result.
+/// Every runtime the closure creates lives and dies on that thread.
+pub fn run_isolated<T, F>(f: F) -> std::thread::Result<T>
+where
+    T: Send,
+    F: FnOnce() -> T + Send,
+{
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .name("lightloom-plugin".into())
+            .stack_size(PLUGIN_THREAD_STACK)
+            .spawn_scoped(s, f)
+            .map_err(|e| Box::new(e.to_string()) as Box<dyn std::any::Any + Send>)?
+            .join()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deadline_arms_clears_and_remembers_firing() {
+        let d = Deadline::default();
+        assert!(!d.expired() && !d.poll() && !d.fired());
+        d.arm(Duration::ZERO);
+        assert!(d.expired());
+        assert!(!d.fired(), "only the interrupt handler's poll marks a firing");
+        assert!(d.poll() && d.fired());
+        d.clear();
+        assert!(!d.expired() && !d.poll());
+        assert!(d.fired(), "a firing survives clear() until the next arm()");
+        d.arm(Duration::from_secs(60));
+        assert!(!d.fired() && !d.poll());
+        // Budgets beyond Instant's range mean "no deadline" instead of a panic.
+        d.arm(Duration::MAX);
+        assert!(!d.expired());
+    }
+
+    #[test]
+    fn resolver_maps_host_shims_and_prelude_relatives() {
+        let gaps = GapLog::default();
+        let r = HostResolver::new(Path::new("/plugins"), false, gaps.clone());
+        let base = "/plugins/Vendor/X.js";
+        assert_eq!(
+            r.resolve_name(base, "@SignalRGB/Errors.js").unwrap(),
+            "lightloom:prelude/Errors.js"
+        );
+        assert_eq!(
+            r.resolve_name(base, "@SignalRGB/base64").unwrap(),
+            "lightloom:prelude/base64.js"
+        );
+        assert_eq!(
+            r.resolve_name(base, "@SignalRGB/udp").unwrap(),
+            "lightloom:prelude/modules/udp.js"
+        );
+        assert_eq!(
+            r.resolve_name("lightloom:prelude/modules/udp.js", "../HostApiMissing.js")
+                .unwrap(),
+            "lightloom:prelude/HostApiMissing.js"
+        );
+        // Unknown host modules resolve to a module that throws HostApiMissing.
+        assert_eq!(
+            r.resolve_name(base, "@SignalRGB/nope").unwrap(),
+            "lightloom:missing:@SignalRGB/nope"
+        );
+        // Plugins cannot reach host-internal modules directly.
+        assert!(r.resolve_name(base, "lightloom:prelude/BinaryUtils.js").is_err());
+        assert!(r.resolve_name(base, "lightloom:missing:x").is_err());
+        assert!(r.resolve_name(base, "fs").is_err());
+        assert_eq!(
+            gaps.lock().unwrap().as_slice(),
+            [
+                "import:@SignalRGB/nope",
+                "import:lightloom:prelude/BinaryUtils.js",
+                "import:lightloom:missing:x",
+                "import:fs"
+            ]
+        );
+        let stubbed = HostResolver::new(Path::new("/plugins"), true, GapLog::default());
+        assert_eq!(
+            stubbed.resolve_name(base, "@SignalRGB/lcd").unwrap(),
+            "lightloom:stub/lcd.js"
+        );
+        // Every shim the resolver can produce exists.
+        for shim in crate::meta::HOST_MODULES
+            .iter()
+            .chain(crate::meta::LIGHTLOOM_ONLY_MODULES)
+        {
+            let n = host_shim_module(shim, false);
+            assert!(prelude_source(&n).is_some(), "{n}");
+        }
+    }
+}

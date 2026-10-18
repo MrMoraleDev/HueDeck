@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Lightloom SPIKE A test lightscript. Original work, CC0. Animated gradient, a moving bar,
+     text and a per-pixel ImageData pass so every frame differs from the previous one. -->
+<html>
+<head>
+  <title>Lightloom Spike</title>
+  <meta description="SPIKE A: gradient + bar + text + per-pixel pass, changes every tick" />
+  <meta publisher="Lightloom" />
+  <meta property="speed" label="Speed" type="number" min="1" max="10" default="3" />
+  <meta property="barColor" label="Bar colour" type="color" default="#ffffff" />
+</head>
+<body style="margin:0;padding:0;background:black;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = 320, H = 200;
+    var tick = 0;
+    var ready = false;
+    var noise = ctx.createImageData(W, 40);
+
+    function onEngineReady() {
+      ready = true;
+      // machine-checkable proof of the pre-load injection (shows up in the renderer's JSON report)
+      console.log("lightloom-spike: engine=" + typeof engine + " freq=" + engine.audio.freq.length +
+        " zone.hue=" + engine.zone.hue.length + " speed=" + speed + " barColor=" + barColor);
+    }
+    function onspeedChanged() { /* value already in global `speed` */ }
+
+    function draw() {
+      tick++;
+      var t = tick * (typeof speed === "number" ? speed : 3) * 0.01;
+
+      // 1. animated hue gradient (whole canvas)
+      var g = ctx.createLinearGradient(0, 0, W, 0);
+      for (var i = 0; i <= 6; i++) {
+        g.addColorStop(i / 6, "hsl(" + ((i * 60 + tick * 2) % 360) + ", 100%, 50%)");
+      }
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      // 2. moving vertical bar
+      var x = (Math.sin(t) * 0.5 + 0.5) * (W - 20);
+      ctx.fillStyle = typeof barColor === "string" ? barColor : "#ffffff";
+      ctx.fillRect(x, 0, 20, H);
+
+      // 3. text (exercises font rasterisation)
+      ctx.fillStyle = "#000";
+      ctx.font = "bold 28px sans-serif";
+      ctx.fillText("Lightloom " + tick, 12, 120);
+      ctx.fillStyle = "#fff";
+      ctx.font = "14px monospace";
+      ctx.fillText("engine=" + (typeof engine) + " ready=" + ready + " audio.level=" +
+        (typeof engine === "object" && engine ? engine.audio.level : "n/a"), 12, 150);
+
+      // 4. per-pixel ImageData pass on the bottom strip (pseudo-random plasma)
+      var d = noise.data;
+      for (var py = 0; py < 40; py++) {
+        for (var px = 0; px < W; px++) {
+          var o = (py * W + px) * 4;
+          var v = Math.sin(px * 0.08 + t * 3) + Math.sin(py * 0.2 - t * 2) + Math.sin((px + py) * 0.05 + tick * 0.1);
+          d[o] = 128 + 127 * Math.sin(v * 1.5);
+          d[o + 1] = 128 + 127 * Math.sin(v * 1.5 + 2.1);
+          d[o + 2] = 128 + 127 * Math.sin(v * 1.5 + 4.2);
+          d[o + 3] = 255;
+        }
+      }
+      ctx.putImageData(noise, 0, H - 40);
+
+      window.requestAnimationFrame(draw);
+    }
+    window.requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

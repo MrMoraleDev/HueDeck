@@ -12,7 +12,7 @@
 //! same `{interface, usage, usage_page, collection}` tuple on every OS.
 //!
 //! Enable the `mock` feature (always on under `cargo test`) for scripted
-//! in-memory backends and the [`mock::TransactionRecorder`] used by golden tests.
+//! in-memory backends and the `mock::TransactionRecorder` used by golden tests.
 
 #![forbid(unsafe_code)]
 

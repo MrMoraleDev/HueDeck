@@ -1,6 +1,13 @@
 <!-- Architecture synthesis from a 3-proposal / 3-judge panel, 2026-10-17. The placeholder name 'OpenLux' (openluxd, luxctl) in this text means Lightloom (lightloomd, lightloom). -->
 # OpenLux (placeholder name) — synthesized architecture
 
+> **Errata (2026-10-18).** This file is the record of the architecture panel and is kept
+> as written. Later research (`docs/research/`) corrected four details: the PawnIO device
+> is opened as `\\?\GLOBALROOT\Device\PawnIO` (`\\.\PawnIO` is deprecated); Pawn modules
+> are LGPL-2.1 and upstreamed to PawnIO.Modules, not kept in a separate GPL-2 repository;
+> the AMD ADLX SDK is not MIT-licensed; NVIDIA's public nvapi headers are MIT and may be
+> vendored. ADR-0004 and ADR-0006 carry the amended decisions.
+
 Base: **OpenLux (Architect A, Rust core)** — highest combined score across the three judges (218 vs GlowRGB 213 vs LumenRGB 199) and the only proposal that scored well on both least-privilege/Linux-readiness and real-time behaviour. Every fatal flaw the judges raised against it is resolved below by grafting from B and C:
 
 | Judge flaw against A | Resolution (source) |

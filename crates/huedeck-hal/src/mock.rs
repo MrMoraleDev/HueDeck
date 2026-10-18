@@ -154,6 +154,9 @@ pub struct MockEndpointState {
     /// Bumped by every unplug: handles opened before keep failing after a
     /// replug, as stale Windows handles do.
     pub generation: u64,
+    /// `read_timeout` without a scripted report waits out its timeout (up to
+    /// 5 s), as a real device that sends nothing does; otherwise it returns at once.
+    pub block_reads: bool,
 }
 
 type SharedEndpoint = Arc<Mutex<MockEndpointState>>;
@@ -360,8 +363,15 @@ impl HidHandle for MockHidHandle {
         Ok(data.len())
     }
 
-    fn read_timeout(&mut self, buf: &mut [u8], _timeout_ms: i32) -> HalResult<usize> {
-        let next = self.connected()?.scripted_reads.pop_front();
+    fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> HalResult<usize> {
+        let (next, block) = {
+            let mut s = self.connected()?;
+            (s.scripted_reads.pop_front(), s.block_reads)
+        };
+        if next.is_none() && block {
+            let ms = u64::try_from(timeout_ms).unwrap_or(0).min(5000);
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
         match next {
             Some(report) => {
                 let n = Self::copy_out(&report, buf);

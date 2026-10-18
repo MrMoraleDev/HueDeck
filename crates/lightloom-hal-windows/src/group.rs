@@ -209,6 +209,7 @@ mod tests {
             usage,
             collection: parsed.collection,
             report_lengths: ReportLengths::default(),
+            feature_reports: Vec::new(),
         });
         p.usb_parent = parent.map(str::to_string).ok_or_else(|| "no parent".to_string());
         p

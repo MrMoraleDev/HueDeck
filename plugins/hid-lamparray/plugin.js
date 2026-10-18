@@ -73,7 +73,7 @@ export function LedPositions() { return [[0, 0]]; }
 export function ImageUrl() { return ""; }
 
 let reports = null;      // the six LampArray feature reports, from the report descriptor
-let lamps = [];          // { id, cell: [x, y], levels: [r, g, b, intensity], programmable }
+let lamps = [];          // { id, position: [x, y] (µm), cell: [x, y], levels: [r, g, b, intensity], programmable }
 let enabled = false;
 let minIntervalMs = 0;   // the device's MinUpdateIntervalInMicroseconds, in milliseconds
 let lastColours = null;

@@ -23,8 +23,10 @@
 //! * [`registry`] (Windows only): read-only `HKEY_CURRENT_USER` string values
 //!   (importing SignalRGB's component assignments).
 //!
-//! Hotplug (`CM_Register_Notification`), raw USB (`nusb`), serial, LampArray and the broker
-//! client follow in later milestones.
+//! * [`hotplug`] (Windows only): HID arrival/removal notifications
+//!   (`CM_Register_Notification`).
+//!
+//! Raw USB (`nusb`), serial, LampArray and the broker client follow in later milestones.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -35,6 +37,8 @@ pub mod path;
 pub mod console;
 #[cfg(windows)]
 pub mod hid;
+#[cfg(windows)]
+pub mod hotplug;
 #[cfg(windows)]
 pub mod native;
 #[cfg(windows)]

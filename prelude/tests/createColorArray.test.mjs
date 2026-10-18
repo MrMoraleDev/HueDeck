@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import defaultExport, {
   createColorArray,
   layoutColors,
+  layoutFlatColors,
   reorderColor,
   normalizeColorOrder,
   normalizeLayout,
@@ -148,4 +149,26 @@ test("layoutColors lays out sampled triples like channel.getColors", () => {
   assert.deepEqual(layoutColors([], "Inline"), []);
   assert.deepEqual(layoutColors(null, "Separate"), [[], [], []]);
   assert.deepEqual(layoutColors(["#ff0000"], "Inline"), [255, 0, 0], "hex strings accepted per entry");
+});
+
+test("layoutFlatColors lays out a flat host stream like channel.getColors", () => {
+  const flat = [1, 2, 3, 4, 5, 6];
+  assert.deepEqual(layoutFlatColors(flat), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(layoutFlatColors(flat, "Inline", "GRB"), [2, 1, 3, 5, 4, 6]);
+  assert.deepEqual(layoutFlatColors(flat, "Separate"), [
+    [1, 4],
+    [2, 5],
+    [3, 6],
+  ]);
+  assert.deepEqual(layoutFlatColors(flat, "seperate", "bgr"), [
+    [3, 6],
+    [2, 5],
+    [1, 4],
+  ]);
+  assert.deepEqual(layoutFlatColors([7, 8, 9, 10], "Inline"), [7, 8, 9], "partial triple dropped");
+  assert.deepEqual(layoutFlatColors([300, -1, 2.6]), [255, 0, 3], "bytes clamped");
+  assert.deepEqual(layoutFlatColors(undefined, "Separate"), [[], [], []]);
+  const a = layoutFlatColors(flat);
+  a[0] = 99;
+  assert.equal(flat[0], 1, "fresh array");
 });

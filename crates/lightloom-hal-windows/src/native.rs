@@ -10,7 +10,9 @@
 //!   ([`probe::hid_interface_paths`]); then, only for collections of
 //!   interest, a zero-access handle for `HidD_GetAttributes`, `HIDP_CAPS`,
 //!   the declared feature report ids and the USB strings;
-//! * I/O on an overlapped `GENERIC_READ | GENERIC_WRITE` handle: output
+//! * I/O on an overlapped `GENERIC_READ | GENERIC_WRITE` handle (a zero-access
+//!   one for system mice and keyboards, which Windows opens exclusively: feature
+//!   reports still work there, as with hidapi; reads and writes do not): output
 //!   reports with `WriteFile`, padded to `OutputReportByteLength` as Windows
 //!   requires; input reports through one persistent pending `ReadFile`, so no
 //!   report is lost between calls, report id first (`0x00` for unnumbered
@@ -40,8 +42,9 @@ use windows::Win32::Devices::HumanInterfaceDevice::{
     HIDD_ATTRIBUTES, HIDP_BUTTON_CAPS, HIDP_CAPS, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_DEVICE_NOT_CONNECTED, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE,
-    ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, HANDLE, WIN32_ERROR,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_DEVICE_NOT_CONNECTED, ERROR_DEV_NOT_EXIST, ERROR_FILE_NOT_FOUND,
+    ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_SUCH_DEVICE, GENERIC_READ, GENERIC_WRITE, HANDLE,
+    WIN32_ERROR,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ,
@@ -89,9 +92,12 @@ fn map_win(context: &str, e: &windows::core::Error) -> HalError {
     if code == ERROR_ACCESS_DENIED.to_hresult() {
         HalError::PermissionDenied(text)
     } else if code == ERROR_DEVICE_NOT_CONNECTED.to_hresult()
-        || code == ERROR_GEN_FAILURE.to_hresult()
+        || code == ERROR_NO_SUCH_DEVICE.to_hresult()
+        || code == ERROR_DEV_NOT_EXIST.to_hresult()
         || code == ERROR_FILE_NOT_FOUND.to_hresult()
     {
+        // The device is gone. ERROR_GEN_FAILURE is not among these: a present
+        // device returns it when it stalls a report it does not support.
         HalError::Disconnected
     } else {
         HalError::Backend(text)
@@ -363,6 +369,8 @@ struct PendingRead {
 pub struct NativeHidHandle {
     info: HidEndpointInfo,
     handle: OwnedHandle,
+    /// Opened without read/write access (a system mouse or keyboard collection).
+    feature_only: bool,
     io_event: OwnedHandle,
     read: Box<PendingRead>,
 }
@@ -377,8 +385,16 @@ impl NativeHidHandle {
         let info = endpoint_info(path, None, false)
             .map_err(HalError::Backend)?
             .ok_or_else(|| HalError::NotFound(path.to_string()))?;
-        let handle = open_path(path, GENERIC_READ.0 | GENERIC_WRITE.0, true)
-            .map_err(|e| map_win("CreateFileW", &e))?;
+        // Windows owns system mice and keyboards exclusively; like hidapi, fall back to a
+        // zero-access handle, which still carries feature reports (Razer mice, for one).
+        let (handle, feature_only) = match open_path(path, GENERIC_READ.0 | GENERIC_WRITE.0, true) {
+            Ok(h) => (h, false),
+            Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => {
+                let h = open_path(path, 0, true).map_err(|e| map_win("CreateFileW(access=0)", &e))?;
+                (h, true)
+            }
+            Err(e) => return Err(map_win("CreateFileW", &e)),
+        };
         // SAFETY: valid handle; a larger queue only reduces lost input reports.
         let _ = unsafe { HidD_SetNumInputBuffers(handle.0, INPUT_BUFFERS) };
         let io_event = new_event()?;
@@ -392,10 +408,11 @@ impl NativeHidHandle {
             buf: vec![0u8; info.report_lengths.input.max(1)],
             pending: false,
         });
-        tracing::debug!(path, report_lengths = ?info.report_lengths, feature_reports = ?info.feature_reports, "opened HID endpoint (native)");
+        tracing::debug!(path, feature_only, report_lengths = ?info.report_lengths, feature_reports = ?info.feature_reports, "opened HID endpoint (native)");
         Ok(Self {
             info,
             handle,
+            feature_only,
             io_event,
             read,
         })
@@ -466,6 +483,12 @@ impl NativeHidHandle {
     }
 }
 
+fn feature_only_error() -> HalError {
+    HalError::PermissionDenied(
+        "Windows holds this mouse/keyboard collection exclusively: only feature reports are available".into(),
+    )
+}
+
 /// `data`, zero-padded to `len` when shorter.
 fn padded(data: &[u8], len: usize) -> std::borrow::Cow<'_, [u8]> {
     if data.len() >= len {
@@ -486,6 +509,9 @@ impl HidHandle for NativeHidHandle {
         if data.is_empty() {
             return Err(HalError::InvalidArgument("empty output report".into()));
         }
+        if self.feature_only {
+            return Err(feature_only_error());
+        }
         let buf = padded(data, self.info.report_lengths.output);
         let mut ov = self.io_overlapped();
         // SAFETY: `buf` and `ov` outlive the operation: `finish` waits for completion or cancellation.
@@ -495,6 +521,9 @@ impl HidHandle for NativeHidHandle {
     }
 
     fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> HalResult<usize> {
+        if self.feature_only {
+            return Err(feature_only_error());
+        }
         let handle = self.handle.0;
         let r = &mut *self.read;
         if !r.pending {

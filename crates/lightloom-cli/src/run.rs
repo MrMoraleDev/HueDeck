@@ -9,15 +9,18 @@
 
 use anyhow::{bail, Context};
 use clap::Args;
-use lightloom_engine::{FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
+use lightloom_engine::{ComponentInstance, FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
 use lightloom_hal::mock::MockHid;
+use lightloom_hal::trace::{RecordingHid, TraceOptions, TraceRestoreCheck};
 use lightloom_hal::{HidBackend, ReportLengths};
-use lightloom_plugin_host::catalog::{Catalog, CatalogEntry};
+use lightloom_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use lightloom_plugin_host::device::{Brightness, IoKind, LogSink, WriteMode};
+use lightloom_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
 use lightloom_plugin_host::session::{
-    self, RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
+    RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
 };
 use lightloom_render::{NullRenderer, Pattern, RendererClient};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 #[cfg(not(windows))]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,13 +39,16 @@ pub struct RunArgs {
     /// Only drive devices whose key starts with this (`vid:pid` or `vid:pid:serial`, hex; repeatable).
     #[arg(long = "device", value_name = "UID")]
     pub devices: Vec<String>,
-    /// Plugin directory (repeatable; later ones win on VID:PID collisions).
-    /// Default: $LIGHTLOOM_PLUGINS, else ./plugins.
-    #[arg(long = "plugins", value_name = "DIR")]
-    pub plugin_dirs: Vec<PathBuf>,
+    #[command(flatten)]
+    pub catalog: CatalogArgs,
     /// Read devices but never write; print the packets that would be sent.
     #[arg(long)]
     pub dry_run: bool,
+    /// Record every HID operation and what the devices answered into FILE
+    /// (JSON), for `lightloom compat replay`. Record with `light` (a solid
+    /// colour) to get a trace that replays exactly.
+    #[arg(long, value_name = "FILE")]
+    pub record: Option<PathBuf>,
     /// Stop after this many seconds (default: until Ctrl-C; `bench` uses --seconds).
     #[arg(long, value_name = "SECS", value_parser = parse_secs)]
     pub duration: Option<f64>,
@@ -79,6 +85,67 @@ pub struct RunArgs {
     /// Print every plugin log line.
     #[arg(short, long)]
     pub verbose: bool,
+}
+
+/// Where plugins come from (shared by `light`, `rainbow`, `bench` and `plugins`).
+#[derive(Debug, Clone, Default, Args)]
+pub struct CatalogArgs {
+    /// Plugin directory (repeatable; later ones win on VID:PID collisions).
+    /// Default: $LIGHTLOOM_PLUGINS, else ./plugins.
+    #[arg(long = "plugins", value_name = "DIR")]
+    pub plugin_dirs: Vec<PathBuf>,
+    /// Also use the plugins of a local SignalRGB installation, read in place (never
+    /// copied). They are scanned first, so Lightloom's own plugin directories win.
+    /// Device runs also take SignalRGB's component setup of each channel (read-only).
+    #[arg(long)]
+    pub signalrgb: bool,
+    /// Load every plugin file again instead of using the plugin index cache.
+    #[arg(long)]
+    pub no_plugin_cache: bool,
+}
+
+impl CatalogArgs {
+    /// Directories in scan order: SignalRGB's (when asked), then Lightloom's.
+    pub fn dirs(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let mut dirs = Vec::new();
+        if self.signalrgb {
+            let found = lightloom_plugin_host::catalog::signalrgb_plugin_dirs();
+            if found.is_empty() {
+                bail!("--signalrgb: no SignalRGB plugin directory found on this machine");
+            }
+            dirs.extend(found);
+        }
+        if self.plugin_dirs.is_empty() {
+            dirs.extend(default_plugin_dirs());
+        } else {
+            dirs.extend(self.plugin_dirs.iter().cloned());
+        }
+        Ok(dirs)
+    }
+
+    /// Scan the directories (with the index cache unless disabled).
+    pub fn scan(&self) -> anyhow::Result<(Catalog, Vec<PathBuf>)> {
+        let dirs = self.dirs()?;
+        let opts = ScanOptions {
+            cache: if self.no_plugin_cache {
+                None
+            } else {
+                lightloom_plugin_host::catalog::default_cache_path()
+            },
+            ..ScanOptions::default()
+        };
+        let catalog = Catalog::scan_with(&dirs, &opts);
+        if catalog.entries().is_empty() {
+            bail!(
+                "no device plugin found in {} (use --plugins DIR, LIGHTLOOM_PLUGINS or --signalrgb)",
+                dirs.iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        Ok((catalog, dirs))
+    }
 }
 
 /// What to draw and how long to run.
@@ -294,46 +361,6 @@ impl RunReport {
     }
 }
 
-/// How long stopped sessions get to run Shutdown() before the run gives up on them.
-const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Stop every session and collect the reports of those that end within
-/// [`STOP_TIMEOUT`]. Sessions that panicked or are stuck (in device I/O)
-/// come back as `key: reason`; stuck threads are left behind and end with
-/// the process.
-fn stop_sessions(handles: Vec<session::SessionHandle>) -> (Vec<SessionReport>, Vec<String>) {
-    for h in &handles {
-        h.stop();
-    }
-    let deadline = Instant::now() + STOP_TIMEOUT;
-    while handles.iter().any(|h| !h.is_finished()) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let mut reports = Vec::new();
-    let mut failed = Vec::new();
-    for h in handles {
-        let key = h.key().to_string();
-        if !h.is_finished() {
-            failed.push(format!(
-                "{key}: did not stop within {} s (stuck in device I/O?)",
-                STOP_TIMEOUT.as_secs()
-            ));
-            continue;
-        }
-        match h.join() {
-            Ok(r) => reports.push(r),
-            Err(panic) => failed.push(format!("{key}: panicked: {panic}")),
-        }
-    }
-    (reports, failed)
-}
-
-/// A device paired with the plugin that drives it.
-struct Target {
-    device: SessionDevice,
-    plugin: CatalogEntry,
-}
-
 // Used by the Windows device path (and tests); Linux drives no hardware yet.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn matches_filter(key: &str, filters: &[String]) -> bool {
@@ -346,7 +373,7 @@ fn matches_filter(key: &str, filters: &[String]) -> bool {
 
 /// A scripted device that answers every feature-report id with 1024 zero bytes
 /// (report id first), so any HID plugin can run its Initialize against it.
-fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid>, SessionDevice)> {
+pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid>, SessionDevice)> {
     let info = MockHid::endpoint_info(
         vid,
         pid,
@@ -376,56 +403,213 @@ fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid>, SessionD
     Ok((Arc::new(mock), device))
 }
 
+/// The HID backend of a hardware run, kept to enumerate again after hotplug events.
 #[cfg(windows)]
-fn hardware_targets(
-    catalog: &Catalog,
-    filters: &[String],
-) -> anyhow::Result<(Arc<dyn HidBackend>, Vec<Target>, usize)> {
-    // Enumerate and probe only the devices some plugin claims.
-    let wanted: std::collections::BTreeSet<(u16, u16)> =
-        catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
-    let (backend, groups): (Arc<dyn HidBackend>, _) = if crate::devices::use_hidapi() {
-        let b = lightloom_hal_windows::WindowsHidBackend::new().context("initialising hidapi")?;
-        let groups = b
-            .enumerate_grouped_for(&wanted)
-            .context("enumerating HID devices")?;
-        (Arc::new(b), groups)
-    } else {
-        let b = lightloom_hal_windows::NativeHidBackend::new();
-        let groups = b
-            .enumerate_grouped_for(&wanted)
-            .context("enumerating HID devices")?;
-        (Arc::new(b), groups)
-    };
-    let total = groups.len();
-    let mut targets = Vec::new();
-    for g in groups {
-        let key = g.key.to_string();
-        if !matches_filter(&key, filters) {
-            continue;
-        }
-        if let Some(plugin) = catalog.lookup(g.key.vid, g.key.pid) {
-            targets.push(Target {
-                device: SessionDevice {
-                    key,
-                    vid: g.key.vid,
-                    pid: g.key.pid,
-                    endpoints: g.endpoints.into_iter().map(|e| e.info).collect(),
-                },
-                plugin: plugin.clone(),
-            });
+enum Hardware {
+    Native(Arc<lightloom_hal_windows::NativeHidBackend>),
+    Hidapi(Arc<lightloom_hal_windows::WindowsHidBackend>),
+}
+
+#[cfg(windows)]
+impl Hardware {
+    fn open() -> anyhow::Result<Self> {
+        Ok(if crate::devices::use_hidapi() {
+            Self::Hidapi(Arc::new(
+                lightloom_hal_windows::WindowsHidBackend::new().context("initialising hidapi")?,
+            ))
+        } else {
+            Self::Native(Arc::new(lightloom_hal_windows::NativeHidBackend::new()))
+        })
+    }
+
+    fn backend(&self) -> Arc<dyn HidBackend> {
+        match self {
+            Self::Native(b) => b.clone(),
+            Self::Hidapi(b) => b.clone(),
         }
     }
-    Ok((backend, targets, total))
+
+    /// The present devices some plugin claims (enumerating and probing only
+    /// those), after `filters`, each with its plugin; plus how many matched
+    /// before filtering.
+    fn targets(&self, catalog: &Catalog, filters: &[String]) -> anyhow::Result<(Vec<Present>, usize)> {
+        let wanted: std::collections::BTreeSet<(u16, u16)> =
+            catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
+        let groups = match self {
+            Self::Native(b) => b.enumerate_grouped_for(&wanted),
+            Self::Hidapi(b) => b.enumerate_grouped_for(&wanted),
+        }
+        .context("enumerating HID devices")?;
+        let total = groups.len();
+        let mut targets = Vec::new();
+        for g in groups {
+            let key = g.key.to_string();
+            if !matches_filter(&key, filters) {
+                continue;
+            }
+            if let Some(plugin) = catalog.lookup(g.key.vid, g.key.pid) {
+                targets.push(Present {
+                    device: SessionDevice {
+                        key,
+                        vid: g.key.vid,
+                        pid: g.key.pid,
+                        endpoints: g.endpoints.into_iter().map(|e| e.info).collect(),
+                    },
+                    plugin: plugin.clone(),
+                });
+            }
+        }
+        Ok((targets, total))
+    }
 }
 
+/// No hardware backend on this platform yet.
 #[cfg(not(windows))]
-fn hardware_targets(_: &Catalog, _: &[String]) -> anyhow::Result<(Arc<dyn HidBackend>, Vec<Target>, usize)> {
-    bail!("driving hardware is only implemented on Windows so far (Linux backend: milestone M7); try `lightloom bench --mock VID:PID`")
+enum Hardware {}
+
+#[cfg(not(windows))]
+impl Hardware {
+    fn open() -> anyhow::Result<Self> {
+        bail!("driving hardware is only implemented on Windows so far (Linux backend: milestone M7); try `lightloom bench --mock VID:PID`")
+    }
+
+    fn backend(&self) -> Arc<dyn HidBackend> {
+        match *self {}
+    }
+
+    fn targets(&self, _: &Catalog, _: &[String]) -> anyhow::Result<(Vec<Present>, usize)> {
+        match *self {}
+    }
+}
+
+/// HID arrival/removal notifications; inactive for mock runs and where the
+/// platform has none yet.
+struct Hotplug {
+    #[cfg(windows)]
+    _source: Option<lightloom_hal_windows::hotplug::HidHotplug>,
+    events: Option<std::sync::mpsc::Receiver<lightloom_hal::DeviceEvent>>,
+}
+
+impl Hotplug {
+    fn inactive() -> Self {
+        Self {
+            #[cfg(windows)]
+            _source: None,
+            events: None,
+        }
+    }
+
+    #[cfg(windows)]
+    fn start() -> Self {
+        use lightloom_hal::HotplugSource;
+        let mut source = lightloom_hal_windows::hotplug::HidHotplug::new();
+        match source.subscribe() {
+            Ok(events) => Self {
+                _source: Some(source),
+                events: Some(events),
+            },
+            Err(e) => {
+                eprintln!("lightloom: hotplug notifications unavailable ({e}); devices plugged in later are not driven");
+                Self::inactive()
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn start() -> Self {
+        Self::inactive()
+    }
+
+    fn active(&self) -> bool {
+        self.events.is_some()
+    }
+
+    /// Whether any device arrived or left since the last call.
+    fn changed(&self) -> bool {
+        let Some(rx) = &self.events else {
+            return false;
+        };
+        let mut any = false;
+        while rx.try_recv().is_ok() {
+            any = true;
+        }
+        any
+    }
+}
+
+/// How long hotplug events must be quiet before enumerating again (one plug
+/// produces a burst of events, one per HID collection).
+const HOTPLUG_SETTLE: Duration = Duration::from_millis(250);
+
+/// The options of the session for `device`: the run's flags, SignalRGB's
+/// channel setup with `--signalrgb`, and a log sink labelled with the device.
+fn session_options(
+    args: &RunArgs,
+    device: &SessionDevice,
+    system_info: Option<Arc<lightloom_hal::SystemInfo>>,
+) -> SessionOptions {
+    let label = device.key.clone();
+    let channel_components = if args.catalog.signalrgb {
+        let (channels, notes) = signalrgb_channels(&device.key);
+        for note in notes {
+            eprintln!("  [{label}] SignalRGB setup: {note}");
+        }
+        if !channels.is_empty() {
+            eprintln!(
+                "  [{label}] SignalRGB component setup: {}",
+                channels
+                    .iter()
+                    .map(|(name, list)| format!(
+                        "{name} ({} component{})",
+                        list.len(),
+                        if list.len() == 1 { "" } else { "s" }
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        channels
+    } else {
+        BTreeMap::new()
+    };
+    let verbose = args.verbose;
+    let sink: LogSink = Arc::new(move |line: &str| {
+        if verbose {
+            eprintln!("  [{label}] {line}");
+        }
+    });
+    SessionOptions {
+        parameters: args.params.iter().cloned().collect(),
+        brightness: Brightness {
+            global: args.brightness,
+            layout: 100,
+        },
+        write_mode: if args.dry_run {
+            WriteMode::DryRun
+        } else {
+            WriteMode::Live
+        },
+        skip_shutdown: args.keep,
+        restore_check: restore_mode(&args.restore_check),
+        log_sink: Some(sink),
+        channel_components,
+        system_info,
+        ..SessionOptions::default()
+    }
+}
+
+fn print_change(mode: &Mode, change: &Change) {
+    let name = mode.name();
+    match change {
+        Change::Started { key, plugin } => eprintln!("lightloom {name}: {key} connected -> {plugin}"),
+        Change::Removed { key } => eprintln!("lightloom {name}: {key} removed, session stopped"),
+        Change::Restarted { key } => eprintln!("lightloom {name}: {key} reconnected, session restarted"),
+        Change::Failed { key, error } => eprintln!("lightloom {name}: {key}: cannot start a session: {error}"),
+    }
 }
 
 #[cfg(windows)]
-fn running_conflicts(targets: &[Target]) -> anyhow::Result<Vec<String>> {
+fn running_conflicts(targets: &[Present]) -> anyhow::Result<Vec<String>> {
     let running = lightloom_hal_windows::system::running_process_names().map_err(anyhow::Error::msg)?;
     let mut wanted: Vec<String> = KNOWN_CONFLICTS.iter().map(|s| s.to_string()).collect();
     for t in targets {
@@ -441,7 +625,7 @@ fn running_conflicts(targets: &[Target]) -> anyhow::Result<Vec<String>> {
 }
 
 #[cfg(not(windows))]
-fn running_conflicts(_: &[Target]) -> anyhow::Result<Vec<String>> {
+fn running_conflicts(_: &[Present]) -> anyhow::Result<Vec<String>> {
     Ok(Vec::new())
 }
 
@@ -501,6 +685,24 @@ impl Interrupt {
     }
 }
 
+impl Drop for Interrupt {
+    /// Every session has shut down and the outputs are written (on every return path).
+    fn drop(&mut self) {
+        self.finished();
+    }
+}
+
+/// The trace form of a restore-check mode.
+fn trace_restore_check(mode: &RestoreCheckMode) -> TraceRestoreCheck {
+    match mode {
+        RestoreCheckMode::Off => TraceRestoreCheck::Off,
+        RestoreCheckMode::DeclaredFeatureReports => TraceRestoreCheck::Declared,
+        RestoreCheckMode::Reports(list) => {
+            TraceRestoreCheck::Reports(list.iter().map(|p| (p.report_id, p.len)).collect())
+        }
+    }
+}
+
 fn rss_bytes() -> Option<u64> {
     #[cfg(windows)]
     {
@@ -510,6 +712,119 @@ fn rss_bytes() -> Option<u64> {
     {
         None
     }
+}
+
+/// `lightloom plugins`: the plugins found and, for each connected HID device
+/// (read-only enumeration), the plugin that would drive it.
+pub fn list_plugins(args: &CatalogArgs, json: bool) -> anyhow::Result<()> {
+    let started = Instant::now();
+    let (catalog, dirs) = args.scan()?;
+    let scan_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let stats = catalog.stats();
+    let devices = connected_devices().unwrap_or_else(|e| {
+        eprintln!("lightloom: device enumeration unavailable: {e}");
+        Vec::new()
+    });
+    let matched: Vec<(String, Option<&CatalogEntry>)> = devices
+        .iter()
+        .map(|(key, vid, pid)| (key.clone(), catalog.lookup(*vid, *pid)))
+        .collect();
+    if json {
+        let value = serde_json::json!({
+            "directories": dirs,
+            "files": stats.files,
+            "cached": stats.cached,
+            "loaded": stats.loaded,
+            "scan_ms": scan_ms,
+            "plugins": catalog.entries().iter().map(|e| serde_json::json!({
+                "name": e.meta.name,
+                "file": e.meta.source_path,
+                "vendor_id": e.meta.vendor_id,
+                "product_ids": e.meta.product_ids,
+            })).collect::<Vec<_>>(),
+            "devices": matched.iter().map(|(key, plugin)| serde_json::json!({
+                "device": key,
+                "plugin": plugin.map(|p| &p.meta.source_path),
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+    println!(
+        "{} plugins from {} directories ({} files: {} cached, {} loaded) in {scan_ms:.0} ms",
+        catalog.entries().len(),
+        dirs.len(),
+        stats.files,
+        stats.cached,
+        stats.loaded
+    );
+    for (key, plugin) in &matched {
+        match plugin {
+            Some(p) => println!("  {key}  ->  {}  ({})", p.meta.name, p.meta.source_path.display()),
+            None => println!("  {key}  ->  no plugin"),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
+    let groups = lightloom_hal_windows::NativeHidBackend::new().enumerate_grouped()?;
+    Ok(groups
+        .into_iter()
+        .map(|g| (g.key.to_string(), g.key.vid, g.key.pid))
+        .collect())
+}
+
+#[cfg(not(windows))]
+fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
+    bail!("HID enumeration is only implemented on Windows so far")
+}
+
+/// SignalRGB's component setup of the device `key` (read-only): the channel
+/// arrays under `HKCU\Software\WhirlwindFX\SignalRgb\devices\<key>`. Other
+/// values there (plugin property values) are not component arrays and are skipped.
+#[cfg(windows)]
+fn signalrgb_channels(key: &str) -> (BTreeMap<String, Vec<ComponentInstance>>, Vec<String>) {
+    let mut channels = BTreeMap::new();
+    let mut notes = Vec::new();
+    let subkey = format!("Software\\WhirlwindFX\\SignalRgb\\devices\\{key}");
+    let values = match lightloom_hal_windows::registry::current_user_strings(&subkey) {
+        Ok(v) => v,
+        Err(e) => {
+            notes.push(format!("cannot read SignalRGB's settings for {key}: {e}"));
+            return (channels, notes);
+        }
+    };
+    for (name, value) in values {
+        if !value.trim_start().starts_with('[') {
+            continue;
+        }
+        match lightloom_engine::parse_channel(&value) {
+            Ok((instances, warnings)) if !instances.is_empty() || value.trim() == "[]" => {
+                notes.extend(warnings.into_iter().map(|w| format!("{name}: {w}")));
+                channels.insert(name, instances);
+            }
+            _ => {}
+        }
+    }
+    (channels, notes)
+}
+
+#[cfg(not(windows))]
+fn signalrgb_channels(_key: &str) -> (BTreeMap<String, Vec<ComponentInstance>>, Vec<String>) {
+    (BTreeMap::new(), Vec::new())
+}
+
+/// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
+#[cfg(windows)]
+fn machine_info() -> Option<lightloom_hal::SystemInfo> {
+    lightloom_hal_windows::system::system_info()
+}
+
+#[cfg(not(windows))]
+fn machine_info() -> Option<lightloom_hal::SystemInfo> {
+    None
 }
 
 /// Exit status of a finished run.
@@ -523,25 +838,19 @@ pub enum Outcome {
 
 /// Run `mode` with `args`. Errors are setup problems (no plugin, no device, conflicts).
 pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
-    let started = Instant::now();
-    let dirs = if args.plugin_dirs.is_empty() {
-        default_plugin_dirs()
-    } else {
-        args.plugin_dirs.clone()
-    };
-    let catalog = Catalog::scan(&dirs, Duration::from_secs(10));
-    if catalog.entries().is_empty() {
-        bail!(
-            "no device plugin found in {} (use --plugins DIR or LIGHTLOOM_PLUGINS)",
-            dirs.iter()
-                .map(|d| d.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+    if args.record.is_some() && args.dry_run {
+        bail!("--record needs the devices' real answers: drop --dry-run");
     }
+    let started = Instant::now();
+    let (catalog, _) = args.catalog.scan()?;
+    // Subscribe before enumerating, so a device plugged in meanwhile is not missed.
+    let hotplug = if matches!(mode, Mode::Bench { mock: Some(_), .. }) {
+        Hotplug::inactive()
+    } else {
+        Hotplug::start()
+    };
 
-    let mock = matches!(mode, Mode::Bench { mock: Some(_), .. });
-    let (backend, targets) = match mode {
+    let (backend, hardware, initial) = match mode {
         Mode::Bench {
             mock: Some((vid, pid)),
             ..
@@ -552,10 +861,11 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                 .clone();
             let (mock, device) = permissive_mock(vid, pid)?;
             let backend: Arc<dyn HidBackend> = mock;
-            (backend, vec![Target { device, plugin }])
+            (backend, None, vec![Present { device, plugin }])
         }
         _ => {
-            let (backend, targets, total) = hardware_targets(&catalog, &args.devices)?;
+            let hardware = Hardware::open()?;
+            let (targets, total) = hardware.targets(&catalog, &args.devices)?;
             if targets.is_empty() {
                 bail!(
                     "no supported device found: {total} device(s) match the {} loaded plugin(s){}",
@@ -567,12 +877,43 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                     }
                 );
             }
-            (backend, targets)
+            (hardware.backend(), Some(hardware), targets)
         }
     };
 
-    if !mock {
-        let conflicts = running_conflicts(&targets)?;
+    let recorder = args.record.as_ref().map(|_| {
+        let r = Arc::new(RecordingHid::new(
+            Arc::clone(&backend),
+            format!(
+                "lightloom {} {}",
+                mode.name(),
+                std::env::args().skip(2).collect::<Vec<_>>().join(" ")
+            ),
+        ));
+        r.set_conditions(
+            match mode {
+                Mode::Light(c) => Some(c.to_hex()),
+                _ => None,
+            },
+            args.params.iter().cloned().collect(),
+        );
+        r.set_options(TraceOptions {
+            brightness: args.brightness,
+            skip_shutdown: args.keep,
+            restore_check: trace_restore_check(&restore_mode(&args.restore_check)),
+        });
+        for t in &initial {
+            r.note_device(&t.device.key, t.device.vid, t.device.pid, &t.device.endpoints);
+        }
+        r
+    });
+    let backend: Arc<dyn HidBackend> = match &recorder {
+        Some(r) => r.clone(),
+        None => backend,
+    };
+
+    if hardware.is_some() {
+        let conflicts = running_conflicts(&initial)?;
         if !conflicts.is_empty() && !args.ignore_conflicts {
             bail!(
                 "conflicting RGB software is running: {}. Close it first (Lightloom never terminates other \
@@ -582,7 +923,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         }
     }
 
-    for t in &targets {
+    for t in &initial {
         eprintln!(
             "lightloom {}: {} -> {} ({}){}",
             mode.name(),
@@ -599,46 +940,42 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     let mut renderer = NullRenderer::new(mode.pattern(), mode.fps());
     renderer.start(Arc::clone(&store))?;
 
-    let verbose = args.verbose;
-    let mut handles = Vec::new();
-    for t in targets {
-        let label = t.device.key.clone();
-        let sink: LogSink = Arc::new(move |line: &str| {
-            if verbose {
-                eprintln!("  [{label}] {line}");
-            }
-        });
-        let opts = SessionOptions {
-            parameters: args.params.iter().cloned().collect(),
-            brightness: Brightness {
-                global: args.brightness,
-                layout: 100,
-            },
-            write_mode: if args.dry_run {
-                WriteMode::DryRun
-            } else {
-                WriteMode::Live
-            },
-            skip_shutdown: args.keep,
-            restore_check: restore_mode(&args.restore_check),
-            log_sink: Some(sink),
-            ..SessionOptions::default()
-        };
-        match session::spawn(t.device, t.plugin, Arc::clone(&backend), Arc::clone(&store), opts) {
-            Ok(h) => handles.push((h, Instant::now())),
-            Err(e) => {
-                // Do not leave the sessions already started running detached.
-                let (_, failed) = stop_sessions(handles.into_iter().map(|(h, _)| h).collect());
-                renderer.stop();
-                interrupt.finished();
-                return Err(anyhow::Error::from(e).context(format!(
-                    "starting a device session ({} already started were stopped{})",
-                    failed.len(),
-                    if failed.is_empty() { "" } else { ", some uncleanly" }
-                )));
-            }
+    let system_info = machine_info().map(Arc::new);
+    if let Some(r) = &recorder {
+        r.set_system_info(system_info.as_deref().cloned());
+    }
+    let option_args = args.clone();
+    let option_recorder = recorder.clone();
+    let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
+        let opts = session_options(&option_args, device, system_info.clone());
+        if let Some(r) = &option_recorder {
+            r.set_channels(
+                &device.key,
+                opts.channel_components
+                    .iter()
+                    .map(|(name, list)| {
+                        let array = list.iter().map(ComponentInstance::to_json).collect();
+                        (name.clone(), serde_json::Value::Array(array))
+                    })
+                    .collect(),
+            );
+        }
+        opts
+    });
+    let mut manager = DeviceManager::new(backend, Arc::clone(&store), options);
+    for change in manager.reconcile(initial) {
+        if let Change::Failed { key, error } = change {
+            // Do not leave the sessions already started running detached.
+            let (_, failed) = manager.finish();
+            renderer.stop();
+            bail!(
+                "starting the device session for {key}: {error} (the sessions already started were stopped{})",
+                if failed.is_empty() { "" } else { ", some uncleanly" }
+            );
         }
     }
+    // Devices plugged in, out or back in while the run goes on are followed.
+    let mut settle: Option<Instant> = None;
 
     let limit = match mode {
         Mode::Bench { seconds, .. } => Some(seconds),
@@ -654,12 +991,12 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     let mut last_rss = Instant::now();
     loop {
         std::thread::sleep(Duration::from_millis(20));
-        let first = handles
-            .iter()
-            .filter_map(|(h, spawned)| {
+        let first = manager
+            .sessions()
+            .filter_map(|h| {
                 h.live()
                     .first_write_ms
-                    .map(|ms| spawned.duration_since(started).as_secs_f64() * 1000.0 + ms)
+                    .map(|ms| h.started().duration_since(started).as_secs_f64() * 1000.0 + ms)
             })
             .reduce(f64::min);
         if let (None, Some(ms)) = (first_write, first) {
@@ -677,7 +1014,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         if let Some(every) = stats_every {
             if last_stats.elapsed() >= every {
                 last_stats = Instant::now();
-                for (h, _) in &handles {
+                for h in manager.sessions() {
                     let l = h.live();
                     eprintln!(
                         "  {:>7.1}s {}: {:?} frames={} render_errors={} hid_errors={} rss={}",
@@ -694,9 +1031,35 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                 }
             }
         }
+        if hotplug.changed() {
+            // One plug produces a burst of events: wait until it is quiet.
+            settle = Some(Instant::now());
+        } else if settle.is_none() && manager.has_disconnected() {
+            settle = Some(Instant::now());
+        }
+        if let (Some(since), Some(hw)) = (settle, &hardware) {
+            if since.elapsed() >= HOTPLUG_SETTLE {
+                settle = None;
+                match hw.targets(&catalog, &args.devices) {
+                    Ok((present, _)) => {
+                        if let Some(r) = &recorder {
+                            for t in &present {
+                                r.note_device(&t.device.key, t.device.vid, t.device.pid, &t.device.endpoints);
+                            }
+                        }
+                        for change in manager.reconcile(present) {
+                            print_change(&mode, &change);
+                        }
+                    }
+                    Err(e) => eprintln!("lightloom {}: enumerating again failed: {e:#}", mode.name()),
+                }
+            }
+        }
         let interrupted = interrupt.requested();
         let expired = limit.is_some_and(|l| started.elapsed() >= l);
-        let all_done = handles.iter().all(|(h, _)| h.is_finished());
+        // Every session ended on its own (when devices may come back, a run
+        // whose devices were all unplugged waits for them instead).
+        let all_done = manager.all_finished() && (!hotplug.active() || manager.sessions().next().is_some());
         if interrupted || expired || all_done {
             if interrupted {
                 eprintln!("lightloom {}: interrupted, shutting down", mode.name());
@@ -704,10 +1067,25 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             break;
         }
     }
-    let (sessions, failed_sessions) = stop_sessions(handles.into_iter().map(|(h, _)| h).collect());
+    let (sessions, failed_sessions) = manager.finish();
     renderer.stop();
-    interrupt.finished();
     max_rss = max_rss.max(rss_bytes());
+    // A held console close/log-off/shutdown is released only when `interrupt` drops,
+    // after the trace and the JSON report are written.
+    if let (Some(r), Some(path)) = (&recorder, &args.record) {
+        for s in &sessions {
+            r.add_session(&s.device, s.frames);
+        }
+        let trace = r.trace();
+        std::fs::write(path, serde_json::to_string_pretty(&trace)?)
+            .with_context(|| format!("writing {}", path.display()))?;
+        eprintln!(
+            "lightloom {}: recorded {} HID operations to {}",
+            mode.name(),
+            trace.events.len(),
+            path.display()
+        );
+    }
     for f in &failed_sessions {
         eprintln!("lightloom: session {f}");
     }
@@ -779,7 +1157,16 @@ fn print_report(r: &RunReport) {
             .unwrap_or_default()
     );
     for s in &r.sessions {
-        println!("- {} ({})", s.device, s.name);
+        println!(
+            "- {} ({}){}",
+            s.device,
+            s.name,
+            if s.device_removed {
+                " [device removed during the run]"
+            } else {
+                ""
+            }
+        );
         if let (Some(ep), Some(path)) = (&s.endpoint, &s.endpoint_path) {
             println!(
                 "  endpoint: interface {} usage_page 0x{:04X} usage 0x{:04X} collection {} ({} of {} validated)  {}",
@@ -802,6 +1189,36 @@ fn print_report(r: &RunReport) {
         );
         if let Some(ms) = s.first_write_ms {
             println!("  first write {ms:.1} ms after session start");
+        }
+        if !s.subdevices.is_empty() {
+            println!(
+                "  subdevices: {}",
+                s.subdevices
+                    .iter()
+                    .map(|d| format!("{} ({}x{})", d.name, d.size[0], d.size[1]))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for c in &s.channels {
+            println!(
+                "  channel {}: {} LEDs (limit {}){}",
+                c.name,
+                c.led_count,
+                c.led_limit,
+                if c.components.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ": {}",
+                        c.components
+                            .iter()
+                            .map(|x| format!("{} [{}]", x.name, x.led_count))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            );
         }
         if r.dry_run {
             let read = s.io_log.iter().find(|x| x.kind == IoKind::GetFeature);
@@ -937,8 +1354,13 @@ mod tests {
     fn bench_mock_runs_the_first_party_plugin_end_to_end() {
         let args = RunArgs {
             devices: Vec::new(),
-            plugin_dirs: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")],
+            catalog: CatalogArgs {
+                plugin_dirs: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")],
+                signalrgb: false,
+                no_plugin_cache: true,
+            },
             dry_run: false,
+            record: None,
             duration: None,
             keep: false,
             ignore_conflicts: false,

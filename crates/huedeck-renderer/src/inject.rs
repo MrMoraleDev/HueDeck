@@ -2,14 +2,16 @@
 //! JavaScript evaluated in the effect's main-frame V8 context *before* any page script runs
 //! (CEF `OnContextCreated`).
 //!
-//! SPIKE A scope: a zeroed `window.engine` (no real audio/screen/sensor inputs yet), the
-//! `<meta property>` controls as globals with their defaults (lightscripts such as the stock
-//! Rainbow read `speed`/`vertical` from their first animation frame on), and a `load` listener
-//! that calls every `on<prop>Changed()` once and then `onEngineReady()`. M3 replaces this with
-//! the full load sequence (see docs/host-api/effects-engine.md).
+//! A zeroed `window.engine` (no real audio/screen/sensor inputs yet), the `<meta property>`
+//! controls as globals (lightscripts such as the stock Rainbow read `speed`/`vertical` from
+//! their first animation frame on), and the load sequence of docs/host-api/effects-engine.md:
+//! once the page has loaded (its scripts ran and may have declared the same names), every
+//! control is assigned its value again, every `on<prop>Changed()` is called once, then
+//! `onEngineReady()`.
 
 use huedeck_effects::EffectMeta;
 use huedeck_protocol::shm::{AUDIO_FREQ_BINS, ZONE_COLS, ZONE_IMAGE_HEIGHT, ZONE_IMAGE_WIDTH, ZONE_ROWS};
+use serde_json::{Map, Value};
 
 /// Key of the injection script in the browser's `extra_info` dictionary (browser → renderer).
 pub const INJECT_KEY: &str = "huedeck.inject";
@@ -114,35 +116,50 @@ pub fn is_injectable_global(name: &str) -> bool {
     is_js_identifier(name) && !NOT_INJECTABLE.contains(&name)
 }
 
-/// Full injection script for an effect: engine bootstrap, control globals, load hooks.
-/// Returns the script and any controls skipped (names that cannot be declared as globals).
-pub fn injection_script(meta: &EffectMeta) -> (String, Vec<String>) {
+/// JS calling each named global function that exists, in order; a throw is logged and the
+/// next one still runs.
+pub fn call_hooks_js(names: &[String]) -> String {
+    let list = names
+        .iter()
+        .map(|h| format!("\"{h}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "[{list}].forEach(function (name) {{\n\
+         \x20 if (typeof window[name] === \"function\") {{\n\
+         \x20   try {{ window[name](); }} catch (err) {{ console.error(\"huedeck: \" + name + \" threw: \" + err); }}\n\
+         \x20 }}\n\
+         }});\n"
+    )
+}
+
+/// Full injection script for an effect: engine bootstrap, control globals, load sequence.
+/// `values` overrides control defaults (unknown names and values of the wrong type are
+/// ignored). Returns the script and the controls skipped (names that cannot be page globals).
+pub fn injection_script(meta: &EffectMeta, values: &Map<String, Value>) -> (String, Vec<String>) {
     let mut js = engine_bootstrap_js();
     let mut skipped = Vec::new();
+    let mut assigns = String::new();
     let mut hooks = Vec::new();
     for control in &meta.properties {
         if !is_injectable_global(&control.property) {
             skipped.push(control.property.clone());
             continue;
         }
-        js.push_str(&control.js_initializer(None));
-        js.push('\n');
+        let value = values
+            .get(&control.property)
+            .and_then(|v| control.coerce(v))
+            .unwrap_or_else(|| control.default_value());
+        let literal = value.js_literal();
+        js.push_str(&format!("var {} = {literal};\n", control.property));
+        assigns.push_str(&format!("  {} = {literal};\n", control.property));
         hooks.push(control.change_hook());
     }
     hooks.push("onEngineReady".to_string());
-    let list = hooks
-        .iter()
-        .map(|h| format!("\"{h}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
+    // After the page scripts: values win over what the page declared, then the hooks.
     js.push_str(&format!(
-        "window.addEventListener(\"load\", function () {{\n\
-         \x20 [{list}].forEach(function (name) {{\n\
-         \x20   if (typeof window[name] === \"function\") {{\n\
-         \x20     try {{ window[name](); }} catch (err) {{ console.error(\"huedeck: \" + name + \" threw: \" + err); }}\n\
-         \x20   }}\n\
-         \x20 }});\n\
-         }});\n"
+        "window.addEventListener(\"load\", function () {{\n{assigns}{}}});\n",
+        call_hooks_js(&hooks)
     ));
     (js, skipped)
 }
@@ -174,12 +191,32 @@ mod tests {
             <meta property="default" label="D" type="number" min="0" max="1" default="1"/>
             <meta property="engine" label="E" type="number" min="0" max="1" default="1"/></head>"##;
         let meta = huedeck_effects::parse_effect_meta(html);
-        let (js, skipped) = injection_script(&meta);
+        let (js, skipped) = injection_script(&meta, &Map::new());
         assert_eq!(skipped, vec!["default".to_string(), "engine".to_string()]);
         assert!(js.contains("var speed = 5;"));
         assert!(!js.contains("var default"));
         assert!(!js.contains("var engine"));
         assert!(js.contains("\"onspeedChanged\", \"onEngineReady\""));
+    }
+
+    #[test]
+    fn values_override_defaults_and_are_assigned_again_after_load() {
+        let html = r##"<head><title>T</title>
+            <meta property="speed" label="Speed" type="number" min="0" max="100" default="50"/>
+            <meta property="tint" label="Tint" type="color" default="#ff0000"/></head>"##;
+        let meta = huedeck_effects::parse_effect_meta(html);
+        let mut values = Map::new();
+        values.insert("speed".into(), serde_json::json!("7"));
+        values.insert("tint".into(), serde_json::json!(12));
+        values.insert("unknown".into(), serde_json::json!(1));
+        let (js, _) = injection_script(&meta, &values);
+        assert!(js.contains("var speed = 7;"));
+        assert!(js.contains("var tint = \"12\";"));
+        let load = js.split("addEventListener(\"load\"").nth(1).unwrap();
+        let assign = load.find("speed = 7;").unwrap();
+        let hook = load.find("onspeedChanged").unwrap();
+        assert!(assign < hook, "values are assigned before the hooks run");
+        assert!(!js.contains("unknown"));
     }
 
     #[test]
@@ -198,7 +235,7 @@ mod tests {
             <meta property="vertical" label="V" type="boolean" default="0"/>
             <meta property="tint" label="Tint" type="color" default="#ff0000"/></head>"##;
         let meta = huedeck_effects::parse_effect_meta(html);
-        let (js, skipped) = injection_script(&meta);
+        let (js, skipped) = injection_script(&meta, &Map::new());
         assert!(skipped.is_empty());
         assert!(js.contains("var speed = 50;"));
         assert!(js.contains("var vertical = false;"));

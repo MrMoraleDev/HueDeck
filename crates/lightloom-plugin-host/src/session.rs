@@ -25,7 +25,7 @@ use crate::children::ChildSetup;
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
-use crate::runtime::{CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
+use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
 use crate::stats::LatencyHistogram;
 use lightloom_engine::{ComponentInstance, FrameStore, Placement, SamplerConfig};
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple};
@@ -50,7 +50,8 @@ pub struct SessionDevice {
     pub endpoints: Vec<HidEndpointInfo>,
 }
 
-/// Time budgets of the lifecycle calls.
+/// Time budgets of the lifecycle calls: JavaScript time, time blocked in
+/// `device.pause()` and HID I/O excluded ([`Budget`]), under the wall-clock caps.
 #[derive(Clone, Copy, Debug)]
 pub struct Budgets {
     /// Parse + evaluate the module.
@@ -63,6 +64,11 @@ pub struct Budgets {
     pub render: Duration,
     /// `Shutdown()`.
     pub shutdown: Duration,
+    /// Wall-clock cap of one `Render()`, blocked time included (plugins set
+    /// devices up lazily from `Render()`, taking seconds once).
+    pub render_wall: Duration,
+    /// Wall-clock cap of `Validate`, `Initialize` and `Shutdown`.
+    pub call_wall: Duration,
 }
 
 impl Default for Budgets {
@@ -73,6 +79,24 @@ impl Default for Budgets {
             initialize: Duration::from_secs(10),
             render: Duration::from_millis(250),
             shutdown: Duration::from_secs(5),
+            render_wall: Duration::from_secs(30),
+            call_wall: Duration::from_secs(30),
+        }
+    }
+}
+
+impl Budgets {
+    fn call(&self, js: Duration) -> Budget {
+        Budget {
+            js,
+            wall: self.call_wall.max(js),
+        }
+    }
+
+    fn render_budget(&self) -> Budget {
+        Budget {
+            js: self.render,
+            wall: self.render_wall.max(self.render),
         }
     }
 }
@@ -482,6 +506,7 @@ pub fn spawn(
         .stack_size(PLUGIN_THREAD_STACK)
         .spawn(move || {
             let report = run(device, plugin, backend, frames, opts, &stop2, &live2);
+            drop(stop2);
             live2.set_state(SessionState::Done);
             report
         })?;
@@ -499,7 +524,7 @@ fn run(
     backend: Arc<dyn HidBackend>,
     frames: Arc<FrameStore>,
     opts: SessionOptions,
-    stop: &AtomicBool,
+    stop: &Arc<AtomicBool>,
     live: &LiveStats,
 ) -> SessionReport {
     let started = Instant::now();
@@ -579,7 +604,7 @@ fn run(
     if lifecycle.initialize_called && !opts.skip_shutdown {
         if healthy {
             let shutdown = catch_unwind(AssertUnwindSafe(|| {
-                rt.call_export("Shutdown", CallArgs::Bool(false), budgets.shutdown)
+                rt.call_export("Shutdown", CallArgs::Bool(false), budgets.call(budgets.shutdown))
             }));
             match shutdown {
                 Ok(Ok(called)) => report.shutdown_called = called,
@@ -640,7 +665,7 @@ fn drive(
     shared: &SharedDevice,
     frames: &FrameStore,
     opts: &SessionOptions,
-    stop: &AtomicBool,
+    stop: &Arc<AtomicBool>,
     live: &LiveStats,
     report: &mut SessionReport,
     lifecycle: &mut Lifecycle,
@@ -667,7 +692,7 @@ fn drive(
     // and set_endpoint may later switch among the accepted ones only.
     let mut validated = Vec::new();
     for (i, ep) in device.endpoints.iter().enumerate() {
-        match rt.validate(&ep.endpoint_tuple(), budgets.validate) {
+        match rt.validate(&ep.endpoint_tuple(), budgets.call(budgets.validate)) {
             Ok(true) => validated.push(i),
             Ok(false) => {}
             Err(e) => report.fail(format!("Validate #{i}"), e),
@@ -720,7 +745,13 @@ fn drive(
     }
 
     lifecycle.initialize_called = true;
-    match rt.call_export("Initialize", CallArgs::None, budgets.initialize) {
+    // A stop request cuts Initialize short (Shutdown still runs).
+    match rt.call_export_until(
+        "Initialize",
+        CallArgs::None,
+        budgets.call(budgets.initialize),
+        stop,
+    ) {
         Ok(_) => report.initialized = true,
         Err(e) => report.fail("Initialize", e),
     }
@@ -743,12 +774,14 @@ fn drive(
         let (_, frame) = frames.latest();
         lock_device(shared).set_frame(frame);
         let t = Instant::now();
-        let result = rt.call_export("Render", CallArgs::None, budgets.render);
+        let result = rt.call_export_until("Render", CallArgs::None, budgets.render_budget(), stop);
         lifecycle.render.record(t.elapsed());
         report.frames += 1;
         live.frames.fetch_add(1, Ordering::Relaxed);
         match result {
             Ok(_) => consecutive_timeouts = 0,
+            // Cut short by a stop request: not the plugin's fault, and the loop ends.
+            Err(e) if e.is_stop() => break,
             Err(e) => {
                 report.render_errors += 1;
                 live.render_errors.fetch_add(1, Ordering::Relaxed);
@@ -760,8 +793,10 @@ fn drive(
                     consecutive_timeouts += 1;
                     if consecutive_timeouts >= opts.max_render_timeouts {
                         report.faulted = Some(format!(
-                            "Render() exceeded its {} ms budget {consecutive_timeouts} times in a row",
-                            budgets.render.as_millis()
+                            "Render() exceeded its budget ({} ms of JavaScript, {} ms in all) \
+                             {consecutive_timeouts} times in a row",
+                            budgets.render.as_millis(),
+                            budgets.render_wall.as_millis()
                         ));
                         break;
                     }

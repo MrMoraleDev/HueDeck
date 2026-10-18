@@ -64,6 +64,7 @@ The other plugin seen in S2 sets `valid_flag0` to `0xFC` (volumes and audio rout
 | `huedeck light red` / `#00ff00` / `blue`, 4 s each | 341 | 347 | 0 | 1.8-2.1 / 3.2-3.6 ms |
 | `huedeck effect effects/rainbow-wave.html`, 15 s | 432 | 434 | 0 | 2.0 / 4.0 ms |
 
-The controller accepted every report. Whether the light bar showed the colours has not
-been checked by eye yet, so the product id stays out of `tested` in the manifest until it
-has.
+The controller accepted every report, and a second run (red, green and blue for 4 s each,
+then 20 s of rainbow; 930 reports, 0 errors) was watched by the user: the light bar showed
+each colour and the rainbow (2026-10-18). `0CE6` is marked tested; the DualSense Edge
+(`0DF2`) is not.

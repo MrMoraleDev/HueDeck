@@ -115,14 +115,12 @@ HueDeck's own plugin library, tested on real hardware:
 | Razer DeathAdder V2 Pro (wired; receiver `007D` untested) | `1532:007C` | logo |
 | NZXT Kraken X53 / X63 / X73 | `1E71:2007` | pump ring, logo, RGB header on the pump |
 | SteelSeries Arctis 5 | `1038:12AA` | both ear cups |
+| Sony DualSense, over USB | `054C:0CE6` | light bar (volume, vibration and the other LEDs are never touched) |
 
 Plus **any HID LampArray device**, the open standard behind Windows Dynamic Lighting
 (keyboards, mice and more from many brands): one generic plugin reads the lamps and their
 positions from the device itself (tested on the Razer DeathAdder V2 Pro's LampArray
 interface).
-
-Written and run on real hardware, waiting for a visual check: the **Sony DualSense**
-light bar over USB (`054C:0CE6`; volume, vibration and the other LEDs are never touched).
 
 Coming next: network lights (**WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeelight**),
 then many more families adapted from OpenRGB. Missing your device?

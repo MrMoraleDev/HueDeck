@@ -292,3 +292,48 @@ fn unimplemented_host_members_throw_instead_of_faking_io() {
         }
     }
 }
+
+#[test]
+fn long_blocking_renders_survive_the_watchdog_and_stop_promptly() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/device");
+    let plugin = Catalog::scan(&[dir], Duration::from_secs(10))
+        .lookup(0x1234, 0x6666)
+        .expect("slow render plugin")
+        .clone();
+    let info = MockHid::endpoint_info(0x1234, 0x6666, "S", 0, 0xFF00, 1, 0, ReportLengths::default());
+    let mock = Arc::new(MockHid::new().add_endpoint(info.clone()));
+    let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    frames.publish(Frame::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    let backend: Arc<dyn HidBackend> = mock.clone();
+    let handle = session::spawn(
+        SessionDevice {
+            key: "1234:6666:S".into(),
+            vid: 0x1234,
+            pid: 0x6666,
+            endpoints: vec![info],
+        },
+        plugin,
+        backend,
+        frames,
+        SessionOptions::default(),
+    )
+    .unwrap();
+    wait_until(Instant::now() + Duration::from_secs(20), || {
+        handle.live().state == SessionState::Running
+    });
+    // Well past the 250 ms JavaScript budget: the paused time does not count.
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(handle.live().render_errors, 0);
+    let asked = Instant::now();
+    handle.stop();
+    let report = handle.join().unwrap();
+    assert!(
+        asked.elapsed() < Duration::from_secs(3),
+        "stop took {:?}",
+        asked.elapsed()
+    );
+    assert!(report.failures.is_empty(), "{:#?}", report.failures);
+    assert_eq!(report.render_errors, 0);
+    assert!(report.shutdown_called);
+    assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0xff]]);
+}

@@ -15,6 +15,7 @@
 //! are counted in [`IoStats`] and logged once per operation kind.
 
 use crate::children::{ChildSetup, Children};
+use crate::runtime::Deadline;
 use crate::stats::{LatencyHistogram, LatencySummary};
 use huedeck_engine::{
     apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, Frame, OffsetTable, Placement,
@@ -28,6 +29,8 @@ use std::time::{Duration, Instant};
 
 /// Longest single `device.pause(ms)` honoured, so a plugin cannot park its thread indefinitely.
 pub const MAX_PAUSE: Duration = Duration::from_millis(1000);
+/// A pause checks for a stop request this often.
+const PAUSE_SLICE: Duration = Duration::from_millis(10);
 /// Largest report buffer a plugin may request or send.
 pub const MAX_REPORT_LEN: usize = 1 << 16;
 /// Largest LED grid side `Size()` / `device.setSize` may declare.
@@ -915,17 +918,26 @@ impl DeviceContext {
     }
 }
 
-/// Install `globalThis.__huedeckNative`, backed by `device`.
-pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice) -> rquickjs::Result<()> {
+/// Install `globalThis.__huedeckNative`, backed by `device`. Natives that
+/// block (HID I/O, `pause`) suspend `deadline`'s JavaScript budget meanwhile.
+pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline) -> rquickjs::Result<()> {
     let natives = Object::new(ctx.clone())?;
     // A panic must never unwind through rquickjs: with the `parallel` feature it
     // would poison the runtime's lock and every later call (Shutdown included)
     // would panic too. Each native therefore catches panics, marks the device
     // fatal (the session stops and shuts down) and throws a JS InternalError.
     macro_rules! native {
-        ($name:literal, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
+        (blocking $name:literal, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {
+            native!(@make true, $name, |$d $(, $arg : $ty)*| $body)
+        };
+        ($name:literal, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {
+            native!(@make false, $name, |$d $(, $arg : $ty)*| $body)
+        };
+        (@make $blocking:expr, $name:literal, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
             let shared = device.clone();
+            let deadline = deadline.clone();
             let f = Function::new(ctx.clone(), move |cx: Ctx<'_>, $($arg: $ty),*| -> rquickjs::Result<_> {
+                let _blocked = $blocking.then(|| deadline.suspend());
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut guard = lock_device(&shared);
                     let $d: &mut DeviceContext = &mut guard;
@@ -940,18 +952,18 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice) -> rquickjs::Result<
             natives.set($name, f)?;
         }};
     }
-    native!("hidWrite", |d, data: Vec<i32>| d.write(&to_bytes(&data)));
-    native!("hidSendFeature", |d, data: Vec<i32>| d
+    native!(blocking "hidWrite", |d, data: Vec<i32>| d.write(&to_bytes(&data)));
+    native!(blocking "hidSendFeature", |d, data: Vec<i32>| d
         .send_feature(&to_bytes(&data)));
-    native!("hidGetFeature", |d, id: i32, len: i32| d
+    native!(blocking "hidGetFeature", |d, id: i32, len: i32| d
         .get_feature(id as u8, clamp_len(len)));
-    native!("hidGetInput", |d, id: i32, len: i32| d
+    native!(blocking "hidGetInput", |d, id: i32, len: i32| d
         .get_input(id as u8, clamp_len(len)));
-    native!("hidRead", |d, len: i32, timeout: i32| d
+    native!(blocking "hidRead", |d, len: i32, timeout: i32| d
         .read(clamp_len(len), timeout));
     native!("lastReadSize", |d| d.last_read_size() as i32);
-    native!("clearReadBuffer", |d| d.clear_read_buffer());
-    native!("setEndpoint", |d, iface: i32, usage: i32, page: i32, col: i32| {
+    native!(blocking "clearReadBuffer", |d| d.clear_read_buffer());
+    native!(blocking "setEndpoint", |d, iface: i32, usage: i32, page: i32, col: i32| {
         match (u16::try_from(usage), u16::try_from(page)) {
             (Ok(usage), Ok(page)) => d.set_endpoint(iface, usage, page, u16::try_from(col).ok()),
             _ => false,
@@ -1027,10 +1039,22 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice) -> rquickjs::Result<
         .component_colors(&name, &id));
     native!("chComponentData", |d, name: String, id: String| d
         .component_data(&name, &id));
-    // `device.pause(ms)` blocks the plugin thread (SignalRGB semantics) without holding the lock.
+    // `device.pause(ms)` blocks the plugin thread (SignalRGB semantics) without holding the
+    // lock, in slices so that a stop request ends it early.
+    let d = deadline.clone();
     natives.set(
         "pause",
-        Function::new(ctx.clone(), |ms: f64| std::thread::sleep(pause_duration(ms)))?,
+        Function::new(ctx.clone(), move |ms: f64| {
+            let _blocked = d.suspend();
+            let end = Instant::now() + pause_duration(ms);
+            loop {
+                let left = end.saturating_duration_since(Instant::now());
+                if left.is_zero() || d.stop_requested() {
+                    break;
+                }
+                std::thread::sleep(left.min(PAUSE_SLICE));
+            }
+        })?,
     )?;
     ctx.globals().set("__huedeckNative", natives)?;
     Ok(())

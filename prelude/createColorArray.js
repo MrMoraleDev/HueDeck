@@ -134,4 +134,38 @@ export function layoutColors(triples, layout = "Inline", colorOrder = "RGB") {
   return out;
 }
 
+/**
+ * channel.getColors(layout, order) over a flat [r, g, b, r, g, b, ...] stream
+ * (what the host samples): a trailing partial triple is dropped and every
+ * value is clamped to a byte. Always returns fresh arrays.
+ */
+export function layoutFlatColors(flat, layout = "Inline", colorOrder = "RGB") {
+  const src = flat != null && typeof flat.length === "number" ? flat : [];
+  const n = Math.floor(src.length / 3);
+  const o = normalizeColorOrder(colorOrder);
+  const i0 = CHANNEL_INDEX[o[0]];
+  const i1 = CHANNEL_INDEX[o[1]];
+  const i2 = CHANNEL_INDEX[o[2]];
+  if (normalizeLayout(layout) === "Separate") {
+    const p0 = new Array(n);
+    const p1 = new Array(n);
+    const p2 = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const k = i * 3;
+      p0[i] = clampByte(src[k + i0]);
+      p1[i] = clampByte(src[k + i1]);
+      p2[i] = clampByte(src[k + i2]);
+    }
+    return [p0, p1, p2];
+  }
+  const out = new Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const k = i * 3;
+    out[k] = clampByte(src[k + i0]);
+    out[k + 1] = clampByte(src[k + i1]);
+    out[k + 2] = clampByte(src[k + i2]);
+  }
+  return out;
+}
+
 export default createColorArray;

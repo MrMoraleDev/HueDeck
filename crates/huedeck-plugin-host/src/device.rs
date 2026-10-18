@@ -6,12 +6,15 @@
 //! host (`js/host.js` in device mode) normalises arguments into plain byte
 //! arrays and calls the natives [`install`] puts on
 //! `globalThis.__huedeckNative`; the host module captures that object and
-//! deletes the global before any plugin code runs.
+//! deletes the global before any plugin code runs. Subdevices and channels
+//! (with their component instances) live in [`Children`], sampled from the
+//! same frame as the device.
 //!
 //! I/O failures never throw into plugin code (hid-usb.md): writes return `-1`,
 //! reads return a zero-filled buffer with `getLastReadSize() == 0`. Failures
 //! are counted in [`IoStats`] and logged once per operation kind.
 
+use crate::children::{ChildSetup, Children};
 use crate::stats::{LatencyHistogram, LatencySummary};
 use huedeck_engine::{
     apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, Frame, OffsetTable, Placement,
@@ -35,6 +38,8 @@ pub const MAX_GRID_CELLS: u32 = 65_536;
 const LOG_TAIL: usize = 50;
 /// I/O records kept for the session report (dry-run writes, first reads).
 const IO_LOG_LIMIT: usize = 64;
+/// Distinct messages [`DeviceContext::log_once`] remembers.
+const LOG_ONCE_LIMIT: usize = 256;
 
 /// A device context shared between the session thread and the JS natives.
 pub type SharedDevice = Arc<Mutex<DeviceContext>>;
@@ -170,7 +175,10 @@ pub struct DeviceContext {
     log_lines: u64,
     log_sink: Option<LogSink>,
     warned: BTreeSet<&'static str>,
+    logged: BTreeSet<String>,
     fatal: Option<String>,
+    children: Children,
+    system_info: String,
 }
 
 impl std::fmt::Debug for DeviceContext {
@@ -259,7 +267,10 @@ impl DeviceContext {
             log_lines: 0,
             log_sink: None,
             warned: BTreeSet::new(),
+            logged: BTreeSet::new(),
             fatal: None,
+            children: Children::default(),
+            system_info: String::new(),
         };
         ctx.update_factor();
         ctx
@@ -381,6 +392,7 @@ impl DeviceContext {
     /// Sampler parameters (canvas size, pivot, sample point, `DefaultScale()`).
     pub fn set_sampler(&mut self, sampler: SamplerConfig) {
         self.sampler = sampler;
+        self.children.set_sampler(sampler);
         self.rebuild_grid();
     }
 
@@ -394,6 +406,7 @@ impl DeviceContext {
     /// Global and layout brightness.
     pub fn set_brightness(&mut self, brightness: Brightness) {
         self.brightness = brightness;
+        self.children.set_brightness(brightness);
         self.update_factor();
     }
 
@@ -460,6 +473,100 @@ impl DeviceContext {
         }
     }
 
+    // ------------------------------------------------------------------ subdevices and channels
+
+    /// Channel components and placements decided by the caller (before the plugin runs).
+    pub fn set_child_setup(&mut self, setup: ChildSetup) {
+        self.children.set_setup(setup);
+    }
+
+    /// What `@SignalRGB/systeminfo` reports (`None`: nothing, the plugin sees `undefined`).
+    pub fn set_system_info(&mut self, info: Option<&huedeck_hal::SystemInfo>) {
+        self.system_info = info
+            .and_then(|i| serde_json::to_string(i).ok())
+            .unwrap_or_default();
+    }
+
+    /// The subdevices and channels the plugin created.
+    pub fn children(&self) -> &Children {
+        &self.children
+    }
+
+    /// `SubdeviceController()` export / `device.SetIsSubdeviceController(flag)`.
+    pub fn set_subdevice_controller(&mut self, flag: bool) {
+        self.children.set_subdevice_controller(flag);
+    }
+
+    fn log_result(&mut self, result: Result<(), String>) {
+        if let Err(e) = result {
+            self.log_once(e);
+        }
+    }
+
+    fn create_subdevice(&mut self, id: &str) {
+        match self.children.create_subdevice(id) {
+            Ok(line) if line.is_empty() => {}
+            Ok(line) => self.log(&line),
+            Err(e) => self.log_once(e),
+        }
+    }
+
+    fn remove_subdevice(&mut self, id: &str) {
+        let line = self.children.remove_subdevice(id);
+        self.log(&line);
+    }
+
+    /// `device.subdeviceColor(id, x, y)`, black (logged once) for an unknown
+    /// subdevice or a cell outside its grid.
+    pub fn subdevice_color(&mut self, id: &str, x: i32, y: i32) -> [u8; 3] {
+        match self.children.subdevice_color(&self.frame, id, x, y) {
+            Ok(c) => c,
+            Err(e) => {
+                self.log_once(e);
+                [0, 0, 0]
+            }
+        }
+    }
+
+    fn add_channel(&mut self, name: &str, limit: i32, default_count: i32) {
+        match self.children.add_channel(name, limit, default_count) {
+            Ok(lines) => {
+                for line in lines {
+                    self.log(&line);
+                }
+            }
+            Err(e) => self.log_once(e),
+        }
+    }
+
+    fn remove_channel(&mut self, name: &str) {
+        let line = self.children.remove_channel(name);
+        self.log(&line);
+    }
+
+    /// `channel(name).getColors()` as flat RGB.
+    pub fn channel_colors(&self, name: &str) -> Vec<u8> {
+        self.children.channel_colors(&self.frame, name)
+    }
+
+    fn component_colors(&self, name: &str, id: &str) -> Vec<u8> {
+        self.children.component_colors(&self.frame, name, id)
+    }
+
+    fn component_data(&self, name: &str, id: &str) -> String {
+        self.children
+            .component(name, id)
+            .map(|c| c.instance.to_json().to_string())
+            .unwrap_or_default()
+    }
+
+    fn component_ids(&self, name: &str) -> Vec<String> {
+        self.children
+            .channel(name)
+            .map(|c| c.components.iter().map(|x| x.instance.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
     // ------------------------------------------------------------------ logging
 
     /// A failure the session must not render through (a panic in a device
@@ -486,6 +593,13 @@ impl DeviceContext {
         tracing::info!(target: "huedeck::plugin", device = %self.name, "{text}");
         if let Some(sink) = &self.log_sink {
             sink(text);
+        }
+    }
+
+    /// Log `text` the first time it occurs (plugins repeat bad calls every frame).
+    fn log_once(&mut self, text: String) {
+        if self.logged.len() < LOG_ONCE_LIMIT && self.logged.insert(text.clone()) {
+            self.log(&text);
         }
     }
 
@@ -852,6 +966,67 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice) -> rquickjs::Result<
     native!("setLeds", |d, flat: Vec<i32>| d.set_leds(&flat));
     native!("setName", |d, name: String| d.set_name(name));
     native!("log", |d, text: String| d.log(&text));
+    native!("systemInfo", |d| d.system_info.clone());
+    // Subdevices (components-channels.md §2).
+    native!("subCreate", |d, id: String| d.create_subdevice(&id));
+    native!("subRemove", |d, id: String| d.remove_subdevice(&id));
+    native!("subList", |d| d.children.subdevice_ids());
+    native!("subName", |d, id: String, name: String| {
+        let r = d.children.set_subdevice_name(&id, name);
+        d.log_result(r)
+    });
+    native!("subSize", |d, id: String, w: i32, h: i32| {
+        let r = d.children.set_subdevice_size(&id, w, h);
+        d.log_result(r)
+    });
+    native!("subLeds", |d, id: String, names: Vec<String>, flat: Vec<i32>| {
+        let r = d.children.set_subdevice_leds(&id, names, &flat);
+        d.log_result(r)
+    });
+    native!("subLedMap", |d, id: String, map: Vec<i32>| {
+        let r = d.children.set_subdevice_led_map(&id, &map);
+        d.log_result(r)
+    });
+    native!("subImage", |d, id: String, image: String| {
+        let r = d.children.set_subdevice_image(&id, image);
+        d.log_result(r)
+    });
+    native!("subColor", |d, id: String, x: i32, y: i32| d
+        .subdevice_color(&id, x, y)
+        .to_vec());
+    native!("setSubdeviceController", |d, flag: bool| d
+        .set_subdevice_controller(flag));
+    // Channels and their components (components-channels.md §1, §4).
+    native!("setLedLimit", |d, n: i32| d
+        .children
+        .set_led_limit(u32::try_from(n).unwrap_or(0)));
+    native!("ledCount", |d| d.children.total_led_count() as i32);
+    native!("chAdd", |d, name: String, limit: i32, default_count: i32| d
+        .add_channel(&name, limit, default_count));
+    native!("chRemove", |d, name: String| d.remove_channel(&name));
+    native!("chNames", |d| d.children.channel_names());
+    native!("chExists", |d, name: String| d.children.channel(&name).is_some());
+    native!(
+        "chLedCount",
+        |d, name: String| d.children.channel_led_count(&name).unwrap_or(0) as i32
+    );
+    native!("chLedLimit", |d, name: String| d
+        .children
+        .channel(&name)
+        .map_or(0, |c| c.led_limit as i32));
+    native!("chSetLimit", |d, name: String, n: i32| {
+        d.children.set_channel_limit(&name, n);
+    });
+    native!("chOnlyDefaults", |d, name: String| d
+        .children
+        .channel(&name)
+        .is_none_or(|c| c.only_default_components()));
+    native!("chColors", |d, name: String| d.channel_colors(&name));
+    native!("chComponents", |d, name: String| d.component_ids(&name));
+    native!("chComponentColors", |d, name: String, id: String| d
+        .component_colors(&name, &id));
+    native!("chComponentData", |d, name: String, id: String| d
+        .component_data(&name, &id));
     // `device.pause(ms)` blocks the plugin thread (SignalRGB semantics) without holding the lock.
     natives.set(
         "pause",

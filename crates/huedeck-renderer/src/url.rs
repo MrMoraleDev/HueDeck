@@ -213,6 +213,8 @@ mod tests {
         }
     }
 
+    // Only Windows paths have UNC forms (and `\` separators for `Path::parent`).
+    #[cfg(windows)]
     #[test]
     fn unc_effect_dirs_match_unc_urls_only() {
         let f = UrlFilter::for_effect(Path::new(r"\\?\UNC\srv\share\fx\e.html"), false);

@@ -44,8 +44,10 @@ with zero privileged components.
   log; a fuzz target for the message parser; whole crate kept under ~2k LOC.
 - PawnIO usage: client only. Module binaries are **SHA-256 pinned**
   (`tools/pawnio-hash-pin`); "Unrestricted" PawnIO builds are refused. Any Pawn
-  module HueDeck authors lives in a separate GPL-2 repository (PawnIO's IOCTL
-  exception does not cover the Pawn side).
+  module HueDeck needs beyond the official set is written under LGPL-2.1 and
+  upstreamed to PawnIO.Modules: official PawnIO builds load only modules signed by
+  the PawnIO maintainer, and the IOCTL exception does not cover the Pawn side
+  (amended 2026-10-18, see below).
 - GPU I2C uses `huedeck-nvapi` (dynamic `nvapi64.dll`, self-declared interface ids)
   inside the broker; ADLX later. Sensors (MSR, NvAPI thermal) are read only through
   the broker; an optional LibreHardwareMonitor HTTP JSON source gives temperatures
@@ -86,3 +88,33 @@ Negative / accepted costs:
   HTTP API in a privileged process.
 - **Dropping SMBus support**: loses RAM, many motherboards and GPUs; too much of the
   ecosystem.
+
+## Amendments
+
+### 2026-10-18: findings of the M5 research brief
+
+Source: [docs/research/m5-privileged-buses.md](../research/m5-privileged-buses.md)
+(drafted, then independently fact-checked against primary sources). Decided now:
+
+- **Pawn modules** are LGPL-2.1 and upstreamed to PawnIO.Modules (see the Decision
+  section). HueDeck ships the signed module blobs of PawnIO.Modules 0.2.11
+  (`SmbusPIIX4`, `SmbusI801`, `LpcIO`, plus `Echo` as a probe) as separate files, with
+  SHA-256 pins compiled into the broker.
+- **PawnIO itself** is required at version 2.2.0 or later, official edition, installed
+  by its official installer on opt-in (never a `.sys` inside HueDeck's installer,
+  ADR-0007) and never uninstalled by HueDeck, because other tools share it.
+- **Device path** is `\\?\GLOBALROOT\Device\PawnIO`; the broker talks raw IOCTLs and
+  does not load `PawnIOLib.dll` into the LocalSystem process.
+- **Block transfers** are limited to 32 bytes per bus (the wire's `MAX_BLOCK_LEN` of 64
+  is only the protocol ceiling), and the SPD write denial must depend on the bus kind.
+- **Reference machine**: two PIIX4 buses (0x0B00 with the DIMMs, 0x0B20 auxiliary) and
+  the RTX 3060 over NvAPI. The NCT6687D SuperIO (LPC config port 0x4E, base 0xA20)
+  exposes no SMBus master that HueDeck can use.
+
+Open, to settle in the M5 spike:
+
+- **NvAPI GPU I2C in `huedeckd` instead of the broker.** Any user process can already
+  call NvAPI (SignalRGB does so unelevated on the reference machine), so loading
+  `nvapi64.dll` into a LocalSystem service only adds attack surface. Whether NvAPI I2C
+  works from session 0 is untested. If the spike confirms the user-process path, the
+  NvAPI part of this decision moves to the daemon with the same op validation.

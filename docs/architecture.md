@@ -144,7 +144,7 @@ by CI, the Node simulator and golden-packet tests from M0.
 | HID | hidapi `windows-native`; parent association via `CM_Get_Parent`; hotplug via `CM_Register_Notification` (debounced 500 ms); `HidD_GetInputReport` for `input_report` | hidapi `linux-native` (hidraw) + `huedeck-hid-desc`; udev monitor; `HIDIOCGINPUT` |
 | raw USB | `nusb` over WinUSB (bound by `huedeck-setup` for approved VID:PIDs) | `nusb`, driverless |
 | serial | `serialport` | `serialport` + dialout group |
-| SMBus / SuperIO / MSR | broker -> PawnIO (`SmbusPIIX4`, `SmbusI801`, `LpcIO`, MSR), hashes pinned | `i2cdev` on `/dev/i2c-*`; hwmon (`nct6775`, `it87`) for fans and temps |
+| SMBus / SuperIO / MSR | broker -> PawnIO (`SmbusPIIX4`, `SmbusI801`, `LpcIO`, MSR), hashes pinned | `i2cdev` on `/dev/i2c-*`; hwmon for fans and temps: out-of-tree `nct6687` for the NCT6687D on the reference board (mainline `nct6683` exposes PWM writes only on Mitac boards), `nct6775` / `it87` elsewhere |
 | GPU I2C | `huedeck-nvapi` (dynamic `nvapi64.dll`) inside the broker; ADLX later | GPU buses appear as `/dev/i2c-*` |
 | sensors | broker MSR/NvAPI thermal; optional LibreHardwareMonitor HTTP JSON | hwmon |
 | screen / audio | `xcap` (WGC) / `cpal` (WASAPI loopback) | PipeWire portal or X11 / PipeWire or Pulse monitor |

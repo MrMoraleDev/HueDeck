@@ -16,8 +16,10 @@ use huedeck_effects::{model::js_string_literal, EffectMeta};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-/// Longest control line read (a `set` with a few values is far below).
-pub const MAX_LINE: usize = 64 * 1024;
+/// Longest control line read. A `set` with a few values is far below; an
+/// `engine` push of the whole 160x100 zone image as a JSON array is about
+/// 250 KB (M6 moves bulk input data to shared memory).
+pub const MAX_LINE: usize = 512 * 1024;
 
 /// A command from the daemon.
 #[derive(Clone, Debug, PartialEq, Deserialize)]

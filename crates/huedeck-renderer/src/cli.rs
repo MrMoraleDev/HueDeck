@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-//! Command line of the SPIKE A renderer.
+//! Command line of the renderer.
 
 use clap::Parser;
 use std::path::PathBuf;

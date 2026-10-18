@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- HueDeck starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Solid Color</title>
+  <meta description="One colour over the whole canvas, optionally breathing." />
+  <meta publisher="HueDeck" />
+  <meta property="color" label="Color" type="color" default="#009bde" />
+  <meta property="breathe" label="Breathe" type="boolean" default="0" />
+  <meta property="period" label="Breath period (s)" type="number" min="1" max="20" default="4" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var rgb = [0, 155, 222];
+
+    function parseHex(hex) {
+      var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex));
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 0, 0];
+    }
+
+    function oncolorChanged() {
+      rgb = parseHex(color);
+    }
+
+    function draw(now) {
+      var k = 1;
+      if (breathe === true || breathe === 1 || breathe === "1" || breathe === "true") {
+        var p = Math.max(Number(period) || 4, 1) * 1000;
+        k = 0.5 - 0.5 * Math.cos((now % p) / p * 2 * Math.PI);
+      }
+      ctx.fillStyle = "rgb(" + Math.round(rgb[0] * k) + "," + Math.round(rgb[1] * k) + "," + Math.round(rgb[2] * k) + ")";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      requestAnimationFrame(draw);
+    }
+
+    oncolorChanged();
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

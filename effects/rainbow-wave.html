@@ -1,0 +1,55 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- HueDeck starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Rainbow Wave</title>
+  <meta description="Hues sweep across the canvas in one direction." />
+  <meta publisher="HueDeck" />
+  <meta property="speed" label="Speed" type="number" min="1" max="100" default="20" tooltip="Degrees of hue per frame, scaled" />
+  <meta property="direction" label="Direction" type="combobox" values="Right,Left,Down,Up" default="Right" />
+  <meta property="spread" label="Spread" type="number" min="10" max="400" default="100" tooltip="Percent of the canvas one full rainbow spans" />
+  <meta property="saturation" label="Saturation" type="number" min="0" max="100" default="100" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var phase = 0;
+    var last = 0;
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    function draw(now) {
+      var dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
+      last = now;
+      // speed 20 -> 72 degrees of hue per second.
+      phase = (phase + dt * num(speed, 20) * 3.6) % 360;
+      var dir = typeof direction === "string" ? direction : "Right";
+      var horizontal = dir === "Right" || dir === "Left";
+      var length = horizontal ? W : H;
+      var span = length * Math.max(num(spread, 100), 10) / 100;
+      // The wave moves towards `dir`: hue decreases along it as time goes on.
+      var forward = dir === "Right" || dir === "Down";
+      var sat = Math.max(0, Math.min(100, num(saturation, 100)));
+      for (var i = 0; i < length; i++) {
+        var along = forward ? i : length - 1 - i;
+        var hue = (((along / span) * 360 - phase) % 360 + 360) % 360;
+        ctx.fillStyle = "hsl(" + hue.toFixed(1) + "," + sat + "%,50%)";
+        if (horizontal) {
+          ctx.fillRect(i, 0, 1, H);
+        } else {
+          ctx.fillRect(0, i, W, 1);
+        }
+      }
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

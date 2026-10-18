@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- HueDeck starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<!-- Calibration pattern for layout and sampling checks. Top half: eight 40 px colour bars
+     (white, yellow, cyan, green, magenta, red, blue, black). Bottom half: a grey ramp, one
+     level per canvas column (x * 255 / 319), so a device's sampled colours reveal where on
+     the canvas each LED sits. An optional marker moves along the ramp. -->
+<html>
+<head>
+  <title>Test Pattern</title>
+  <meta description="Colour bars over a grey ramp, for placing devices on the canvas." />
+  <meta publisher="HueDeck" />
+  <meta property="marker" label="Moving marker" type="boolean" default="0" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var bars = ["#ffffff", "#ffff00", "#00ffff", "#00ff00", "#ff00ff", "#ff0000", "#0000ff", "#000000"];
+
+    function pattern() {
+      for (var i = 0; i < bars.length; i++) {
+        ctx.fillStyle = bars[i];
+        ctx.fillRect(i * 40, 0, 40, H / 2);
+      }
+      for (var x = 0; x < W; x++) {
+        var v = Math.round(x * 255 / (W - 1));
+        ctx.fillStyle = "rgb(" + v + "," + v + "," + v + ")";
+        ctx.fillRect(x, H / 2, 1, H / 2);
+      }
+    }
+
+    function draw(now) {
+      pattern();
+      if (marker === true || marker === 1 || marker === "1" || marker === "true") {
+        var x = Math.floor((now / 20) % W);
+        ctx.fillStyle = "#ff0000";
+        ctx.fillRect(x, H / 2, 2, H / 2);
+      }
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

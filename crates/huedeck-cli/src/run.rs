@@ -44,6 +44,11 @@ pub struct RunArgs {
     /// Read devices but never write; print the packets that would be sent.
     #[arg(long)]
     pub dry_run: bool,
+    /// Place devices, subdevices and component instances on the canvas from a
+    /// layout file (schemas/layout.schema.json: placements keyed by endpoint uid,
+    /// layout brightness). Endpoints it does not place keep their defaults.
+    #[arg(long, value_name = "FILE")]
+    pub layout: Option<PathBuf>,
     /// Record every HID operation and what the devices answered into FILE
     /// (JSON), for `huedeck compat replay`. Record with `light` (a solid
     /// colour) to get a trace that replays exactly.
@@ -613,6 +618,7 @@ fn session_options(
     args: &RunArgs,
     device: &SessionDevice,
     system_info: Option<Arc<huedeck_hal::SystemInfo>>,
+    layout: Option<&huedeck_engine::Layout>,
 ) -> SessionOptions {
     let label = device.key.clone();
     let channel_components = if args.catalog.signalrgb {
@@ -648,8 +654,10 @@ fn session_options(
         parameters: args.params.iter().cloned().collect(),
         brightness: Brightness {
             global: args.brightness,
-            layout: 100,
+            layout: layout.map_or(100, |l| l.brightness.min(100)),
         },
+        placement: layout.and_then(|l| l.endpoints.get(&device.key).cloned()),
+        placements: layout.map(|l| l.endpoints.clone()).unwrap_or_default(),
         write_mode: if args.dry_run {
             WriteMode::DryRun
         } else {
@@ -1063,13 +1071,24 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     renderer.start(Arc::clone(&store))?;
 
     let system_info = machine_info().map(Arc::new);
+    let layout = match &args.layout {
+        Some(path) => {
+            let text =
+                std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            Some(
+                serde_json::from_str::<huedeck_engine::Layout>(&text)
+                    .with_context(|| format!("{} is not a layout", path.display()))?,
+            )
+        }
+        None => None,
+    };
     if let Some(r) = &recorder {
         r.set_system_info(system_info.as_deref().cloned());
     }
     let option_args = args.clone();
     let option_recorder = recorder.clone();
     let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
-        let opts = session_options(&option_args, device, system_info.clone());
+        let opts = session_options(&option_args, device, system_info.clone(), layout.as_ref());
         if let Some(r) = &option_recorder {
             r.set_channels(
                 &device.key,
@@ -1494,6 +1513,7 @@ mod tests {
                 no_plugin_cache: true,
             },
             dry_run: false,
+            layout: None,
             record: None,
             duration: None,
             keep: false,

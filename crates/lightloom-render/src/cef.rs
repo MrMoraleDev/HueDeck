@@ -16,7 +16,9 @@
 //!   over 60 frames at a target of 30 or more (VMs, RDP, a busy GPU);
 //! * forwards control values ([`CefRenderer::set_properties`]) over the
 //!   renderer's stdin; a restarted renderer gets the latest values on its
-//!   command line.
+//!   command line;
+//! * forwards input data for the page's `window.engine`
+//!   ([`CefRenderer::push_engine_data`]: audio, screen zones, meters, sensors).
 
 use crate::{RenderError, RendererClient};
 use lightloom_engine::{Frame, FrameStore};
@@ -149,6 +151,13 @@ impl CefRenderer {
     /// What has happened so far.
     pub fn status(&self) -> CefStatus {
         lock(&self.shared.status).clone()
+    }
+
+    /// Input data for the page's `window.engine` (`audio`, `zone`, `vision`,
+    /// `sensors`); `false` when no renderer is running.
+    pub fn push_engine_data(&self, data: Map<String, Value>) -> bool {
+        let line = serde_json::json!({ "cmd": "engine", "data": data }).to_string() + "\n";
+        self.shared.send(&line)
     }
 
     /// New control values: sent to the running renderer and kept for restarts.

@@ -7,6 +7,7 @@
 //! {"cmd":"event","sender":"discord","event":"message"}   onCanvasApiEvent({sender, event})
 //! {"cmd":"tap","x":120,"y":40}                           onCanvasTapped(x, y)
 //! {"cmd":"fps","value":15}                               paint rate
+//! {"cmd":"engine","data":{"audio":{"level":-20}}}         merged into window.engine
 //! {"cmd":"quit"}                                         close and exit
 //! ```
 
@@ -40,6 +41,12 @@ pub enum Command {
         x: f64,
         /// Y.
         y: f64,
+    },
+    /// Input data merged into `window.engine` (`audio`, `zone`, `vision`,
+    /// `sensors` only); arrays fill the existing typed arrays in place.
+    Engine {
+        /// `{audio: {...}, zone: {...}, ...}`.
+        data: Map<String, Value>,
     },
     /// Change the paint rate, frames per second.
     Fps {
@@ -96,6 +103,42 @@ pub fn set_script(meta: &EffectMeta, values: &Map<String, Value>) -> (String, Ve
         format!("(function () {{\n{assigns}{}}})();\n", call_hooks_js(&hooks)),
         skipped,
     )
+}
+
+/// Top-level `window.engine` members an `engine` command may update.
+pub const ENGINE_KEYS: &[&str] = &["audio", "zone", "vision", "sensors"];
+
+/// Merges its argument into `window.engine` (see [`engine_script`]). Own keys
+/// only, `__proto__` never assigned.
+const ENGINE_MERGE_JS: &str = r#"(function (d) {
+  var e = window.engine;
+  if (!e) return;
+  function merge(dst, src) {
+    Object.keys(src).forEach(function (k) {
+      if (k === "__proto__") return;
+      var v = src[k], cur = dst[k];
+      if (cur && ArrayBuffer.isView(cur) && Array.isArray(v)) { cur.set(v.slice(0, cur.length)); }
+      else if (cur && typeof cur === "object" && !ArrayBuffer.isView(cur) && v && typeof v === "object" && !Array.isArray(v)) { merge(cur, v); }
+      else { dst[k] = v; }
+    });
+  }
+  merge(e, d);
+})"#;
+
+/// JS merging `data` into `window.engine`: objects merge recursively, arrays
+/// fill the existing typed arrays in place (effects keep references to them),
+/// other values replace. Keys outside [`ENGINE_KEYS`] are dropped and returned.
+pub fn engine_script(data: &Map<String, Value>) -> (String, Vec<String>) {
+    let mut kept = Map::new();
+    let mut skipped = Vec::new();
+    for (k, v) in data {
+        if ENGINE_KEYS.contains(&k.as_str()) {
+            kept.insert(k.clone(), v.clone());
+        } else {
+            skipped.push(k.clone());
+        }
+    }
+    (format!("{ENGINE_MERGE_JS}({});\n", Value::Object(kept)), skipped)
 }
 
 /// JS for `onCanvasApiEvent({sender, event})`.
@@ -169,6 +212,24 @@ mod tests {
         let mut bad = Map::new();
         bad.insert("speed".into(), serde_json::json!("fast"));
         assert_eq!(set_script(&meta(), &bad).1, vec!["speed"]);
+    }
+
+    #[test]
+    fn engine_data_is_restricted_to_input_members() {
+        let mut data = Map::new();
+        data.insert(
+            "audio".into(),
+            serde_json::json!({"level": -20, "freq": [1, 2, 3]}),
+        );
+        data.insert("getSensorValue".into(), serde_json::json!(1));
+        let (js, skipped) = engine_script(&data);
+        assert_eq!(skipped, vec!["getSensorValue"]);
+        assert!(js.contains("\"level\":-20") && js.contains("cur.set("), "{js}");
+        assert!(!js.contains("getSensorValue"));
+        assert!(matches!(
+            parse_line(r#"{"cmd":"engine","data":{"zone":{"hue":[1]}}}"#).unwrap(),
+            Some(Command::Engine { .. })
+        ));
     }
 
     #[test]

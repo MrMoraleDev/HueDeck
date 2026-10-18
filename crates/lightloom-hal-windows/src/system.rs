@@ -27,7 +27,14 @@ pub fn running_process_names() -> Result<Vec<String>, String> {
     };
     let mut names = Vec::new();
     // SAFETY: valid snapshot handle; `entry.dwSize` is set as the API requires.
-    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok();
+    let first = unsafe { Process32FirstW(snapshot, &mut entry) };
+    if let Err(e) = &first {
+        // SAFETY: handle from CreateToolhelp32Snapshot, closed exactly once.
+        let _ = unsafe { CloseHandle(snapshot) };
+        // Fail closed: an empty list would hide running conflicting software.
+        return Err(format!("Process32FirstW: {}", e.message()));
+    }
+    let mut more = true;
     while more {
         let len = entry
             .szExeFile

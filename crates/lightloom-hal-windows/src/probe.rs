@@ -24,14 +24,16 @@ use lightloom_hal::hid::ReportLengths;
 use std::collections::BTreeSet;
 use windows::core::PCWSTR;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_Device_IDW, CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_List_SizeW, CM_Get_Parent,
-    CM_Locate_DevNodeW, CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL, CR_BUFFER_SMALL,
-    CR_SUCCESS, MAX_DEVICE_ID_LEN,
+    CM_Get_DevNode_PropertyW, CM_Get_Device_IDW, CM_Get_Device_Interface_ListW,
+    CM_Get_Device_Interface_List_SizeW, CM_Get_Parent, CM_Locate_DevNodeW,
+    CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL, CR_BUFFER_SMALL, CR_SUCCESS,
+    MAX_DEVICE_ID_LEN,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::{
     HidD_FreePreparsedData, HidD_GetHidGuid, HidD_GetPreparsedData, HidP_GetCaps, HIDP_CAPS,
     HIDP_STATUS_SUCCESS, PHIDP_PREPARSED_DATA,
 };
+use windows::Win32::Devices::Properties::{DEVPKEY_Device_Manufacturer, DEVPROPTYPE, DEVPROP_TYPE_STRING};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -96,7 +98,7 @@ pub struct PresentHid {
 
 /// VID/PID of a HID interface path: `VID_xxxx&PID_xxxx` (USB) or
 /// `_VID&0002xxxx_PID&xxxx` (Bluetooth: vendor-id source + id).
-fn path_vid_pid(path: &str) -> Option<(u16, u16)> {
+pub fn path_vid_pid(path: &str) -> Option<(u16, u16)> {
     let p = parse_hid_path(path);
     if let (Some(v), Some(d)) = (p.vid, p.pid) {
         return Some((v, d));
@@ -112,8 +114,9 @@ fn path_vid_pid(path: &str) -> Option<(u16, u16)> {
     Some((vid, pid))
 }
 
-/// List the present HID interfaces and their VID/PID without opening any device.
-pub fn present_hid() -> Result<PresentHid, String> {
+/// Device-interface paths of every present HID collection (`CM_Get_Device_Interface_List`;
+/// nothing is opened).
+pub fn hid_interface_paths() -> Result<Vec<String>, String> {
     // SAFETY: plain out-value call.
     let guid = unsafe { HidD_GetHidGuid() };
     for _ in 0..4 {
@@ -152,18 +155,66 @@ pub fn present_hid() -> Result<PresentHid, String> {
                 cr.0
             ));
         }
-        let mut present = PresentHid::default();
-        for path in buf.split(|&c| c == 0).filter(|s| !s.is_empty()) {
-            match path_vid_pid(&String::from_utf16_lossy(path)) {
-                Some(key) => {
-                    present.keys.insert(key);
-                }
-                None => present.unparsed += 1,
-            }
-        }
-        return Ok(present);
+        return Ok(buf
+            .split(|&c| c == 0)
+            .filter(|s| !s.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect());
     }
     Err("the HID interface list kept changing".into())
+}
+
+/// List the present HID interfaces and their VID/PID without opening any device.
+pub fn present_hid() -> Result<PresentHid, String> {
+    let mut present = PresentHid::default();
+    for path in hid_interface_paths()? {
+        match path_vid_pid(&path) {
+            Some(key) => {
+                present.keys.insert(key);
+            }
+            None => present.unparsed += 1,
+        }
+    }
+    Ok(present)
+}
+
+/// `DEVPKEY_Device_Manufacturer` of the device node directly above a HID
+/// collection (the USB interface, whose INF names the vendor): the fallback
+/// hidapi uses when `HidD_GetManufacturerString` returns nothing.
+pub fn parent_manufacturer(path: &str) -> Option<String> {
+    let id = interface_path_to_instance_id(path)?;
+    let wid = wide(&id);
+    let mut inst = 0u32;
+    // SAFETY: NUL-terminated id that outlives the call; valid out pointer.
+    if unsafe { CM_Locate_DevNodeW(&mut inst, PCWSTR(wid.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) } != CR_SUCCESS
+    {
+        return None;
+    }
+    let mut parent = 0u32;
+    // SAFETY: plain out-pointer call on a devnode handle cfgmgr32 gave us.
+    if unsafe { CM_Get_Parent(&mut parent, inst, 0) } != CR_SUCCESS {
+        return None;
+    }
+    let mut kind = DEVPROPTYPE(0);
+    let mut buf = [0u16; 256];
+    let mut size = (buf.len() * 2) as u32;
+    // SAFETY: the buffer pointer and its size in bytes describe `buf`; out pointers are valid.
+    let cr = unsafe {
+        CM_Get_DevNode_PropertyW(
+            parent,
+            &DEVPKEY_Device_Manufacturer,
+            &mut kind,
+            Some(buf.as_mut_ptr().cast()),
+            &mut size,
+            0,
+        )
+    };
+    if cr != CR_SUCCESS || kind != DEVPROP_TYPE_STRING {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let s = String::from_utf16_lossy(&buf[..len]);
+    (!s.is_empty()).then_some(s)
 }
 
 /// Usage page / usage / report lengths from `HIDP_CAPS`.

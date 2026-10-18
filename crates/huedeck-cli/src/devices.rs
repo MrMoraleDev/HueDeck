@@ -160,6 +160,7 @@ pub fn to_json(groups: &[DeviceGroup]) -> Value {
 
 /// `HUEDECK_HID_BACKEND=hidapi` selects the hidapi backend instead of the
 /// native one (same results; kept for comparison while the native backend is new).
+#[cfg(windows)]
 pub fn use_hidapi() -> bool {
     std::env::var("HUEDECK_HID_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("hidapi"))
 }

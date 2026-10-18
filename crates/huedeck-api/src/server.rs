@@ -200,6 +200,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/export", get(export))
         .route("/v1/import", post(import))
         .route("/v1/rescan", post(rescan))
+        .route("/v1/shutdown", post(shutdown))
         .route("/v1/canvas/event", post(canvas_event))
         .route("/v1/canvas/tap", post(canvas_tap))
         .route("/v1/events", get(events_ws))
@@ -439,6 +440,10 @@ async fn import(State(ctx): State<ApiContext>, Json(state): Json<Value>) -> Resp
 
 async fn rescan(State(ctx): State<ApiContext>) -> Response {
     reply(ctx.call(Request::Rescan).await)
+}
+
+async fn shutdown(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::Shutdown).await)
 }
 
 #[derive(Deserialize)]

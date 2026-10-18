@@ -111,6 +111,7 @@ pub const NATIVE_ROUTES: &[Route] = &[
     r("GET", "/export", false),
     r("POST", "/import", true),
     r("POST", "/rescan", true),
+    r("POST", "/shutdown", true),
     r("POST", "/canvas/event", true),
     r("POST", "/canvas/tap", true),
     r("GET", "/events", false),  // WebSocket: JSON events

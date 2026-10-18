@@ -321,6 +321,8 @@ pub enum Request {
     },
     /// Enumerate devices again now.
     Rescan,
+    /// Stop the daemon (every plugin restores its device first).
+    Shutdown,
 }
 
 impl Request {
@@ -350,6 +352,7 @@ impl Request {
             Request::Export => "export",
             Request::Import { .. } => "import",
             Request::Rescan => "rescan",
+            Request::Shutdown => "shutdown",
         }
     }
 }

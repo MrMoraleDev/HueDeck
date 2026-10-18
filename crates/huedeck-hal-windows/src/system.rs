@@ -10,8 +10,11 @@
 //! * [`system_info`]: motherboard, BIOS and memory modules from the SMBIOS
 //!   table (what `@SignalRGB/systeminfo` reports; SignalRGB reads WMI, which
 //!   reads the same table).
+//! * [`tcp_listener_pids`]: processes listening on a TCP port (the daemon
+//!   leaves SignalRGB's API ports alone while SignalRGB listens on them).
 
 use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, TCP_TABLE_OWNER_PID_LISTENER};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
@@ -112,5 +115,71 @@ mod tests {
     fn working_set_is_reported() {
         let ws = working_set_bytes().expect("working set");
         assert!(ws > 1024 * 1024, "{ws}");
+    }
+}
+
+/// Process ids listening on TCP `port` on any local address, IPv4 and IPv6
+/// (`GetExtendedTcpTable` listener tables), sorted and deduplicated.
+pub fn tcp_listener_pids(port: u16) -> Result<Vec<u32>, String> {
+    const AF_INET: u32 = 2;
+    const AF_INET6: u32 = 23;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    let mut pids = Vec::new();
+    // (family, row size, offset of the local port, offset of the owning pid):
+    // MIB_TCPROW_OWNER_PID and MIB_TCP6ROW_OWNER_PID after the u32 entry count.
+    for (family, row, port_at, pid_at) in [(AF_INET, 24usize, 8usize, 20usize), (AF_INET6, 56, 20, 52)] {
+        let mut words: Vec<u32> = Vec::new();
+        let mut attempts = 0;
+        loop {
+            let mut size = (words.len() * 4) as u32;
+            let ptr = if words.is_empty() {
+                None
+            } else {
+                Some(words.as_mut_ptr().cast())
+            };
+            // SAFETY: `ptr` (when given) points to `size` writable, u32-aligned bytes.
+            let err = unsafe {
+                GetExtendedTcpTable(ptr, &mut size, false, family, TCP_TABLE_OWNER_PID_LISTENER, 0)
+            };
+            if err == 0 && !words.is_empty() {
+                break;
+            }
+            attempts += 1;
+            if (err != ERROR_INSUFFICIENT_BUFFER && err != 0) || attempts > 4 {
+                return Err(format!("GetExtendedTcpTable: error {err}"));
+            }
+            // The table may grow between the size query and the read: leave room.
+            words = vec![0u32; (size as usize).div_ceil(4) + 64];
+        }
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_ne_bytes()).collect();
+        let count = words[0] as usize;
+        for i in 0..count {
+            let off = 4 + i * row;
+            let Some(r) = bytes.get(off..off + row) else {
+                break;
+            };
+            let word = |o: usize| u32::from_ne_bytes([r[o], r[o + 1], r[o + 2], r[o + 3]]);
+            // The port sits in network byte order in the low 16 bits.
+            if u16::from_be((word(port_at) & 0xFFFF) as u16) == port {
+                pids.push(word(pid_at));
+            }
+        }
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    Ok(pids)
+}
+
+#[cfg(test)]
+mod listener_tests {
+    use super::*;
+
+    #[test]
+    fn a_listener_of_this_process_is_found_on_its_port() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(tcp_listener_pids(port).unwrap().contains(&std::process::id()));
+        drop(l);
+        assert!(!tcp_listener_pids(port).unwrap().contains(&std::process::id()));
     }
 }

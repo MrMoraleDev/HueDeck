@@ -111,6 +111,14 @@ pub struct Shared {
     events: broadcast::Sender<Event>,
     requests: Sender<Envelope>,
     frames: Arc<FrameStore>,
+    shutdown: tokio::sync::Notify,
+}
+
+impl Shared {
+    /// Resolves once a client asked the daemon to stop (`POST /v1/shutdown`).
+    pub async fn shutdown_requested(&self) {
+        self.shutdown.notified().await;
+    }
 }
 
 impl Backend for Shared {
@@ -185,6 +193,7 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
         events,
         requests: tx,
         frames,
+        shutdown: tokio::sync::Notify::new(),
     });
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
@@ -1217,6 +1226,11 @@ impl Engine {
             Request::Rescan => {
                 self.rescan();
                 Ok(json!({ "devices": self.present.len() }))
+            }
+            Request::Shutdown => {
+                self.log("shutdown requested");
+                self.shared.shutdown.notify_one();
+                Ok(json!({ "stopping": true }))
             }
         }
     }

@@ -232,6 +232,9 @@ pub struct EndpointView {
     /// The channel of a component.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// The component's `ProductName` (library key).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
     /// LED grid size in cells.
     pub size: [u32; 2],
     /// Number of LEDs.
@@ -355,6 +358,7 @@ impl Children {
                 kind: EndpointKind::Subdevice,
                 name: s.name.clone(),
                 channel: None,
+                product: None,
                 size: s.surface.geometry.size,
                 leds: s.surface.geometry.led_positions.len(),
                 placement: s.surface.placement.clone(),
@@ -367,6 +371,7 @@ impl Children {
                     kind: EndpointKind::Component,
                     name: c.instance.component.display_name.clone(),
                     channel: Some(ch.name.clone()),
+                    product: Some(c.instance.component.product_name.clone()),
                     size: c.surface.geometry.size,
                     leds: c.instance.component.led_count as usize,
                     placement: c.surface.placement.clone(),

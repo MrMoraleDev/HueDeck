@@ -574,7 +574,14 @@ impl Engine {
                 .collect(),
             _ => match &self.hardware {
                 Some(hw) => match hw.targets(&self.catalog, &[]) {
-                    Ok((present, _)) => present,
+                    Ok((present, _)) => present
+                        .into_iter()
+                        .filter(|p| {
+                            let ignore = &self.opts.config.devices.ignore;
+                            ignore.is_empty()
+                                || !huedeck_runtime::hardware::matches_filter(&p.device.key, ignore)
+                        })
+                        .collect(),
                     Err(e) => {
                         self.log(format!("enumerating devices failed: {e:#}"));
                         return;
@@ -912,7 +919,14 @@ impl Engine {
                         components: endpoints
                             .iter()
                             .filter(|e| e.channel.as_deref() == Some(c.name.as_str()))
-                            .map(|e| json!({ "ComponentId": e.uid, "DisplayName": e.name, "LedCount": e.leds }))
+                            .map(|e| {
+                                json!({
+                                    "ComponentId": e.uid,
+                                    "ProductName": e.product,
+                                    "DisplayName": e.name,
+                                    "LedCount": e.leds,
+                                })
+                            })
                             .collect(),
                     })
                     .collect();
@@ -1244,11 +1258,17 @@ impl Engine {
         channel: &str,
         components: Vec<Value>,
     ) -> Result<Vec<ComponentInstance>, ApiError> {
+        // What the session uses now: HueDeck's stored setup, else SignalRGB's read in place.
         let stored: Vec<ComponentInstance> = lock(&self.defaults)
             .channels
             .get(device)
             .and_then(|c| c.get(channel))
             .cloned()
+            .or_else(|| {
+                self.signalrgb
+                    .then(|| huedeck_runtime::signalrgb::channels(device).0.remove(channel))
+                    .flatten()
+            })
             .unwrap_or_default();
         let mut out = Vec::new();
         for v in components {

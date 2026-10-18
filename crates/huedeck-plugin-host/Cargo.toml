@@ -18,6 +18,7 @@ rquickjs = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 huedeck-hal = { path = "../huedeck-hal" }
+huedeck-hid-desc = { path = "../huedeck-hid-desc" }
 huedeck-engine = { path = "../huedeck-engine" }
 
 [dev-dependencies]

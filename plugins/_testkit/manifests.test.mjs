@@ -40,6 +40,14 @@ for (const dir of dirs) {
     assert.ok(existsSync(join(plugins, dir, manifest.entry)), `entry '${manifest.entry}' exists`);
     const usbId = new RegExp(schema.$defs.usbId.anyOf.find((form) => form.type === "string").pattern);
     for (const claim of manifest.devices) {
+      if ("hidUsage" in claim) {
+        for (const key of Object.keys(claim)) {
+          assert.ok(key in schema.$defs.hidUsageClaim.properties, `hid usage claim key '${key}' is not in the schema`);
+        }
+        assert.match(claim.hidUsage.usagePage, usbId);
+        assert.match(claim.hidUsage.usage, usbId);
+        continue;
+      }
       for (const key of schema.$defs.usbClaim.required) {
         assert.ok(key in claim, `usb claim is missing '${key}'`);
       }

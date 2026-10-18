@@ -342,6 +342,7 @@ const deviceTarget = {
   set_endpoint: noop,
   getHidEndpoints: () => [],
   getHidInfo: () => ({ readLength: 64, writeLength: 64 }),
+  getHidReportFields: () => null,
   getDeviceInfo: () => ({
     product: "",
     manufacturer: "",
@@ -676,6 +677,9 @@ if (native !== undefined) {
       const [readLength, writeLength] = native.hidInfo();
       return { readLength, writeLength };
     },
+    // HueDeck extension: the open collection's reports and fields from its report
+    // descriptor ({ usagePage, usage, reports, fields }), or null.
+    getHidReportFields: () => JSON.parse(native.hidReportFields()),
     getDeviceInfo: () => {
       const [manufacturer, product, serialNumber] = native.deviceInfo();
       return { product, manufacturer, serialNumber, vendorId: state.vendorId, productId: state.productId };
@@ -991,6 +995,7 @@ const METADATA = [
   "UsesUSBSensorMutex",
   "AllowConflictBypass",
   "BrandGPUList",
+  "HidUsages",
 ];
 const LIFECYCLE = ["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService"];
 

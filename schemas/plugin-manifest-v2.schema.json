@@ -82,9 +82,32 @@
     "deviceClaim": {
       "oneOf": [
         { "$ref": "#/$defs/usbClaim" },
+        { "$ref": "#/$defs/hidUsageClaim" },
         { "$ref": "#/$defs/smbusClaim" },
         { "$ref": "#/$defs/networkClaim" }
       ]
+    },
+    "hidUsageClaim": {
+      "type": "object",
+      "required": ["hidUsage"],
+      "properties": {
+        "hidUsage": {
+          "type": "object",
+          "required": ["usagePage", "usage"],
+          "properties": {
+            "usagePage": { "$ref": "#/$defs/usbId", "description": "Usage page of the HID top-level collection." },
+            "usage": { "$ref": "#/$defs/usbId", "description": "Usage of the HID top-level collection." }
+          },
+          "additionalProperties": false,
+          "description": "A generic driver for a standard HID collection on any device (e.g. 0x59/0x01, HID LampArray), used for devices no plugin claims by vendor and product id (HidUsages() export)."
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["hid"],
+          "default": "hid"
+        }
+      },
+      "additionalProperties": false
     },
     "usbClaim": {
       "type": "object",

@@ -119,6 +119,40 @@ Values (call sites): `"battery"` 46, `"keyboard"` 18, `"mouse"` 10, `"udp"` 5, `
 - `udp.send(ip, port, bytes[, BIG_ENDIAN])`, `udp.createSocket()`; `dtls.createConnection(ip, 2100, username, psk)`, `dtls.send(bytes)`, `dtls.CloseConnection()`, callbacks `onConnectionEstablished/Closed/Error(fn)` (PhilipsHue); `base64.Encode(bytes)→string`, `base64.Decode(string)→bytes` (Twinkly/Govee).
 
 
+## 8. HueDeck extensions for generic HID drivers
+
+Not part of the SignalRGB surface; plugins that use them run only in HueDeck. They let one
+plugin drive a standard HID collection on any device (the first user is
+`plugins/hid-lamparray/`, HID LampArray).
+
+- **`HidUsages()` export** -> `[[usagePage, usage], ...]`, for example `[[0x59, 0x01]]`. Read
+  with the other metadata exports (call-if-function). A plugin that exports it needs no
+  `VendorId`/`ProductId`. The host offers it for a device when no plugin claims the device's
+  VID:PID and one of the device's top-level collections has one of these usages; a VID:PID plugin
+  always wins. Manifests declare it as a `hidUsage` claim (`schemas/plugin-manifest-v2`).
+- **`device.getHidReportFields()`** -> the open collection's report descriptor, parsed by the
+  host (`huedeck-hid-desc`; on Windows the descriptor hidapi reconstructs from the collection's
+  preparsed data), or `null` when the backend cannot read it. No report I/O.
+  ```js
+  {
+    usagePage: 0x59, usage: 0x01,
+    reports: [{ kind: "feature", reportId: 1, bytes: 23 }, ...],   // bytes include the report id
+    fields: [{
+      kind: "feature", reportId: 1,
+      bitOffset: 16, bitSize: 32, count: 5,      // bits after the report-id byte, little-endian
+      flags: 3,                                  // main-item flags: bit 0 constant, bit 1 variable
+      logicalMin: 0, logicalMax: 2147483647,
+      collection: [0x59, 0x02],                  // innermost collection around the field
+      usages: [[0x59, 0x04, 0x04], [0x59, 0x05, 0x05], ...],   // [page, min, max] in order
+    }, ...],
+  }
+  ```
+  Element `i` of a variable field takes the `i`-th declared usage and the last one when there
+  are fewer usages than elements (HID 1.11, 6.2.2.8). Unnumbered collections report
+  `reportId: 0`, and their report arrays still start with that `0x00` byte, like every other
+  host call.
+
+
 ## Engine requirements (summary)
 
 - ES-module JS runtime per device with host globals `device`, `console`, and import resolver for `@SignalRGB/{serial,udp,tcp,dtls,base64,lcd,Errors(.js),DeviceDiscovery,permissions,systeminfo,performance,appInfo}` plus relative `./x.js` imports; no DOM globals.

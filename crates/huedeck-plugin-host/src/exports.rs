@@ -202,6 +202,19 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
     if let Some(a) = get("BrandGPUList").and_then(J::as_array) {
         meta.brand_gpu_list = a.clone();
     }
+    if let Some(a) = get("HidUsages").and_then(J::as_array) {
+        for v in a {
+            let pair = v.as_array().and_then(|p| {
+                let page = u16::try_from(p.first()?.as_u64()?).ok()?;
+                let usage = u16::try_from(p.get(1)?.as_u64()?).ok()?;
+                (p.len() == 2).then_some([page, usage])
+            });
+            match pair {
+                Some(pair) => meta.hid_usages.push(pair),
+                None => warnings.push(format!("HidUsages() entries must be [usage page, usage]: {v}")),
+            }
+        }
+    }
 
     let flag = |k: &str| {
         ns.get("lifecycle")

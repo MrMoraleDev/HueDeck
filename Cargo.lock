@@ -1070,6 +1070,7 @@ version = "0.0.1"
 dependencies = [
  "huedeck-engine",
  "huedeck-hal",
+ "huedeck-hid-desc",
  "rquickjs",
  "serde",
  "serde_json",

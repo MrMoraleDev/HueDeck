@@ -61,9 +61,14 @@ impl Hardware {
         use anyhow::Context;
         let wanted: std::collections::BTreeSet<(u16, u16)> =
             catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
+        let usages: std::collections::BTreeSet<(u16, u16)> = catalog
+            .entries()
+            .iter()
+            .flat_map(|e| e.meta.hid_usages.iter().map(|[page, usage]| (*page, *usage)))
+            .collect();
         let groups = match self {
-            Self::Native(b) => b.enumerate_grouped_for(&wanted),
-            Self::Hidapi(b) => b.enumerate_grouped_for(&wanted),
+            Self::Native(b) => b.enumerate_grouped_matching(&wanted, &usages),
+            Self::Hidapi(b) => b.enumerate_grouped_matching(&wanted, &usages),
         }
         .context("enumerating HID devices")?;
         let total = groups.len();
@@ -73,13 +78,14 @@ impl Hardware {
             if !matches_filter(&key, filters) {
                 continue;
             }
-            if let Some(plugin) = catalog.lookup(g.key.vid, g.key.pid) {
+            let endpoints: Vec<_> = g.endpoints.into_iter().map(|e| e.info).collect();
+            if let Some(plugin) = catalog.lookup_device(g.key.vid, g.key.pid, &endpoints) {
                 targets.push(Present {
                     device: SessionDevice {
                         key,
                         vid: g.key.vid,
                         pid: g.key.pid,
-                        endpoints: g.endpoints.into_iter().map(|e| e.info).collect(),
+                        endpoints,
                     },
                     plugin: plugin.clone(),
                 });

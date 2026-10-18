@@ -566,10 +566,12 @@ impl Engine {
             HardwareMode::Fixed { devices, .. } => devices
                 .iter()
                 .filter_map(|d| {
-                    self.catalog.lookup(d.vid, d.pid).map(|p| Present {
-                        device: d.clone(),
-                        plugin: p.clone(),
-                    })
+                    self.catalog
+                        .lookup_device(d.vid, d.pid, &d.endpoints)
+                        .map(|p| Present {
+                            device: d.clone(),
+                            plugin: p.clone(),
+                        })
                 })
                 .collect(),
             _ => match &self.hardware {

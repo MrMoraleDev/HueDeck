@@ -1,0 +1,64 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- HueDeck starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Marquee Text</title>
+  <meta description="A line of text scrolling across the canvas." />
+  <meta publisher="HueDeck" />
+  <meta property="message" label="Text" type="textfield" default="HueDeck" />
+  <meta property="textColor" label="Text Colour" type="color" default="#ffcc00" />
+  <meta property="background" label="Background" type="color" default="#101040" />
+  <meta property="speed" label="Speed" type="number" min="1" max="100" default="40" />
+  <meta property="rainbow" label="Rainbow Letters" type="boolean" default="false" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var offset = 0, last = 0, hueShift = 0;
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    function bool(v) {
+      return v === true || v === 1 || v === "true" || v === "1";
+    }
+
+    function colour(v, fallback) {
+      return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback;
+    }
+
+    function draw(now) {
+      var dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
+      last = now;
+      var text = typeof message === "string" && message.length ? message : "HueDeck";
+      ctx.fillStyle = colour(background, "#101040");
+      ctx.fillRect(0, 0, W, H);
+      ctx.font = "bold 150px sans-serif";
+      ctx.textBaseline = "middle";
+      var width = ctx.measureText(text).width;
+      offset = (offset + dt * num(speed, 40) * 4) % (width + W);
+      var x = W - offset;
+      if (bool(rainbow)) {
+        hueShift = (hueShift + dt * 90) % 360;
+        for (var i = 0; i < text.length; i++) {
+          var ch = text.charAt(i);
+          ctx.fillStyle = "hsl(" + ((hueShift + i * 40) % 360) + ",100%,55%)";
+          ctx.fillText(ch, x, H / 2);
+          x += ctx.measureText(ch).width;
+        }
+      } else {
+        ctx.fillStyle = colour(textColor, "#ffcc00");
+        ctx.fillText(text, x, H / 2);
+      }
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

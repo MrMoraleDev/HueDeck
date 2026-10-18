@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- HueDeck starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Breathing</title>
+  <meta description="The whole canvas fades between two colours." />
+  <meta publisher="HueDeck" />
+  <meta property="colorA" label="First Colour" type="color" default="#ff0040" />
+  <meta property="colorB" label="Second Colour" type="color" default="#000000" />
+  <meta property="period" label="Period (s)" type="number" min="1" max="20" default="4" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var a = [255, 0, 64], b = [0, 0, 0], seconds = 4;
+
+    function rgb(hex, fallback) {
+      if (typeof hex !== "string" || !/^#[0-9a-fA-F]{6}$/.test(hex)) return fallback;
+      return [parseInt(hex.substr(1, 2), 16), parseInt(hex.substr(3, 2), 16), parseInt(hex.substr(5, 2), 16)];
+    }
+
+    // The engine calls these once after load and again whenever a value changes.
+    function oncolorAChanged() { a = rgb(colorA, a); }
+    function oncolorBChanged() { b = rgb(colorB, b); }
+    function onperiodChanged() {
+      var n = Number(period);
+      seconds = isFinite(n) && n > 0 ? n : 4;
+    }
+
+    function draw(now) {
+      var k = 0.5 - 0.5 * Math.cos((now / 1000 / seconds) * Math.PI * 2);
+      ctx.fillStyle = "rgb(" + Math.round(a[0] * k + b[0] * (1 - k)) + "," +
+        Math.round(a[1] * k + b[1] * (1 - k)) + "," + Math.round(a[2] * k + b[2] * (1 - k)) + ")";
+      ctx.fillRect(0, 0, W, H);
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

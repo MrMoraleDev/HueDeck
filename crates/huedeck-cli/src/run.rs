@@ -14,7 +14,9 @@ use huedeck_hal::mock::MockHid;
 use huedeck_hal::{HidBackend, ReportLengths};
 use huedeck_plugin_host::catalog::{Catalog, CatalogEntry};
 use huedeck_plugin_host::device::{Brightness, IoKind, LogSink, WriteMode};
-use huedeck_plugin_host::session::{self, RestoreProbe, SessionDevice, SessionOptions, SessionReport};
+use huedeck_plugin_host::session::{
+    self, RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
+};
 use huedeck_render::{NullRenderer, Pattern, RendererClient};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,9 +48,18 @@ pub struct RunArgs {
     /// Run even when conflicting RGB software (SignalRGB, OpenRGB, the plugin's list) is running.
     #[arg(long)]
     pub ignore_conflicts: bool,
-    /// Read feature report ID (LEN bytes) before Initialize and after Shutdown and compare (e.g. 0x52:185).
-    #[arg(long, value_name = "ID:LEN", value_parser = parse_probe)]
-    pub restore_check: Option<RestoreProbe>,
+    /// Compare feature reports before Initialize and after Shutdown. Alone: every
+    /// feature report the device's report descriptor declares. `=ID:LEN`: that
+    /// report only (repeatable, e.g. --restore-check=0x52:185).
+    #[arg(
+        long,
+        value_name = "ID:LEN",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "auto",
+        value_parser = parse_restore
+    )]
+    pub restore_check: Vec<RestoreArg>,
     /// Plugin parameter override, NAME=VALUE (VALUE parsed as JSON, else taken as a string; repeatable).
     #[arg(long = "param", value_name = "NAME=VALUE", value_parser = parse_param)]
     pub params: Vec<(String, serde_json::Value)>,
@@ -139,6 +150,41 @@ fn parse_u(s: &str) -> Result<u64, String> {
         None => t.parse(),
     };
     r.map_err(|e| format!("'{s}': {e}"))
+}
+
+/// One `--restore-check` occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreArg {
+    /// Every declared feature report.
+    Auto,
+    /// One report.
+    Report(RestoreProbe),
+}
+
+fn parse_restore(s: &str) -> Result<RestoreArg, String> {
+    if s.eq_ignore_ascii_case("auto") {
+        return Ok(RestoreArg::Auto);
+    }
+    parse_probe(s).map(RestoreArg::Report)
+}
+
+/// The session's mode for the given `--restore-check` occurrences.
+pub fn restore_mode(args: &[RestoreArg]) -> RestoreCheckMode {
+    if args.contains(&RestoreArg::Auto) {
+        return RestoreCheckMode::DeclaredFeatureReports;
+    }
+    let reports: Vec<RestoreProbe> = args
+        .iter()
+        .filter_map(|a| match a {
+            RestoreArg::Report(p) => Some(*p),
+            RestoreArg::Auto => None,
+        })
+        .collect();
+    if reports.is_empty() {
+        RestoreCheckMode::Off
+    } else {
+        RestoreCheckMode::Reports(reports)
+    }
 }
 
 fn parse_probe(s: &str) -> Result<RestoreProbe, String> {
@@ -254,7 +300,12 @@ fn hardware_targets(
     filters: &[String],
 ) -> anyhow::Result<(Arc<dyn HidBackend>, Vec<Target>, usize)> {
     let backend = huedeck_hal_windows::WindowsHidBackend::new().context("initialising hidapi")?;
-    let groups = backend.enumerate_grouped().context("enumerating HID devices")?;
+    // Enumerate and probe only the devices some plugin claims.
+    let wanted: std::collections::BTreeSet<(u16, u16)> =
+        catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
+    let groups = backend
+        .enumerate_grouped_for(&wanted)
+        .context("enumerating HID devices")?;
     let total = groups.len();
     let mut targets = Vec::new();
     for g in groups {
@@ -376,7 +427,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             let (backend, targets, total) = hardware_targets(&catalog, &args.devices)?;
             if targets.is_empty() {
                 bail!(
-                    "no supported device found: {total} HID device(s) present, {} plugin(s) loaded{}",
+                    "no supported device found: {total} device(s) match the {} loaded plugin(s){}",
                     catalog.entries().len(),
                     if args.devices.is_empty() {
                         ""
@@ -438,7 +489,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                 WriteMode::Live
             },
             skip_shutdown: args.keep,
-            restore_probe: args.restore_check,
+            restore_check: restore_mode(&args.restore_check),
             log_sink: Some(sink),
             ..SessionOptions::default()
         };
@@ -638,7 +689,10 @@ fn print_report(r: &RunReport) {
                 println!("  ... {} more recorded writes", writes.len() - 3);
             }
         }
-        if let Some(c) = &s.restore_check {
+        for note in &s.restore_notes {
+            println!("  restore check: {note}");
+        }
+        for c in &s.restore_checks {
             if c.after.is_empty() {
                 println!(
                     "  restore check 0x{:02X}: the report could not be read back",
@@ -705,6 +759,15 @@ mod tests {
         );
         assert!(parse_probe("0x152:185").is_err());
         assert!(parse_probe("82").is_err());
+        assert_eq!(parse_restore("auto"), Ok(RestoreArg::Auto));
+        assert_eq!(restore_mode(&[]), RestoreCheckMode::Off);
+        assert_eq!(
+            restore_mode(&[
+                RestoreArg::Auto,
+                RestoreArg::Report(RestoreProbe { report_id: 1, len: 2 })
+            ]),
+            RestoreCheckMode::DeclaredFeatureReports
+        );
         assert_eq!(
             parse_param("LightingMode=Forced"),
             Ok(("LightingMode".into(), serde_json::json!("Forced")))
@@ -737,10 +800,10 @@ mod tests {
             duration: None,
             keep: false,
             ignore_conflicts: false,
-            restore_check: Some(RestoreProbe {
+            restore_check: vec![RestoreArg::Report(RestoreProbe {
                 report_id: 0x52,
                 len: 185,
-            }),
+            })],
             params: Vec::new(),
             brightness: 100,
             stats_every: 0.0,

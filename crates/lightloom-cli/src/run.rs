@@ -909,9 +909,26 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     renderer.start(Arc::clone(&store))?;
 
     let system_info = machine_info().map(Arc::new);
+    if let Some(r) = &recorder {
+        r.set_system_info(system_info.as_deref().cloned());
+    }
     let option_args = args.clone();
+    let option_recorder = recorder.clone();
     let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
-        session_options(&option_args, device, system_info.clone())
+        let opts = session_options(&option_args, device, system_info.clone());
+        if let Some(r) = &option_recorder {
+            r.set_channels(
+                &device.key,
+                opts.channel_components
+                    .iter()
+                    .map(|(name, list)| {
+                        let array = list.iter().map(ComponentInstance::to_json).collect();
+                        (name.clone(), serde_json::Value::Array(array))
+                    })
+                    .collect(),
+            );
+        }
+        opts
     });
     let mut manager = DeviceManager::new(backend, Arc::clone(&store), options);
     for change in manager.reconcile(initial) {

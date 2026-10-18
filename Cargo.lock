@@ -734,6 +734,10 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "lightloom-hal",
+ "lightloom-hal-windows",
+ "lightloom-plugin-host",
+ "serde_json",
  "thiserror",
 ]
 

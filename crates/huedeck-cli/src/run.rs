@@ -9,7 +9,7 @@
 
 use anyhow::{bail, Context};
 use clap::Args;
-use huedeck_engine::{FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
+use huedeck_engine::{ComponentInstance, FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
 use huedeck_hal::mock::MockHid;
 use huedeck_hal::{HidBackend, ReportLengths};
 use huedeck_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
@@ -18,6 +18,7 @@ use huedeck_plugin_host::session::{
     self, RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
 };
 use huedeck_render::{NullRenderer, Pattern, RendererClient};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 #[cfg(not(windows))]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,6 +89,7 @@ pub struct CatalogArgs {
     pub plugin_dirs: Vec<PathBuf>,
     /// Also use the plugins of a local SignalRGB installation, read in place (never
     /// copied). They are scanned first, so HueDeck's own plugin directories win.
+    /// Device runs also take SignalRGB's component setup of each channel (read-only).
     #[arg(long)]
     pub signalrgb: bool,
     /// Load every plugin file again instead of using the plugin index cache.
@@ -637,6 +639,52 @@ fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
     bail!("HID enumeration is only implemented on Windows so far")
 }
 
+/// SignalRGB's component setup of the device `key` (read-only): the channel
+/// arrays under `HKCU\Software\WhirlwindFX\SignalRgb\devices\<key>`. Other
+/// values there (plugin property values) are not component arrays and are skipped.
+#[cfg(windows)]
+fn signalrgb_channels(key: &str) -> (BTreeMap<String, Vec<ComponentInstance>>, Vec<String>) {
+    let mut channels = BTreeMap::new();
+    let mut notes = Vec::new();
+    let subkey = format!("Software\\WhirlwindFX\\SignalRgb\\devices\\{key}");
+    let values = match huedeck_hal_windows::registry::current_user_strings(&subkey) {
+        Ok(v) => v,
+        Err(e) => {
+            notes.push(format!("cannot read SignalRGB's settings for {key}: {e}"));
+            return (channels, notes);
+        }
+    };
+    for (name, value) in values {
+        if !value.trim_start().starts_with('[') {
+            continue;
+        }
+        match huedeck_engine::parse_channel(&value) {
+            Ok((instances, warnings)) if !instances.is_empty() || value.trim() == "[]" => {
+                notes.extend(warnings.into_iter().map(|w| format!("{name}: {w}")));
+                channels.insert(name, instances);
+            }
+            _ => {}
+        }
+    }
+    (channels, notes)
+}
+
+#[cfg(not(windows))]
+fn signalrgb_channels(_key: &str) -> (BTreeMap<String, Vec<ComponentInstance>>, Vec<String>) {
+    (BTreeMap::new(), Vec::new())
+}
+
+/// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
+#[cfg(windows)]
+fn machine_info() -> Option<huedeck_hal::SystemInfo> {
+    huedeck_hal_windows::system::system_info()
+}
+
+#[cfg(not(windows))]
+fn machine_info() -> Option<huedeck_hal::SystemInfo> {
+    None
+}
+
 /// Exit status of a finished run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -711,9 +759,33 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     renderer.start(Arc::clone(&store))?;
 
     let verbose = args.verbose;
+    let system_info = machine_info().map(Arc::new);
     let mut handles = Vec::new();
     for t in targets {
         let label = t.device.key.clone();
+        let channel_components = if args.catalog.signalrgb {
+            let (channels, notes) = signalrgb_channels(&t.device.key);
+            for note in notes {
+                eprintln!("  [{label}] SignalRGB setup: {note}");
+            }
+            if !channels.is_empty() {
+                eprintln!(
+                    "  [{label}] SignalRGB component setup: {}",
+                    channels
+                        .iter()
+                        .map(|(name, list)| format!(
+                            "{name} ({} component{})",
+                            list.len(),
+                            if list.len() == 1 { "" } else { "s" }
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            channels
+        } else {
+            BTreeMap::new()
+        };
         let sink: LogSink = Arc::new(move |line: &str| {
             if verbose {
                 eprintln!("  [{label}] {line}");
@@ -733,6 +805,8 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             skip_shutdown: args.keep,
             restore_check: restore_mode(&args.restore_check),
             log_sink: Some(sink),
+            channel_components,
+            system_info: system_info.clone(),
             ..SessionOptions::default()
         };
         match session::spawn(t.device, t.plugin, Arc::clone(&backend), Arc::clone(&store), opts) {
@@ -913,6 +987,36 @@ fn print_report(r: &RunReport) {
         );
         if let Some(ms) = s.first_write_ms {
             println!("  first write {ms:.1} ms after session start");
+        }
+        if !s.subdevices.is_empty() {
+            println!(
+                "  subdevices: {}",
+                s.subdevices
+                    .iter()
+                    .map(|d| format!("{} ({}x{})", d.name, d.size[0], d.size[1]))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for c in &s.channels {
+            println!(
+                "  channel {}: {} LEDs (limit {}){}",
+                c.name,
+                c.led_count,
+                c.led_limit,
+                if c.components.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ": {}",
+                        c.components
+                            .iter()
+                            .map(|x| format!("{} [{}]", x.name, x.led_count))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            );
         }
         if r.dry_run {
             let read = s.io_log.iter().find(|x| x.kind == IoKind::GetFeature);

@@ -265,6 +265,13 @@ fn run_command(host: &HostCtx, meta: &EffectMeta, cmd: &Command) {
             }
             exec(&js);
         }
+        Command::Engine { data } => {
+            let (js, skipped) = control::engine_script(data);
+            if !skipped.is_empty() {
+                eprintln!("huedeck-renderer: ignored engine members: {}", skipped.join(", "));
+            }
+            exec(&js);
+        }
         Command::Event { sender, event } => exec(&control::event_script(sender, event)),
         Command::Tap { x, y } => exec(&control::tap_script(*x, *y)),
     }

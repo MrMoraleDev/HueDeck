@@ -18,7 +18,8 @@ pub const INJECT_KEY: &str = "huedeck.inject";
 /// `sourceURL` the injected script is evaluated under (shows up in console messages).
 pub const INJECT_URL: &str = "huedeck://renderer/inject.js";
 
-/// `window.engine` with every input zeroed.
+/// `window.engine` with every input zeroed; `getSensorValue(name)` reads
+/// `engine.sensors[name]` (filled by `engine` control commands).
 pub fn engine_bootstrap_js() -> String {
     let cells = ZONE_COLS * ZONE_ROWS;
     let image = ZONE_IMAGE_WIDTH * ZONE_IMAGE_HEIGHT * 4;
@@ -30,7 +31,7 @@ pub fn engine_bootstrap_js() -> String {
          lightness: new Int8Array({cells}), imagedata: new Uint8ClampedArray({image}) }};\n\
          \x20 e.vision = {{}};\n\
          \x20 e.sensors = {{}};\n\
-         \x20 e.getSensorValue = function (name) {{ return null; }};\n\
+         \x20 e.getSensorValue = function (name) {{ var v = e.sensors[name]; return v === undefined ? null : v; }};\n\
          }})();\n"
     )
 }

@@ -51,10 +51,15 @@ fn frames_flow_and_controls_reach_the_renderer() {
     wait_until("the control pipe", 20, || {
         r.set_properties(json!({"speed": 3}).as_object().unwrap().clone())
     });
+    assert!(r.push_engine_data(json!({"audio": {"level": -20}}).as_object().unwrap().clone()));
     r.stop();
     let log = std::fs::read_to_string(dir.join("frames-1.shm.control.log")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(log.contains("\"set\"") && log.contains("\"speed\":3"), "{log}");
+    assert!(
+        log.contains("\"engine\"") && log.contains("\"level\":-20"),
+        "{log}"
+    );
     assert!(log.contains("\"quit\""), "stop sends quit: {log}");
     let st = r.status();
     assert_eq!((st.starts, st.running), (1, false));

@@ -345,10 +345,10 @@ pub fn signalrgb_plugin_dirs() -> Vec<PathBuf> {
     if !cfg!(windows) {
         return out;
     }
+    if let Some(app) = signalrgb_app_dir() {
+        out.push(app.join("Signal-x64").join("Plugins"));
+    }
     if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-        if let Some(app) = newest_app_dir(&local.join("VortxEngine")) {
-            out.push(app.join("Signal-x64").join("Plugins"));
-        }
         let cache = local.join("WhirlwindFX").join("SignalRgb").join("cache");
         out.push(cache.join("plugin_cdn").join("main").join("Plugins"));
         if let Ok(rd) = std::fs::read_dir(cache.join("addons")) {
@@ -366,6 +366,16 @@ pub fn signalrgb_plugin_dirs() -> Vec<PathBuf> {
     }
     out.retain(|d| d.is_dir());
     out
+}
+
+/// The newest installed SignalRGB app directory
+/// (`%LOCALAPPDATA%\VortxEngine\app-x.y.z`), if any; `None` on non-Windows hosts.
+pub fn signalrgb_app_dir() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
+    newest_app_dir(&local.join("VortxEngine")).filter(|d| d.is_dir())
 }
 
 /// `app-x.y.z` directory with the highest version under `root`.

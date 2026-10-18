@@ -790,6 +790,7 @@ dependencies = [
  "huedeck-hal-windows",
  "huedeck-plugin-host",
  "huedeck-render",
+ "huedeck-runtime",
  "serde",
  "serde_json",
  "thiserror",
@@ -928,6 +929,20 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+]
+
+[[package]]
+name = "huedeck-runtime"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "huedeck-effects",
+ "huedeck-engine",
+ "huedeck-hal",
+ "huedeck-hal-windows",
+ "huedeck-plugin-host",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

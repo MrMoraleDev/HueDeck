@@ -30,6 +30,7 @@ huedeck-plugin-host = { path = "../huedeck-plugin-host" }
 huedeck-engine = { path = "../huedeck-engine" }
 huedeck-render = { path = "../huedeck-render" }
 huedeck-effects = { path = "../huedeck-effects" }
+huedeck-runtime = { path = "../huedeck-runtime" }
 
 # Ctrl-C on Unix; Windows uses huedeck_hal_windows::console (close/log-off/shutdown too).
 [target.'cfg(not(windows))'.dependencies]

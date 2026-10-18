@@ -509,7 +509,9 @@ impl DeviceContext {
 
     fn set_leds(&mut self, flat: &[i32]) {
         self.led_positions = flat
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| [u32::try_from(p[0]).unwrap_or(0), u32::try_from(p[1]).unwrap_or(0)])
             .collect();
     }

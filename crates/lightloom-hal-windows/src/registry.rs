@@ -144,7 +144,9 @@ pub fn current_user_values(subkey: &str) -> io::Result<Vec<(String, RegValue)>> 
         let bytes = &data[..(data_len as usize).min(data.len())];
         let value = if kind == REG_SZ.0 || kind == REG_EXPAND_SZ.0 {
             let units: Vec<u16> = bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             RegValue::Text(

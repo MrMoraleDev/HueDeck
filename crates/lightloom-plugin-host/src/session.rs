@@ -905,11 +905,9 @@ fn drive(
             apply_control(rt, shared, control, &budgets, stop, report);
             controlled = true;
         }
-        if controlled || report.frames % 30 == 0 {
-            {
-                let dev = lock_device(shared);
-                live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
-            }
+        if controlled || report.frames.is_multiple_of(30) {
+            let dev = lock_device(shared);
+            live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
         }
         let (_, frame, captured) = frames.latest_stamped();
         lock_device(shared).set_frame_at(frame, captured);

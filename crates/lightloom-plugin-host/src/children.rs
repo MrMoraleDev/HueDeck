@@ -495,7 +495,9 @@ impl Children {
             .map(|n| crate::device::capped(n, MAX_LED_NAME_CHARS))
             .collect();
         let positions: Vec<[u32; 2]> = flat
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| {
                 [
                     u32::try_from(p[0]).unwrap_or(u32::MAX),

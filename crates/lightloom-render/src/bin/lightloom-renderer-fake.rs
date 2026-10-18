@@ -74,7 +74,7 @@ fn main() {
         if !(paint_once && n > 0) {
             n += 1;
             let mut px = vec![0u8; 320 * 200 * 4];
-            for p in px.chunks_exact_mut(4) {
+            for p in px.as_chunks_mut::<4>().0 {
                 p.copy_from_slice(&[0, 0, (n % 256) as u8, 255]);
             }
             ring.publish(&px, 320, 200).expect("publish");

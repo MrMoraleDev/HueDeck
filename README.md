@@ -107,13 +107,15 @@ HueDeck's own plugin library, tested on real hardware:
 
 | Device | USB id | What lights up |
 |---|---|---|
-| MSI Mystic Light boards (185-byte protocol), e.g. MAG B550 Tomahawk | `1462:7C91` | six onboard LED zones |
+| MSI Mystic Light boards (185-byte protocol), e.g. MAG B550 Tomahawk | `1462:7C91` | six onboard LEDs, both 12 V RGB headers, ARGB strips on both JRAINBOW headers, LED by LED |
 | Razer DeathAdder V2 Pro (wired; receiver `007D` untested) | `1532:007C` | logo |
 | NZXT Kraken X53 / X63 / X73 | `1E71:2007` | pump ring, logo, RGB header on the pump |
 | SteelSeries Arctis 5 | `1038:12AA` | both ear cups |
 
-Coming next: the Sony DualSense light bar, per-LED ARGB strips on MSI JRAINBOW
-headers, any **HID LampArray** device (the Windows Dynamic Lighting standard),
+Written and run on real hardware, waiting for a visual check: the **Sony DualSense**
+light bar over USB (`054C:0CE6`; volume, vibration and the other LEDs are never touched).
+
+Coming next: any **HID LampArray** device (the Windows Dynamic Lighting standard),
 network lights (**WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeelight**), then many
 more families adapted from OpenRGB. Missing your device?
 [Add it](#add-your-device) or open an issue with its USB id.
@@ -218,7 +220,7 @@ Long form: [docs/architecture.md](docs/architecture.md). Decisions:
 | M2 | Plugin host, hot-plug, record and replay, conformance suite | done |
 | M3 | Effects in Chromium, layouts, sampling, benchmarks | done |
 | M4 | Daemon, settings, local API, dashboard, SignalRGB import, installer | in progress: installer next |
-| Devices | HueDeck's own plugin library: DualSense, MSI ARGB headers, HID LampArray, network lights, OpenRGB families | in progress |
+| Devices | HueDeck's own plugin library: HID LampArray, network lights, OpenRGB families | in progress |
 | M5 | RAM, GPU and SMBus devices through PawnIO, sensors | planned |
 | M6 | Audio and screen-reactive effects, network lights, LCD screens, macros, OpenRGB SDK server | planned |
 | M7 | Linux, AppImage/Flatpak, 1.0 | planned |

@@ -8,10 +8,11 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 
 | Plugin | Devices | Tested on |
 |---|---|---|
-| `msi-mystic-light-7c91` | MSI Mystic Light 185-byte boards | MAG B550 Tomahawk `1462:7C91` |
+| `msi-mystic-light-7c91` | MSI Mystic Light 185-byte boards, per-LED: onboard LEDs, JRGB and JRAINBOW headers | MAG B550 Tomahawk `1462:7C91` |
 | `razer-deathadder-v2-pro` | Razer DeathAdder V2 Pro | wired `1532:007C` |
 | `nzxt-kraken-x3` | NZXT Kraken X53 / X63 / X73 | `1E71:2007` |
 | `steelseries-arctis-5` | SteelSeries Arctis 5 | `1038:12AA` |
+| `sony-dualsense` | Sony DualSense light bar, over USB | run on `054C:0CE6`; visual check pending |
 
 ## A plugin directory
 

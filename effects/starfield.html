@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Lightloom starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Starfield</title>
+  <meta description="Stars rushing out of the centre." />
+  <meta publisher="Lightloom" />
+  <meta property="starColor" label="Star Colour" type="color" default="#ffffff" />
+  <meta property="speed" label="Speed" type="number" min="1" max="100" default="35" />
+  <meta property="stars" label="Stars" type="number" min="20" max="400" default="160" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var field = [];
+    var seed = 7, last = 0;
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    // Deterministic generator: the same sky on every run.
+    function rnd() {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    }
+
+    function spawn(s) {
+      s.x = (rnd() - 0.5) * W;
+      s.y = (rnd() - 0.5) * H;
+      s.z = 0.2 + rnd() * 0.8;
+      return s;
+    }
+
+    function draw(now) {
+      var dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
+      last = now;
+      var want = Math.round(Math.max(20, Math.min(400, num(stars, 160))));
+      while (field.length < want) field.push(spawn({}));
+      field.length = want;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = typeof starColor === "string" ? starColor : "#ffffff";
+      var v = (num(speed, 35) / 100) * dt;
+      for (var i = 0; i < field.length; i++) {
+        var s = field[i];
+        s.z -= v;
+        if (s.z <= 0.02) spawn(s);
+        var px = W / 2 + s.x / s.z, py = H / 2 + s.y / s.z;
+        if (px < 0 || px >= W || py < 0 || py >= H) { spawn(s); continue; }
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(0.6, (1 - s.z) * 3), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Lightloom starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Screen Ambience</title>
+  <meta description="Mirrors the screen's colours (engine.zone.imagedata, 160x100) onto the canvas." />
+  <meta publisher="Lightloom" />
+  <meta property="brightness" label="Brightness" type="number" min="10" max="200" default="100" />
+  <meta property="smooth" label="Smooth" type="boolean" default="true" tooltip="Blend neighbouring zones" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var ZW = 160, ZH = 100;
+    var zone = document.createElement("canvas");
+    zone.width = ZW;
+    zone.height = ZH;
+    var zctx = zone.getContext("2d");
+    var frame = zctx.createImageData(ZW, ZH);
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    function bool(v) {
+      return v === true || v === 1 || v === "true" || v === "1";
+    }
+
+    function draw() {
+      var src = window.engine && engine.zone ? engine.zone.imagedata : null;
+      if (src && src.data) src = src.data;
+      if (src && src.length >= ZW * ZH * 4) {
+        var gain = num(brightness, 100) / 100, d = frame.data;
+        for (var i = 0; i < ZW * ZH * 4; i += 4) {
+          d[i] = src[i] * gain; d[i + 1] = src[i + 1] * gain; d[i + 2] = src[i + 2] * gain; d[i + 3] = 255;
+        }
+        zctx.putImageData(frame, 0, 0);
+      }
+      ctx.imageSmoothingEnabled = bool(smooth);
+      ctx.drawImage(zone, 0, 0, W, H);
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

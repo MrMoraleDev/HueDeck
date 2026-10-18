@@ -19,7 +19,7 @@ use lightloom_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
 use lightloom_plugin_host::session::{
     RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
 };
-use lightloom_render::{NullRenderer, Pattern, RendererClient};
+use lightloom_render::{CefRenderer, CefRendererConfig, NullRenderer, Pattern, RendererClient};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 #[cfg(not(windows))]
@@ -44,6 +44,11 @@ pub struct RunArgs {
     /// Read devices but never write; print the packets that would be sent.
     #[arg(long)]
     pub dry_run: bool,
+    /// Place devices, subdevices and component instances on the canvas from a
+    /// layout file (schemas/layout.schema.json: placements keyed by endpoint uid,
+    /// layout brightness). Endpoints it does not place keep their defaults.
+    #[arg(long, value_name = "FILE")]
+    pub layout: Option<PathBuf>,
     /// Record every HID operation and what the devices answered into FILE
     /// (JSON), for `lightloom compat replay`. Record with `light` (a solid
     /// colour) to get a trace that replays exactly.
@@ -158,6 +163,8 @@ pub enum Mode {
         /// Frame rate.
         fps: f64,
     },
+    /// An effect (lightscript) rendered by `lightloom-renderer` (CEF).
+    Effect(EffectArgs),
     /// Rainbow for a fixed time, then latency histograms.
     Bench {
         /// Frame rate.
@@ -169,11 +176,34 @@ pub enum Mode {
     },
 }
 
+/// `lightloom effect`: which effect and how to render it.
+#[derive(Clone, Debug, Args)]
+pub struct EffectArgs {
+    /// Effect HTML file (a SignalRGB-style lightscript).
+    pub effect: PathBuf,
+    /// Effect control value, NAME=VALUE (VALUE parsed as JSON, else taken as a string; repeatable).
+    #[arg(long = "prop", value_name = "NAME=VALUE", value_parser = parse_param)]
+    pub props: Vec<(String, serde_json::Value)>,
+    /// Frames per second the effect paints at (1-240).
+    #[arg(long, default_value_t = 30.0, value_parser = parse_fps)]
+    pub fps: f64,
+    /// The `lightloom-renderer` executable (default: $LIGHTLOOM_RENDERER, else next to lightloom).
+    #[arg(long, value_name = "PATH")]
+    pub renderer: Option<PathBuf>,
+    /// Composite on the GPU. The default, software compositing, paints the
+    /// 320x200 view at a steadier cadence with less memory (docs/hardware/effects-m3.md)
+    /// and works in VMs and remote desktop sessions; GPU compositing can help
+    /// effects with heavy canvas filters.
+    #[arg(long)]
+    pub gpu_compositing: bool,
+}
+
 impl Mode {
     fn name(&self) -> &'static str {
         match self {
             Mode::Light(_) => "light",
             Mode::Rainbow { .. } => "rainbow",
+            Mode::Effect(_) => "effect",
             Mode::Bench { .. } => "bench",
         }
     }
@@ -189,8 +219,52 @@ impl Mode {
         match self {
             Mode::Light(_) => 30.0,
             Mode::Rainbow { fps } | Mode::Bench { fps, .. } => *fps,
+            Mode::Effect(e) => e.fps,
         }
     }
+
+    /// The renderer client that draws this mode.
+    fn renderer(&self) -> anyhow::Result<Box<dyn RendererClient>> {
+        Ok(match self {
+            Mode::Effect(e) => {
+                let effect = std::fs::canonicalize(&e.effect)
+                    .with_context(|| format!("effect {}", e.effect.display()))?;
+                let work_dir = std::env::temp_dir().join(format!("lightloom-effect-{}", std::process::id()));
+                Box::new(CefRenderer::new(CefRendererConfig {
+                    renderer: renderer_exe(e.renderer.as_deref())?,
+                    effect,
+                    fps: e.fps.round().clamp(1.0, 240.0) as u32,
+                    properties: e.props.iter().cloned().collect(),
+                    software_compositing: !e.gpu_compositing,
+                    work_dir,
+                }))
+            }
+            _ => Box::new(NullRenderer::new(self.pattern(), self.fps())),
+        })
+    }
+}
+
+/// The `lightloom-renderer` executable: `explicit`, $LIGHTLOOM_RENDERER, or next to this program.
+fn renderer_exe(explicit: Option<&std::path::Path>) -> anyhow::Result<PathBuf> {
+    if let Some(p) = explicit {
+        return Ok(p.to_path_buf());
+    }
+    if let Some(p) = std::env::var_os("LIGHTLOOM_RENDERER") {
+        return Ok(PathBuf::from(p));
+    }
+    let name = if cfg!(windows) {
+        "lightloom-renderer.exe"
+    } else {
+        "lightloom-renderer"
+    };
+    let beside = std::env::current_exe()?.with_file_name(name);
+    if beside.exists() {
+        return Ok(beside);
+    }
+    bail!(
+        "{name} was not found next to lightloom: build it with `cargo build --release -p lightloom-renderer \
+         --features cef` and pass --renderer PATH (or set LIGHTLOOM_RENDERER)"
+    )
 }
 
 /// `#RRGGBB`, `RRGGBB` or a basic colour name.
@@ -547,6 +621,7 @@ fn session_options(
     args: &RunArgs,
     device: &SessionDevice,
     system_info: Option<Arc<lightloom_hal::SystemInfo>>,
+    layout: Option<&lightloom_engine::Layout>,
 ) -> SessionOptions {
     let label = device.key.clone();
     let channel_components = if args.catalog.signalrgb {
@@ -582,8 +657,10 @@ fn session_options(
         parameters: args.params.iter().cloned().collect(),
         brightness: Brightness {
             global: args.brightness,
-            layout: 100,
+            layout: layout.map_or(100, |l| l.brightness.min(100)),
         },
+        placement: layout.and_then(|l| l.endpoints.get(&device.key).cloned()),
+        placements: layout.map(|l| l.endpoints.clone()).unwrap_or_default(),
         write_mode: if args.dry_run {
             WriteMode::DryRun
         } else {
@@ -827,6 +904,62 @@ fn machine_info() -> Option<lightloom_hal::SystemInfo> {
     None
 }
 
+/// `lightloom effects`: every `*.html` effect in `dirs` (default `./effects`) with its controls.
+pub fn list_effects(dirs: &[PathBuf], json: bool) -> anyhow::Result<()> {
+    let dirs = if dirs.is_empty() {
+        vec![PathBuf::from("effects")]
+    } else {
+        dirs.to_vec()
+    };
+    let mut effects = Vec::new();
+    for dir in &dirs {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .with_context(|| format!("reading {}", dir.display()))?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("html")))
+            .collect();
+        files.sort();
+        for path in files {
+            let html = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+            let mut meta = lightloom_effects::parse_effect_meta(&String::from_utf8_lossy(&html));
+            meta.id = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            effects.push((path, meta));
+        }
+    }
+    if json {
+        let list: Vec<_> = effects
+            .iter()
+            .map(|(path, meta)| serde_json::json!({ "path": path, "meta": meta }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&list)?);
+        return Ok(());
+    }
+    for (path, meta) in &effects {
+        println!("{}  ({})", meta.title, path.display());
+        if !meta.description.is_empty() {
+            println!("    {}", meta.description);
+        }
+        for c in &meta.properties {
+            let values = if c.values.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", c.values.join(", "))
+            };
+            println!(
+                "    --prop {}=…  {:?}, default {}{values}",
+                c.property,
+                c.control_type,
+                c.default.as_deref().unwrap_or("-")
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Exit status of a finished run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -937,17 +1070,28 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     let interrupt = Interrupt::install();
 
     let store = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
-    let mut renderer = NullRenderer::new(mode.pattern(), mode.fps());
+    let mut renderer = mode.renderer()?;
     renderer.start(Arc::clone(&store))?;
 
     let system_info = machine_info().map(Arc::new);
+    let layout = match &args.layout {
+        Some(path) => {
+            let text =
+                std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            Some(
+                serde_json::from_str::<lightloom_engine::Layout>(&text)
+                    .with_context(|| format!("{} is not a layout", path.display()))?,
+            )
+        }
+        None => None,
+    };
     if let Some(r) = &recorder {
         r.set_system_info(system_info.as_deref().cloned());
     }
     let option_args = args.clone();
     let option_recorder = recorder.clone();
     let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
-        let opts = session_options(&option_args, device, system_info.clone());
+        let opts = session_options(&option_args, device, system_info.clone(), layout.as_ref());
         if let Some(r) = &option_recorder {
             r.set_channels(
                 &device.key,
@@ -1069,6 +1213,9 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     }
     let (sessions, failed_sessions) = manager.finish();
     renderer.stop();
+    if let Some(line) = renderer.status_line() {
+        eprintln!("lightloom {}: {line}", mode.name());
+    }
     max_rss = max_rss.max(rss_bytes());
     // A held console close/log-off/shutdown is released only when `interrupt` drops,
     // after the trace and the JSON report are written.
@@ -1189,6 +1336,15 @@ fn print_report(r: &RunReport) {
         );
         if let Some(ms) = s.first_write_ms {
             println!("  first write {ms:.1} ms after session start");
+        }
+        if s.canvas_to_wire.count > 0 {
+            println!(
+                "  canvas to wire p50 {:.2} ms p99 {:.2} ms max {:.2} ms ({} frames)",
+                s.canvas_to_wire.p50_ms,
+                s.canvas_to_wire.p99_ms,
+                s.canvas_to_wire.max_ms,
+                s.canvas_to_wire.count
+            );
         }
         if !s.subdevices.is_empty() {
             println!(
@@ -1360,6 +1516,7 @@ mod tests {
                 no_plugin_cache: true,
             },
             dry_run: false,
+            layout: None,
             record: None,
             duration: None,
             keep: false,

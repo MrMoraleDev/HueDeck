@@ -306,6 +306,8 @@ pub struct SessionReport {
     pub render: LatencySummary,
     /// Successful HID write / feature-send wall time.
     pub write: LatencySummary,
+    /// Frame capture to the first write of the `Render()` that used it.
+    pub canvas_to_wire: LatencySummary,
     /// Session start to the first successful (or dry-run) write.
     pub first_write_ms: Option<f64>,
     /// HID counters.
@@ -354,6 +356,7 @@ impl SessionReport {
             faulted: None,
             render: LatencySummary::default(),
             write: LatencySummary::default(),
+            canvas_to_wire: LatencySummary::default(),
             first_write_ms: None,
             io: IoStats::default(),
             io_log: Vec::new(),
@@ -854,8 +857,8 @@ fn drive(
         while let Ok(control) = controls.try_recv() {
             apply_control(rt, shared, control, &budgets, stop, report);
         }
-        let (_, frame) = frames.latest();
-        lock_device(shared).set_frame(frame);
+        let (_, frame, captured) = frames.latest_stamped();
+        lock_device(shared).set_frame_at(frame, captured);
         let t = Instant::now();
         let result = rt.call_export_until("Render", CallArgs::None, budgets.render_budget(), stop);
         // Cut short by a stop request (it outlived STOP_GRACE): not the plugin's
@@ -967,6 +970,7 @@ fn finish(
     let mut dev = lock_device(shared);
     report.io = dev.stats().clone();
     report.write = dev.write_latency();
+    report.canvas_to_wire = dev.canvas_to_wire();
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
     let (tail, lines) = dev.log_tail();

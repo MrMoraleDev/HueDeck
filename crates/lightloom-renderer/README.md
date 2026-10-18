@@ -1,13 +1,15 @@
 <!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
-# lightloom-renderer (SPIKE A)
+# lightloom-renderer
 
 Offscreen Chromium (CEF, via the [`cef`](https://crates.io/crates/cef) crate 154.5.0+154.0.34,
 Apache-2.0 OR MIT; CEF itself is BSD-3-Clause) rendering a SignalRGB-style lightscript at
 **320x200**. Every `OnPaint` BGRA buffer goes into a memory-mapped frame ring with the
 `lightloom_protocol::shm` layout. After `--frames` frames the binary prints paint-interval
-statistics as JSON.
+statistics as JSON. With `--serve` (M3) it runs until stdin closes instead, taking control
+commands from it; this is how `lightloom effect` and the daemon use it through
+`lightloom_render::CefRenderer`. See [Serve mode](#serve-mode-and-control-commands).
 
-**Status, 2026-10-18 (Windows 11, RTX 3060 on a 144 Hz display, SignalRGB running alongside),
+**SPIKE A status, 2026-10-18 (Windows 11, RTX 3060 on a 144 Hz display, SignalRGB running alongside),
 re-measured by review:** SPIKE A passes with `--software-compositing` and with `--disable-gpu`
 (12/12 runs each: 300/300 frames, p99 34.6-35.5 ms, 0 dropped). With the default GPU
 compositing all 300 frames still arrive at 30 fps with 0 dropped, but p99 < 40 ms holds in
@@ -18,7 +20,7 @@ lightloom-renderer --effect <path.html> --out <ring.shm> [--frames 300] [--fps 3
                  [--png <snap.png>] [--snapshot-frames 10,100] [--software-compositing]
                  [--disable-gpu] [--chromium-flag name[=value]]... [--stats <report.json>]
                  [--cef-log <file>] [--cef-cache <dir>] [--timeout-factor 3] [--raw-intervals]
-                 [--allow-network] [--no-inject] [--verbose]
+                 [--allow-network] [--no-inject] [--verbose] [--serve] [--prop name=value]...
 ```
 
 Exit codes:
@@ -38,6 +40,57 @@ PNG path. The rest is the shm geometry, load status, the mode (`software_composi
 `disable_gpu`, `sandbox`, `network_blocked`, the Chromium switches), what happened to the cache
 dir (`cef_cache_prepared`, `cef_cache_removed`), `skipped_controls` and the first 40 console
 lines.
+
+## Serve mode and control commands
+
+```text
+lightloom-renderer --serve --effect <path.html> --out <ring.shm> [--fps 30] [--prop name=value]...
+                 [--software-compositing]
+```
+
+`--serve` drops the frame limit and the deadline: the renderer paints into the ring until it is
+told to stop. Paint statistics cover the last 1800 paints (about a minute at 30 fps); the JSON
+report is printed when it exits. `--prop` sets a control's starting value; the value is parsed
+as JSON, else taken as a string, and coerced to the control's type (`ControlMeta::coerce`: a
+number control takes `5` or `"5"`, a boolean `true`, `"true"` or `1`, a colour `#rrggbb`).
+
+Stdin carries one JSON object per line (`src/control.rs`):
+
+| command | effect on the page |
+|---|---|
+| `{"cmd":"set","values":{"speed":5,"color":"#ff0000"}}` | each known control is coerced, assigned to its global, then its `on<name>Changed()` runs; unknown or non-injectable names are ignored with a warning on stderr |
+| `{"cmd":"event","sender":"discord","event":"message"}` | `onCanvasApiEvent({sender, event})`, as SignalRGB's `POST /canvas/event` |
+| `{"cmd":"tap","x":120,"y":40}` | `onCanvasTapped(x, y)` in canvas pixels |
+| `{"cmd":"fps","value":15}` | `SetWindowlessFrameRate` (the client's 15 fps downshift) |
+| `{"cmd":"engine","data":{"audio":{"level":-20,"freq":[...]}}}` | merged into `window.engine` (below) |
+| `{"cmd":"quit"}` | close the browser and exit; the end of stdin does the same, so a renderer never outlives its parent |
+
+Strings are embedded as JSON string literals, never spliced into code, and every hook call is
+wrapped in `try`/`catch` that reports to the console. Lines longer than 512 KiB are refused.
+
+**Engine data.** Only `audio`, `zone`, `vision` and `sensors` are accepted. Objects merge
+recursively; an array fills the page's existing typed array in place (`engine.audio.freq`,
+`engine.zone.hue|saturation|lightness|imagedata`), truncated to its length, so effects that kept
+a reference to the array see the new values; any other value replaces. Only own keys are copied
+and `__proto__` is skipped. `engine.getSensorValue(name)` returns `engine.sensors[name]` or
+`null`. Verified live (CEF 154): after one push a probe effect logged `level=-20 freq0=5
+freq199=9 sameArray=true hue0=123 sensor=55C`, `({}).polluted` stayed `undefined`, and a
+`getSensorValue` key in the data was ignored. The whole 160x100 zone image as a JSON array is
+about 250 KB per push; M6 moves bulk input data to shared memory.
+
+**Load sequence.** The injected script runs in `OnContextCreated`, before any page script:
+
+1. `window.engine` with zeroed inputs.
+2. `var <control> = <value>;` for every injectable control, so page code can read controls
+   from its first line and its first animation frame.
+3. A `load` listener that assigns every control again (a page that declares `var speed = 1`
+   itself would otherwise win; SignalRGB evaluates the values after the page scripts), calls
+   every `on<control>Changed()` once, then `onEngineReady()`.
+
+`lightloom_render::CefRenderer` drives this process: it polls the ring every 2 ms, republishes
+the last frame when the page paints nothing for two frame periods, restarts a renderer that
+exits (1 s doubling to 30 s, holding the last frame), downshifts to 15 fps below 20 fps, and
+replays the latest control values on a restart's command line.
 
 ## Building
 
@@ -153,8 +206,8 @@ own sample manifests. The embedding was verified: the Win10 GUID string is prese
     each call does a bounded amount of work, so at 30 fps it either busy-polls or adds latency.
     `external_message_pump=1` with `OnScheduleMessagePumpWork` is the proper way to embed into a
     foreign loop. `multi_threaded_message_loop=1` (Windows-only) runs CEF's UI thread separately.
-  - For M3, keep `run_message_loop` on the main thread. Run the control pipe on its own thread
-    and hand commands to CEF with `post_task(TID_UI, ...)`.
+  - M3 kept `run_message_loop` on the main thread. The control pipe runs on its own thread
+    (`lightloom-control`) and hands commands to CEF with `post_task(TID_UI, ...)`.
 - **Pacing.** We set `BrowserSettings.windowless_frame_rate = --fps`. CEF 154's header gives
   only a minimum (1), and it is not capped at 60: spike.html measured 60.4 / 60.1 fps at
   `--fps 60` and 120.4 / 120.0 fps at `--fps 120` (GPU / software compositing, 240 frames, 0
@@ -178,8 +231,8 @@ own sample manifests. The embedding was verified: the Win10 GUID string is prese
   it in `OnBrowserCreated`. In `OnContextCreated` (main frame only), `CefV8Context::Eval`
   evaluates it. It is verified: `spike.html` logs
   `engine=object freq=200 zone.hue=560 speed=3 barColor=#ffffff`, which appears in the report's
-  `console`, and draws `engine=object ready=true` into the frame. M3 replaces this with the full
-  load sequence.
+  `console`, and draws `engine=object ready=true` into the frame. M3 completed the load
+  sequence; see [Serve mode](#serve-mode-and-control-commands).
   - Controls whose name cannot be a page global are skipped and listed in the report's
     `skipped_controls`: non-identifiers, ECMAScript reserved words (a single `var default = 1;`
     is a SyntaxError that would drop the whole script, `window.engine` included), and globals
@@ -200,8 +253,15 @@ own sample manifests. The embedding was verified: the Win10 GUID string is prese
   `disable-features=OptimizationGuideModelDownloading,OptimizationHints,NetworkTimeServiceQuerying,...`
   did not stop them. With the rule (now the default) a run shows 0 TCP/UDP endpoints in the
   whole process tree. Effects are local files, and docs/architecture.md wants "URL filter
-  restricted to the effect directory" and "no telemetry". Literal-IP URLs are not blocked; that
-  is the M3 URL filter's job (`CefRequestHandler`).
+  restricted to the effect directory" and "no telemetry". Literal-IP URLs pass the resolver
+  rule, so M3 added the URL filter (`url::UrlFilter`, applied by a `CefRequestHandler` in the
+  browser process to every navigation and resource request). It allows files in the effect's
+  directory and below, `data:`, `blob:`, `about:blank` and `about:srcdoc`; `http(s)` and
+  `ws(s)` only with `--allow-network`; it cancels everything else and every popup. The report
+  counts refused requests (`blocked_requests`) and lists the first 20 (`blocked_urls`).
+  Verified with a probe effect: a parent-directory image, `fetch("http://142.250.180.14/")`,
+  an iframe on `file:///C:/Windows/win.ini`, a navigation to `file:///C:/Windows/` and
+  `window.open` were all refused; a same-directory image and a `data:` image loaded.
 
 ## shm ring (`src/ring.rs`)
 
@@ -339,7 +399,9 @@ software 34.67 / 34.67) is within these ranges.
   37.4 / 47.7 / 35.5. None fixes it.
 - **Recommendation.** Make the M3 renderer default to software compositing for the 320x200
   view. For heavy WebGL effects, look at `shared_texture_enabled` (`OnAcceleratedPaint`) with
-  our own D3D11 readback, or external begin frames.
+  our own D3D11 readback, or external begin frames. (M3 did: `lightloom effect` and
+  `CefRenderer` composite in software unless asked for `--gpu-compositing`; 20 effects in both
+  modes are measured in docs/hardware/effects-m3.md.)
 - **Memory** of the renderer process tree (final binary), sampled every 1.5 s during a run: 6
   processes, working set 284-301 MB (shared pages counted once per process), private bytes
   159-169 MB, browser process 99 MB. With `--software-compositing`: 271-286 MB and

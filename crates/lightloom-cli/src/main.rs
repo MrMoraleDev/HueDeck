@@ -61,6 +61,21 @@ enum Command {
         #[command(flatten)]
         run: run::RunArgs,
     },
+    /// Render an effect (lightscript) with the CEF renderer onto every supported device until Ctrl-C.
+    Effect {
+        #[command(flatten)]
+        effect: run::EffectArgs,
+        #[command(flatten)]
+        run: run::RunArgs,
+    },
+    /// List the effects in a directory and their controls.
+    Effects {
+        /// Effect directories (default: ./effects).
+        dirs: Vec<std::path::PathBuf>,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Drive the rainbow pattern for a fixed time and report latency percentiles.
     Bench {
         /// Seconds to run.
@@ -105,6 +120,8 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
         Command::Devices { json, filters } => run_devices(json, &filters).map(|_| run::Outcome::Clean),
         Command::Light { color, run } => run::run(run::Mode::Light(color), &run),
         Command::Rainbow { fps, run } => run::run(run::Mode::Rainbow { fps }, &run),
+        Command::Effect { effect, run } => run::run(run::Mode::Effect(effect), &run),
+        Command::Effects { dirs, json } => run::list_effects(&dirs, json).map(|_| run::Outcome::Clean),
         Command::Bench {
             seconds,
             fps,

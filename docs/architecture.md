@@ -98,7 +98,8 @@ lightloomd FrameStore (triple buffer + seq) --condvar--> plugin thread N:
 - Slow devices skip to the latest frame; nothing queues. Target canvas-to-wire
   p50 <= 10 ms, p99 <= 25 ms with four devices; `lightloom bench` prints histograms.
 - If `on_paint` cadence stays below 20 fps for 60 frames the engine downshifts to
-  15 fps and warns. `--software-compositing` is the VM/RDP fallback.
+  15 fps and warns. The renderer composites in software by default (steadier
+  paint cadence at 320x200, works in VMs and RDP); GPU compositing is opt-in.
 - Effect load sequence: page scripts run -> engine injects `var <prop> = <value>`
   for every `<meta property>` -> every `on<prop>Changed()` called once ->
   `onEngineReady()` -> `requestAnimationFrame` loop. `engine.audio.*`,

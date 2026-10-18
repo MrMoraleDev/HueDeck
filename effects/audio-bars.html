@@ -1,0 +1,53 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Lightloom starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Audio Bars</title>
+  <meta description="Spectrum bars driven by the system audio (engine.audio)." />
+  <meta publisher="Lightloom" />
+  <meta property="bars" label="Bars" type="number" min="4" max="50" default="20" />
+  <meta property="colourMode" label="Colours" type="combobox" values="Rainbow,Single" default="Rainbow" />
+  <meta property="barColor" label="Bar Colour" type="color" default="#00a0ff" />
+  <meta property="sensitivity" label="Sensitivity" type="number" min="10" max="300" default="100" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var heights = [];
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    function draw() {
+      var n = Math.round(Math.max(4, Math.min(50, num(bars, 20))));
+      var audio = window.engine && engine.audio ? engine.audio : null;
+      var freq = audio && audio.freq ? audio.freq : [];
+      var gain = num(sensitivity, 100) / 100;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, W, H);
+      var bw = W / n;
+      var per = Math.max(1, Math.floor(freq.length / n));
+      for (var b = 0; b < n; b++) {
+        var sum = 0;
+        for (var i = b * per; i < (b + 1) * per && i < freq.length; i++) sum += Math.abs(freq[i]);
+        var target = Math.min(1, (sum / per / 127) * gain);
+        // Rise at once, fall slowly.
+        var h = heights[b] || 0;
+        h = target > h ? target : Math.max(target, h - 0.03);
+        heights[b] = h;
+        var px = Math.max(2, h * H);
+        ctx.fillStyle = colourMode === "Single" && typeof barColor === "string" ? barColor : "hsl(" + Math.round((b / n) * 300) + ",100%,50%)";
+        ctx.fillRect(Math.floor(b * bw) + 1, H - px, Math.ceil(bw) - 2, px);
+      }
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

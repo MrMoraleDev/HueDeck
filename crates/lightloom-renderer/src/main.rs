@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-//! `lightloom-renderer` — CEF offscreen renderer process (SPIKE A).
+//! `lightloom-renderer` — CEF offscreen renderer process.
 //!
 //! Hosts one windowless Chromium browser (CEF, Alloy style) on an effect's `file://` URL at
-//! 320x200, copies every `OnPaint` BGRA buffer into the shm ring described by
-//! `lightloom_protocol::shm`, and after `--frames` frames prints paint-interval statistics as
-//! JSON. The same executable serves as every Chromium subprocess (`--type=renderer|gpu-process|
-//! utility|...`) through `cef::execute_process`. See README.md.
+//! 320x200 and copies every `OnPaint` BGRA buffer into the shm ring described by
+//! `lightloom_protocol::shm`. With `--frames N` it stops after N frames; with `--serve` it runs
+//! until stdin closes, taking control commands from it (`control.rs`). Either way it prints
+//! paint-interval statistics as JSON at the end. The same executable serves as every Chromium
+//! subprocess (`--type=renderer|gpu-process|utility|...`) through `cef::execute_process`. See
+//! README.md.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]

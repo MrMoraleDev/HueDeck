@@ -1,0 +1,557 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. What device.getHidReportFields() returns for a LampArray collection laid out like Microsoft's public sample (MIT, ArduinoHidForWindows): feature reports 1 attributes (23 bytes), 2 attribute request (3), 3 attribute response (29), 4 multi update for 8 lamps (51), 5 range update (10), 6 control (2). Written by hand for the tests.",
+ "usagePage": 89,
+ "usage": 1,
+ "reports": [
+  {
+   "kind": "feature",
+   "reportId": 1,
+   "bytes": 23
+  },
+  {
+   "kind": "feature",
+   "reportId": 2,
+   "bytes": 3
+  },
+  {
+   "kind": "feature",
+   "reportId": 3,
+   "bytes": 29
+  },
+  {
+   "kind": "feature",
+   "reportId": 4,
+   "bytes": 51
+  },
+  {
+   "kind": "feature",
+   "reportId": 5,
+   "bytes": 10
+  },
+  {
+   "kind": "feature",
+   "reportId": 6,
+   "bytes": 2
+  }
+ ],
+ "fields": [
+  {
+   "kind": "feature",
+   "reportId": 1,
+   "bitOffset": 0,
+   "bitSize": 16,
+   "count": 1,
+   "flags": 3,
+   "logicalMin": 0,
+   "logicalMax": 65535,
+   "collection": [
+    89,
+    2
+   ],
+   "usages": [
+    [
+     89,
+     3,
+     3
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 1,
+   "bitOffset": 16,
+   "bitSize": 32,
+   "count": 5,
+   "flags": 3,
+   "logicalMin": 0,
+   "logicalMax": 2147483647,
+   "collection": [
+    89,
+    2
+   ],
+   "usages": [
+    [
+     89,
+     4,
+     4
+    ],
+    [
+     89,
+     5,
+     5
+    ],
+    [
+     89,
+     6,
+     6
+    ],
+    [
+     89,
+     7,
+     7
+    ],
+    [
+     89,
+     8,
+     8
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 2,
+   "bitOffset": 0,
+   "bitSize": 16,
+   "count": 1,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 65535,
+   "collection": [
+    89,
+    32
+   ],
+   "usages": [
+    [
+     89,
+     33,
+     33
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 3,
+   "bitOffset": 0,
+   "bitSize": 16,
+   "count": 1,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 65535,
+   "collection": [
+    89,
+    34
+   ],
+   "usages": [
+    [
+     89,
+     33,
+     33
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 3,
+   "bitOffset": 16,
+   "bitSize": 32,
+   "count": 5,
+   "flags": 3,
+   "logicalMin": 0,
+   "logicalMax": 2147483647,
+   "collection": [
+    89,
+    34
+   ],
+   "usages": [
+    [
+     89,
+     35,
+     35
+    ],
+    [
+     89,
+     36,
+     36
+    ],
+    [
+     89,
+     37,
+     37
+    ],
+    [
+     89,
+     39,
+     39
+    ],
+    [
+     89,
+     38,
+     38
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 3,
+   "bitOffset": 176,
+   "bitSize": 8,
+   "count": 6,
+   "flags": 3,
+   "logicalMin": 0,
+   "logicalMax": 255,
+   "collection": [
+    89,
+    34
+   ],
+   "usages": [
+    [
+     89,
+     40,
+     40
+    ],
+    [
+     89,
+     41,
+     41
+    ],
+    [
+     89,
+     42,
+     42
+    ],
+    [
+     89,
+     43,
+     43
+    ],
+    [
+     89,
+     44,
+     44
+    ],
+    [
+     89,
+     45,
+     45
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 4,
+   "bitOffset": 0,
+   "bitSize": 8,
+   "count": 2,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 8,
+   "collection": [
+    89,
+    80
+   ],
+   "usages": [
+    [
+     89,
+     3,
+     3
+    ],
+    [
+     89,
+     85,
+     85
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 4,
+   "bitOffset": 16,
+   "bitSize": 16,
+   "count": 8,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 65535,
+   "collection": [
+    89,
+    80
+   ],
+   "usages": [
+    [
+     89,
+     33,
+     33
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 4,
+   "bitOffset": 144,
+   "bitSize": 8,
+   "count": 32,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 255,
+   "collection": [
+    89,
+    80
+   ],
+   "usages": [
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ],
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ],
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ],
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ],
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ],
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ],
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ],
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 5,
+   "bitOffset": 0,
+   "bitSize": 8,
+   "count": 1,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 8,
+   "collection": [
+    89,
+    96
+   ],
+   "usages": [
+    [
+     89,
+     85,
+     85
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 5,
+   "bitOffset": 8,
+   "bitSize": 16,
+   "count": 2,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 65535,
+   "collection": [
+    89,
+    96
+   ],
+   "usages": [
+    [
+     89,
+     97,
+     97
+    ],
+    [
+     89,
+     98,
+     98
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 5,
+   "bitOffset": 40,
+   "bitSize": 8,
+   "count": 4,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 255,
+   "collection": [
+    89,
+    96
+   ],
+   "usages": [
+    [
+     89,
+     81,
+     81
+    ],
+    [
+     89,
+     82,
+     82
+    ],
+    [
+     89,
+     83,
+     83
+    ],
+    [
+     89,
+     84,
+     84
+    ]
+   ]
+  },
+  {
+   "kind": "feature",
+   "reportId": 6,
+   "bitOffset": 0,
+   "bitSize": 8,
+   "count": 1,
+   "flags": 2,
+   "logicalMin": 0,
+   "logicalMax": 1,
+   "collection": [
+    89,
+    112
+   ],
+   "usages": [
+    [
+     89,
+     113,
+     113
+    ]
+   ]
+  }
+ ]
+}

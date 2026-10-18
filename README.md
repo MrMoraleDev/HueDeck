@@ -112,12 +112,16 @@ Lightloom's own plugin library, tested on real hardware:
 | NZXT Kraken X53 / X63 / X73 | `1E71:2007` | pump ring, logo, RGB header on the pump |
 | SteelSeries Arctis 5 | `1038:12AA` | both ear cups |
 
+Plus **any HID LampArray device**, the open standard behind Windows Dynamic Lighting
+(keyboards, mice and more from many brands): one generic plugin reads the lamps and their
+positions from the device itself (tested on the Razer DeathAdder V2 Pro's LampArray
+interface).
+
 Written and run on real hardware, waiting for a visual check: the **Sony DualSense**
 light bar over USB (`054C:0CE6`; volume, vibration and the other LEDs are never touched).
 
-Coming next: any **HID LampArray** device (the Windows Dynamic Lighting standard),
-network lights (**WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeelight**), then many
-more families adapted from OpenRGB. Missing your device?
+Coming next: network lights (**WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeelight**),
+then many more families adapted from OpenRGB. Missing your device?
 [Add it](#add-your-device) or open an issue with its USB id.
 
 ## Quick start
@@ -220,7 +224,7 @@ Long form: [docs/architecture.md](docs/architecture.md). Decisions:
 | M2 | Plugin host, hot-plug, record and replay, conformance suite | done |
 | M3 | Effects in Chromium, layouts, sampling, benchmarks | done |
 | M4 | Daemon, settings, local API, dashboard, SignalRGB import, installer | in progress: installer next |
-| Devices | Lightloom's own plugin library: HID LampArray, network lights, OpenRGB families | in progress |
+| Devices | Lightloom's own plugin library: network lights, OpenRGB families | in progress |
 | M5 | RAM, GPU and SMBus devices through PawnIO, sensors | planned |
 | M6 | Audio and screen-reactive effects, network lights, LCD screens, macros, OpenRGB SDK server | planned |
 | M7 | Linux, AppImage/Flatpak, 1.0 | planned |

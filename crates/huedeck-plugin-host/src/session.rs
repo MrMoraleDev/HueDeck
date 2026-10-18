@@ -324,6 +324,9 @@ pub struct SessionReport {
     pub log_lines: u64,
     /// QuickJS heap at the end of the session.
     pub memory_bytes: i64,
+    /// The session was stopped because its device went away (set by
+    /// [`crate::manager::DeviceManager`]); I/O errors are then expected.
+    pub device_removed: bool,
     /// Session wall time.
     pub elapsed_ms: f64,
 }
@@ -356,6 +359,7 @@ impl SessionReport {
             log_tail: Vec::new(),
             log_lines: 0,
             memory_bytes: 0,
+            device_removed: false,
             elapsed_ms: 0.0,
         }
     }
@@ -368,8 +372,12 @@ impl SessionReport {
     }
 
     /// No lifecycle failure, no fault, no HID error, and every requested
-    /// restore check found the device as it was before.
+    /// restore check found the device as it was before. A session whose device
+    /// was removed only needs to have ended without a fault.
     pub fn is_clean(&self) -> bool {
+        if self.device_removed {
+            return self.faulted.is_none();
+        }
         self.failures.is_empty()
             && self.faulted.is_none()
             && self.io.errors() == 0
@@ -398,6 +406,7 @@ struct LiveStats {
     frames: AtomicU64,
     render_errors: AtomicU64,
     hid_errors: AtomicU64,
+    hid_disconnects: AtomicU64,
     /// Microseconds from session start to the first write; 0 = none yet.
     first_write_us: AtomicU64,
 }
@@ -413,6 +422,8 @@ pub struct LiveSnapshot {
     pub render_errors: u64,
     /// Failed HID operations so far.
     pub hid_errors: u64,
+    /// Failed HID operations whose device is gone (see [`IoStats::disconnects`]).
+    pub disconnects: u64,
     /// Session start to the first successful (or dry-run) write.
     pub first_write_ms: Option<f64>,
 }
@@ -434,6 +445,7 @@ impl LiveStats {
             frames: self.frames.load(Ordering::Relaxed),
             render_errors: self.render_errors.load(Ordering::Relaxed),
             hid_errors: self.hid_errors.load(Ordering::Relaxed),
+            disconnects: self.hid_disconnects.load(Ordering::Relaxed),
             first_write_ms: match self.first_write_us.load(Ordering::Relaxed) {
                 0 => None,
                 us => Some(us as f64 / 1000.0),
@@ -446,6 +458,7 @@ impl LiveStats {
 #[derive(Debug)]
 pub struct SessionHandle {
     key: String,
+    started: Instant,
     stop: Arc<AtomicBool>,
     live: Arc<LiveStats>,
     thread: JoinHandle<SessionReport>,
@@ -455,6 +468,11 @@ impl SessionHandle {
     /// Device key.
     pub fn key(&self) -> &str {
         &self.key
+    }
+
+    /// When the session was spawned.
+    pub fn started(&self) -> Instant {
+        self.started
     }
 
     /// Ask the session to finish its current frame, shut down and return.
@@ -497,6 +515,7 @@ pub fn spawn(
         frames: AtomicU64::new(0),
         render_errors: AtomicU64::new(0),
         hid_errors: AtomicU64::new(0),
+        hid_disconnects: AtomicU64::new(0),
         first_write_us: AtomicU64::new(0),
     });
     let key = device.key.clone();
@@ -512,6 +531,7 @@ pub fn spawn(
         })?;
     Ok(SessionHandle {
         key,
+        started: Instant::now(),
         stop,
         live,
         thread,
@@ -807,6 +827,8 @@ fn drive(
         }
         let dev = lock_device(shared);
         live.hid_errors.store(dev.stats().errors(), Ordering::Relaxed);
+        live.hid_disconnects
+            .store(dev.stats().disconnects, Ordering::Relaxed);
         if let Some(d) = dev.first_write() {
             live.first_write_us
                 .store((d.as_micros() as u64).max(1), Ordering::Relaxed);

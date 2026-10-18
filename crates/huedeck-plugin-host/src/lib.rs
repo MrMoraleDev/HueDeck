@@ -22,11 +22,13 @@
 //!   each placed and sampled on the canvas on its own.
 //! * [`session`]: one device session = one plugin thread running
 //!   Validate → Initialize → Render per frame → Shutdown.
+//! * [`manager`]: one session per present device, following hotplug
+//!   (stop on removal, restart behind a stale handle, start on arrival).
 //! * [`catalog`]: plugin discovery over plugin directories (VID:PID index).
 //! * [`stats`]: fixed-memory latency histograms for long-running sessions.
 //! * [`exports`]: namespace JSON → [`PluginMeta`].
 //! * [`dryrun`]: the `huedeck compat dry-run` corpus harness.
-// TODO(M2): hotplug; `bus.*` (SMBus) is M5.
+// `bus.*` (SMBus) arrives with the privileged broker (M5).
 
 #![forbid(unsafe_code)]
 
@@ -36,6 +38,7 @@ pub mod device;
 pub mod dryrun;
 pub mod exports;
 pub mod loader;
+pub mod manager;
 pub mod meta;
 pub mod resolve;
 pub mod runtime;

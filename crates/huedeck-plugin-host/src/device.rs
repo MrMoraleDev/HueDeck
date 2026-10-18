@@ -114,6 +114,9 @@ pub struct IoStats {
     pub read_timeouts: u64,
     /// Calls that needed an open endpoint while none was open.
     pub no_endpoint: u64,
+    /// Failed operations (also counted above) whose device is gone: unplugged,
+    /// or plugged back in behind a stale handle.
+    pub disconnects: u64,
     /// Text of the most recent failure.
     pub last_error: Option<String>,
 }
@@ -612,7 +615,10 @@ impl DeviceContext {
         }
     }
 
-    fn fail(&mut self, key: &'static str, err: &str) {
+    fn fail(&mut self, key: &'static str, err: &huedeck_hal::HalError) {
+        if matches!(err, huedeck_hal::HalError::Disconnected) {
+            self.stats.disconnects += 1;
+        }
         self.stats.last_error = Some(format!("{key}: {err}"));
         self.warn_once(
             key,
@@ -674,7 +680,7 @@ impl DeviceContext {
             }
             Err(e) => {
                 self.stats.write_errors += 1;
-                self.fail("write", &e.to_string());
+                self.fail("write", &e);
                 -1
             }
         }
@@ -704,7 +710,7 @@ impl DeviceContext {
             }
             Err(e) => {
                 self.stats.feature_send_errors += 1;
-                self.fail("send_report", &e.to_string());
+                self.fail("send_report", &e);
                 -1
             }
         }
@@ -750,7 +756,7 @@ impl DeviceContext {
             }
             Err(e) => {
                 self.stats.feature_get_errors += 1;
-                self.fail("get_report", &e.to_string());
+                self.fail("get_report", &e);
                 vec![0u8; len]
             }
         }
@@ -798,7 +804,7 @@ impl DeviceContext {
             }
             Err(e) => {
                 self.stats.read_errors += 1;
-                self.fail("input_report", &e.to_string());
+                self.fail("input_report", &e);
                 vec![0u8; len]
             }
         }
@@ -830,7 +836,7 @@ impl DeviceContext {
             }
             Err(e) => {
                 self.stats.read_errors += 1;
-                self.fail("read", &e.to_string());
+                self.fail("read", &e);
                 Vec::new()
             }
         }
@@ -846,7 +852,7 @@ impl DeviceContext {
         if let Some(handle) = self.handle.as_mut() {
             if let Err(e) = handle.clear_read_buffer() {
                 self.stats.read_errors += 1;
-                self.fail("clearReadBuffer", &e.to_string());
+                self.fail("clearReadBuffer", &e);
             }
         }
     }
@@ -879,7 +885,7 @@ impl DeviceContext {
         match self.open(index) {
             Ok(()) => true,
             Err(e) => {
-                self.fail("set_endpoint", &e.to_string());
+                self.fail("set_endpoint", &e);
                 false
             }
         }

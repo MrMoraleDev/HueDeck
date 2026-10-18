@@ -25,7 +25,6 @@
     layoutBrightness = snapshot.lighting.layoutBrightness;
   });
 
-  const STAGE_W = 960;
   const GRID = 4;
 
   function placementOf(it: Item): Placement {
@@ -120,9 +119,9 @@
 </div>
 
 <div class="editor">
-  <div class="stage" style={`width:${STAGE_W}px;height:${(STAGE_W * 200) / 320}px`}>
-    <Preview width={STAGE_W} tappable={false} />
-    <svg viewBox="0 0 320 200" class="overlay" role="presentation">
+  <div class="stage">
+    <Preview fill tappable={false} />
+    <svg viewBox="0 0 320 200" preserveAspectRatio="none" class="overlay" role="presentation">
       {#each items as it (it.ep.uid)}
         {@const p = placementOf(it)}
         {@const sc = scaleOf(it, p)}
@@ -203,7 +202,9 @@
   }
   .stage {
     position: relative;
-    max-width: 100%;
+    flex: 1 1 600px;
+    max-width: 960px;
+    aspect-ratio: 320 / 200;
   }
   .overlay {
     position: absolute;

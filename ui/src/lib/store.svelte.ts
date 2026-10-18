@@ -5,6 +5,12 @@
 import { api, wsUrl } from "./api";
 import type { Snapshot } from "./types";
 
+/** A message for the banner; a failed fetch means the daemon is not running. */
+function describe(e: unknown): string {
+  if (e instanceof TypeError) return "HueDeck is not running (or not reachable on this address). Start it and this page reconnects.";
+  return e instanceof Error ? e.message : String(e);
+}
+
 class DaemonState {
   snapshot = $state<Snapshot | null>(null);
   connected = $state(false);
@@ -24,7 +30,7 @@ class DaemonState {
       this.snapshot = await api.state();
       this.error = null;
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = describe(e);
     } finally {
       this.pending = false;
       if (this.again) {
@@ -66,7 +72,7 @@ class DaemonState {
       this.error = null;
       return r;
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = describe(e);
       return undefined;
     } finally {
       void this.refresh();

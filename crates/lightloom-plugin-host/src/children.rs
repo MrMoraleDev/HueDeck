@@ -29,6 +29,12 @@ use std::collections::BTreeMap;
 pub const MAX_SUBDEVICES: usize = 256;
 /// Most channels one plugin may add.
 pub const MAX_CHANNELS: usize = 64;
+/// Most LEDs one subdevice may name or map.
+pub const MAX_SUBDEVICE_LEDS: usize = 4096;
+/// Longest LED name kept (characters).
+pub const MAX_LED_NAME_CHARS: usize = 128;
+/// Largest subdevice image (URL or base64) kept, in bytes.
+pub const MAX_IMAGE_BYTES: usize = 1 << 20;
 
 /// Where one endpoint samples the canvas.
 #[derive(Clone, Debug)]
@@ -347,6 +353,15 @@ impl Children {
 
     /// `device.setSubdeviceLeds(id, names, positions)`; `flat` = `[x0, y0, x1, y1, ...]`.
     pub fn set_subdevice_leds(&mut self, id: &str, names: Vec<String>, flat: &[i32]) -> Result<(), String> {
+        if names.len() > MAX_SUBDEVICE_LEDS || flat.len() > MAX_SUBDEVICE_LEDS * 2 {
+            return Err(format!(
+                "device.setSubdeviceLeds({id}): more than {MAX_SUBDEVICE_LEDS} LEDs"
+            ));
+        }
+        let names: Vec<String> = names
+            .into_iter()
+            .map(|n| crate::device::capped(n, MAX_LED_NAME_CHARS))
+            .collect();
         let positions: Vec<[u32; 2]> = flat
             .chunks_exact(2)
             .map(|p| {
@@ -376,12 +391,22 @@ impl Children {
         let s = self
             .subdevice_mut(id)
             .ok_or_else(|| missing("setSubdeviceLedMap", id))?;
-        s.led_map = map.iter().map(|&v| u32::try_from(v).unwrap_or(0)).collect();
+        s.led_map = map
+            .iter()
+            .take(MAX_SUBDEVICE_LEDS)
+            .map(|&v| u32::try_from(v).unwrap_or(0))
+            .collect();
         Ok(())
     }
 
     /// `device.setSubdeviceImageUrl(id, url)` / `setSubdeviceImage(id, base64)`.
     pub fn set_subdevice_image(&mut self, id: &str, image: String) -> Result<(), String> {
+        if image.len() > MAX_IMAGE_BYTES {
+            return Err(format!(
+                "device.setSubdeviceImage({id}): {} bytes is larger than {MAX_IMAGE_BYTES}",
+                image.len()
+            ));
+        }
         if image
             .to_ascii_lowercase()
             .split(['?', '#'])
@@ -655,6 +680,27 @@ mod tests {
             "Failed to find subdevice with name: Header 1"
         );
         assert!(c.set_subdevice_image("x", "a.GIF".into()).is_err());
+    }
+
+    #[test]
+    fn plugin_supplied_sizes_are_bounded() {
+        let mut c = children();
+        c.create_subdevice("S").unwrap();
+        let names = vec!["n".to_string(); MAX_SUBDEVICE_LEDS + 1];
+        let flat = vec![0; (MAX_SUBDEVICE_LEDS + 1) * 2];
+        assert!(c
+            .set_subdevice_leds("S", names, &flat)
+            .unwrap_err()
+            .contains("more than"));
+        let long = "x".repeat(1000);
+        c.set_subdevice_leds("S", vec![long], &[0, 0]).unwrap();
+        assert_eq!(c.subdevices()[0].led_names[0].chars().count(), MAX_LED_NAME_CHARS);
+        assert!(c
+            .set_subdevice_image("S", "a".repeat(MAX_IMAGE_BYTES + 1))
+            .is_err());
+        c.set_subdevice_led_map("S", &vec![1; MAX_SUBDEVICE_LEDS * 2])
+            .unwrap();
+        assert_eq!(c.subdevices()[0].led_map.len(), MAX_SUBDEVICE_LEDS);
     }
 
     #[test]

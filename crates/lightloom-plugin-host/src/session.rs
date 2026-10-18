@@ -316,6 +316,8 @@ pub struct SessionReport {
     pub restore_checks: Vec<RestoreCheck>,
     /// Why requested reports were not compared (unreadable, none declared).
     pub restore_notes: Vec<String>,
+    /// Worth knowing, not failures: calls a stop request cut short.
+    pub notes: Vec<String>,
     /// `Shutdown(false)` ran.
     pub shutdown_called: bool,
     /// Subdevices at the end of the session.
@@ -357,6 +359,7 @@ impl SessionReport {
             io_log: Vec::new(),
             restore_checks: Vec::new(),
             restore_notes: Vec::new(),
+            notes: Vec::new(),
             shutdown_called: false,
             subdevices: Vec::new(),
             channels: Vec::new(),
@@ -377,10 +380,15 @@ impl SessionReport {
 
     /// No lifecycle failure, no fault, no HID error, and every requested
     /// restore check found the device as it was before. A session whose device
-    /// was removed only needs to have ended without a fault.
+    /// was removed while it ran is judged without the failures removal causes
+    /// (HID errors, `Render()` / `Shutdown()` / change-hook failures).
     pub fn is_clean(&self) -> bool {
         if self.device_removed {
-            return self.faulted.is_none();
+            return self.faulted.is_none()
+                && self
+                    .failures
+                    .iter()
+                    .all(|f| f.phase == "Render" || f.phase == "Shutdown" || f.phase.starts_with("on"));
         }
         self.failures.is_empty()
             && self.faulted.is_none()
@@ -411,6 +419,7 @@ struct LiveStats {
     render_errors: AtomicU64,
     hid_errors: AtomicU64,
     hid_disconnects: AtomicU64,
+    hid_disconnected: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
     first_write_us: AtomicU64,
 }
@@ -428,6 +437,8 @@ pub struct LiveSnapshot {
     pub hid_errors: u64,
     /// Failed HID operations whose device is gone (see [`IoStats::disconnects`]).
     pub disconnects: u64,
+    /// The latest HID operation failed because the device is gone.
+    pub disconnected: bool,
     /// Session start to the first successful (or dry-run) write.
     pub first_write_ms: Option<f64>,
 }
@@ -450,6 +461,7 @@ impl LiveStats {
             render_errors: self.render_errors.load(Ordering::Relaxed),
             hid_errors: self.hid_errors.load(Ordering::Relaxed),
             disconnects: self.hid_disconnects.load(Ordering::Relaxed),
+            disconnected: self.hid_disconnected.load(Ordering::Relaxed),
             first_write_ms: match self.first_write_us.load(Ordering::Relaxed) {
                 0 => None,
                 us => Some(us as f64 / 1000.0),
@@ -541,6 +553,7 @@ pub fn spawn(
         render_errors: AtomicU64::new(0),
         hid_errors: AtomicU64::new(0),
         hid_disconnects: AtomicU64::new(0),
+        hid_disconnected: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
     });
     let key = device.key.clone();
@@ -744,6 +757,10 @@ fn drive(
     // and set_endpoint may later switch among the accepted ones only.
     let mut validated = Vec::new();
     for (i, ep) in device.endpoints.iter().enumerate() {
+        if stop.load(Ordering::Acquire) {
+            report.notes.push("stopped while validating endpoints".into());
+            return;
+        }
         match rt.validate(&ep.endpoint_tuple(), budgets.call(budgets.validate)) {
             Ok(true) => validated.push(i),
             Ok(false) => {}
@@ -796,6 +813,10 @@ fn drive(
         }
     }
 
+    if stop.load(Ordering::Acquire) {
+        report.notes.push("stopped before Initialize".into());
+        return;
+    }
     lifecycle.initialize_called = true;
     // A stop request cuts Initialize short (Shutdown still runs).
     match rt.call_export_until(
@@ -805,6 +826,9 @@ fn drive(
         stop,
     ) {
         Ok(_) => report.initialized = true,
+        Err(e) if e.is_stop() => report
+            .notes
+            .push("Initialize was cut short by a stop request".into()),
         Err(e) => report.fail("Initialize", e),
     }
     if let Some(fatal) = lock_device(shared).fatal() {
@@ -822,9 +846,13 @@ fn drive(
         let Some(seq) = frames.wait_for_newer(last_seq, Duration::from_millis(100)) else {
             continue;
         };
+        // Asked to stop while waiting: no new frame.
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
         last_seq = seq;
         while let Ok(control) = controls.try_recv() {
-            apply_control(rt, shared, control, &budgets, report);
+            apply_control(rt, shared, control, &budgets, stop, report);
         }
         let (_, frame) = frames.latest();
         lock_device(shared).set_frame(frame);
@@ -867,6 +895,8 @@ fn drive(
         live.hid_errors.store(dev.stats().errors(), Ordering::Relaxed);
         live.hid_disconnects
             .store(dev.stats().disconnects, Ordering::Relaxed);
+        live.hid_disconnected
+            .store(dev.stats().disconnected, Ordering::Relaxed);
         if let Some(d) = dev.first_write() {
             live.first_write_us
                 .store((d.as_micros() as u64).max(1), Ordering::Relaxed);
@@ -884,12 +914,20 @@ fn apply_control(
     shared: &SharedDevice,
     control: Control,
     budgets: &Budgets,
+    stop: &Arc<AtomicBool>,
     report: &mut SessionReport,
 ) {
-    let hook = |name: &str, report: &mut SessionReport| {
-        if let Err(e) = rt.call_export(name, CallArgs::None, budgets.call(budgets.validate)) {
-            report.fail(name, e);
-        }
+    let hook = |name: &str, report: &mut SessionReport| match rt.call_export_until(
+        name,
+        CallArgs::None,
+        budgets.call(budgets.validate),
+        stop,
+    ) {
+        Ok(_) => {}
+        Err(e) if e.is_stop() => report
+            .notes
+            .push(format!("{name} was cut short by a stop request")),
+        Err(e) => report.fail(name, e),
     };
     match control {
         Control::Parameters(values) => {

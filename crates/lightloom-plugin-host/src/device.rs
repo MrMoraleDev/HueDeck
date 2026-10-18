@@ -31,6 +31,8 @@ use std::time::{Duration, Instant};
 pub const MAX_PAUSE: Duration = Duration::from_millis(1000);
 /// A pause checks for a stop request this often.
 const PAUSE_SLICE: Duration = Duration::from_millis(10);
+/// A blocking read checks for a stop request this often.
+const READ_SLICE: Duration = Duration::from_millis(100);
 /// Largest report buffer a plugin may request or send.
 pub const MAX_REPORT_LEN: usize = 1 << 16;
 /// Largest LED grid side `Size()` / `device.setSize` may declare.
@@ -43,6 +45,18 @@ const LOG_TAIL: usize = 50;
 const IO_LOG_LIMIT: usize = 64;
 /// Distinct messages [`DeviceContext::log_once`] remembers.
 const LOG_ONCE_LIMIT: usize = 256;
+/// Longest log line kept or forwarded (characters).
+const MAX_LOG_CHARS: usize = 4096;
+/// Longest id or name a plugin may pass (characters): subdevices, channels, components.
+pub const MAX_ID_CHARS: usize = 256;
+
+/// `s` cut to at most `max` characters (strings copied out of the engine escape its heap cap).
+pub(crate) fn capped(mut s: String, max: usize) -> String {
+    if let Some((i, _)) = s.char_indices().nth(max) {
+        s.truncate(i);
+    }
+    s
+}
 
 /// A device context shared between the session thread and the JS natives.
 pub type SharedDevice = Arc<Mutex<DeviceContext>>;
@@ -117,6 +131,8 @@ pub struct IoStats {
     /// Failed operations (also counted above) whose device is gone: unplugged,
     /// or plugged back in behind a stale handle.
     pub disconnects: u64,
+    /// The latest I/O failed because the device is gone (any success clears it).
+    pub disconnected: bool,
     /// Text of the most recent failure.
     pub last_error: Option<String>,
 }
@@ -185,6 +201,8 @@ pub struct DeviceContext {
     fatal: Option<String>,
     children: Children,
     system_info: String,
+    /// The plugin call's watchdog (device sessions): long reads end early on a stop request.
+    deadline: Option<Deadline>,
 }
 
 impl std::fmt::Debug for DeviceContext {
@@ -277,6 +295,7 @@ impl DeviceContext {
             fatal: None,
             children: Children::default(),
             system_info: String::new(),
+            deadline: None,
         };
         ctx.update_factor();
         ctx
@@ -528,7 +547,8 @@ impl DeviceContext {
         match self.children.subdevice_color(&self.frame, id, x, y) {
             Ok(c) => c,
             Err(e) => {
-                self.log_once(e);
+                // One line per subdevice: out-of-bounds messages differ by coordinates.
+                self.log_once_keyed(format!("subdeviceColor:{id}"), &e);
                 [0, 0, 0]
             }
         }
@@ -589,8 +609,12 @@ impl DeviceContext {
         }
     }
 
-    /// Store and forward one plugin log line.
+    /// Store and forward one plugin log line (cut at [`MAX_LOG_CHARS`]).
     pub fn log(&mut self, text: &str) {
+        let text = match text.char_indices().nth(MAX_LOG_CHARS) {
+            Some((i, _)) => &text[..i],
+            None => text,
+        };
         self.log_lines += 1;
         if self.log_tail.len() == LOG_TAIL {
             self.log_tail.pop_front();
@@ -604,9 +628,33 @@ impl DeviceContext {
 
     /// Log `text` the first time it occurs (plugins repeat bad calls every frame).
     fn log_once(&mut self, text: String) {
-        if self.logged.len() < LOG_ONCE_LIMIT && self.logged.insert(text.clone()) {
-            self.log(&text);
+        let key = capped(text.clone(), MAX_ID_CHARS);
+        self.log_once_keyed(key, &text);
+    }
+
+    /// Log `text` the first time `key` occurs.
+    fn log_once_keyed(&mut self, key: String, text: &str) {
+        if self.logged.len() < LOG_ONCE_LIMIT && self.logged.insert(key) {
+            self.log(text);
         }
+    }
+
+    /// The answer of a read whose call is past its deadline: nothing was read.
+    fn cut_off_read(&mut self, len: usize) -> Vec<u8> {
+        self.last_read_size = 0;
+        self.warn_once(
+            "cut-off",
+            "device I/O skipped: the plugin call is past its time budget or the session is stopping",
+        );
+        vec![0u8; len]
+    }
+
+    /// A write or switch whose call is past its deadline: not attempted.
+    fn cut_off_write(&mut self) {
+        self.warn_once(
+            "cut-off",
+            "device I/O skipped: the plugin call is past its time budget or the session is stopping",
+        );
     }
 
     fn warn_once(&mut self, key: &'static str, text: &str) {
@@ -618,6 +666,7 @@ impl DeviceContext {
     fn fail(&mut self, key: &'static str, err: &lightloom_hal::HalError) {
         if matches!(err, lightloom_hal::HalError::Disconnected) {
             self.stats.disconnects += 1;
+            self.stats.disconnected = true;
         }
         self.stats.last_error = Some(format!("{key}: {err}"));
         self.warn_once(
@@ -675,6 +724,7 @@ impl DeviceContext {
         match handle.write(data) {
             Ok(n) => {
                 self.stats.writes += 1;
+                self.stats.disconnected = false;
                 self.mark_write(Some(started));
                 n as i32
             }
@@ -705,6 +755,7 @@ impl DeviceContext {
         match handle.send_feature_report(data) {
             Ok(n) => {
                 self.stats.feature_sends += 1;
+                self.stats.disconnected = false;
                 self.mark_write(Some(started));
                 n as i32
             }
@@ -742,6 +793,7 @@ impl DeviceContext {
         match result {
             Ok(n) => {
                 self.stats.feature_gets += 1;
+                self.stats.disconnected = false;
                 // The real size, even beyond `len`: a plugin checking getLastReadSize()
                 // must be able to tell a longer report from the one it expects.
                 self.last_read_size = n;
@@ -798,6 +850,7 @@ impl DeviceContext {
             Ok(n) => {
                 let n = n.min(len);
                 self.stats.reads += 1;
+                self.stats.disconnected = false;
                 self.last_read_size = n;
                 self.record(IoKind::GetInput, &buf[..n], false);
                 buf
@@ -823,14 +876,35 @@ impl DeviceContext {
             self.no_endpoint("read");
             return buf;
         };
-        match handle.read_timeout(&mut buf, timeout_ms.max(0)) {
+        // Wait in slices so a stop request (or the call's deadline) ends a long
+        // read early; the backends keep one pending read, so nothing is lost.
+        let end = Instant::now() + Duration::from_millis(u64::try_from(timeout_ms).unwrap_or(0));
+        let result = loop {
+            let left = end.saturating_duration_since(Instant::now());
+            let slice = left.min(READ_SLICE).as_millis() as i32;
+            match handle.read_timeout(&mut buf, slice) {
+                Ok(0)
+                    if !left.is_zero()
+                        && !self
+                            .deadline
+                            .as_ref()
+                            .is_some_and(|d| d.stop_requested() || d.expired()) =>
+                {
+                    continue
+                }
+                other => break other,
+            }
+        };
+        match result {
             Ok(0) => {
                 self.stats.read_timeouts += 1;
+                self.stats.disconnected = false;
                 Vec::new()
             }
             Ok(n) => {
                 let n = n.min(len);
                 self.stats.reads += 1;
+                self.stats.disconnected = false;
                 self.last_read_size = n;
                 buf
             }
@@ -927,27 +1001,39 @@ impl DeviceContext {
 /// Install `globalThis.__lightloomNative`, backed by `device`. Natives that
 /// block (HID I/O, `pause`) suspend `deadline`'s JavaScript budget meanwhile.
 pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline) -> rquickjs::Result<()> {
+    lock_device(device).deadline = Some(deadline.clone());
     let natives = Object::new(ctx.clone())?;
     // A panic must never unwind through rquickjs: with the `parallel` feature it
     // would poison the runtime's lock and every later call (Shutdown included)
     // would panic too. Each native therefore catches panics, marks the device
     // fatal (the session stops and shuts down) and throws a JS InternalError.
+    //
+    // Blocking natives (HID I/O) suspend the JavaScript budget while they wait.
+    // QuickJS consults the interrupt handler only every ~10,000 operations, so
+    // a loop around a blocking call could outlive its wall-clock cap or a stop
+    // request for minutes: once the call is past its deadline, these natives
+    // answer `else` at once instead, the loop spins, and the interrupt follows.
     macro_rules! native {
-        (blocking $name:literal, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {
-            native!(@make true, $name, |$d $(, $arg : $ty)*| $body)
+        (blocking $name:literal else $fallback:expr, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {
+            native!(@make true, $name, $fallback, |$d $(, $arg : $ty)*| $body)
         };
         ($name:literal, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {
-            native!(@make false, $name, |$d $(, $arg : $ty)*| $body)
+            native!(@make false, $name, unreachable!(), |$d $(, $arg : $ty)*| $body)
         };
-        (@make $blocking:expr, $name:literal, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
+        (@make $blocking:expr, $name:literal, $fallback:expr, |$d:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
             let shared = device.clone();
             let deadline = deadline.clone();
             let f = Function::new(ctx.clone(), move |cx: Ctx<'_>, $($arg: $ty),*| -> rquickjs::Result<_> {
-                let _blocked = $blocking.then(|| deadline.suspend());
+                let cut_off = $blocking && deadline.expired();
+                let _blocked = ($blocking && !cut_off).then(|| deadline.suspend());
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut guard = lock_device(&shared);
                     let $d: &mut DeviceContext = &mut guard;
-                    $body
+                    if cut_off {
+                        $fallback
+                    } else {
+                        $body
+                    }
                 }));
                 result.map_err(|panic| {
                     let msg = format!("host panic in device.{}: {}", $name, panic_text(panic.as_ref()));
@@ -958,18 +1044,18 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
             natives.set($name, f)?;
         }};
     }
-    native!(blocking "hidWrite", |d, data: Vec<i32>| d.write(&to_bytes(&data)));
-    native!(blocking "hidSendFeature", |d, data: Vec<i32>| d
+    native!(blocking "hidWrite" else { d.cut_off_write(); -1 }, |d, data: Vec<i32>| d.write(&to_bytes(&data)));
+    native!(blocking "hidSendFeature" else { d.cut_off_write(); -1 }, |d, data: Vec<i32>| d
         .send_feature(&to_bytes(&data)));
-    native!(blocking "hidGetFeature", |d, id: i32, len: i32| d
+    native!(blocking "hidGetFeature" else d.cut_off_read(clamp_len(len)), |d, id: i32, len: i32| d
         .get_feature(id as u8, clamp_len(len)));
-    native!(blocking "hidGetInput", |d, id: i32, len: i32| d
+    native!(blocking "hidGetInput" else d.cut_off_read(clamp_len(len)), |d, id: i32, len: i32| d
         .get_input(id as u8, clamp_len(len)));
-    native!(blocking "hidRead", |d, len: i32, timeout: i32| d
+    native!(blocking "hidRead" else d.cut_off_read(0), |d, len: i32, timeout: i32| d
         .read(clamp_len(len), timeout));
     native!("lastReadSize", |d| d.last_read_size() as i32);
-    native!(blocking "clearReadBuffer", |d| d.clear_read_buffer());
-    native!(blocking "setEndpoint", |d, iface: i32, usage: i32, page: i32, col: i32| {
+    native!(blocking "clearReadBuffer" else d.cut_off_write(), |d| d.clear_read_buffer());
+    native!(blocking "setEndpoint" else { d.cut_off_write(); false }, |d, iface: i32, usage: i32, page: i32, col: i32| {
         match (u16::try_from(usage), u16::try_from(page)) {
             (Ok(usage), Ok(page)) => d.set_endpoint(iface, usage, page, u16::try_from(col).ok()),
             _ => false,
@@ -982,15 +1068,17 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
     native!("brightness", |d| d.device_brightness() as i32);
     native!("setSize", |d, w: i32, h: i32| d.set_size(w, h));
     native!("setLeds", |d, flat: Vec<i32>| d.set_leds(&flat));
-    native!("setName", |d, name: String| d.set_name(name));
+    native!("setName", |d, name: String| d
+        .set_name(capped(name, MAX_ID_CHARS)));
     native!("log", |d, text: String| d.log(&text));
     native!("systemInfo", |d| d.system_info.clone());
     // Subdevices (components-channels.md §2).
-    native!("subCreate", |d, id: String| d.create_subdevice(&id));
+    native!("subCreate", |d, id: String| d
+        .create_subdevice(&capped(id, MAX_ID_CHARS)));
     native!("subRemove", |d, id: String| d.remove_subdevice(&id));
     native!("subList", |d| d.children.subdevice_ids());
     native!("subName", |d, id: String, name: String| {
-        let r = d.children.set_subdevice_name(&id, name);
+        let r = d.children.set_subdevice_name(&id, capped(name, MAX_ID_CHARS));
         d.log_result(r)
     });
     native!("subSize", |d, id: String, w: i32, h: i32| {
@@ -1020,7 +1108,7 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
         .set_led_limit(u32::try_from(n).unwrap_or(0)));
     native!("ledCount", |d| d.children.total_led_count() as i32);
     native!("chAdd", |d, name: String, limit: i32, default_count: i32| d
-        .add_channel(&name, limit, default_count));
+        .add_channel(&capped(name, MAX_ID_CHARS), limit, default_count));
     native!("chRemove", |d, name: String| d.remove_channel(&name));
     native!("chNames", |d| d.children.channel_names());
     native!("chExists", |d, name: String| d.children.channel(&name).is_some());
@@ -1051,6 +1139,9 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
     natives.set(
         "pause",
         Function::new(ctx.clone(), move |ms: f64| {
+            if d.expired() {
+                return;
+            }
             let _blocked = d.suspend();
             let end = Instant::now() + pause_duration(ms);
             loop {
@@ -1233,6 +1324,19 @@ mod tests {
         mock.script_read(&info.path, vec![0x01, 0xAA]).unwrap();
         let r = ctx.read(4, 0);
         assert_eq!((r, ctx.last_read_size()), (vec![0x01, 0xAA, 0, 0], 2));
+    }
+
+    #[test]
+    fn plugin_strings_are_capped_on_char_boundaries() {
+        assert_eq!(capped("abcdef".into(), 3), "abc");
+        assert_eq!(capped("àèìòù".into(), 2), "àè");
+        assert_eq!(capped("ab".into(), 5), "ab");
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        ctx.log(&"y".repeat(MAX_LOG_CHARS * 2));
+        let (tail, lines) = ctx.log_tail();
+        assert_eq!(lines, 1);
+        assert!(tail[0].chars().count() <= MAX_LOG_CHARS);
     }
 
     #[test]

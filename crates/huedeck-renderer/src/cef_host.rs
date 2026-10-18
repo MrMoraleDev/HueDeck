@@ -11,16 +11,23 @@
 //! Render-process side: the injection script travels in the browser's `extra_info`
 //! (`OnBrowserCreated`) and is evaluated in the main frame's V8 context in `OnContextCreated`,
 //! i.e. before any page script runs.
+//!
+//! Serve mode (`--serve`): no frame limit and no deadline; a thread reads control commands
+//! from stdin (`huedeck_renderer::control`) and posts each to the UI thread, where it becomes
+//! JavaScript in the main frame or a browser call. End of stdin (the daemon is gone) closes
+//! the browser like `quit`.
 
 use cef::*;
 use huedeck_effects::parse_effect_meta;
+use huedeck_effects::EffectMeta;
 use huedeck_protocol::shm::{FrameHeader, CANVAS_HEIGHT, CANVAS_WIDTH, SLOT_COUNT};
 use huedeck_renderer::cache;
 use huedeck_renderer::cli::Args;
+use huedeck_renderer::control::{self, Command};
 use huedeck_renderer::inject::{injection_script, INJECT_KEY, INJECT_URL};
 use huedeck_renderer::ring::RingWriter;
 use huedeck_renderer::sink::{FrameSink, PaintOutcome, SinkConfig, SinkReport};
-use huedeck_renderer::url::file_url;
+use huedeck_renderer::url::{file_url, UrlFilter};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::os::raw::c_int;
@@ -30,8 +37,13 @@ use std::time::Instant;
 
 /// Console lines kept for the report.
 const CONSOLE_KEEP: usize = 40;
+/// Blocked URLs kept for the report (all are counted).
+const BLOCKED_KEEP: usize = 20;
+/// `sourceURL` of scripts run for control commands (shows up in console messages).
+const CONTROL_URL: &str = "huedeck://renderer/control.js";
 
-/// Mutable run state shared by the handlers (all called on the CEF UI thread).
+/// Mutable run state shared by the handlers (CEF UI thread; the request handler runs on the
+/// IO thread).
 #[derive(Default)]
 struct RunState {
     browser: Option<Browser>,
@@ -45,12 +57,15 @@ struct RunState {
     console: Vec<String>,
     console_total: u64,
     console_errors: u64,
+    blocked_total: u64,
+    blocked: Vec<String>,
 }
 
 /// Everything the browser-process handlers need.
 struct HostCtx {
     args: Args,
     url: String,
+    filter: UrlFilter,
     inject_js: Option<String>,
     sink: Mutex<FrameSink>,
     state: Mutex<RunState>,
@@ -172,6 +187,7 @@ fn create_browser(host: &Arc<HostCtx>) {
         HueLifeSpanHandler::new(host.clone()),
         HueLoadHandler::new(host.clone()),
         HueDisplayHandler::new(host.clone()),
+        HueRequestHandler::new(host.clone(), HueBlockedRequest::new()),
     );
     let mut extra = dictionary_value_create();
     if let (Some(dict), Some(js)) = (extra.as_mut(), host.inject_js.as_deref()) {
@@ -191,9 +207,95 @@ fn create_browser(host: &Arc<HostCtx>) {
         quit_message_loop();
         return;
     }
-    let mut deadline = DeadlineTask::new(host.clone());
-    let ms = i64::try_from(host.args.deadline().as_millis()).unwrap_or(i64::MAX);
-    post_delayed_task(ThreadId::UI, Some(&mut deadline), ms);
+    if !host.args.serve {
+        let mut deadline = DeadlineTask::new(host.clone());
+        let ms = i64::try_from(host.args.deadline().as_millis()).unwrap_or(i64::MAX);
+        post_delayed_task(ThreadId::UI, Some(&mut deadline), ms);
+    }
+}
+
+/// Serve mode: read control commands from stdin until it closes; each runs on the UI thread.
+fn spawn_control_reader(host: Arc<HostCtx>, meta: Arc<EffectMeta>) {
+    let spawned = std::thread::Builder::new()
+        .name("huedeck-control".into())
+        .spawn(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            let mut reader = stdin.lock();
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let cmd = match reader.read_line(&mut line) {
+                    // End of input: the daemon is gone.
+                    Ok(0) | Err(_) => Command::Quit,
+                    Ok(_) => match control::parse_line(&line) {
+                        Ok(Some(cmd)) => cmd,
+                        Ok(None) => continue,
+                        Err(e) => {
+                            eprintln!("huedeck-renderer: {e}");
+                            continue;
+                        }
+                    },
+                };
+                let quit = cmd == Command::Quit;
+                let mut task = ControlTask::new(host.clone(), meta.clone(), cmd);
+                post_task(ThreadId::UI, Some(&mut task));
+                if quit {
+                    break;
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        eprintln!("huedeck-renderer: control thread not started ({e}); stop by closing the process");
+    }
+}
+
+/// Run one control command (UI thread).
+fn run_command(host: &HostCtx, meta: &EffectMeta, cmd: &Command) {
+    let browser = host.state.lock().browser.clone();
+    let exec = |js: &str| {
+        if let Some(frame) = browser.as_ref().and_then(|b| b.main_frame()) {
+            frame.execute_java_script(Some(&CefString::from(js)), Some(&CefString::from(CONTROL_URL)), 1);
+        }
+    };
+    match cmd {
+        Command::Quit => request_close(host, "quit"),
+        Command::Fps { value } => {
+            if let Some(bh) = browser.as_ref().and_then(|b| b.host()) {
+                bh.set_windowless_frame_rate(*value as c_int);
+            }
+        }
+        Command::Set { values } => {
+            let (js, skipped) = control::set_script(meta, values);
+            if !skipped.is_empty() {
+                eprintln!("huedeck-renderer: ignored control values: {}", skipped.join(", "));
+            }
+            exec(&js);
+        }
+        Command::Engine { data } => {
+            let (js, skipped) = control::engine_script(data);
+            if !skipped.is_empty() {
+                eprintln!("huedeck-renderer: ignored engine members: {}", skipped.join(", "));
+            }
+            exec(&js);
+        }
+        Command::Event { sender, event } => exec(&control::event_script(sender, event)),
+        Command::Tap { x, y } => exec(&control::tap_script(*x, *y)),
+    }
+}
+
+wrap_task! {
+    struct ControlTask {
+        host: Arc<HostCtx>,
+        meta: Arc<EffectMeta>,
+        cmd: Command,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            run_command(&self.host, &self.meta, &self.cmd);
+        }
+    }
 }
 
 wrap_task! {
@@ -217,9 +319,14 @@ wrap_client! {
         life_span: LifeSpanHandler,
         load: LoadHandler,
         display: DisplayHandler,
+        request: RequestHandler,
     }
 
     impl Client {
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request.clone())
+        }
+
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render.clone())
         }
@@ -234,6 +341,87 @@ wrap_client! {
 
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(self.display.clone())
+        }
+    }
+}
+
+/// Whether `request` may load; a refused URL is counted and kept for the report.
+fn admit(host: &HostCtx, request: Option<&mut Request>) -> bool {
+    let url = request
+        .map(|r| CefString::from(&r.url()).to_string())
+        .unwrap_or_default();
+    if host.filter.allows(&url) {
+        return true;
+    }
+    if host.args.verbose {
+        eprintln!("huedeck-renderer: blocked {url}");
+    }
+    let mut st = host.state.lock();
+    st.blocked_total += 1;
+    if st.blocked.len() < BLOCKED_KEEP {
+        st.blocked.push(url.chars().take(200).collect());
+    }
+    false
+}
+
+wrap_request_handler! {
+    struct HueRequestHandler {
+        host: Arc<HostCtx>,
+        blocked: ResourceRequestHandler,
+    }
+
+    impl RequestHandler {
+        fn on_before_browse(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _user_gesture: c_int,
+            _is_redirect: c_int,
+        ) -> c_int {
+            // Non-zero cancels the navigation.
+            c_int::from(!admit(&self.host, request))
+        }
+
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _target_url: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            _user_gesture: c_int,
+        ) -> c_int {
+            1
+        }
+
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _is_navigation: c_int,
+            _is_download: c_int,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut c_int>,
+        ) -> Option<ResourceRequestHandler> {
+            (!admit(&self.host, request)).then(|| self.blocked.clone())
+        }
+    }
+}
+
+// Attached to refused requests: cancels them before anything is loaded.
+wrap_resource_request_handler! {
+    struct HueBlockedRequest;
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            ReturnValue::CANCEL
         }
     }
 }
@@ -316,6 +504,26 @@ wrap_life_span_handler! {
                     bh.close_browser(1);
                 }
             }
+        }
+
+        fn on_before_popup(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _popup_id: c_int,
+            _target_url: Option<&CefString>,
+            _target_frame_name: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            _user_gesture: c_int,
+            _popup_features: Option<&PopupFeatures>,
+            _window_info: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _no_javascript_access: Option<&mut c_int>,
+        ) -> c_int {
+            // Effects get no popups (window.open, target=_blank).
+            1
         }
 
         fn on_before_close(&self, _browser: Option<&mut Browser>) {
@@ -509,6 +717,8 @@ struct RunReport {
     console_messages: u64,
     console_errors: u64,
     console: Vec<String>,
+    blocked_requests: u64,
+    blocked_urls: Vec<String>,
     errors: Vec<String>,
 }
 
@@ -544,7 +754,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
         Err(e) => return fail(format!("effect {}: {e}", effect.display())),
     };
     let meta = parse_effect_meta(&html);
-    let (inject_js, skipped_controls) = injection_script(&meta);
+    let (inject_js, skipped_controls) = injection_script(&meta, &args.prop_values());
     let url = file_url(&effect);
 
     let ring = match RingWriter::create_file(&args.out, CANVAS_WIDTH, CANVAS_HEIGHT) {
@@ -558,6 +768,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
             fps: args.fps,
             snapshot_frames: args.snapshot_frames.clone(),
             raw_intervals: args.raw_intervals,
+            serve: args.serve,
         },
     );
 
@@ -584,6 +795,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
 
     let host = Arc::new(HostCtx {
         url: url.clone(),
+        filter: UrlFilter::for_effect(&effect, args.allow_network),
         inject_js: (!args.no_inject).then_some(inject_js),
         sink: Mutex::new(sink),
         state: Mutex::new(RunState::default()),
@@ -628,6 +840,9 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
     }
     let cef_initialize_ms = (init_start.elapsed().as_secs_f64() * 1_000_000.0).round() / 1000.0;
 
+    if host.args.serve {
+        spawn_control_reader(host.clone(), Arc::new(meta.clone()));
+    }
     run_message_loop();
     shutdown();
     // The browser process keeps the profile's LevelDB locks (Session Storage, shared_proto_db,
@@ -649,7 +864,12 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
     }
     let created = st.create_requested_at.unwrap_or(run_start);
     let geometry = FrameHeader::new(CANVAS_WIDTH, CANVAS_HEIGHT);
-    let ok = sink.is_done() && !st.timed_out && st.load_error.is_none();
+    // A serving renderer ends when told to; it succeeded if the page loaded and painted.
+    let ok = if args.serve {
+        sink.frames() > 0 && st.load_error.is_none()
+    } else {
+        sink.is_done() && !st.timed_out && st.load_error.is_none()
+    };
     let report = RunReport {
         ok,
         effect: effect.display().to_string(),
@@ -694,6 +914,8 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
         console_messages: st.console_total,
         console_errors: st.console_errors,
         console: st.console.clone(),
+        blocked_requests: st.blocked_total,
+        blocked_urls: st.blocked.clone(),
         errors,
     };
     let json = serde_json::to_string_pretty(&report).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));

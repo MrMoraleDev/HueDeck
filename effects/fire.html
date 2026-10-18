@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- HueDeck starter effect. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Fire</title>
+  <meta description="Flames rising from the bottom edge, simulated per pixel." />
+  <meta publisher="HueDeck" />
+  <meta property="flame" label="Flame" type="combobox" values="Fire,Blue,Green" default="Fire" />
+  <meta property="intensity" label="Intensity" type="number" min="10" max="100" default="80" />
+  <meta property="cooling" label="Cooling" type="number" min="1" max="20" default="5" tooltip="Higher values give shorter flames" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="exCanvas" width="320" height="200"></canvas>
+  <script>
+    var canvas = document.getElementById("exCanvas");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var W = canvas.width, H = canvas.height;
+    var image = ctx.createImageData(W, H);
+    var heat = new Uint8Array(W * H);
+    var seed = 12345;
+
+    function num(v, fallback) {
+      var n = Number(v);
+      return isFinite(n) ? n : fallback;
+    }
+
+    // Deterministic generator: the same flames on every run.
+    function rnd() {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return seed / 4294967296;
+    }
+
+    function colour(h, out, p) {
+      // Black -> deep colour -> bright colour -> white as heat rises.
+      var a = Math.min(h * 3, 255), b = Math.max(0, Math.min((h - 85) * 3, 255)), c = Math.max(0, Math.min((h - 170) * 3, 255));
+      var kind = typeof flame === "string" ? flame : "Fire";
+      if (kind === "Blue") { out[p] = c; out[p + 1] = b; out[p + 2] = a; }
+      else if (kind === "Green") { out[p] = c; out[p + 1] = a; out[p + 2] = b; }
+      else { out[p] = a; out[p + 1] = b; out[p + 2] = c; }
+      out[p + 3] = 255;
+    }
+
+    function draw() {
+      var hot = Math.max(10, Math.min(100, num(intensity, 80))) * 2.55;
+      var cool = Math.max(1, Math.min(20, num(cooling, 5)));
+      var bottom = (H - 1) * W;
+      for (var x = 0; x < W; x++) {
+        heat[bottom + x] = rnd() < 0.6 ? hot : hot * 0.3;
+      }
+      for (var y = 0; y < H - 1; y++) {
+        var below = (y + 1) * W, below2 = Math.min(y + 2, H - 1) * W, row = y * W;
+        for (var x2 = 0; x2 < W; x2++) {
+          var l = x2 > 0 ? x2 - 1 : x2, r = x2 < W - 1 ? x2 + 1 : x2;
+          var sum = heat[below + l] + heat[below + x2] + heat[below + r] + heat[below2 + x2];
+          var v = sum / 4 - cool * rnd();
+          heat[row + x2] = v > 0 ? v : 0;
+        }
+      }
+      var d = image.data;
+      for (var i = 0, p = 0; i < heat.length; i++, p += 4) colour(heat[i], d, p);
+      ctx.putImageData(image, 0, 0);
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

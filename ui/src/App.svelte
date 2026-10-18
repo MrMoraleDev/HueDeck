@@ -22,7 +22,15 @@
     history.replaceState(null, "", `#${t}`);
   }
 
-  onMount(() => daemon.connect());
+  onMount(() => {
+    daemon.connect();
+    const follow = () => {
+      const t = location.hash.slice(1) as Tab;
+      if (tabs.some((x) => x.id === t)) tab = t;
+    };
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
+  });
 
   const s = $derived(daemon.snapshot);
   let brightness = $state(100);

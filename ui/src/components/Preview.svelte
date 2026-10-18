@@ -4,7 +4,11 @@
   import { onDestroy, onMount } from "svelte";
   import { api, wsUrl } from "../lib/api";
 
-  let { width = 480, tappable = true }: { width?: number; tappable?: boolean } = $props();
+  let {
+    width = 480,
+    tappable = true,
+    fill = false,
+  }: { width?: number; tappable?: boolean; fill?: boolean } = $props();
   let canvas: HTMLCanvasElement;
   let ws: WebSocket | null = null;
   let closed = false;
@@ -47,7 +51,12 @@
   }
 </script>
 
-<canvas bind:this={canvas} width="320" height="200" style={`width:${width}px;height:${(width * 200) / 320}px`} onclick={tap}
+<canvas
+  bind:this={canvas}
+  width="320"
+  height="200"
+  style={fill ? "width:100%;height:100%" : `width:${width}px;height:${(width * 200) / 320}px`}
+  onclick={tap}
 ></canvas>
 
 <style>

@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+import { mount } from "svelte";
+import App from "./App.svelte";
+import "./app.css";
+
+const target = document.getElementById("app");
+if (!target) throw new Error("#app is missing");
+
+export default mount(App, { target });

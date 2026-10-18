@@ -151,9 +151,9 @@ commits, how to run tests), [SECURITY.md](SECURITY.md) and
 
 Code and the Host API specification: **Apache-2.0 OR MIT**, at your option
 ([LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT)). First-party plugins
-under `plugins/` are MIT; starter effects under `effects/` are CC0-1.0. Any Pawn
-modules the project authors for PawnIO live in a separate GPL-2 repository. Details
-in [ADR-0006](docs/adr/0006-license-apache-mit.md).
+under `plugins/` are MIT; starter effects under `effects/` are CC0-1.0. Pawn modules
+for PawnIO are LGPL-2.1 and upstreamed to PawnIO.Modules, never kept in this tree.
+Details in [ADR-0006](docs/adr/0006-license-apache-mit.md).
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for
 inclusion in Lightloom by you shall be dual licensed as above, without any additional

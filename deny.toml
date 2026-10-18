@@ -14,7 +14,7 @@ ignore = []
 [licenses]
 version = 2
 # Permissive only inside the main tree. Copyleft (GPL/LGPL/AGPL) is denied:
-# PawnIO modules we author live in a separate GPL-2 repository.
+# Pawn modules for PawnIO are LGPL-2.1, upstreamed to PawnIO.Modules (ADR-0006).
 allow = [
   "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause",
   "ISC", "Zlib", "MPL-2.0", "Unicode-3.0", "Unicode-DFS-2016", "CC0-1.0", "0BSD",

@@ -20,9 +20,13 @@
 //!   this process's working set.
 //! * [`console`] (Windows only): console control events, with close/log-off/
 //!   shutdown held until devices are restored.
+//! * [`registry`] (Windows only): read-only `HKEY_CURRENT_USER` string values
+//!   (importing SignalRGB's component assignments).
 //!
-//! Hotplug (`CM_Register_Notification`), raw USB (`nusb`), serial, LampArray and the broker
-//! client follow in later milestones.
+//! * [`hotplug`] (Windows only): HID arrival/removal notifications
+//!   (`CM_Register_Notification`).
+//!
+//! Raw USB (`nusb`), serial, LampArray and the broker client follow in later milestones.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -34,9 +38,13 @@ pub mod console;
 #[cfg(windows)]
 pub mod hid;
 #[cfg(windows)]
+pub mod hotplug;
+#[cfg(windows)]
 pub mod native;
 #[cfg(windows)]
 pub mod probe;
+#[cfg(windows)]
+pub mod registry;
 #[cfg(windows)]
 pub mod system;
 

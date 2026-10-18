@@ -5,7 +5,9 @@
 //!   dropped on a dedicated OS thread ([`run_isolated`]); nothing JS-related
 //!   ever crosses a thread boundary.
 //! * Memory limit ([`DEFAULT_MEMORY_LIMIT`], 64 MiB) and an interrupt handler
-//!   driven by a [`Deadline`] that the caller arms per phase.
+//!   driven by a [`Deadline`] that the caller arms per phase with a [`Budget`]:
+//!   JavaScript time (time blocked in `device.pause` and HID I/O is excluded,
+//!   [`Deadline::suspend`]) under a wall-clock cap.
 //! * [`HostResolver`] / [`HostLoader`]: `@SignalRGB/<name>` and
 //!   `@SignalRGB/<name>.js` (plus the `@huedeck/` alias) resolve to the
 //!   embedded `prelude/` files; relative imports resolve against the importing
@@ -27,7 +29,7 @@ use rquickjs::{Coerced, Context, Ctx, FromJs, Function, Module, Object, Runtime,
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// Per-plugin heap cap (synthesis D-rules: 64 MB).
@@ -122,6 +124,13 @@ const NATIVE_MODULES: &[&str] = &[
     "appInfo",
 ];
 
+/// Rust-backed modules a device session implements (`js/host.js` `nativeModules`);
+/// the others keep their throwing facade there.
+const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo"];
+
+/// Prefix of the generated modules that pick a device-session implementation.
+const NATIVE_PREFIX: &str = "huedeck:native/";
+
 fn prelude_source(name: &str) -> Option<&'static str> {
     PRELUDE_MODULES.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
 }
@@ -131,6 +140,8 @@ pub fn host_shim_module(shim: &str, module_stubs: bool) -> String {
     if NATIVE_MODULES.contains(&shim) {
         if module_stubs {
             format!("huedeck:stub/{shim}.js")
+        } else if DEVICE_MODULES.contains(&shim) {
+            format!("{NATIVE_PREFIX}{shim}.js")
         } else {
             format!("huedeck:prelude/modules/{shim}.js")
         }
@@ -168,6 +179,27 @@ impl Default for RuntimeOptions {
     }
 }
 
+/// Time limits of one call into the plugin.
+///
+/// Plugins block in host calls on purpose: `device.pause()` between packets,
+/// HID reads waiting for a reply, device setup run lazily from `Render()`
+/// (Razer mice probe nine transaction ids 400 ms apart). Only JavaScript time
+/// counts against `js`, so such a call completes; `wall` still bounds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Budget {
+    /// JavaScript time; time blocked in host calls is excluded.
+    pub js: Duration,
+    /// Wall-clock cap, blocked time included (at least `js`).
+    pub wall: Duration,
+}
+
+impl From<Duration> for Budget {
+    /// The same limit for JavaScript and wall-clock time.
+    fn from(d: Duration) -> Self {
+        Self { js: d, wall: d }
+    }
+}
+
 /// Watchdog deadline shared with the interrupt handler.
 ///
 /// The interrupt handler calls [`Deadline::poll`]. Once that has interrupted
@@ -178,31 +210,87 @@ impl Default for RuntimeOptions {
 pub struct Deadline(Arc<DeadlineState>);
 
 #[derive(Debug, Default)]
+struct Window {
+    /// End of the JavaScript budget, pushed back by suspended time.
+    soft: Option<Instant>,
+    /// Wall-clock cap.
+    hard: Option<Instant>,
+    /// Set by whoever may cancel the call (a session asked to stop).
+    stop: Option<Arc<AtomicBool>>,
+    /// When the stop request was first seen.
+    stop_seen: Option<Instant>,
+}
+
+/// A call still running this long after a stop request is interrupted; one
+/// that ends sooner completes normally (its packets are whole).
+pub const STOP_GRACE: Duration = Duration::from_millis(500);
+
+#[derive(Debug, Default)]
 struct DeadlineState {
-    at: Mutex<Option<Instant>>,
+    window: Mutex<Window>,
     fired: AtomicBool,
 }
 
 impl Deadline {
+    fn window(&self) -> MutexGuard<'_, Window> {
+        self.0.window.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Arm: the engine is interrupted once `budget` has elapsed from now
-    /// (a budget too large to represent means no deadline).
-    pub fn arm(&self, budget: Duration) {
-        *self.0.at.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now().checked_add(budget);
+    /// (limits too large to represent mean no limit).
+    pub fn arm(&self, budget: impl Into<Budget>) {
+        let b = budget.into();
+        let now = Instant::now();
+        *self.window() = Window {
+            soft: now.checked_add(b.js),
+            hard: now.checked_add(b.wall.max(b.js)),
+            stop: None,
+            stop_seen: None,
+        };
         self.0.fired.store(false, Ordering::Relaxed);
+    }
+
+    /// [`Deadline::arm`], and interrupt as soon as `stop` is set.
+    pub fn arm_until(&self, budget: impl Into<Budget>, stop: Arc<AtomicBool>) {
+        self.arm(budget);
+        self.window().stop = Some(stop);
+    }
+
+    /// Whether the armed call was asked to stop ([`Deadline::arm_until`]).
+    pub fn stop_requested(&self) -> bool {
+        self.window()
+            .stop
+            .as_ref()
+            .is_some_and(|s| s.load(Ordering::Acquire))
     }
 
     /// Disarm (keeps [`Deadline::fired`] until the next arm).
     pub fn clear(&self) {
-        *self.0.at.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.window() = Window::default();
     }
 
-    /// Whether the armed deadline has passed.
+    /// Whether the armed budget or cap has passed, or a stop request is
+    /// older than [`STOP_GRACE`].
     pub fn expired(&self) -> bool {
-        self.0
-            .at
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some_and(|d| Instant::now() >= d)
+        let mut w = self.window();
+        let now = Instant::now();
+        if w.soft.is_some_and(|d| now >= d) || w.hard.is_some_and(|d| now >= d) {
+            return true;
+        }
+        if w.stop.as_ref().is_some_and(|s| s.load(Ordering::Acquire)) {
+            let seen = *w.stop_seen.get_or_insert(now);
+            return now.duration_since(seen) >= STOP_GRACE;
+        }
+        false
+    }
+
+    /// While the returned guard lives, time does not count against the
+    /// JavaScript budget (the wall-clock cap still runs): wrap host calls that block.
+    pub fn suspend(&self) -> Suspended<'_> {
+        Suspended {
+            deadline: self,
+            since: Instant::now(),
+        }
     }
 
     /// Interrupt-handler hook: `true` (and remembered) once the deadline has passed.
@@ -217,6 +305,23 @@ impl Deadline {
     /// Whether the interrupt handler cut the engine off since the last [`Deadline::arm`].
     pub fn fired(&self) -> bool {
         self.0.fired.load(Ordering::Relaxed)
+    }
+}
+
+/// See [`Deadline::suspend`].
+#[must_use = "the budget is suspended only while the guard lives"]
+pub struct Suspended<'a> {
+    deadline: &'a Deadline,
+    since: Instant,
+}
+
+impl Drop for Suspended<'_> {
+    fn drop(&mut self) {
+        let blocked = self.since.elapsed();
+        let mut w = self.deadline.window();
+        if let Some(soft) = w.soft {
+            w.soft = soft.checked_add(blocked);
+        }
     }
 }
 
@@ -355,6 +460,19 @@ impl JsLoader for HostLoader {
             let src = format!("export default globalThis.__huedeckHost.modules[{shim:?}];\n");
             return Module::declare(ctx.clone(), name, src);
         }
+        if let Some(shim) = name
+            .strip_prefix(NATIVE_PREFIX)
+            .and_then(|s| s.strip_suffix(".js"))
+            .filter(|s| DEVICE_MODULES.contains(s))
+        {
+            // The device host's implementation, else the throwing facade.
+            let src = format!(
+                "import facade from \"huedeck:prelude/modules/{shim}.js\";\n\
+                 const real = globalThis.__huedeckHost.nativeModules[{shim:?}];\n\
+                 export default real === undefined ? facade : real;\n"
+            );
+            return Module::declare(ctx.clone(), name, src);
+        }
         if let Some(spec) = name.strip_prefix(MISSING_PREFIX) {
             let src = format!(
                 "import {{ HostApiMissing }} from \"huedeck:prelude/HostApiMissing.js\";\n\
@@ -399,7 +517,31 @@ impl JsFailure {
             message: format!("interrupted ({during} exceeded its deadline)"),
         }
     }
+
+    fn stopped(during: &str) -> Self {
+        JsFailure {
+            class: STOPPED.into(),
+            message: format!("interrupted ({during} was running when the session was asked to stop)"),
+        }
+    }
+
+    /// The call was cut off by a stop request, not by its budget.
+    pub fn is_stop(&self) -> bool {
+        self.class == STOPPED
+    }
+
+    /// The failure of a call `deadline` cut off.
+    fn cut_off(deadline: &Deadline, during: &str) -> Self {
+        if deadline.stop_requested() {
+            Self::stopped(during)
+        } else {
+            Self::timeout(during)
+        }
+    }
 }
+
+/// [`JsFailure::class`] of a call interrupted by a stop request.
+pub const STOPPED: &str = "Stopped";
 
 /// Turn an rquickjs error into a [`JsFailure`], consuming the pending exception.
 ///
@@ -425,7 +567,12 @@ pub fn failure(ctx: &Ctx<'_>, err: rquickjs::Error, deadline: &Deadline) -> JsFa
         if !f.message.contains("interrupted") {
             f.message = format!("interrupted; {}", f.message);
         }
-        f.class = "Timeout".into();
+        f.class = if deadline.stop_requested() {
+            STOPPED
+        } else {
+            "Timeout"
+        }
+        .into();
     } else if f.message.contains("out of memory") {
         f.class = "OutOfMemory".into();
     }
@@ -573,7 +720,7 @@ impl PluginRuntime {
             cfg.set("plugin", plugin).map_err(|e| failure(&ctx, e, d))?;
             if let Some(device) = &opts.device {
                 cfg.set("mode", "device").map_err(|e| failure(&ctx, e, d))?;
-                crate::device::install(&ctx, device).map_err(|e| failure(&ctx, e, d))?;
+                crate::device::install(&ctx, device, d).map_err(|e| failure(&ctx, e, d))?;
             }
             ctx.globals()
                 .set("__huedeckConfig", cfg)
@@ -662,7 +809,12 @@ impl PluginRuntime {
     }
 
     /// Bind ControllableParameters defaults as globals and set `device.productId()`, under `budget`.
-    pub fn prepare_device(&self, vendor_id: u16, product_id: u16, budget: Duration) -> Result<(), JsFailure> {
+    pub fn prepare_device(
+        &self,
+        vendor_id: u16,
+        product_id: u16,
+        budget: impl Into<Budget>,
+    ) -> Result<(), JsFailure> {
         let deadline = &self.deadline;
         deadline.arm(budget);
         let r = self.context.with(|ctx| {
@@ -694,9 +846,39 @@ impl PluginRuntime {
     /// Call a lifecycle export (`Initialize`, `Shutdown`, `Render`, …) under `budget`.
     /// A missing (or non-function) export is `Ok(false)`. Promise jobs the call
     /// queued are run to completion inside the same budget.
-    pub fn call_export(&self, export: &str, args: CallArgs, budget: Duration) -> Result<bool, JsFailure> {
+    pub fn call_export(
+        &self,
+        export: &str,
+        args: CallArgs,
+        budget: impl Into<Budget>,
+    ) -> Result<bool, JsFailure> {
+        self.call(export, args, budget.into(), None)
+    }
+
+    /// [`PluginRuntime::call_export`], cut off as soon as `stop` is set (the
+    /// failure is then [`JsFailure::is_stop`]); `device.pause()` ends early too.
+    pub fn call_export_until(
+        &self,
+        export: &str,
+        args: CallArgs,
+        budget: impl Into<Budget>,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<bool, JsFailure> {
+        self.call(export, args, budget.into(), Some(Arc::clone(stop)))
+    }
+
+    fn call(
+        &self,
+        export: &str,
+        args: CallArgs,
+        budget: Budget,
+        stop: Option<Arc<AtomicBool>>,
+    ) -> Result<bool, JsFailure> {
         let deadline = &self.deadline;
-        deadline.arm(budget);
+        match stop {
+            Some(stop) => deadline.arm_until(budget, stop),
+            None => deadline.arm(budget),
+        }
         let r = self.context.with(|ctx| {
             let run = || -> rquickjs::Result<bool> {
                 let ns = plugin_namespace(&ctx)?;
@@ -721,7 +903,7 @@ impl PluginRuntime {
                 Ok(true)
             };
             match run().map_err(|e| failure(&ctx, e, deadline)) {
-                Ok(_) if deadline.fired() => Err(JsFailure::timeout(export)),
+                Ok(_) if deadline.fired() => Err(JsFailure::cut_off(deadline, export)),
                 r => r,
             }
         });
@@ -731,7 +913,11 @@ impl PluginRuntime {
 
     /// `Validate(endpoint)` under `budget`: the truthiness of its return value.
     /// A plugin without `Validate` accepts every endpoint.
-    pub fn validate(&self, endpoint: &HidEndpointTuple, budget: Duration) -> Result<bool, JsFailure> {
+    pub fn validate(
+        &self,
+        endpoint: &HidEndpointTuple,
+        budget: impl Into<Budget>,
+    ) -> Result<bool, JsFailure> {
         let deadline = &self.deadline;
         deadline.arm(budget);
         let r = self.context.with(|ctx| {
@@ -760,7 +946,11 @@ impl PluginRuntime {
 
     /// Assign globals from a JSON object (`{"LightingMode": "Forced"}`): parameter
     /// overrides applied after [`PluginRuntime::prepare_device`].
-    pub fn set_globals(&self, values: &serde_json::Value, budget: Duration) -> Result<(), JsFailure> {
+    pub fn set_globals(
+        &self,
+        values: &serde_json::Value,
+        budget: impl Into<Budget>,
+    ) -> Result<(), JsFailure> {
         let json = values.to_string();
         let deadline = &self.deadline;
         deadline.arm(budget);
@@ -850,6 +1040,53 @@ mod tests {
     }
 
     #[test]
+    fn a_stop_request_expires_an_abortable_deadline_only() {
+        let d = Deadline::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        d.arm_until(Duration::from_secs(60), Arc::clone(&stop));
+        assert!(!d.expired() && !d.stop_requested());
+        stop.store(true, Ordering::Release);
+        assert!(d.stop_requested());
+        assert!(!d.expired(), "a running call gets STOP_GRACE to finish");
+        std::thread::sleep(STOP_GRACE + Duration::from_millis(20));
+        assert!(d.expired());
+        assert!(JsFailure::cut_off(&d, "Render").is_stop());
+        d.arm(Duration::from_secs(60));
+        assert!(!d.expired() && !d.stop_requested(), "plain arms ignore the flag");
+        assert!(!JsFailure::cut_off(&d, "Shutdown").is_stop());
+    }
+
+    #[test]
+    fn suspended_time_extends_the_js_budget_but_not_the_cap() {
+        let d = Deadline::default();
+        d.arm(Budget {
+            js: Duration::from_millis(40),
+            wall: Duration::from_millis(400),
+        });
+        {
+            let _blocked = d.suspend();
+            std::thread::sleep(Duration::from_millis(80));
+        }
+        assert!(
+            !d.expired(),
+            "80 ms blocked do not use the 40 ms JavaScript budget"
+        );
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(d.expired(), "unsuspended time does");
+        d.arm(Budget {
+            js: Duration::from_millis(40),
+            wall: Duration::from_millis(60),
+        });
+        {
+            let _blocked = d.suspend();
+            std::thread::sleep(Duration::from_millis(80));
+        }
+        assert!(d.expired(), "the wall-clock cap still applies");
+        d.arm(Duration::from_millis(30));
+        assert!(!d.expired());
+    }
+
+    #[test]
     fn resolver_maps_host_shims_and_prelude_relatives() {
         let gaps = GapLog::default();
         let r = HostResolver::new(Path::new("/plugins"), false, gaps.clone());
@@ -894,13 +1131,26 @@ mod tests {
             stubbed.resolve_name(base, "@SignalRGB/lcd").unwrap(),
             "huedeck:stub/lcd.js"
         );
-        // Every shim the resolver can produce exists.
+        // Every shim the resolver can produce exists (device-session modules are
+        // generated, over a facade that must exist).
         for shim in crate::meta::HOST_MODULES
             .iter()
             .chain(crate::meta::HUEDECK_ONLY_MODULES)
         {
             let n = host_shim_module(shim, false);
-            assert!(prelude_source(&n).is_some(), "{n}");
+            match n.strip_prefix(NATIVE_PREFIX) {
+                Some(native) => {
+                    assert!(DEVICE_MODULES.contains(&native.trim_end_matches(".js")), "{n}");
+                    let facade = format!("huedeck:prelude/modules/{native}");
+                    assert!(prelude_source(&facade).is_some(), "{facade}");
+                }
+                None => assert!(prelude_source(&n).is_some(), "{n}"),
+            }
         }
+        assert_eq!(
+            host_shim_module("permissions", false),
+            "huedeck:native/permissions.js"
+        );
+        assert_eq!(host_shim_module("lcd", false), "huedeck:prelude/modules/lcd.js");
     }
 }

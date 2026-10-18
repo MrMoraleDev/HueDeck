@@ -25,7 +25,9 @@ pub mod key;
 pub mod lamparray;
 pub mod sensors;
 pub mod serial;
+pub mod smbios;
 pub mod smbus;
+pub mod trace;
 pub mod usb;
 
 #[cfg(any(test, feature = "mock"))]
@@ -36,5 +38,6 @@ pub use hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportLe
 pub use hotplug::{DeviceClass, DeviceEvent, HotplugSource};
 pub use key::{DeviceKey, EndpointUid};
 pub use serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};
+pub use smbios::SystemInfo;
 pub use smbus::{PciIds, SmbusBus, SmbusBusDescriptor, SmbusBusKind};
 pub use usb::{UsbBackend, UsbDeviceInfo, UsbHandle};

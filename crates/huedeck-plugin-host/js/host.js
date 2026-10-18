@@ -18,16 +18,17 @@
 //   stub that returns sane defaults and never touches hardware; an API gap is
 //   answered with a no-op function, so the dry-run measures how far the
 //   corpus gets against the documented surface.
-// * "device" (a real device session): the HID, canvas and logging members of
-//   `device` call the natives on `__huedeckNative` (crates/huedeck-plugin-host
-//   src/device.rs), which this module captures and removes from the global
-//   object before plugin code runs. An API gap is logged once and throws
-//   `HostApiMissing` when called (architecture-synthesis.md D6).
+// * "device" (a real device session): the HID, canvas, subdevice, channel and
+//   logging members of `device` call the natives on `__huedeckNative`
+//   (crates/huedeck-plugin-host src/device.rs and src/children.rs), which this
+//   module captures and removes from the global object before plugin code
+//   runs. An API gap is logged once and throws `HostApiMissing` when called
+//   (architecture-synthesis.md D6).
 //
 // The Rust side reads state back through `globalThis.__huedeckHost`
 // (non-writable, non-configurable: plugin code cannot replace it).
 
-import { createColorArray, layoutColors } from "huedeck:prelude/createColorArray.js";
+import { createColorArray, layoutColors, layoutFlatColors } from "huedeck:prelude/createColorArray.js";
 import { BinaryUtils } from "huedeck:prelude/BinaryUtils.js";
 import { createFeatureGlobal as createBase64Feature } from "huedeck:prelude/base64.js";
 import { HostApiMissing } from "huedeck:prelude/HostApiMissing.js";
@@ -35,6 +36,7 @@ import { HostApiMissing } from "huedeck:prelude/HostApiMissing.js";
 // Builtins the host-side helpers rely on, captured before plugin code runs
 // (a plugin replacing `JSON.stringify` must not falsify the report).
 const stringify = JSON.stringify;
+const parseJson = JSON.parse;
 const objectKeys = Object.keys;
 const hasOwn = Object.hasOwn;
 const fromEntries = Object.fromEntries;
@@ -515,6 +517,70 @@ function timeoutArg(timeout, fallback) {
   return Number.isFinite(t) && t >= 0 ? Math.min(Math.trunc(t), MAX_READ_TIMEOUT_MS) : fallback;
 }
 
+/** `[[x, y], ...]` -> `[x0, y0, x1, y1, ...]` (missing coordinates are 0). */
+function flatPositions(positions) {
+  const flat = [];
+  if (isArray(positions)) {
+    for (const p of positions) {
+      flat.push(toInt(p?.[0]), toInt(p?.[1]));
+    }
+  }
+  return flat;
+}
+
+const strArg = (v) => (v === undefined || v === null ? "" : String(v));
+
+// Identify colour of channels (SignalRGB's default accent) until the UI can pulse them.
+const PULSE_COLOR = "#009EDB";
+
+/**
+ * Device mode: the channel object of `device.channel(name)`. Stateless (every
+ * member asks the host by name), so one object per name is reused.
+ */
+function deviceChannel(name) {
+  const data = (id) => {
+    const text = native.chComponentData(name, id);
+    return text === "" ? undefined : parseJson(text);
+  };
+  const component = (id) => {
+    const componentData = data(id);
+    return componentData === undefined ? undefined : { componentID: id, componentData };
+  };
+  return recording("channel", {
+    get ledCount() {
+      return native.chLedCount(name);
+    },
+    get ledLimit() {
+      return native.chLedLimit(name);
+    },
+    get name() {
+      return name;
+    },
+    overrideColors: false,
+    overrideCount: 0,
+    forceColor: false,
+    identifying: false,
+    LedCount: () => native.chLedCount(name),
+    LedLimit: () => native.chLedLimit(name),
+    SetLedLimit: (n) => native.chSetLimit(name, toInt(n)),
+    SetLedCount: noop,
+    Name: () => name,
+    SetName: noop,
+    getColors: (layout, order) => layoutFlatColors(native.chColors(name), layout, order),
+    // Nobody can ask to identify a channel yet (no UI): never pulsing.
+    shouldPulseColors: () => false,
+    onlyHasDefaultComponents: () => native.chOnlyDefaults(name),
+    getComponentNames: () => native.chComponents(name),
+    getComponents: () => native.chComponents(name).map(component),
+    getComponent: (id) => component(strArg(id)),
+    getComponentColors: (id, layout, order) =>
+      layoutFlatColors(native.chComponentColors(name, strArg(id)), layout, order),
+    getComponentData: (id) => data(strArg(id)),
+    getChannelColor: () => "#000000",
+    getPulse: (count, layout, order) => createColorArray(PULSE_COLOR, count, layout, order),
+  });
+}
+
 /** `device.log(value[, { toFile, hex }])`; `hex` prints a byte array as hex. */
 function deviceLog(value, ...rest) {
   const opts = rest.length === 1 && rest[0] && typeof rest[0] === "object" && !isArray(rest[0]) ? rest[0] : undefined;
@@ -525,25 +591,17 @@ function deviceLog(value, ...rest) {
   hostLog(fmt(opts === undefined ? [value, ...rest] : [value]));
 }
 
+const channelObjects = new Map();
+
 if (native !== undefined) {
   const stubAddFeature = deviceTarget.addFeature;
   Object.assign(deviceTarget, {
     // Not implemented in device sessions yet: these throw instead of answering
-    // with stub data (libusb transfers and subdevices: M2, fans: M5, LCD: M6).
+    // with stub data (libusb transfers: M2, fans: M5, LCD: M6).
     ...unimplemented("device", [
       "bulk_transfer",
       "control_transfer",
       "setProtocol",
-      "createSubdevice",
-      "removeSubdevice",
-      "subdeviceColor",
-      "setSubdeviceName",
-      "setSubdeviceSize",
-      "setSubdeviceLeds",
-      "setSubdeviceLedMap",
-      "setSubdeviceImageUrl",
-      "setSubdeviceImage",
-      "SetIsSubdeviceController",
       "createFanControl",
       "removeFanControl",
       "setRPM",
@@ -554,7 +612,39 @@ if (native !== undefined) {
       "getImageBuffer",
       "getMotherboardName",
     ]),
-    getCurrentSubdevices: () => [],
+    // Subdevices (components-channels.md §2).
+    createSubdevice: (id) => native.subCreate(strArg(id)),
+    removeSubdevice: (id) => native.subRemove(strArg(id)),
+    getCurrentSubdevices: () => native.subList(),
+    setSubdeviceName: (id, name) => native.subName(strArg(id), strArg(name)),
+    setSubdeviceSize: (id, w, h) => native.subSize(strArg(id), toInt(w), toInt(h)),
+    setSubdeviceLeds: (id, names, positions) =>
+      native.subLeds(strArg(id), isArray(names) ? names.map(strArg) : [], flatPositions(positions)),
+    setSubdeviceLedMap: (id, map) => native.subLedMap(strArg(id), isArray(map) ? map.map(toInt) : []),
+    setSubdeviceImageUrl: (id, url) => native.subImage(strArg(id), strArg(url)),
+    setSubdeviceImage: (id, image) => native.subImage(strArg(id), strArg(image)),
+    subdeviceColor: (id, x, y) => native.subColor(strArg(id), toInt(x), toInt(y)),
+    SetIsSubdeviceController: (flag) => native.setSubdeviceController(Boolean(flag)),
+    // Channels (components-channels.md §1): components are assigned by the host.
+    SetLedLimit: (n) => native.setLedLimit(toInt(n)),
+    addChannel: (name, ledLimit, defaultCount) =>
+      native.chAdd(strArg(name), toInt(ledLimit), defaultCount === undefined ? -1 : toInt(defaultCount)),
+    removeChannel: (name) => native.chRemove(strArg(name)),
+    getChannelNames: () => native.chNames(),
+    channel: (name) => {
+      const key = strArg(name);
+      if (!native.chExists(key)) {
+        return undefined;
+      }
+      let ch = channelObjects.get(key);
+      if (ch === undefined) {
+        ch = deviceChannel(key);
+        channelObjects.set(key, ch);
+      }
+      return ch;
+    },
+    getLedCount: () => native.ledCount(),
+    getChannelPulseColor: () => PULSE_COLOR,
     // HueDeck does not drive fans yet; plugins that check this skip fan control.
     fanControlDisabled: () => true,
     // Network features need sockets HueDeck does not provide to device plugins yet.
@@ -599,15 +689,7 @@ if (native !== undefined) {
         native.setSize(toInt(size[0]), toInt(size[1]));
       }
     },
-    setControllableLeds: (_names, positions) => {
-      const flat = [];
-      if (isArray(positions)) {
-        for (const p of positions) {
-          flat.push(toInt(p?.[0]), toInt(p?.[1]));
-        }
-      }
-      native.setLeds(flat);
-    },
+    setControllableLeds: (_names, positions) => native.setLeds(flatPositions(positions)),
     log: deviceLog,
     notify: (title, text) => {
       hostLog(`notify: ${String(title ?? "")}: ${String(text ?? "")}`);
@@ -809,6 +891,50 @@ const modules = {
   }),
   appInfo: recording("@SignalRGB/appInfo", { version: "0.0.1", compat: "signalrgb-2.5", name: "HueDeck" }),
 };
+
+// ---------------------------------------------------------------- device-session modules
+// Real `@SignalRGB/*` modules of a device session (the loader falls back to the
+// throwing facade for the others).
+
+// Partner permissions (MSI, Lian-Li): SignalRGB fetches them from its servers
+// and plugins treat a missing entry as granted. HueDeck has no partner gate,
+// the user controls their own hardware, so everything is granted and never changes.
+const PARTNERS = ["MSI", "Lian-Li"];
+const permissionsModule = freeze({
+  permissions: () => fromEntries(PARTNERS.map((p) => [p, { fans: true, lighting: true, macros: true }])),
+  setCallback: noop,
+});
+
+// Motherboard / BIOS / memory facts (SMBIOS, the source of SignalRGB's WMI queries).
+function systemInfo() {
+  const text = native.systemInfo();
+  return text === "" ? undefined : parseJson(text);
+}
+const systeminfoModule = freeze({
+  GetMotherboardInfo: () => {
+    const info = systemInfo();
+    return info && { manufacturer: info.motherboard.manufacturer, model: info.motherboard.model };
+  },
+  GetBiosInfo: () => {
+    const info = systemInfo();
+    return info && { vendor: info.bios.vendor, version: info.bios.version, releaseDate: info.bios.release_date };
+  },
+  GetRamInfo: () => {
+    const info = systemInfo();
+    return info
+      ? info.ram.map((m) => ({
+          manufacturer: m.manufacturer,
+          partNumber: m.part_number,
+          serialNumber: m.serial_number,
+          locator: m.locator,
+          capacity: m.size_mb * 1024 * 1024,
+          speed: m.speed_mts,
+        }))
+      : [];
+  },
+});
+
+const nativeModules = native === undefined ? {} : { permissions: permissionsModule, systeminfo: systeminfoModule };
 
 // ---------------------------------------------------------------- install
 const g = globalThis;
@@ -1024,6 +1150,7 @@ defineProperty(g, "__huedeckHost", {
     report,
     describeError,
     modules: freeze(modules),
+    nativeModules: freeze(nativeModules),
   }),
   writable: false,
   enumerable: false,

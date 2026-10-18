@@ -101,7 +101,7 @@ Imported as default (`import serial from "@SignalRGB/serial"`, 7 files: Turzx_LC
 
 ## 5. Multi-PID plugins, matching and endpoint selection
 - 137 files use `ProductId(){return [..]}`, ≈120 use `Object.keys(lib.PIDLibrary)` (strings). The loader registers **one `VID:PID` key per element** (log: 656 modules → 1366 USB plugins). Collisions are resolved by overwrite order; two real collisions on this machine: `0x320F:0x5088` (QMK GMMK Numpad vs EVision controller) and `0x3434:0x0DA0` (two Keychron K10 V2 files).
-- Matching algorithm (inferred from logs/plugins): enumerate USB parents (`USB\VID_xxxx&PID_xxxx\serial`), group all HID collections under the parent, look up plugin by `VID:PID`, filter collections with `Validate(endpoint)` (fields `interface` = `MI_xx` or -1, `usage`, `usage_page`, `collection` index), open them; the first validated one is active until `set_endpoint`. Plugins then call `device.productId()` to pick a per-PID config (`PIDLibrary[device.productId()]`, numeric key lookup on an object keyed by hex literal ⇒ engine must return a Number).
+- Matching algorithm (inferred from logs/plugins): enumerate USB parents (`USB\VID_xxxx&PID_xxxx\serial`), group all HID collections under the parent, look up plugin by `VID:PID`, filter collections with `Validate(endpoint)` (fields `interface` = `MI_xx` (0 for a non-composite USB device, -1 only without a USB interface), `usage`, `usage_page`, `collection` = the Windows `ColNN` number, 0 for a single-TLC interface; see §Endpoint tuple semantics), open them; the first validated one is active until `set_endpoint`. Plugins then call `device.productId()` to pick a per-PID config (`PIDLibrary[device.productId()]`, numeric key lookup on an object keyed by hex literal ⇒ engine must return a Number).
 - Inside Validate some plugins consult `device.productId()` ⇒ `device` global must be bound before Validate runs.
 - Plugins read `device.getHidEndpoints()` to select among several interface/usage combos, and `device.getHidInfo()` for report sizes of the active endpoint.
 - Helper modules (`*_Protocol.js`, `*.test.js`, `*.bak.js`) in plugin dirs are evaluated and rejected by the ProductId check (harmless warnings); an open-source loader should skip modules without `VendorId`+`ProductId` silently.
@@ -123,7 +123,7 @@ Values (call sites): `"battery"` 46, `"keyboard"` 18, `"mouse"` 10, `"udp"` 5, `
 
 - ES-module JS runtime per device with host globals `device`, `console`, and import resolver for `@SignalRGB/{serial,udp,tcp,dtls,base64,lcd,Errors(.js),DeviceDiscovery,permissions,systeminfo,performance,appInfo}` plus relative `./x.js` imports; no DOM globals.
 - Plugin crawler: evaluate every .js, require exports Name/VendorId/ProductId (int | int[] | numeric-string[] via Object.keys), register one entry per VID:PID, log and overwrite on collision, skip helper modules gracefully.
-- USB enumeration on Windows: SetupAPI/WMI parent devices (USB\VID_&PID_\serial), group HID collections (hidapi paths with MI_xx and collection index), expose {interface, usage, usage_page, collection} to Validate(endpoint) and getHidEndpoints(); report interface -1 when no MI suffix.
+- USB enumeration on Windows: SetupAPI/WMI parent devices (USB\VID_&PID_\serial), group HID collections (hidapi paths with MI_xx and collection index), expose {interface, usage, usage_page, collection} to Validate(endpoint) and getHidEndpoints(); interface = bInterfaceNumber (0 when the path has no `&MI_xx` but the device is USB), -1 only for non-USB transports (Bluetooth/BLE HID); collection = `ColNN` parsed as two hex digits (1-based), 0 when the interface has a single top-level collection.
 - HID I/O on the active endpoint: write (output report, report-id byte first, zero-pad to length, return -1 on error), send_report/get_report (feature), read(reportId[], len, timeout=100ms; non-blocking when 0) returning report-id-prefixed int[] and tracking getLastReadSize(), input_report (GET_REPORT Input), clearReadBuffer(), flush(), getHidInfo() {readLength, writeLength}, set_endpoint(3/4-arg), productId(), getDeviceInfo() {product}.
 - libusb layer for Type 'rawusb' and 'hybrid' (both handles open) with bulk_transfer(ep, data, len, timeout) (IN ep>=0x80 returns bytes into pre-sized buffer) and control_transfer(bmRequestType, bRequest, wValue, wIndex, data, len, timeout); runtime device.setProtocol('hid'|'hybrid').
 - Serial backend for Type 'serial': bind COM port belonging to the matched USB VID:PID, serial.connect({portName?, baudRate, dataBits, stopBits, parity}), disconnect, isConnected, write, read(max, timeout), readAll, availablePorts, getDeviceInfo, getPortName, getBaudRate.
@@ -142,7 +142,7 @@ Values (call sites): `"battery"` 46, `"keyboard"` 18, `"mouse"` 10, `"udp"` 5, `
 - Default Render() frame rate when setFrameRateTarget is never called, and whether setRefreshRate is an alias.
 - Whether device.read returns exactly `length` bytes zero-padded or the real report size; whether index 0 is always the report id even for numbered-report endpoints (observed only for report-id-0 devices).
 - Default timeout of bulk_transfer when the 4th argument is omitted, and whether it throws (Lian Li wraps it in try/catch) or returns [] on timeout.
-- Semantics of endpoint.interface === -1 (assumed: HID path without &MI_xx) and of endpoint.collection numbering (top-level collection index vs usage-based).
+- ~~Semantics of endpoint.interface === -1 and of endpoint.collection numbering.~~ Resolved in M0 spike C, see §Endpoint tuple semantics.
 - Which endpoint becomes active when Validate accepts several (first enumerated? lowest interface?) and whether set_endpoint 3-arg matches collection wildcard.
 - Full field list of device.getDeviceInfo() (only .product used) and of serial.availablePorts()/getDeviceInfo() objects.
 - How 'hybrid' obtains the libusb handle on Windows (WinUSB filter via SignalRgbDriver.sys? libusbK?) and whether rawusb devices need a driver swap.
@@ -200,7 +200,7 @@ Values (call sites): `"battery"` 46, `"keyboard"` 18, `"mouse"` 10, `"udp"` 5, `
   - **Resolution:** Names confirmed (not inferred). Engine implications: device.read on a report-id-0 endpoint returns [0x00, ...32 bytes] (length 33 logically, plugins request 32 and index from 1 — so returned array index 0 is the report id and payload is shifted by one; the engine must prepend 0x00 when the endpoint has no report IDs). STREAM_RGB_DATA packets never get a reply on success; the plugin's `case 0x24: sendColors()` handles stale/echoed packets. Error replies have garbage byte[1]==253/254 with stale cmd byte.
 - **Gap:** Docs-vs-corpus discrepancies in Validate/Type/exports worth recording for the loader
   - **Evidence:** Docs determining-device-type: Type strings are case-insensitive ('"HID", "Hid", "hid" all work'), values hid|rawusb|hybrid|serial|network|smbus; HID needs no custom driver, rawusb 'communicates directly with the device using libusb' (driver install not documented). Docs plugin-exports: Validate example `(endpoint.interface === 2 && endpoint.collection === 0x0003) || endpoint.interface === 1`; 'Several endpoints can be opened but only one is used at a time'; plugin-template Validate `interface===0 && usage===0 && usage_page===0 && collection===0`. Corpus: Validate uses device.productId() in BUND\Sony\Sony_Dualshock_4_Controller_Wired.js:83 and BUND\Steelseries\Steelseries_Apex_Pro_Mini_Keyboard.js:126 (device bound before Validate). Key names doc also lists generic 'Shift','Ctrl','Alt','Win','Apps','ContextMenu' and both 'Back Space'/'Backspace'. Export `deviceLibrary` appears in 77 files (helper-library modules, not engine-called).
-  - **Resolution:** Loader rules: compare Type() case-insensitively; default hid; also accept 'smbus' lowercase. Validate(endpoint) must be callable with the `device` global already bound (productId() available). Endpoint fields exactly: interface (int, -1 when the HID path has no &MI_xx), usage, usage_page, collection (int; template compares against 0 so the first top-level collection index is 0). Extra exports present in files (deviceLibrary, RazerProtocol, class X, hexToRgb, BitArray, SCIMITAR_*...) must be ignored by the loader. Key-name canonical list = docs list incl. generic Shift/Ctrl/Alt/Win/Apps/ContextMenu.
+  - **Resolution:** Loader rules: compare Type() case-insensitively; default hid; also accept 'smbus' lowercase. Validate(endpoint) must be callable with the `device` global already bound (productId() available). Endpoint fields exactly: interface (int; bInterfaceNumber, 0 for a non-composite USB device, -1 only without a USB interface), usage, usage_page, collection (int; the Windows `ColNN` number, 1-based, and 0 when the interface has a single top-level collection; see §Endpoint tuple semantics). Extra exports present in files (deviceLibrary, RazerProtocol, class X, hexToRgb, BitArray, SCIMITAR_*...) must be ignored by the loader. Key-name canonical list = docs list incl. generic Shift/Ctrl/Alt/Win/Apps/ContextMenu.
 - **Gap:** bulk_transfer error behaviour: which plugins wrap it and why
   - **Evidence:** Files wrapping bulk_transfer in try/catch: BUND\Lian Li\Lian_Li_Universal_Screen_88.js (2 blocks), BUND\Turzx\Turzx_Screen_88_Controller.js (1). Docs advanced-communication: bulk_transfer(Endpoint, DataArray, Length, Timeout) returns received bytes for IN or empty; control_transfer(RequestType, Request, Value, Index, DataArray, Length, Timeout) returns received bytes; input_report(DataArray, Length) = HID GET_INPUT_REPORT control transfer; docs example control_transfer(0x21, 0x09, 0x0300, 0, [0x03,0x08,0x32], 0, 500) = HID SET_REPORT(Feature) via libusb.
   - **Resolution:** bulk_transfer/control_transfer may throw a JS exception on libusb error/timeout (only LCD streamers guard it); on IN timeout returning [] is also acceptable. Default timeout when the 4th arg is omitted remains UNKNOWN (21 three-arg call sites; use ~1000 ms). input_report(reportIdBytes, length) -> int[] via GET_REPORT(Input) on the HID handle (BUND\Lian Li\LianLi_SL_Infinity.js:210).
@@ -224,3 +224,34 @@ Values (call sites): `"battery"` 46, `"keyboard"` 18, `"mouse"` 10, `"udp"` 5, `
 - §5 note: `Validate` may call device.productId() (Sony DS4, SteelSeries Apex Pro Mini) — confirmed 2 files; spec's 'inside Validate some plugins consult device.productId()' stands, listed here with exact paths.
 - Docs-only APIs with zero corpus use that still should be stubbed: device.denotify, device.addMessage/removeMessage, device.getMotherboardName, mouse.sendHid, dtls.hasEncryptedConnection, serial.readAll/getPortName/getBaudRate, @SignalRGB/tcp, @SignalRGB/performance, @SignalRGB/appInfo, SupportsSubdevices(), DeviceMessage() (singular).
 - Spec file-count header says 'bundled plugins 462'; actual .js count under BUND is 464 incl. 2 .test.js/.ts helpers; total scanned here 1008 (.js + .ts). Minor.
+
+## Endpoint tuple semantics (verified in M0 spike C, 2026-10-18)
+
+Measured on the reference machine with `huedeck devices` (read-only enumeration) and checked
+against the plugin corpus, hidapi 2.6.7 and SignalRGB's logs. This supersedes the earlier
+assumptions above (interface -1 for MI-less paths, 0-based collection index).
+
+- **interface** = USB `bInterfaceNumber` (the `&MI_xx` suffix). A non-composite USB device has
+  no `&MI_xx` in its HID path and reports **0** (hidapi does the same). **-1** is reserved for
+  HID devices without a USB interface (Bluetooth/BLE). Every corpus `Validate` that accepts -1
+  also accepts 0, so no plugin depends on -1 alone.
+- **collection** = the Windows top-level-collection number from the `&ColNN` suffix. Windows
+  writes it as **two uppercase hex digits** (hidclass.sys format
+  `HID\VID_%04X&PID_%04X&Col%02X&UP:%04X_U:%04X`; Microsoft "HIDClass Hardware IDs for
+  Top-Level Collections"), 1-based. An interface with a single top-level collection has no
+  `&ColNN` and reports **0**.
+  - Evidence: a Sonix-family keyboard plugin hard-codes `{interface 1, usage 0x0092,
+    usage_page 0xFF1C, collection 4}`; the Sonix 320F:5064 here exposes exactly
+    `0xFF1C/0x0092` at `MI_01&Col04`. Razer `set_endpoint(1, 0, 1, 5)` matches `MI_01&Col05`.
+    Across the corpus, 46 distinct literal tuples use collection values 0..6, none
+    contradictory.
+- **Grouping**: HID interfaces are grouped under their USB parent device
+  (`USB\VID_xxxx&PID_xxxx\<serial>`), found by walking the PnP tree with cfgmgr32. The parent
+  is accepted only when its VID/PID equals the endpoint's, so Bluetooth HID devices are never
+  merged under the Bluetooth radio's USB node; they fall back to serial or instance-prefix
+  grouping. The device key is `vid:pid:<serial>`, where the serial comes from the parent's
+  instance id (generated ids such as `6&XXXXXXXX&0&10` become `6-XXXXXXXX-0-10`, the form
+  SignalRGB logs).
+- **Linux (M7)**: hidraw tuples must follow the same rules: collection 0 for a single-TLC
+  interface, otherwise the 1-based TLC index in report-descriptor order (`huedeck-hid-desc`);
+  interface 0 for non-composite USB, -1 for Bluetooth.

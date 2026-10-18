@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A local SignalRGB installation's setup, read in place: never copied into
 //! HueDeck's files, never written. Everything here is empty on hosts without
 //! SignalRGB (and on non-Windows hosts).

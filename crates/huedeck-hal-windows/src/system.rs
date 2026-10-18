@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Process-level queries.
 //!
 //! * [`running_process_names`]: executable names of every running process

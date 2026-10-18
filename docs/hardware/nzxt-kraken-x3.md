@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
 # NZXT Kraken X53/X63/X73 ("X3", `1E71:2007`): lighting
 

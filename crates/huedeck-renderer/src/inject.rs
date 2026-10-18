@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! JavaScript evaluated in the effect's main-frame V8 context *before* any page script runs
 //! (CEF `OnContextCreated`).
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Plugin discovery.
 //!
 //! [`Catalog::scan`] loads every candidate `*.js` file under the given

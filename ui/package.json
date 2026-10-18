@@ -2,8 +2,8 @@
   "name": "@huedeck/ui",
   "private": true,
   "version": "0.1.0",
-  "description": "HueDeck dashboard, served by huedeckd on 127.0.0.1:16138. SPDX-License-Identifier: Apache-2.0 OR MIT",
-  "license": "Apache-2.0 OR MIT",
+  "description": "HueDeck dashboard, served by huedeckd on 127.0.0.1:16138. SPDX-License-Identifier: GPL-3.0-or-later",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",

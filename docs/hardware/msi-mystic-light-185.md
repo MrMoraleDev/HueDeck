@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
 # MSI Mystic Light "185-byte" motherboard controller (USB HID 1462:7C91)
 

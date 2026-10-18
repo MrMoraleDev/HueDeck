@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Embeds the Windows application manifest CEF expects (supportedOS list + Common Controls v6)
 //! into `huedeck-renderer.exe`. Chromium reads the compatibility section to detect the OS
 //! version; without it some features silently degrade. The CEF runtime files themselves

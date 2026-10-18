@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `huedeck-iobroker` — privileged I/O broker (M5).
 //!
 //! Will run as a Windows service (LocalSystem), installed once by

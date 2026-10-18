@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Layout editor: the live canvas with every endpoint's footprint on top. Drag to
      move; the inspector sets scale, rotation (clockwise about the top-left
      corner, as the sampler applies it), mirroring, brightness and forced colour. -->

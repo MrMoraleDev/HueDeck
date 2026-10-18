@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Golden-packet tests for the MSI Mystic Light 185 plugin. Run from the repo root with
 //   node --test "plugins/**/*.test.mjs"
@@ -75,7 +75,7 @@ test("manifest.json follows schemas/plugin-manifest-v2 (required keys, no unknow
   assert.equal(manifest.manifestVersion, 2);
   assert.match(manifest.id, new RegExp(manifestSchema.properties.id.pattern));
   assert.equal(manifest.id, "huedeck.msi-mystic-light-7c91");
-  assert.equal(manifest.license, "MIT");
+  assert.equal(manifest.license, "GPL-3.0-or-later");
   assert.equal(manifest.compat, "signalrgb-2.5");
   assert.equal(manifest.entry, "plugin.js");
   assert.ok(manifestSchema.properties.permissions.items.$ref.endsWith("permission"));

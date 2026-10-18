@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Source this (Git Bash on Windows) before any cargo command that may (re)run cef-dll-sys's
 # build script, i.e. anything building huedeck-renderer with `--features cef`:
 #   . crates/huedeck-renderer/tools/cef-env.sh

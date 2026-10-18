@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // HueDeck first-party plugin: Razer DeathAdder V2 Pro (wired 1532:007C, wireless receiver
 // 1532:007D), the logo light.

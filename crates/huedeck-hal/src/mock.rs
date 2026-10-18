@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Scripted in-memory backends and the transaction recorder used by golden
 //! tests, the plugin simulator and the conformance record/replay harness.
 //!

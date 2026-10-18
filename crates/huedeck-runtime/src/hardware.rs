@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The HID backend of a hardware run and the present devices some plugin claims.
 
 use huedeck_hal::HidBackend;

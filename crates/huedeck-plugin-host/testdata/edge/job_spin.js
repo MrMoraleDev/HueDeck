@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Initialize() returns, but a promise job it queued never ends (HueDeck test fixture).
 export function Name() { return "Edge Job Spin"; }
 export function VendorId() { return 0x1111; }

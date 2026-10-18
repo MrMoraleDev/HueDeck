@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Conversion of the JSON image of a plugin namespace into [`PluginMeta`].
 //!
 //! The runtime applies the call-if-function rule inside the engine and hands

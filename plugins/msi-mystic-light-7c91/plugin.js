@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // HueDeck first-party plugin: MSI Mystic Light "185-byte" motherboard controller.
 // Target board for M1: MSI MAG B550 TOMAHAWK (MS-7C91), USB HID 1462:7C91.

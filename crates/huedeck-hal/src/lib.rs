@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! HueDeck hardware abstraction layer.
 //!
 //! This crate is the design centre of the HueDeck device stack: every OS

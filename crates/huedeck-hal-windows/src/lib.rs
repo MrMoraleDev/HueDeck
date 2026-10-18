@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Windows HAL backends.
 //!
 //! * [`path`]: pure parser for Windows HID device-interface paths

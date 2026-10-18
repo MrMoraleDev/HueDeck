@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://huedeck.dev/schemas/plugin-manifest-v2.schema.json",
-  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "$comment": "SPDX-License-Identifier: GPL-3.0-or-later",
   "title": "HueDeck native plugin manifest (v2)",
   "description": "manifest.json placed next to a native-v2 plugin's entry module. SignalRGB-compatible plugins (compat-v1 profile) have no manifest: their metadata comes from the module exports. A manifest lets HueDeck know which hardware the plugin may touch and which host capabilities it needs BEFORE loading any code; the host grants only the listed permissions and only hands the plugin handles matching its devices[] entries. Unlisted permissions are refused with a typed error at call time.",
   "type": "object",
@@ -30,7 +30,7 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^\\(*[A-Za-z0-9.+\\-]+\\)*(?:\\s+(?:OR|AND|WITH)\\s+\\(*[A-Za-z0-9.+\\-]+\\)*)*$",
-      "description": "SPDX license expression, e.g. \"MIT\", \"Apache-2.0 OR MIT\" or \"(MIT OR Apache-2.0) AND CC0-1.0\" (parentheses allowed; balance is checked by the loader). First-party plugins use MIT."
+      "description": "SPDX license expression, e.g. \"MIT\", \"GPL-3.0-or-later\" or \"(MIT OR Apache-2.0) AND CC0-1.0\" (parentheses allowed; balance is checked by the loader). First-party plugins use GPL-3.0-or-later; third-party plugins may use any license (LICENSE-EXCEPTION.md)."
     },
     "publisher": { "type": "string", "minLength": 1, "description": "Author or organisation." },
     "description": { "type": "string" },

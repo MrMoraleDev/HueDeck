@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `config.toml`: static settings the user edits by hand (ports, frame rate,
 //! extra plugin directories, where the renderer and the dashboard are). The
 //! daemon never writes it; choices made in the dashboard live in the database.

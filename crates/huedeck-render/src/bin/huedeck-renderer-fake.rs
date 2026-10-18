@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! A stand-in for `huedeck-renderer --serve` in the CEF client's tests: no
 //! Chromium, just the frame ring and the control pipe.
 //!

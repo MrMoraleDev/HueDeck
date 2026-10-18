@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://huedeck.dev/schemas/effect-meta.schema.json",
-  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "$comment": "SPDX-License-Identifier: GPL-3.0-or-later",
   "title": "HueDeck effect metadata (parsed lightscript <head> model)",
   "description": "The control model HueDeck's effect loader produces from one lightscript HTML file: <title>, <meta description|publisher|background>, every <meta property ...> user control and every <meta meter ...> screen-meter tag (with its optional <resolution> children). The loader injects one JS global per property (var <property> = <value>), calls each on<property>Changed() once after the page scripts ran, then onEngineReady(). Attribute values in HTML are always strings; the parsed model keeps them as strings except where a numeric field is listed below.",
   "type": "object",

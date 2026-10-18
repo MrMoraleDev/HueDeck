@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `huedeck light | rainbow | bench`: the headless M1 pipeline.
 //!
 //! Null renderer → [`FrameStore`] → one plugin session per supported device

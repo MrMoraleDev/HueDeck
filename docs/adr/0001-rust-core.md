@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # ADR-0001: Rust for the core (daemon, CLI, renderer host, broker)
 
 - Status: Accepted (2026-10-17)

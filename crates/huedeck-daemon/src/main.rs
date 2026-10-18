@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `huedeckd` — the HueDeck per-user daemon (unprivileged): devices, effects,
 //! the local API and the dashboard. See `lib.rs`.
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # HueDeck release skeleton (tag-triggered).
 #
@@ -113,7 +113,7 @@ jobs:
           for b in $HUEDECK_BINS; do
             cp "target/${{ matrix.target }}/release/$b" "$out/"
           done
-          for f in LICENSE-APACHE LICENSE-MIT README.md \
+          for f in LICENSE LICENSE-EXCEPTION.md README.md \
             packaging/systemd/huedeckd.service packaging/udev/70-huedeck.rules.template; do
             if [ -f "$f" ]; then cp "$f" "$out/"; fi
           done
@@ -135,7 +135,7 @@ jobs:
           foreach ($b in $env:HUEDECK_BINS.Split(" ")) {
             Copy-Item "target/$target/release/$b.exe" $out
           }
-          foreach ($f in "LICENSE-APACHE", "LICENSE-MIT", "README.md") {
+          foreach ($f in "LICENSE", "LICENSE-EXCEPTION.md", "README.md") {
             if (Test-Path $f) { Copy-Item $f $out }
           }
           Copy-Item "sbom/*.cdx.json" $out

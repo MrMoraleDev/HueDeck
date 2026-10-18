@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `huedeck-renderer` — CEF offscreen renderer process.
 //!
 //! Hosts one windowless Chromium browser (CEF, Alloy style) on an effect's `file://` URL at

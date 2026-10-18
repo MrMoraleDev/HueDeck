@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Native backing of the compat `device` object in a real device session.
 //!
 //! [`DeviceContext`] owns the open HID endpoint of one physical device, the

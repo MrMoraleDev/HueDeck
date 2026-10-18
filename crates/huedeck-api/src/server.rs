@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The HTTP side: routers for the native API (with the dashboard and the
 //! WebSocket streams), the SignalRGB-compatible API and the canvas-event
 //! listener, all behind [`guard`].

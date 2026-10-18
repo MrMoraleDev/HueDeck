@@ -3,7 +3,7 @@
   "id": "huedeck.razer-deathadder-v2-pro",
   "name": "Razer DeathAdder V2 Pro",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "publisher": "HueDeck",
   "description": "The logo light of the Razer DeathAdder V2 Pro, wired (1532:007C) or through its receiver (1532:007D, untested). DPI, polling rate, battery and buttons are not touched. Protocol notes: docs/hardware/razer-deathadder-v2-pro.md.",
   "entry": "plugin.js",

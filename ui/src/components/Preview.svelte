@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- The live canvas from /v1/preview (BGRA frames with a width/height header). -->
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";

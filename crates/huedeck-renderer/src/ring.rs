@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Writer and reader for the shared-memory frame ring described in
 //! [`huedeck_protocol::shm`] (64-byte header + 3 BGRA slots, per-slot seqlock).
 //!

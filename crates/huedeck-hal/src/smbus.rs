@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SMBus / I2C bus trait.
 //!
 //! One [`SmbusBus`] per host controller: chipset SMBus (AMD FCH "PIIX4",

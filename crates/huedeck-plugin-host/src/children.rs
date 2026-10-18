@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Canvas endpoints a device plugin creates besides the device itself
 //! (docs/host-api/components-channels.md §1, §2 and §4):
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! hidapi-backed HID backend for Windows.
 //!
 //! hidapi's Windows backend already exposes one entry per top-level

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Channels, components and subdevices in a device session
 //! (docs/host-api/components-channels.md): a synthetic ARGB-controller plugin
 //! on the mock HAL, with one channel left to the placeholder strip and one

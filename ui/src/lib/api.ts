@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The daemon's native API (crates/huedeck-api/src/server.rs). Requests that change
 // state carry the token huedeckd embeds in the page it serves.
 

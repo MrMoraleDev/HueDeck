@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
 # SteelSeries Arctis 5 (`1038:12AA`): ear-cup lights
 

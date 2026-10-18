@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Device manager on the mock HAL: sessions follow devices being unplugged and
 //! plugged back in, including a replug fast enough that no enumeration saw the
 //! device missing (the session then holds a stale handle and is restarted).

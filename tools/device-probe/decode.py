@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Decode the coordinate-probe trace: which canvas cell each LED byte triple sampled.
 
 The probe effect paints R = round(x*255/319), G = round(y*255/199), B in {0x40,0x80,0xC0};

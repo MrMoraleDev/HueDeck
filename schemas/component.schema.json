@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://huedeck.dev/schemas/component.schema.json",
-  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "$comment": "SPDX-License-Identifier: GPL-3.0-or-later",
   "title": "HueDeck component descriptor (SignalRGB-compatible component JSON)",
   "description": "One addressable-RGB component (fan, strip, AIO block, case panel...) that a user attaches to a plugin channel (e.g. a motherboard JRAINBOW header). The file format is compatible with the SignalRGB 2.5 component library so community component JSON loads unchanged. Invariants that JSON Schema cannot express and that the loader MUST check: (1) LedMapping, LedCoordinates and LedNames all have exactly LedCount elements; (2) every LedCoordinates[i] = [x, y] satisfies 0 <= x < Width and 0 <= y < Height; (3) LedMapping SHOULD be a permutation of 0..LedCount-1 (each output slot used once) - the loader warns on duplicates and keeps the last writer; (4) ProductName is the identity/persistence key: a user component with the same ProductName overrides the built-in one. Semantics: LedCoordinates[i] is where LED i sits in the Width x Height sampling buffer (index-aligned with LedNames[i]); LedMapping[i] is the slot in the component's output colour stream (wire order) that receives that LED's colour, i.e. stream[LedMapping[i]] = sample(LedCoordinates[i]).",
   "type": "object",

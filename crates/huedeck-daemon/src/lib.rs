@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `huedeckd`, the per-user HueDeck daemon, as a library: the binary in
 //! `main.rs` parses arguments and calls [`run`]; tests drive the parts.
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Local API of `huedeckd`: the native REST + WebSocket API and the dashboard
 //! on [`NATIVE_PORT`], the SignalRGB-compatible REST API on
 //! [`COMPAT_REST_PORT`] and its canvas-event listener on

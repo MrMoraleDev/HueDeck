@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Read-only access to values under `HKEY_CURRENT_USER`: importing another
 //! application's per-user settings (SignalRGB keeps its component assignments
 //! and canvas placements there). HueDeck never writes the registry.

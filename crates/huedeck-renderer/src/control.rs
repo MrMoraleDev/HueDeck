@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Control commands for a serving renderer (`--serve`): one JSON object per line on stdin,
 //! turned into JavaScript for the effect page. End of input means the daemon is gone.
 //!

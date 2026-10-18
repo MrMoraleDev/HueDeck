@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 import { mount } from "svelte";
 import App from "./App.svelte";
 import "./app.css";

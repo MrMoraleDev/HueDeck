@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # ADR-0009: huedeckd's engine thread, the loopback API and the dashboard
 
 - Status: Accepted (2026-10-18); implemented in M4

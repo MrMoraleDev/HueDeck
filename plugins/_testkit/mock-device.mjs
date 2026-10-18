@@ -22,8 +22,10 @@ import { pathToFileURL } from "node:url";
  * @param {Record<string, number[][]>} [options.channelColors]  per channel name, one [r, g, b] per LED;
  *   channel(name) of a channel the plugin added returns them through getColors(format, order)
  * @param {(sent: number[]) => (number[] | undefined)} [options.featureReply]  called after every
- *   send_report with the bytes sent; a returned array becomes what get_report answers for that
- *   report id (a device that answers each request)
+ *   send_report with the bytes sent; a returned array (report id first) becomes what get_report
+ *   answers for its report id (a device that answers each request)
+ * @param {object | null} [options.reportFields]  what getHidReportFields() returns (HueDeck
+ *   extension: { usagePage, usage, reports, fields }); null when absent
  * @param {Record<string, number[]>} [options.subdeviceColors]  per subdevice id, the colour
  *   subdeviceColor(id, x, y) returns (black when absent)
  */
@@ -65,7 +67,7 @@ export function createMockDevice(options = {}) {
       device.sent.push({ reportId: bytes[0], length, bytes });
       if (failSend.has(bytes[0])) return -1;
       const reply = options.featureReply?.(bytes);
-      if (reply) featureReports.set(bytes[0], Array.from(reply));
+      if (reply) featureReports.set(Number(reply[0]), Array.from(reply));
       return length;
     },
     get_report(reportIdBytes, length) {
@@ -97,6 +99,7 @@ export function createMockDevice(options = {}) {
     productId() { return options.productId ?? 0; },
     vendorId() { return options.vendorId ?? 0; },
     getDeviceInfo() { return { product: "mock" }; },
+    getHidReportFields() { record("getHidReportFields", []); return options.reportFields ?? null; },
     setName(name) { record("setName", [name]); },
     setSize(size) { record("setSize", [size]); },
     setControllableLeds(names, positions) { record("setControllableLeds", [names, positions]); },

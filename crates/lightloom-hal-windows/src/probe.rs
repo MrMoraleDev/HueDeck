@@ -33,7 +33,11 @@ use windows::Win32::Devices::HumanInterfaceDevice::{
     HidD_FreePreparsedData, HidD_GetHidGuid, HidD_GetPreparsedData, HidP_GetCaps, HIDP_CAPS,
     HIDP_STATUS_SUCCESS, PHIDP_PREPARSED_DATA,
 };
-use windows::Win32::Devices::Properties::{DEVPKEY_Device_Manufacturer, DEVPROPTYPE, DEVPROP_TYPE_STRING};
+use windows::Win32::Devices::Properties::{
+    DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_Manufacturer, DEVPROPTYPE, DEVPROP_TYPE_STRING,
+    DEVPROP_TYPE_STRING_LIST,
+};
+use windows::Win32::Foundation::DEVPROPKEY;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -178,10 +182,26 @@ pub fn present_hid() -> Result<PresentHid, String> {
     Ok(present)
 }
 
-/// `DEVPKEY_Device_Manufacturer` of the device node directly above a HID
-/// collection (the USB interface, whose INF names the vendor): the fallback
-/// hidapi uses when `HidD_GetManufacturerString` returns nothing.
-pub fn parent_manufacturer(path: &str) -> Option<String> {
+/// Transport of a HID collection, decided as hidapi does: from the compatible
+/// ids of the device node directly above the HID collection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HidBus {
+    /// `USB\...` compatible ids.
+    Usb,
+    /// `BTHENUM\...` (Bluetooth classic).
+    Bluetooth,
+    /// `BTHLEDEVICE\...` (Bluetooth LE).
+    BluetoothLe,
+    /// `PNP0C50` (HID over I2C).
+    I2c,
+    /// `PNP0C51` (HID over SPI).
+    Spi,
+    /// Anything else (virtual devices, VMBus, unknown).
+    Unknown,
+}
+
+/// The device node directly above the HID collection at `path`.
+fn parent_devnode(path: &str) -> Option<u32> {
     let id = interface_path_to_instance_id(path)?;
     let wid = wide(&id);
     let mut inst = 0u32;
@@ -192,29 +212,70 @@ pub fn parent_manufacturer(path: &str) -> Option<String> {
     }
     let mut parent = 0u32;
     // SAFETY: plain out-pointer call on a devnode handle cfgmgr32 gave us.
-    if unsafe { CM_Get_Parent(&mut parent, inst, 0) } != CR_SUCCESS {
-        return None;
+    (unsafe { CM_Get_Parent(&mut parent, inst, 0) } == CR_SUCCESS).then_some(parent)
+}
+
+/// A string or string-list property of a devnode, as UTF-16 strings.
+fn devnode_strings(inst: u32, key: &DEVPROPKEY) -> Vec<String> {
+    let mut buf = vec![0u16; 512];
+    for _ in 0..2 {
+        let mut kind = DEVPROPTYPE(0);
+        let mut size = (buf.len() * 2) as u32;
+        // SAFETY: the buffer pointer and its size in bytes describe `buf`; out pointers are valid.
+        let cr = unsafe {
+            CM_Get_DevNode_PropertyW(inst, key, &mut kind, Some(buf.as_mut_ptr().cast()), &mut size, 0)
+        };
+        if cr == CR_BUFFER_SMALL {
+            buf = vec![0u16; (size as usize).div_ceil(2) + 1];
+            continue;
+        }
+        if cr != CR_SUCCESS || (kind != DEVPROP_TYPE_STRING && kind != DEVPROP_TYPE_STRING_LIST) {
+            return Vec::new();
+        }
+        let units = ((size as usize) / 2).min(buf.len());
+        return buf[..units]
+            .split(|&c| c == 0)
+            .filter(|s| !s.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect();
     }
-    let mut kind = DEVPROPTYPE(0);
-    let mut buf = [0u16; 256];
-    let mut size = (buf.len() * 2) as u32;
-    // SAFETY: the buffer pointer and its size in bytes describe `buf`; out pointers are valid.
-    let cr = unsafe {
-        CM_Get_DevNode_PropertyW(
-            parent,
-            &DEVPKEY_Device_Manufacturer,
-            &mut kind,
-            Some(buf.as_mut_ptr().cast()),
-            &mut size,
-            0,
-        )
+    Vec::new()
+}
+
+/// Transport of the HID collection at `path` (see [`HidBus`]).
+pub fn hid_bus(path: &str) -> HidBus {
+    let Some(parent) = parent_devnode(path) else {
+        return HidBus::Unknown;
     };
-    if cr != CR_SUCCESS || kind != DEVPROP_TYPE_STRING {
-        return None;
-    }
-    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    let s = String::from_utf16_lossy(&buf[..len]);
-    (!s.is_empty()).then_some(s)
+    devnode_strings(parent, &DEVPKEY_Device_CompatibleIds)
+        .iter()
+        .find_map(|id| {
+            let id = id.to_ascii_uppercase();
+            if id.starts_with("USB") {
+                Some(HidBus::Usb)
+            } else if id.starts_with("BTHENUM") {
+                Some(HidBus::Bluetooth)
+            } else if id.starts_with("BTHLEDEVICE") {
+                Some(HidBus::BluetoothLe)
+            } else if id.starts_with("PNP0C50") {
+                Some(HidBus::I2c)
+            } else if id.starts_with("PNP0C51") {
+                Some(HidBus::Spi)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(HidBus::Unknown)
+}
+
+/// `DEVPKEY_Device_Manufacturer` of the device node directly above a HID
+/// collection (the USB interface, whose INF names the vendor): the fallback
+/// hidapi uses for USB devices when `HidD_GetManufacturerString` returns nothing.
+pub fn parent_manufacturer(path: &str) -> Option<String> {
+    let parent = parent_devnode(path)?;
+    devnode_strings(parent, &DEVPKEY_Device_Manufacturer)
+        .into_iter()
+        .next()
 }
 
 /// Usage page / usage / report lengths from `HIDP_CAPS`.

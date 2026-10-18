@@ -13,4 +13,10 @@ homepage.workspace = true
 
 [dependencies]
 huedeck-engine = { path = "../huedeck-engine" }
+# The CEF client reads the renderer's shared-memory frame ring.
+huedeck-protocol = { path = "../huedeck-protocol" }
+huedeck-renderer = { path = "../huedeck-renderer" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }

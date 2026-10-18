@@ -7,14 +7,17 @@
 //! * [`NullRenderer`] (this crate, M1): solid / rainbow / test-pattern frames
 //!   generated in-process at a fixed fps from a [`FrameClock`]. Used headless,
 //!   in CI and by `huedeck light|rainbow|bench`.
-//! * `CefRenderer` (M3): reads the shm ring written by `huedeck-renderer`
-//!   (see `huedeck_protocol::shm`) and republishes into the store.
+//! * [`CefRenderer`]: runs `huedeck-renderer --serve` on an effect, publishes
+//!   every frame of its shared-memory ring (see `huedeck_protocol::shm`) and
+//!   supervises it (restart, keep-alive, 15 fps downshift).
 
 #![forbid(unsafe_code)]
 
+pub mod cef;
 pub mod clock;
 pub mod null;
 
+pub use cef::{CefRenderer, CefRendererConfig, CefStatus};
 pub use clock::FrameClock;
 pub use null::{NullRenderer, Pattern};
 
@@ -50,4 +53,8 @@ pub trait RendererClient: Send {
     fn stop(&mut self);
     /// Whether frames are currently being produced.
     fn is_running(&self) -> bool;
+    /// One line about what happened (renderer restarts, republished frames), if anything to say.
+    fn status_line(&self) -> Option<String> {
+        None
+    }
 }

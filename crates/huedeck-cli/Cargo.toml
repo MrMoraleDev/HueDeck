@@ -19,7 +19,14 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
-huedeck-hal = { path = "../huedeck-hal" }
+ctrlc = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# `mock`: `huedeck bench --mock VID:PID` drives a scripted in-memory device.
+huedeck-hal = { path = "../huedeck-hal", features = ["mock"] }
 huedeck-hal-windows = { path = "../huedeck-hal-windows" }
 huedeck-plugin-host = { path = "../huedeck-plugin-host" }
+huedeck-engine = { path = "../huedeck-engine" }
+huedeck-render = { path = "../huedeck-render" }

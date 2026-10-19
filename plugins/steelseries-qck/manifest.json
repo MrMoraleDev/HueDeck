@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.steelseries-qck",
+  "name": "SteelSeries QCK Prism",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "The two lights of the SteelSeries QCK Prism Cloth mouse mats (Medium, XL and its editions, 3XL, 4XL, 5XL). Adapted from OpenRGB's SteelSeriesQCKMatController (GPL-2.0-or-later); untested on hardware. Every colour report is followed by OpenRGB's report 0x0D, whose function is unknown: it may store the colours in the mat's memory. HueDeck therefore sends colours only when they change and at most once a second (an animated effect looks stepped), and a black Shutdown may persist as the mat's stored state. Protocol notes: docs/hardware/steelseries-qck.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mousepad",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x150A", "0x150D", "0x151E", "0x1520", "0x1514", "0x151C", "0x1516", "0x1518", "0x151A"],
+      "transport": "hid",
+      "interfaces": [0],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "qck", "prism", "mousepad", "mousemat", "openrgb"]
+}

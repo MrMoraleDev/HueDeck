@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.steelseries-rival",
+  "name": "SteelSeries Rival (older models)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-LED lighting of the older SteelSeries Rival mice: Rival 100, 105, 106, 110, the Rival 300 family, Rival 600 and Rival 700/710. The Rival 650 / 650 Wireless (1038:172B, 1726) are held back: OpenRGB's colour update for them sends unexplained 0x03 reports (0x03 is the DPI opcode in other Rival protocols). Adapted from OpenRGB's SteelSeriesRivalController (GPL-2.0-or-later); untested on hardware. The save command, DPI and polling rate are never touched. Protocol notes: docs/hardware/steelseries-rival.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x1702", "0x170C", "0x1814", "0x1816", "0x1729", "0x1710", "0x1714", "0x1394", "0x1716", "0x171A", "0x1392", "0x1718", "0x1724", "0x172E", "0x1700", "0x1730"],
+      "transport": "hid",
+      "interfaces": [0],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "rival", "mouse", "openrgb"]
+}

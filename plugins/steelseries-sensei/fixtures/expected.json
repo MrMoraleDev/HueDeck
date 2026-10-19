@@ -1,0 +1,145 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Expected packets worked out from OpenRGB's C++ (commit d4798c120659ec5ba2e664a9e87bedff8d36f880, Controllers/SteelSeriesController) by a separate reference model that mirrors each C++ function buffer by buffer (openrgb-work/steelseries/gen_fixtures.py in the porting session's scratch space, not part of the repository); plugin.js was never run to make them. 'products' comes from SteelSeriesControllerDetect.cpp (first registration wins for a pid, as in OpenRGB). Each variant lists the LED names and grid cells (zones in OpenRGB order; a zone with several LEDs gets its own row, consecutive one-LED zones share a row), two colour sets in LED order, and the I/O for Initialize (switch to Direct), a frame with each colour set and Shutdown. ops: write = output report (hid_write), send_report = feature report (hid_send_feature_report), read = input report read (hid_read_timeout), pause = sleep; hex is the whole buffer at the length the C++ passes, report id first. A product with 'held_back' is one OpenRGB lists that the HueDeck plugin deliberately does not claim (the reason is given). Deliberate HueDeck deviations from the C++ that the hardware notes describe are modelled the same way here (Apex M750 numeric-pad slots, Aerox receiver read timeout).",
+ "products": [
+  {
+   "pid": "0x1720",
+   "name": "SteelSeries Rival 310",
+   "variant": "SENSEI",
+   "validate": {
+    "interface": 0
+   },
+   "openrgb_line": 502
+  },
+  {
+   "pid": "0x171E",
+   "name": "SteelSeries Rival 310 CS:GO Howl Edition",
+   "variant": "SENSEI",
+   "validate": {
+    "interface": 0
+   },
+   "openrgb_line": 503
+  },
+  {
+   "pid": "0x1736",
+   "name": "SteelSeries Rival 310 PUBG Edition",
+   "variant": "SENSEI",
+   "validate": {
+    "interface": 0
+   },
+   "openrgb_line": 504
+  },
+  {
+   "pid": "0x1832",
+   "name": "SteelSeries Sensei TEN",
+   "variant": "SENSEI",
+   "validate": {
+    "interface": 0
+   },
+   "openrgb_line": 515
+  },
+  {
+   "pid": "0x1834",
+   "name": "SteelSeries Sensei TEN CS:GO Neon Rider Edition",
+   "variant": "SENSEI",
+   "validate": {
+    "interface": 0
+   },
+   "openrgb_line": 516
+  },
+  {
+   "pid": "0x1722",
+   "name": "SteelSeries Sensei 310",
+   "variant": "SENSEI",
+   "validate": {
+    "interface": 0
+   },
+   "openrgb_line": 517
+  }
+ ],
+ "variants": {
+  "SENSEI": {
+   "variant": "SENSEI",
+   "size": [
+    2,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Logo",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Scroll Wheel",
+     "pos": [
+      1,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     17,
+     64,
+     240
+    ],
+    [
+     34,
+     71,
+     231
+    ]
+   ],
+   "colours_b": [
+    [
+     128,
+     5,
+     119
+    ],
+    [
+     141,
+     36,
+     116
+    ]
+   ],
+   "initialize": [],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 66,
+     "hex": "005B0000000000000000000000000000000000000100000000000000011140F01140F000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 66,
+     "hex": "005B0001000000000000000000000000000000000100000000000000012247E72247E700000000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 66,
+     "hex": "005B00000000000000000000000000000000000001000000000000000180057780057700000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 66,
+     "hex": "005B0001000000000000000000000000000000000100000000000000018D24748D247400000000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 66,
+     "hex": "005B00000000000000000000000000000000000001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 66,
+     "hex": "005B00010000000000000000000000000000000001000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  }
+ }
+}

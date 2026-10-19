@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.steelseries-apex-old",
+  "name": "SteelSeries Apex (original) / Apex 350",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "The five lighting zones (QWERTY, ten-key, function keys, MX keys, logo) of the original SteelSeries Apex / Apex Fnatic and the Apex 350. Adapted from OpenRGB's SteelSeriesOldApexController (GPL-2.0-or-later); untested on hardware. Only the zone colour report is sent. Protocol notes: docs/hardware/steelseries-apex-old.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x1202", "0x1206"],
+      "transport": "hid",
+      "interfaces": [0],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "apex", "apex-350", "fnatic", "keyboard", "openrgb"]
+}

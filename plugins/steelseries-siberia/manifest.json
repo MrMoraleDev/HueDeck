@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.steelseries-siberia",
+  "name": "SteelSeries Siberia 350",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "The light of the SteelSeries Siberia 350 headset (USB 1038:1229). Adapted from OpenRGB's SteelSeriesSiberiaController (GPL-2.0-or-later); untested on hardware. Each colour change sends OpenRGB's four-report sequence: the colour command plus three commands OpenRGB does not explain (they may be register writes of the headset's controller), so the sequence goes out only when the colour changes, with no keepalive. Protocol notes: docs/hardware/steelseries-siberia.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "headphones",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x1229"],
+      "transport": "hid",
+      "interfaces": [3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "siberia", "headset", "headphones", "openrgb"]
+}

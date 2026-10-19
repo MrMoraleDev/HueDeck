@@ -12,8 +12,9 @@
 //!
 //! Install:
 //! 1. check the PawnIO driver: installed, official edition, 2.2.0 or later.
-//!    **Lightloom never downloads or installs PawnIO**; when it is missing or too
-//!    old this tool stops and says so;
+//!    **This tool never downloads or installs PawnIO** (installing it is the
+//!    user's choice: pawnio.eu, or an option of the Lightloom installer); when
+//!    it is missing or too old this tool stops and says so;
 //! 2. check `SmbusPIIX4.bin` and `Echo.bin` in `<dir>` (the signed PawnIO.Modules
 //!    0.2.11 release the user downloaded) against their SHA-256 pins, and copy
 //!    them with `COPYING` and the module sources found there (LGPL-2.1) to
@@ -124,7 +125,7 @@ enum Action {
 }
 
 /// The steps for `action`, given what PawnIO detection found. An install
-/// stops when PawnIO is not usable: Lightloom never installs it.
+/// stops when PawnIO is not usable: this tool does not install it.
 fn plan_steps(action: &Action, pawnio: PawnIoStatus, layout: &Layout) -> Result<Vec<Step>, String> {
     match action {
         Action::Uninstall => Ok(vec![
@@ -141,8 +142,8 @@ fn plan_steps(action: &Action, pawnio: PawnIoStatus, layout: &Layout) -> Result<
         } => {
             if let Some(problem) = pawnio.problem() {
                 return Err(format!(
-                    "{problem}. RAM lighting needs it; Lightloom never installs PawnIO for you: install the official \
-                     edition from https://pawnio.eu yourself, then run this again."
+                    "{problem}. RAM lighting needs it: install the official edition of PawnIO \
+                     (https://pawnio.eu), then run this again."
                 ));
             }
             Ok(vec![
@@ -544,7 +545,10 @@ mod tests {
             PawnIoStatus::NoAccess,
         ] {
             let err = plan_steps(&install(), status, &layout()).unwrap_err();
-            assert!(err.contains("never installs PawnIO"), "{status:?}: {err}");
+            assert!(
+                err.contains("install the official edition of PawnIO"),
+                "{status:?}: {err}"
+            );
         }
         let steps = plan_steps(&install(), PawnIoStatus::Ready(0x0002_0200), &layout()).unwrap();
         assert_eq!(steps.len(), 4);

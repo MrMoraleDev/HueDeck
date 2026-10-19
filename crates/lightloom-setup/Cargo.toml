@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "lightloom-setup"
-description = "lightloom-setup: one-shot elevated registration of the Lightloom I/O broker service (RAM lighting over SMBus) with its hash-pinned PawnIO modules; never installs PawnIO itself"
+description = "lightloom-setup: one-shot elevated registration of the Lightloom I/O broker service (RAM lighting over SMBus) with its hash-pinned PawnIO modules; does not install PawnIO itself"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

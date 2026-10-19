@@ -14,6 +14,11 @@
       "smbus": {
         "addresses": [32, 33, 34, 35, 39, 57, 58, 59, 60],
         "buses": ["amd", "intel"],
+        "spdManufacturers": [
+          { "bank": 1, "id": 44, "name": "Micron Technology" },
+          { "bank": 6, "id": 155, "name": "Crucial Technology" }
+        ],
+        "batchWrites": true,
         "tested": []
       }
     }

@@ -4,7 +4,8 @@
 // required keys are there, no key is outside the schema, USB claims have the claim shape, the
 // tested product ids are among the claimed ones, and the entry file exists. SMBus claims list valid
 // 7-bit addresses, which must equal the plugin's SmbusAddresses() export, and their deniedRegisters
-// equal its SmbusDeniedRegisters().
+// equal its SmbusDeniedRegisters(), their spdManufacturers its SpdManufacturers(), and their
+// batchWrites its SmbusBatchWrites().
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -73,6 +74,19 @@ for (const dir of dirs) {
           smbus.deniedRegisters ?? [],
           "SmbusDeniedRegisters() equals the manifest deniedRegisters",
         );
+        assert.deepEqual(
+          plugin.SpdManufacturers?.() ?? [],
+          smbus.spdManufacturers ?? [],
+          "SpdManufacturers() equals the manifest spdManufacturers",
+        );
+        assert.equal(
+          plugin.SmbusBatchWrites?.() === true,
+          smbus.batchWrites === true,
+          "SmbusBatchWrites() equals the manifest batchWrites",
+        );
+        if (manifest.deviceType === "ram" && !(smbus.pci ?? []).length) {
+          assert.ok((smbus.spdManufacturers ?? []).length > 0, "a RAM plugin declares spdManufacturers (SPD check)");
+        }
         assert.equal(String(plugin.Type()).toUpperCase(), "SMBUS");
         continue;
       }

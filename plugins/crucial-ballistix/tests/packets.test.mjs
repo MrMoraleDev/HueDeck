@@ -343,3 +343,69 @@ test("no SPD (0x50-0x57) or write-protect (0x30-0x37) address is ever touched", 
     restore();
   }
 });
+
+test("SpdManufacturers names Micron and Crucial Technology (JEP106)", async () => {
+  const plugin = await loadPlugin(pluginPath);
+  const list = plugin.SpdManufacturers().map(({ bank, id }) => [bank, id]);
+  assert.deepEqual(list, [
+    [1, 0x2c],
+    [6, 0x9b],
+  ]);
+  for (const { name } of plugin.SpdManufacturers()) {
+    assert.ok(name.length > 0);
+  }
+});
+
+test("SmbusBatchWrites: a frame is sent as one batch, a failed one again byte by byte", async () => {
+  const plugin = await loadPlugin(pluginPath);
+  assert.equal(plugin.SmbusBatchWrites(), true);
+  const device = createMockDevice({ color: (x) => perLed(x) });
+  for (const failBlockAt of [[], [0x39]]) {
+    const mock = createMockBus({ kind: "amd", pci: PIIX4, address: 0x39, indexed: { 0x39: crucialModule() }, failBlockAt, batchWrites: true });
+    const restore = installGlobals(device, mock.fixed);
+    try {
+      device.calls.length = 0;
+      plugin.Initialize();
+      assert.ok(
+        device.calls.some((c) => c.method === "setName" && c.args[0] === "Crucial DRAM 0x39 (BL8G32C16U4WL)"),
+        "the version string reads through queued pointer writes",
+      );
+      mock.ops.length = 0;
+      plugin.Render();
+      assert.equal(mock.isLocked(), false);
+      if (failBlockAt.length === 0) {
+        assert.deepEqual(toWire(mock.ops), wire(expected.frame_planes));
+      } else {
+        // The first block write fails: the rest of the batch is dropped, then the planes go out
+        // byte by byte (pointer, eight Write Byte 0x01 each).
+        const ops = toWire(mock.ops);
+        assert.deepEqual(ops.slice(0, 2), [["ww", 0x00, 0x0083], ["blk", 0x03, FRAME.map((c) => c[0])]]);
+        const fallback = ops.slice(2);
+        assert.equal(fallback.length, 3 * 9);
+        assert.deepEqual(fallback.filter(([op]) => op === "ww").map(([, , w]) => w), [0x0083, 0x4083, 0x8083]);
+        assert.deepEqual(fallback.filter(([op]) => op === "wb").map(([, , v]) => v), [0, 1, 2].flatMap((p) => FRAME.map((c) => c[p])));
+      }
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("dry run: modules already remapped are found on reads alone, a needed remap is reported", async () => {
+  const plugin = await loadPlugin(pluginPath);
+  // After a live scan and until the next power cycle the two modules answer at 0x3B and 0x3C.
+  const mock = createMockBus({ kind: "amd", pci: PIIX4, indexed: { 0x3B: crucialModule(), 0x3C: crucialModule() }, dryRun: true });
+  assert.deepEqual(plugin.Scan(mock.free), [0x3B, 0x3C]);
+  assert.ok(mock.ops.filter((o) => o.op.startsWith("Write")).every((o) => o.dry), "no write reaches the bus");
+  assert.ok(mock.logs.some((l) => l.includes("0x3b") && l.includes("dry run")), mock.logs.join("\n"));
+  // A module still at 0x27: the remap is reported, not sent, and the module stays where it is.
+  const fresh = createMockBus({ kind: "amd", pci: PIIX4, indexed: { 0x27: crucialModule() }, dryRun: true });
+  assert.deepEqual(plugin.Scan(fresh.free), []);
+  assert.deepEqual(fresh.indexedAddresses(), [0x27]);
+  assert.ok(fresh.logs.some((l) => l.includes("needs an address") && l.includes("0x39")), fresh.logs.join("\n"));
+  assert.ok(fresh.ops.filter((o) => o.op.startsWith("Write")).every((o) => o.dry));
+  // A live scan says that it moved one.
+  const live = createMockBus({ kind: "amd", pci: PIIX4, indexed: { 0x27: crucialModule() } });
+  assert.deepEqual(plugin.Scan(live.free), [0x39]);
+  assert.ok(live.logs.some((l) => l.includes("moving the module at 0x27")), live.logs.join("\n"));
+});

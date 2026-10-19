@@ -109,6 +109,8 @@ pub(crate) fn install_bus<'js>(
             "subVendor": d.pci.sub_vendor,
             "subDevice": d.pci.sub_device,
             "address": g.address(),
+            "spdSlots": g.spd_slots(),
+            "dryRun": g.dry_run(),
         })
         .to_string()
     });
@@ -142,16 +144,17 @@ pub(crate) fn install_bus<'js>(
     native!("busReadNoReg" else vec![-1], |g, a: i32, n: i32| block(g.read_block_no_reg(addr(a), len(n))));
     native!("busReadByteNoReg" else -1, |g, a: i32| value(g.read_byte_no_reg(addr(a))));
     native!("busLock" else false, |g| g.lock());
-    native!("busUnlock" else (), |g| g.unlock());
+    native!("busUnlock" else -1, |g| g.unlock());
     native!("busHasLock" else false, |g| g.has_lock());
 
     if !natives.contains_key("log")? {
-        let bus_name = lock_guard(guard).descriptor().name.clone();
+        // Scan(bus): the line is traced and kept for the scan's outcome.
+        let shared = Arc::clone(guard);
         natives.set(
             "log",
             Function::new(ctx.clone(), move |text: String| {
                 let text: String = text.chars().take(4096).collect();
-                tracing::info!(target: "lightloom::plugin", bus = %bus_name, "{text}");
+                lock_guard(&shared).plugin_log(&text);
             })?,
         )?;
     }

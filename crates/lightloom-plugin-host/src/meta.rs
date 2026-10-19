@@ -68,6 +68,8 @@ pub const METADATA_EXPORTS: &[&str] = &[
     "SmbusAddresses",
     "SmbusBuses",
     "SmbusDeniedRegisters",
+    "SpdManufacturers",
+    "SmbusBatchWrites",
 ];
 
 /// Exports the host calls during the device lifecycle (never at scan time).
@@ -533,6 +535,16 @@ pub struct PluginMeta {
     /// lets the plugin write, at any address (save-to-flash and the like).
     #[serde(default)]
     pub smbus_denied_registers: Vec<u8>,
+    /// `SpdManufacturers()` (Lightloom extension): the JEP106 module
+    /// manufacturers a RAM plugin drives. On chipset buses a RAM plugin
+    /// scans only when the SPD shows one of them ([`crate::spd`]).
+    #[serde(default)]
+    pub spd_manufacturers: Vec<crate::spd::SpdManufacturer>,
+    /// `SmbusBatchWrites()` returned `true` (Lightloom extension): inside a
+    /// `TransactionLock` the host queues the plugin's writes and sends them
+    /// as one batch (crate::smbus); `TransactionUnlock()` reports a failure.
+    #[serde(default)]
+    pub smbus_batch_writes: bool,
     /// Lifecycle exports the module declares.
     #[serde(default)]
     pub lifecycle: LifecycleExports,
@@ -579,6 +591,8 @@ impl PluginMeta {
             smbus_addresses: Vec::new(),
             smbus_buses: Vec::new(),
             smbus_denied_registers: Vec::new(),
+            spd_manufacturers: Vec::new(),
+            smbus_batch_writes: false,
             lifecycle: LifecycleExports::default(),
         }
     }
@@ -606,6 +620,12 @@ impl PluginMeta {
                 gpus.is_empty()
             }
         }
+    }
+
+    /// Whether the SPD check gates this plugin on chipset buses: a RAM
+    /// plugin (`DeviceType()` "ram"), or one that declares `SpdManufacturers()`.
+    pub fn spd_gated(&self) -> bool {
+        self.device_type == DeviceType::Ram || !self.spd_manufacturers.is_empty()
     }
 
     /// The dry-run "meta-complete" rule: `Name` + `VendorId` + `ProductId`, or a

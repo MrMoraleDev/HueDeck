@@ -6,7 +6,9 @@
 //! unprivileged process never opens the PawnIO device: it reads
 //! `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO`
 //! (`DisplayVersion`, as LibreHardwareMonitor does) to tell the user what is
-//! missing, and [`message`] says it. Lightloom never installs PawnIO.
+//! missing, and [`message`] says it. Installing PawnIO is the user's choice
+//! (from pawnio.eu, or as an option of the Lightloom installer); nothing here
+//! installs it.
 
 /// PawnIO's uninstall key.
 pub const UNINSTALL_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO";
@@ -40,10 +42,9 @@ pub fn message(presence: &PawnIoPresence, broker_up: bool) -> Option<String> {
         return None;
     }
     Some(match presence {
-        PawnIoPresence::NotInstalled => "RAM lighting needs the PawnIO driver (official edition 2.2.0 or later, \
-             https://pawnio.eu), which is not installed on this PC. Lightloom never installs it for you. Install it \
-             yourself, then register the Lightloom I/O broker once with `lightloom-setup --smbus` (one UAC prompt). \
-             GPU lighting works without it."
+        PawnIoPresence::NotInstalled => "RAM lighting is off: it needs the PawnIO driver (official edition 2.2.0 \
+             or later, https://pawnio.eu), which is not installed on this PC. Once PawnIO is installed, register the \
+             Lightloom I/O broker once with `lightloom-setup --smbus` (one UAC prompt). GPU lighting works without it."
             .to_string(),
         PawnIoPresence::Installed { version } if parse_version(version).is_some_and(|v| v < MIN_VERSION) => {
             format!(
@@ -98,7 +99,7 @@ mod tests {
             "the broker answers"
         );
         let missing = message(&PawnIoPresence::NotInstalled, false).unwrap();
-        assert!(missing.contains("not installed") && missing.contains("never installs"));
+        assert!(missing.contains("not installed") && missing.contains("RAM lighting is off"));
         assert!(
             missing.contains("lightloom-setup --smbus") && missing.contains("GPU lighting works without it")
         );

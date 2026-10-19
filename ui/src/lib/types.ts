@@ -56,7 +56,7 @@ export interface DeviceView {
   connected: boolean;
   frames: number;
   renderErrors: number;
-  hidErrors: number;
+  ioErrors: number;
   /** SMBus devices: "<bus name> · 0x<address>". */
   bus?: string | null;
   defaultScale: number;

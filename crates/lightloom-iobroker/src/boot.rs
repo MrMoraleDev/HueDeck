@@ -62,6 +62,9 @@ mod registry {
     }
 }
 
+/// `ioctl_set_sleep_mode` 0: poll with `KeStallExecutionProcessor` (no timer tick per transfer).
+pub const SLEEP_MODE_ALWAYS_BUSY: u8 = 0;
+
 /// How the broker starts.
 #[derive(Clone, Debug)]
 pub struct BootOptions {
@@ -69,8 +72,17 @@ pub struct BootOptions {
     pub modules_dir: PathBuf,
     /// Refuse every write with `DryRun`.
     pub dry_run: bool,
-    /// PIIX4 sleep mode: 1 (ShortBusy) by default; research §8 R1 (AlwaysSleep
-    /// costs a timer tick per poll, too slow for a frame of RAM colours).
+    /// PIIX4 sleep mode: 0 (AlwaysBusy, the module's own default) unless
+    /// told otherwise. ShortBusy (1) and AlwaysSleep (2) wait with
+    /// `KeDelayExecutionThread`, which on Windows lasts at least one timer
+    /// tick (15.6 ms unless some program raised the timer resolution) per
+    /// transfer. On the test machine the Crucial `Initialize()` (~180
+    /// transfers) took about 3 s with ShortBusy, ~16 ms per transfer, the
+    /// timer tick (the pipe's 1 ms sleep under a lease, see `pipe`, cost a
+    /// tick too). AlwaysBusy polls with
+    /// `KeStallExecutionProcessor` instead, bounded by the module's 64 ms
+    /// timeout: each transfer costs its bus time (0.5-1.3 ms at 93.75 kHz),
+    /// spent on the broker's thread (research §8 R1, docs/adr/0004).
     pub sleep_mode: u8,
 }
 
@@ -79,7 +91,7 @@ impl Default for BootOptions {
         Self {
             modules_dir: default_modules_dir(),
             dry_run: false,
-            sleep_mode: 1,
+            sleep_mode: SLEEP_MODE_ALWAYS_BUSY,
         }
     }
 }
@@ -204,6 +216,12 @@ mod tests {
         assert_eq!(piix4_bus_name(0), "AMD PIIX4 Bus - 0x0b00");
         assert_eq!(piix4_bus_name(1), "AMD PIIX4 Bus - 0x0b20");
         assert!(default_modules_dir().ends_with(r"Lightloom\pawnio\0.2.11") || !cfg!(windows));
+    }
+
+    #[test]
+    fn piix4_polls_without_a_timer_tick_per_transfer() {
+        assert_eq!(BootOptions::default().sleep_mode, SLEEP_MODE_ALWAYS_BUSY);
+        assert_eq!(SLEEP_MODE_ALWAYS_BUSY, 0);
     }
 
     #[test]

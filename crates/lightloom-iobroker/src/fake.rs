@@ -13,6 +13,11 @@ struct State {
     devices: BTreeMap<u8, BTreeMap<u8, u8>>,
     port: u8,
     fail: Option<NtStatus>,
+    /// DDR4 SPDs (EE1004, 512 bytes) and the page selected on the bus.
+    spd: BTreeMap<u8, Vec<u8>>,
+    spd_page: u8,
+    /// Modules switch the page but do not acknowledge the select.
+    nack_page_select: bool,
 }
 
 /// A `SmbusPIIX4` module over a register map; clones share state.
@@ -44,6 +49,25 @@ impl FakePiix4 {
     pub fn on_port(self, port: u8) -> Self {
         self.state().port = port;
         self
+    }
+
+    /// A DDR4 SPD (EE1004) at `addr` holding `contents` (0xFF-padded to 512).
+    pub fn with_spd(self, addr: u8, contents: &[u8]) -> Self {
+        let mut bytes = vec![0xFF; 512];
+        bytes[..contents.len().min(512)].copy_from_slice(&contents[..contents.len().min(512)]);
+        self.state().spd.insert(addr, bytes);
+        self
+    }
+
+    /// The SPDs switch page on a Set Page Address but answer it with a NACK.
+    pub fn nack_page_select(self) -> Self {
+        self.state().nack_page_select = true;
+        self
+    }
+
+    /// The EE1004 page selected on the bus.
+    pub fn spd_page(&self) -> u8 {
+        self.state().spd_page
     }
 
     /// Every `(function, input cells)` so far.
@@ -80,6 +104,31 @@ impl PawnExec for FakePiix4 {
                     return Err(status);
                 }
                 let (addr, read, cmd, proto) = (input[0] as u8, input[1] == 1, input[2] as u8, input[3]);
+                // EE1004: Set Page Address (Send Byte to 0x36 / 0x37) and
+                // Read Page Address (Receive Byte at 0x36: ACK on page 0).
+                if (addr == 0x36 || addr == 0x37) && proto == 1 && !s.spd.is_empty() {
+                    if read {
+                        return if addr == 0x36 && s.spd_page == 0 {
+                            Ok(())
+                        } else {
+                            Err(NtStatus::NO_SUCH_DEVICE)
+                        };
+                    }
+                    s.spd_page = addr - 0x36;
+                    return if s.nack_page_select {
+                        Err(NtStatus::NO_SUCH_DEVICE)
+                    } else {
+                        Ok(())
+                    };
+                }
+                if let Some(spd) = s.spd.get(&addr) {
+                    assert!(read, "the broker never writes an SPD: {input:?}");
+                    if proto != 2 {
+                        return Err(NtStatus::NOT_SUPPORTED);
+                    }
+                    output[0] = u64::from(spd[usize::from(s.spd_page) * 256 + usize::from(cmd)]);
+                    return Ok(());
+                }
                 let dev = s.devices.get_mut(&addr).ok_or(NtStatus::NO_SUCH_DEVICE)?;
                 match (proto, read) {
                     (0, _) => {}

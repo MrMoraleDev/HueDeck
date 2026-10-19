@@ -394,7 +394,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
     });
     let d = s.devices.iter().find(|d| d.key == GPU).unwrap();
     assert_eq!(d.bus.as_deref(), Some("NVIDIA GeForce RTX 3060 · 0x68"));
-    assert_eq!((d.vid, d.pid, d.hid_errors), (0x10DE, 0x2504, 0));
+    assert_eq!((d.vid, d.pid, d.io_errors), (0x10DE, 0x2504, 0));
     assert!(s.settings.smbus);
     assert!(!rec.payloads(TransactionKind::SmbusWrite).is_empty());
 

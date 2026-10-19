@@ -13,7 +13,11 @@
 //!   reaches the pipe cannot write clock generators, VRM controllers or EC
 //!   parts through this LocalSystem service;
 //! * only chipset buses: GPU I2C stays in the user process, SuperIO is not served;
-//! * at most [`RATE_LIMIT_PER_SEC`] operations per second (token bucket);
+//! * `SpdRead` only at the SPD addresses 0x50-0x57, 1..=32 bytes in one page
+//!   ([`BrokerOp::validate`]); its EE1004 page select (0x36 / 0x37) is a step
+//!   inside the broker, never an op of its own;
+//! * at most [`RATE_LIMIT_PER_SEC`] bus transfers per second (token bucket;
+//!   an `SpdRead` costs its bytes plus two);
 //! * dry-run: writes refused with `DryRun` (reported, never silent);
 //! * an audit line per write (`target: "lightloom::audit"`).
 //!
@@ -47,11 +51,17 @@ impl RateLimiter {
 
     /// Take one token at `now`.
     pub fn admit(&mut self, now: Instant) -> bool {
+        self.admit_n(1, now)
+    }
+
+    /// Take `n` tokens at `now` (none when fewer are left).
+    pub fn admit_n(&mut self, n: u32, now: Instant) -> bool {
         let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
         self.last = now.max(self.last);
         self.tokens = (self.tokens + elapsed * self.rate).min(self.rate);
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
+        let n = f64::from(n);
+        if self.tokens >= n {
+            self.tokens -= n;
             true
         } else {
             false
@@ -129,7 +139,7 @@ impl Policy {
             audit(bus, op, "DENIED (not in the broker's write allowlist)");
             return Err(BrokerError::AddressDenied { addr });
         }
-        if !self.limiter.admit(now) {
+        if !self.limiter.admit_n(op.transfers(), now) {
             return Err(BrokerError::RateLimited);
         }
         if self.dry_run && op.is_write() {
@@ -140,9 +150,10 @@ impl Policy {
     }
 }
 
-/// One audit line for a write (or a refused one).
+/// One audit line for a write (or a refused one), and for an SPD read (its
+/// page select writes 0x36 / 0x37).
 pub fn audit(bus: &BusInfo, op: &BrokerOp, outcome: &str) {
-    if op.is_write() || outcome.starts_with("DENIED") {
+    if op.is_write() || matches!(op, BrokerOp::SpdRead { .. }) || outcome.starts_with("DENIED") {
         tracing::info!(target: "lightloom::audit", bus = %bus.name, "{op:?}: {outcome}");
     }
 }
@@ -258,6 +269,41 @@ mod tests {
         for addr in [0x20, 0x23, 0x27, 0x39, 0x3C] {
             assert!(p.check(&write(addr), &b, t0).is_ok(), "0x{addr:02x}");
         }
+    }
+
+    #[test]
+    fn spd_read_only_at_spd_addresses_and_charged_per_transfer() {
+        let t0 = Instant::now();
+        let mut p = Policy::new(false, t0);
+        let b = bus(BusKind::Amd);
+        let spd = |addr| BrokerOp::SpdRead {
+            bus: 0,
+            addr,
+            offset: 320,
+            len: 2,
+        };
+        assert!(p.check(&spd(0x50), &b, t0).is_ok());
+        for addr in [0x36, 0x37, 0x39] {
+            assert_eq!(
+                p.check(&spd(addr), &b, t0),
+                Err(BrokerError::AddressDenied { addr })
+            );
+        }
+        let mut p = Policy::new(true, t0);
+        assert!(p.check(&spd(0x57), &b, t0).is_ok(), "served in dry-run");
+        assert_eq!(
+            p.check(&spd(0x50), &bus(BusKind::Nvidia), t0),
+            Err(BrokerError::Unsupported)
+        );
+        let mut p = Policy::new(false, t0);
+        for _ in 0..(RATE_LIMIT_PER_SEC / 4) {
+            assert!(p.check(&spd(0x50), &b, t0).is_ok());
+        }
+        assert_eq!(
+            p.check(&spd(0x50), &b, t0),
+            Err(BrokerError::RateLimited),
+            "4 transfers each"
+        );
     }
 
     #[test]

@@ -31,7 +31,8 @@
 //! * [`smbus`]: the SMBus policy (scan window, allowlist, SPD write deny,
 //!   transaction lock, dry-run) every `bus.*` call goes through; [`bus`]: the
 //!   natives behind `bus.*`; [`discover`]: `Scan(bus)` of the SMBus plugins
-//!   offered each bus, which yields the SMBus devices.
+//!   offered each bus, which yields the SMBus devices; [`spd`]: the SPD
+//!   check that gates RAM plugins on chipset buses.
 
 #![forbid(unsafe_code)]
 
@@ -49,6 +50,7 @@ pub mod resolve;
 pub mod runtime;
 pub mod session;
 pub mod smbus;
+pub mod spd;
 pub mod stats;
 
 pub use loader::{Loader, LoaderError, PluginIndex};

@@ -29,6 +29,37 @@ pub const DDR5_PMIC: RangeInclusive<u8> = 0x48..=0x4F;
 /// 24RF08-class EEPROMs, which a Quick write can corrupt (Linux never sends
 /// one there). Never written on a DIMM bus.
 pub const EEPROM_AREA: RangeInclusive<u8> = 0x50..=0x5F;
+/// A DDR4 SPD EEPROM (JEDEC EE1004): 512 bytes in two 256-byte pages.
+pub const SPD_DDR4_LEN: u16 = 512;
+/// EE1004 page size.
+pub const SPD_PAGE_LEN: u16 = 256;
+/// EE1004 "Set Page Address" commands: SPA0 (page 0) at 0x36, SPA1 (page 1)
+/// at 0x37. A Send Byte (data 0x00, ignored by the EEPROM) to one of them
+/// switches the page of every DDR4 SPD on the bus, as Linux's `ee1004`
+/// driver does. The only writes Lightloom ever sends into 0x30-0x37, and only
+/// from [`SmbusBus::spd_read`] inside a backend.
+pub const SPD_SET_PAGE: [u8; 2] = [0x36, 0x37];
+
+/// Check the arguments of [`SmbusBus::spd_read`]: an SPD address
+/// (0x50..=0x57), 1..=32 bytes within one page of the 512-byte DDR4 SPD.
+pub fn validate_spd_read(addr: u8, offset: u16, len: usize) -> HalResult<()> {
+    if !SPD_EEPROM.contains(&addr) {
+        return Err(HalError::InvalidArgument(format!(
+            "SPD read at 0x{addr:02x}: not an SPD address (0x50..=0x57)"
+        )));
+    }
+    let in_page = usize::from(offset % SPD_PAGE_LEN);
+    if offset >= SPD_DDR4_LEN
+        || len == 0
+        || len > SMBUS_BLOCK_MAX
+        || in_page + len > usize::from(SPD_PAGE_LEN)
+    {
+        return Err(HalError::InvalidArgument(format!(
+            "SPD read of {len} bytes at {offset}: 1..=32 bytes within one 256-byte page of 512"
+        )));
+    }
+    Ok(())
+}
 
 /// Which family of host controller owns a bus. Drives the plugin-visible
 /// `IsSystemBus/IsAMDBus/IsIntelBus/IsNvidiaBus/IsNuvotonBus/IsAMDGpuBus` predicates.
@@ -174,7 +205,8 @@ pub fn validate_address(addr: u8) -> HalResult<()> {
 ///
 /// Every method takes the 7-bit slave `addr`; the fixed-address wrapper the
 /// plugin sees simply binds it. Implementations serialise access themselves
-/// (the Windows broker holds `Global\Access_SMBUS.HTP.Method` per operation).
+/// (the Windows broker holds `Global\Access_SMBUS.HTP.Method` per operation
+/// or batch; NvAPI buses go through one worker thread per process).
 pub trait SmbusBus: Send {
     /// Static description.
     fn descriptor(&self) -> &SmbusBusDescriptor;
@@ -216,6 +248,162 @@ pub trait SmbusBus: Send {
     fn bus_unlock(&mut self) -> HalResult<()> {
         Ok(())
     }
+
+    /// Read `buf.len()` bytes (1..=32, within one page) of the DDR4 SPD
+    /// EEPROM (EE1004) at `addr` (0x50..=0x57) from byte `offset` (0..512),
+    /// for the host's SPD check of RAM plugins ([`validate_spd_read`]). The
+    /// backend selects the page ([`SPD_SET_PAGE`]), reads, and selects page 0
+    /// again, all under its bus mutex; it is the only write any backend sends
+    /// to 0x30-0x37, and plugins have no way to it (their `bus` object has no
+    /// such call). Chipset buses only; the default refuses (GPU buses).
+    fn spd_read(&mut self, _addr: u8, _offset: u16, _buf: &mut [u8]) -> HalResult<usize> {
+        Err(HalError::Unsupported("SPD read on this bus"))
+    }
+
+    /// Run `ops` in order and stop at the first failure ([`SmbusBatch`]).
+    /// The default sends them one by one; the I/O broker client sends them
+    /// as one request (one pipe round trip, one hold of the global SMBus
+    /// mutex). Every op gets the same checks as when sent alone.
+    fn run_batch(&mut self, ops: &[SmbusOp]) -> SmbusBatch {
+        run_one_by_one(self, ops)
+    }
+}
+
+/// [`SmbusBus::run_batch`] op by op: stops at the first failure.
+pub fn run_one_by_one<B: SmbusBus + ?Sized>(bus: &mut B, ops: &[SmbusOp]) -> SmbusBatch {
+    let mut done = SmbusBatch::default();
+    for op in ops {
+        match op.run_on(bus) {
+            Ok(reply) => done.replies.push(reply),
+            Err(e) => {
+                done.error = Some(e);
+                break;
+            }
+        }
+    }
+    done
+}
+
+/// One transfer of a [`SmbusBus::run_batch`]: the operations a plugin host
+/// queues (writes) plus the reads that end a batch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SmbusOp {
+    /// [`SmbusBus::write_quick`].
+    WriteQuick {
+        /// 7-bit address.
+        addr: u8,
+    },
+    /// [`SmbusBus::write_byte`].
+    WriteByte {
+        /// 7-bit address.
+        addr: u8,
+        /// Command byte.
+        reg: u8,
+        /// Value.
+        value: u8,
+    },
+    /// [`SmbusBus::write_word`].
+    WriteWord {
+        /// 7-bit address.
+        addr: u8,
+        /// Command byte.
+        reg: u8,
+        /// Value.
+        value: u16,
+    },
+    /// [`SmbusBus::write_block`].
+    WriteBlock {
+        /// 7-bit address.
+        addr: u8,
+        /// Command byte.
+        reg: u8,
+        /// Data.
+        data: Vec<u8>,
+    },
+    /// [`SmbusBus::write_block_no_reg`].
+    WriteBlockNoReg {
+        /// 7-bit address.
+        addr: u8,
+        /// Data.
+        data: Vec<u8>,
+    },
+    /// [`SmbusBus::read_byte`].
+    ReadByte {
+        /// 7-bit address.
+        addr: u8,
+        /// Command byte.
+        reg: u8,
+    },
+    /// [`SmbusBus::read_word`].
+    ReadWord {
+        /// 7-bit address.
+        addr: u8,
+        /// Command byte.
+        reg: u8,
+    },
+    /// [`SmbusBus::read_byte_no_reg`].
+    ReadByteNoReg {
+        /// 7-bit address.
+        addr: u8,
+    },
+}
+
+impl SmbusOp {
+    /// Whether the op changes device state (a Quick command counts).
+    pub fn is_write(&self) -> bool {
+        matches!(
+            self,
+            SmbusOp::WriteQuick { .. }
+                | SmbusOp::WriteByte { .. }
+                | SmbusOp::WriteWord { .. }
+                | SmbusOp::WriteBlock { .. }
+                | SmbusOp::WriteBlockNoReg { .. }
+        )
+    }
+
+    /// Run the op alone on `bus`.
+    pub fn run_on<B: SmbusBus + ?Sized>(&self, bus: &mut B) -> HalResult<SmbusReply> {
+        match self {
+            SmbusOp::WriteQuick { addr } => bus.write_quick(*addr).map(|()| SmbusReply::Done),
+            SmbusOp::WriteByte { addr, reg, value } => {
+                bus.write_byte(*addr, *reg, *value).map(|()| SmbusReply::Done)
+            }
+            SmbusOp::WriteWord { addr, reg, value } => {
+                bus.write_word(*addr, *reg, *value).map(|()| SmbusReply::Done)
+            }
+            SmbusOp::WriteBlock { addr, reg, data } => {
+                bus.write_block(*addr, *reg, data).map(|()| SmbusReply::Done)
+            }
+            SmbusOp::WriteBlockNoReg { addr, data } => {
+                bus.write_block_no_reg(*addr, data).map(|()| SmbusReply::Done)
+            }
+            SmbusOp::ReadByte { addr, reg } => bus.read_byte(*addr, *reg).map(SmbusReply::Byte),
+            SmbusOp::ReadWord { addr, reg } => bus.read_word(*addr, *reg).map(SmbusReply::Word),
+            SmbusOp::ReadByteNoReg { addr } => bus.read_byte_no_reg(*addr).map(SmbusReply::Byte),
+        }
+    }
+}
+
+/// What one [`SmbusOp`] answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SmbusReply {
+    /// A write completed.
+    Done,
+    /// A byte read.
+    Byte(u8),
+    /// A word read.
+    Word(u16),
+}
+
+/// The outcome of [`SmbusBus::run_batch`]: one reply per op done, in order;
+/// when it stopped early, the error of op `replies.len()` (the ops after it
+/// were not sent).
+#[derive(Debug, Default)]
+pub struct SmbusBatch {
+    /// Replies of the ops done.
+    pub replies: Vec<SmbusReply>,
+    /// Why op `replies.len()` failed, if one did.
+    pub error: Option<HalError>,
 }
 
 #[cfg(test)]
@@ -282,6 +470,20 @@ mod tests {
                 assert!(!write_denied(kind, addr), "{kind:?} 0x{addr:02x}");
             }
         }
+    }
+
+    #[test]
+    fn spd_read_arguments() {
+        assert!(validate_spd_read(0x50, 2, 1).is_ok());
+        assert!(validate_spd_read(0x57, 320, 2).is_ok());
+        assert!(validate_spd_read(0x50, 0x1E0, 32).is_ok());
+        assert!(validate_spd_read(0x4F, 0, 1).is_err(), "not an SPD address");
+        assert!(validate_spd_read(0x58, 0, 1).is_err());
+        assert!(validate_spd_read(0x36, 0, 1).is_err());
+        assert!(validate_spd_read(0x50, 0, 0).is_err());
+        assert!(validate_spd_read(0x50, 0, 33).is_err());
+        assert!(validate_spd_read(0x50, 250, 8).is_err(), "crosses into page 1");
+        assert!(validate_spd_read(0x50, 512, 1).is_err());
     }
 
     #[test]

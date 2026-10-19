@@ -7,13 +7,15 @@
 //! reported, never terminated), and every session ends with the plugin's
 //! `Shutdown(false)` — on Ctrl-C too — unless `--keep` is given.
 //!
-//! With `--smbus` the SMBus devices (GPU RGB over NvAPI, RAM RGB through the
-//! Lightloom I/O broker) join the run:
-//! the SMBus plugins scan the buses once before the sessions start, never
-//! while SignalRGB, OpenRGB or a vendor lighting service runs and never
-//! alongside lightloomd or another `--smbus` run (`--ignore-conflicts` does not
-//! apply). Those programs are looked for again every second while the SMBus
-//! devices run; one that starts ends the run (every `Shutdown()` runs).
+//! The SMBus devices (GPU RGB over NvAPI; RAM RGB through the Lightloom I/O
+//! broker, when it is installed and healthy) join the run unless
+//! `--no-smbus`: the SMBus plugins scan the buses once before the sessions
+//! start. They are left out, with one line saying why, while SignalRGB,
+//! OpenRGB or a vendor lighting service runs (`--ignore-conflicts` does not
+//! apply to them), while lightloomd runs (it drives them) and while another
+//! Lightloom run drives them; the HID devices run all the same. Those programs
+//! are looked for again every second while the SMBus devices run; one that
+//! starts ends the run (every `Shutdown()` runs).
 
 use anyhow::{bail, Context};
 use clap::Args;
@@ -70,14 +72,15 @@ pub struct RunArgs {
     #[arg(long)]
     pub keep: bool,
     /// Run even when conflicting RGB software (SignalRGB, OpenRGB, the plugin's list) is running.
-    /// Never applies to --smbus.
+    /// Never applies to SMBus devices: they are left out then.
     #[arg(long)]
     pub ignore_conflicts: bool,
-    /// Also drive SMBus devices (NVIDIA GPU RGB controllers through NvAPI, RAM through
-    /// the Lightloom I/O broker): the SMBus plugins scan the buses first. Refused while
-    /// SignalRGB or OpenRGB runs.
+    /// Leave the SMBus devices out. By default NVIDIA GPU RGB controllers (through NvAPI)
+    /// and RAM (through the Lightloom I/O broker, when installed) join the run: the SMBus
+    /// plugins scan the buses first. They are left out anyway while SignalRGB, OpenRGB or
+    /// lightloomd runs.
     #[arg(long)]
-    pub smbus: bool,
+    pub no_smbus: bool,
     /// Compare feature reports before Initialize and after Shutdown. Alone: every
     /// feature report the device's report descriptor declares. `=ID:LEN`: that
     /// report only (repeatable, e.g. --restore-check=0x52:185).
@@ -494,7 +497,9 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
 /// address (unset registers read 0xFF); else an AMD PIIX4 bus with one DRAM
 /// RGB controller at the first `SmbusAddresses()` address: the ENE-style
 /// indexed register file OpenRGB's DRAM detectors identify (0xA0..0xAF read
-/// 0..15, "Micron" at 0x1025, a version string at 0x1000).
+/// 0..15, "Micron" at 0x1025, a version string at 0x1000), and a DDR4 SPD at
+/// 0x50 from the first manufacturer of its `SpdManufacturers()` (the host's
+/// SPD check).
 pub(crate) fn permissive_mock_smbus(meta: &lightloom_plugin_host::PluginMeta) -> BusHandle {
     let rec = TransactionRecorder::new();
     let mut bus = match meta.gpu_ids().first() {
@@ -528,12 +533,34 @@ pub(crate) fn permissive_mock_smbus(meta: &lightloom_plugin_host::PluginMeta) ->
                 .map(|(i, b)| (0x1000 + i as u16, *b));
             bus.add_indexed_device(a, ident, micron.chain(version));
         }
+        if let Some(m) = meta.spd_manufacturers.first() {
+            bus.add_ddr4_spd(0x50, &mock_ddr4_spd(m.bank, m.id));
+        }
     } else {
         for a in &meta.smbus_addresses {
             bus.add_device(*a, []);
         }
     }
     BusHandle::new(Box::new(bus))
+}
+
+/// A DDR4 SPD (512 bytes) of a module from JEP106 `bank` (1-based) / `id`:
+/// byte 2 = 0x0C (DDR4), bytes 320-321 = continuation count and id, each
+/// with its odd-parity bit 7, as modules store them.
+fn mock_ddr4_spd(bank: u8, id: u8) -> Vec<u8> {
+    let parity = |v: u8| {
+        let v = v & 0x7F;
+        if v.count_ones() % 2 == 0 {
+            v | 0x80
+        } else {
+            v
+        }
+    };
+    let mut spd = vec![0u8; 512];
+    spd[..3].copy_from_slice(&[0x23, 0x11, 0x0C]);
+    spd[320] = parity(bank.saturating_sub(1));
+    spd[321] = parity(id);
+    spd
 }
 
 /// The SMBus plugin `name` (its `Name()` or its directory's name).
@@ -550,6 +577,9 @@ fn smbus_plugin<'c>(catalog: &'c Catalog, name: &str) -> Option<&'c CatalogEntry
 
 fn print_scan(outcomes: &[ScanOutcome]) {
     for o in outcomes {
+        for line in &o.log {
+            eprintln!("  SMBus scan [{}] {}: {line}", o.bus, o.plugin);
+        }
         let found = o
             .addrs
             .iter()
@@ -713,18 +743,52 @@ fn trace_restore_check(mode: &RestoreCheckMode) -> TraceRestoreCheck {
     }
 }
 
-/// `lightloom plugins --smbus`: the SMBus buses, the plugins offered each, and
-/// what their `Scan(bus)` found (this runs the scans: hardware access).
-fn list_smbus(catalog: &Catalog, json: bool) -> anyhow::Result<serde_json::Value> {
-    // Not even NvAPI is loaded while SignalRGB or OpenRGB runs.
+/// Why this process must leave SMBus alone now, if it must: a program that
+/// never shares the buses (SignalRGB, OpenRGB, a vendor lighting service), or
+/// lightloomd (it drives them itself).
+fn smbus_skip_reason() -> anyhow::Result<Option<String>> {
     let blockers = lightloom_runtime::conflicts::smbus_blockers()?;
     if !blockers.is_empty() {
-        let text = format!("{} {}", blockers.join(", "), lightloom_runtime::smbus::BLOCKED);
-        if !json {
-            println!("SMBus: {text}");
-        }
-        return Ok(serde_json::json!({ "error": text }));
+        return Ok(Some(format!(
+            "{} {}",
+            blockers.join(", "),
+            lightloom_runtime::smbus::BLOCKED
+        )));
     }
+    let daemon = lightloom_runtime::conflicts::running_conflicts(&[], &["lightloomd.exe"])?;
+    if daemon.iter().any(|n| n.eq_ignore_ascii_case("lightloomd.exe")) {
+        return Ok(Some(
+            "lightloomd is running and drives them (use the dashboard, or stop lightloomd; --no-smbus leaves them out quietly)"
+                .into(),
+        ));
+    }
+    Ok(None)
+}
+
+/// Take this process's turn on SMBus: `Err` with the reason it must not.
+fn claim_smbus_now() -> Result<lightloom_runtime::conflicts::SmbusClaim, String> {
+    match smbus_skip_reason() {
+        Ok(Some(why)) => Err(why),
+        Ok(None) => lightloom_runtime::conflicts::claim_smbus().map_err(|e| format!("{e:#}")),
+        Err(e) => Err(format!("cannot check for conflicting software: {e:#}")),
+    }
+}
+
+/// `lightloom plugins` (unless `--no-smbus`): the SMBus buses, the plugins
+/// offered each, and what their `Scan(bus)` found (this runs the scans:
+/// hardware access).
+fn list_smbus(catalog: &Catalog, json: bool) -> anyhow::Result<serde_json::Value> {
+    // Not even NvAPI is loaded while SignalRGB, OpenRGB or lightloomd runs.
+    let _claim = match claim_smbus_now() {
+        Ok(claim) => claim,
+        Err(why) => {
+            let text = format!("not scanned: {why}");
+            if !json {
+                println!("SMBus: {text}");
+            }
+            return Ok(serde_json::json!({ "error": text }));
+        }
+    };
     let hw = SmbusHardware::open();
     let buses: Vec<serde_json::Value> = hw
         .buses()
@@ -780,8 +844,8 @@ fn list_smbus(catalog: &Catalog, json: bool) -> anyhow::Result<serde_json::Value
 }
 
 /// `lightloom plugins`: the plugins found and, for each connected HID device
-/// (read-only enumeration), the plugin that would drive it; with `smbus`, the
-/// SMBus buses and what the SMBus plugins' scans find on them.
+/// (read-only enumeration), the plugin that would drive it; with `smbus` (the
+/// default), the SMBus buses and what the SMBus plugins' scans find on them.
 pub fn list_plugins(args: &CatalogArgs, smbus: bool, json: bool) -> anyhow::Result<()> {
     let started = Instant::now();
     let (catalog, dirs) = args.scan()?;
@@ -978,31 +1042,29 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         _ => {
             let hardware = Hardware::open()?;
             let (mut targets, total) = hardware.targets(&catalog, &args.devices)?;
-            if args.smbus {
-                // Checked before NvAPI is even loaded; never bypassed (Scan() itself writes).
-                let blockers = lightloom_runtime::conflicts::smbus_blockers()?;
-                if !blockers.is_empty() {
-                    bail!("{} {}", blockers.join(", "), lightloom_runtime::smbus::BLOCKED);
+            if !args.no_smbus {
+                // Checked before NvAPI is even loaded and never bypassed (Scan() itself
+                // writes): SignalRGB, OpenRGB, lightloomd or another Lightloom run on the
+                // buses leave the SMBus devices out of this run, the HID ones run.
+                match claim_smbus_now() {
+                    Err(why) => eprintln!("lightloom {}: SMBus devices left out: {why}", mode.name()),
+                    Ok(claim) => {
+                        _smbus_claim = Some(claim);
+                        let hw = SmbusHardware::open();
+                        for note in hw.notes() {
+                            eprintln!("lightloom {}: SMBus: {note}", mode.name());
+                        }
+                        match hw.targets(&catalog, &args.devices, &scan_budget) {
+                            Ok((found, outcomes)) => {
+                                print_scan(&outcomes);
+                                smbus_present = found.clone();
+                                targets.extend(found);
+                            }
+                            Err(e) => eprintln!("lightloom {}: SMBus devices left out: {e:#}", mode.name()),
+                        }
+                        _smbus_hardware = Some(hw);
+                    }
                 }
-                // The daemon may drive the same buses: never scan alongside it either.
-                let daemon = lightloom_runtime::conflicts::running_conflicts(&[], &["lightloomd.exe"])?;
-                if daemon.iter().any(|n| n.eq_ignore_ascii_case("lightloomd.exe")) {
-                    bail!(
-                        "lightloomd is running: stop it before using --smbus (both would drive the same buses)"
-                    );
-                }
-                // Nor alongside another `lightloom --smbus` run (or a daemon started meanwhile).
-                _smbus_claim = Some(lightloom_runtime::conflicts::claim_smbus()?);
-                let hw = SmbusHardware::open();
-                for note in hw.notes() {
-                    eprintln!("lightloom {}: SMBus: {note}", mode.name());
-                }
-                // Never bypassed: Scan() itself writes.
-                let (found, outcomes) = hw.targets(&catalog, &args.devices, &scan_budget)?;
-                print_scan(&outcomes);
-                smbus_present = found.clone();
-                targets.extend(found);
-                _smbus_hardware = Some(hw);
             }
             if targets.is_empty() {
                 bail!(
@@ -1013,10 +1075,10 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                     } else {
                         " (after --device filters)"
                     },
-                    if args.smbus {
-                        ", and no SMBus device was found"
-                    } else {
+                    if args.no_smbus {
                         ""
+                    } else {
+                        ", and no SMBus device was found"
                     }
                 );
             }
@@ -1175,13 +1237,13 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                 for h in manager.sessions() {
                     let l = h.live();
                     eprintln!(
-                        "  {:>7.1}s {}: {:?} frames={} render_errors={} hid_errors={} rss={}",
+                        "  {:>7.1}s {}: {:?} frames={} render_errors={} io_errors={} rss={}",
                         started.elapsed().as_secs_f64(),
                         h.key(),
                         l.state,
                         l.frames,
                         l.render_errors,
-                        l.hid_errors,
+                        l.io_errors,
                         lightloom_runtime::system::rss_bytes()
                             .map(|b| format!("{:.1} MB", b as f64 / 1e6))
                             .unwrap_or_else(|| "n/a".into())
@@ -1576,7 +1638,7 @@ mod tests {
             duration: None,
             keep: false,
             ignore_conflicts: false,
-            smbus: false,
+            no_smbus: false,
             restore_check: vec![RestoreArg::Report(RestoreProbe {
                 report_id: 0x52,
                 len: 185,
@@ -1610,7 +1672,7 @@ mod tests {
             duration: None,
             keep: false,
             ignore_conflicts: false,
-            smbus: false,
+            no_smbus: false,
             restore_check: Vec::new(),
             params: Vec::new(),
             brightness: 100,

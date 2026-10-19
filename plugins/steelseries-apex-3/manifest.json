@@ -1,0 +1,19 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.steelseries-apex-3",
+  "name": "SteelSeries Apex 3",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Zone lighting of the SteelSeries Apex 3 (ten zones) and Apex 3 TKL (eight zones) keyboards. Adapted from OpenRGB's SteelSeriesApexTZoneController and SteelSeriesApex8ZoneController (GPL-2.0-or-later); untested on hardware. The save command is never sent; key functions are never touched. Protocol notes: docs/hardware/steelseries-apex-3.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    { "vid": "0x1038", "pids": ["0x161A"], "transport": "hid", "interfaces": [3], "tested": [] },
+    { "vid": "0x1038", "pids": ["0x1622"], "transport": "hid", "interfaces": [1], "tested": [] }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "apex", "apex-3", "keyboard", "openrgb"]
+}

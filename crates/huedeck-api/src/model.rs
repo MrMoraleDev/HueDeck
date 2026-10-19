@@ -91,8 +91,9 @@ pub struct DeviceView {
     pub frames: u64,
     /// Failed `Render()` calls.
     pub render_errors: u64,
-    /// Failed HID operations (SMBus devices: failed or refused bus operations).
-    pub hid_errors: u64,
+    /// Failed I/O operations: HID operations, or for SMBus devices failed or
+    /// refused bus operations.
+    pub io_errors: u64,
     /// SMBus devices: `<bus name> · 0x<address>`; `None` for HID devices.
     pub bus: Option<String>,
     /// `DefaultScale()`.

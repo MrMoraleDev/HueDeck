@@ -738,6 +738,8 @@ function busMembers(fixed) {
     IsAMDGpuBus: () => false,
     IsNuvotonBus: () => false,
     FetchRamInfo: () => "",
+    SpdSlots: () => [],
+    IsDryRun: () => true,
     log: logFn,
     pause: noop,
     toString: () => (fixed ? "I2CBusWrapperFixedAddress(stub)" : "I2CBusWrapper(stub)"),
@@ -838,9 +840,8 @@ function nativeBusMembers(fixed) {
     ReadByteWithoutRegister: (...args) => call("ReadByteWithoutRegister", args, 0, (a) => native.busReadByteNoReg(a)),
     // HueDeck answers whether the bus is held (SignalRGB returns nothing).
     TransactionLock: () => native.busLock(),
-    TransactionUnlock: () => {
-      native.busUnlock();
-    },
+    // HueDeck: 0, or the status of the first write queued under SmbusBatchWrites() that failed.
+    TransactionUnlock: () => native.busUnlock(),
     HasTransactionLock: () => native.busHasLock(),
     Vendor: () => info.vendor,
     SubVendor: () => info.subVendor,
@@ -856,6 +857,12 @@ function nativeBusMembers(fixed) {
     IsAMDGpuBus: () => kind === "amdgpu",
     IsNuvotonBus: () => kind === "nuvoton",
     FetchRamInfo: unimplementedMember("bus.FetchRamInfo"),
+    // HueDeck extension (docs/host-api/smbus.md, SPD check): the DIMM slots whose SPD names
+    // a manufacturer of the plugin's SpdManufacturers(), read by the host before Scan(bus).
+    // Copies; reading them touches no hardware. Empty where no SPD check ran.
+    SpdSlots: () => (isArray(info.spdSlots) ? info.spdSlots.map((s) => ({ ...s })) : []),
+    // HueDeck extension: writes are recorded, never sent (--dry-run); reads still reach the bus.
+    IsDryRun: () => info.dryRun === true,
     log: logFn,
     pause: (ms) => native.pause(Number(ms) || 0),
     toString: () =>
@@ -864,8 +871,9 @@ function nativeBusMembers(fixed) {
         : `I2CBusWrapper(${info.name})`,
   };
   if (fixed) {
-    // The fixed bus has no free-only member (smbus.md §4).
+    // The fixed bus has no free-only member (smbus.md §4); SpdSlots belongs to Scan(bus).
     delete members.WriteQuick;
+    delete members.SpdSlots;
   }
   return members;
 }
@@ -1138,6 +1146,8 @@ const METADATA = [
   "SmbusAddresses",
   "SmbusBuses",
   "SmbusDeniedRegisters",
+  "SpdManufacturers",
+  "SmbusBatchWrites",
 ];
 const LIFECYCLE = ["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService"];
 

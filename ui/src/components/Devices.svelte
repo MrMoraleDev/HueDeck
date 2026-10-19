@@ -49,7 +49,7 @@
         <span class={`badge ${stateBadge(d)}`}>{d.state}</span>
         {#if d.connected}
           <span class="muted stats"
-            >{d.frames} frames · {d.renderErrors} render errors · {d.hidErrors} {d.bus ? "bus" : "HID"} errors</span
+            >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? "bus" : "HID"} errors</span
           >
         {/if}
         <label class="row"

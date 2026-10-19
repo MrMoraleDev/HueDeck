@@ -62,6 +62,20 @@ const REMAP_SLOTS = 4;
 // HueDeck extensions (docs/host-api/smbus.md): every address Scan() may touch, on chipset buses.
 export function SmbusAddresses() { return [0x20, 0x21, 0x22, 0x23, REMAP_ADDRESS, 0x39, 0x3A, 0x3B, 0x3C]; }
 export function SmbusBuses() { return ["amd", "intel"]; }
+// HueDeck extension (docs/host-api/smbus.md, SPD check): Scan() runs only when the SPD of a
+// DIMM names one of these module manufacturers (JEP106 bank, id). Crucial Ballistix modules
+// carry Crucial Technology (bank 6, 0x9B) or, on some batches, Micron Technology (bank 1,
+// 0x2C) as module manufacturer: docs/hardware/crucial-ballistix.md.
+export function SpdManufacturers() {
+  return [
+    { bank: 1, id: 0x2C, name: "Micron Technology" },
+    { bank: 6, id: 0x9B, name: "Crucial Technology" },
+  ];
+}
+// HueDeck extension: inside TransactionLock the host may queue this plugin's writes and send them
+// as one batch (one I/O broker request per locked sequence); TransactionUnlock() then answers
+// whether they all went through (sendDirect() below falls back on it).
+export function SmbusBatchWrites() { return true; }
 
 // IF_DRAM_SMBUS (pci_ids.h): the chipset SMBus controllers OpenRGB looks for DRAM on.
 const AMD_VEN = 0x1022;
@@ -232,6 +246,13 @@ function remapModules(b) {
         b.log("Crucial: the device at 0x27 is not a Crucial controller: not remapped");
         break;
       }
+      const target = `0x${ADDRESSES[index].toString(16)}`;
+      if (dryRun(b)) {
+        // The remap writes would only be recorded: the module stays at 0x27, so stop here.
+        b.log(`Crucial: a module at 0x27 needs an address: a live scan moves it (slot ${slot}) to ${target} (dry run: not sent)`);
+        break;
+      }
+      b.log(`Crucial: moving the module at 0x27 (slot ${slot}) to ${target} (until the next power cycle)`);
       // 0x82EE = slot, 0x82EF = the new 8-bit address, 0x82F0 = 0xF0 applies it.
       const io = freeOps(b, REMAP_ADDRESS);
       held(io, () => {
@@ -244,14 +265,25 @@ function remapModules(b) {
   }
 }
 
+// HueDeck's --dry-run (bus.IsDryRun(), HueDeck extension): writes are recorded, never sent.
+function dryRun(b) {
+  return typeof b.IsDryRun === "function" && b.IsDryRun() === true;
+}
+
 // TestForCrucialController: something answers, registers 0xA0..0xAF read 0..15, and "Micron"
-// is at 0x1025 or 0x1030.
+// is at 0x1025 or 0x1030. The "Micron" string sits behind the register pointer, which takes a
+// write: in a dry run that write is not sent, so the module is reported on the identification
+// registers alone (reads only), and the log says so.
 function isCrucial(b, addr) {
   if (b.ReadByteWithoutRegister(addr) < 0) {
     return false;
   }
   if (!identifies(b, addr)) {
     return false;
+  }
+  if (dryRun(b)) {
+    b.log(`Crucial: 0x${addr.toString(16)} answers the identification registers (dry run: the "Micron" check needs a pointer write, not sent)`);
+    return true;
   }
   const io = freeOps(b, addr);
   return regString(io, REG_MICRON_CHECK_1) === "Micron" || regString(io, REG_MICRON_CHECK_2) === "Micron";
@@ -315,15 +347,35 @@ export function Initialize() {
   lastColors = null;
 }
 
+const PLANES = [REG_DIRECT_RED, REG_DIRECT_GREEN, REG_DIRECT_BLUE];
+
 // SendDirectColors(): the red, green and blue planes, one Block Write each. HueDeck holds the
 // bus for the whole frame so no other program's transfer lands between pointer and data; when
 // the bus cannot be held the frame is not sent (false) and goes out with the next Render().
+// With SmbusBatchWrites() HueDeck sends the frame as one batch and TransactionUnlock() answers a
+// negative status when a write failed; then, as OpenRGB does for a failed block write, the planes
+// go out again byte by byte.
 function sendDirect(colors) {
   const io = fixedOps(bus);
+  if (!io.lock()) {
+    return false;
+  }
+  let status;
+  try {
+    PLANES.forEach((reg, plane) => regWriteBlock(io, reg, colors.map((c) => c[plane])));
+  } finally {
+    status = io.unlock();
+  }
+  if (typeof status !== "number" || status >= 0) {
+    return true;
+  }
   return held(io, () => {
-    regWriteBlock(io, REG_DIRECT_RED, colors.map((c) => c[0]));
-    regWriteBlock(io, REG_DIRECT_GREEN, colors.map((c) => c[1]));
-    regWriteBlock(io, REG_DIRECT_BLUE, colors.map((c) => c[2]));
+    PLANES.forEach((reg, plane) => {
+      io.writeWord(CMD_POINTER, swap16(reg));
+      for (const c of colors) {
+        io.writeByte(CMD_WRITE, c[plane]);
+      }
+    });
     return true;
   }, false);
 }

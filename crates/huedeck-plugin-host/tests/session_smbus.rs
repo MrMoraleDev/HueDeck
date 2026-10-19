@@ -459,12 +459,44 @@ const PIIX4: PciIds = PciIds {
     sub_device: 0x790B,
 };
 
+/// A DDR4 SPD (EE1004, 512 bytes) of a module from JEP106 `b320` / `b321`
+/// (bytes 320-321 as stored: continuation count with parity, id with parity).
+fn ddr4_spd(b320: u8, b321: u8, part: &str) -> Vec<u8> {
+    let mut spd = vec![0u8; 512];
+    spd[..3].copy_from_slice(&[0x23, 0x11, 0x0C]);
+    spd[320] = b320;
+    spd[321] = b321;
+    let mut p = part.as_bytes().to_vec();
+    p.resize(20, b' ');
+    spd[329..349].copy_from_slice(&p);
+    spd
+}
+
+/// The SPD of a Crucial Ballistix module: Crucial Technology, JEP106 bank 6 id 0x9B.
+fn ballistix_spd() -> Vec<u8> {
+    ddr4_spd(0x85, 0x9B, "BL8G32C16U4WL.M8FE1")
+}
+
 /// An AMD PIIX4 bus with Crucial modules (ENE-style indexed register file:
-/// identification bytes 0xA0..0xAF = 0..15, "Micron" at 0x1025) at `addrs`.
+/// identification bytes 0xA0..0xAF = 0..15, "Micron" at 0x1025) at `addrs`,
+/// and their SPDs at 0x50, 0x51, ... (the host's SPD check).
 fn ram_bus(addrs: &[u8], rec: &TransactionRecorder, fail_block: bool) -> BusHandle {
+    ram_bus_with_log(addrs, rec, fail_block).0
+}
+
+/// [`ram_bus`] and the sizes of the batches the bus was given.
+fn ram_bus_with_log(
+    addrs: &[u8],
+    rec: &TransactionRecorder,
+    fail_block: bool,
+) -> (BusHandle, Arc<std::sync::Mutex<Vec<usize>>>) {
     let mut bus = MockSmbus::new("AMD PIIX4 Bus - 0x0b00", SmbusBusKind::Amd, rec.clone())
         .with_pci(PIIX4)
         .with_instance("0b00");
+    for i in 0..addrs.len() {
+        bus.add_ddr4_spd(0x50 + i as u8, &ballistix_spd());
+    }
+    let batches = bus.batch_log();
     for &a in addrs {
         if fail_block {
             bus = bus.fail_block_writes(a);
@@ -480,7 +512,7 @@ fn ram_bus(addrs: &[u8], rec: &TransactionRecorder, fail_block: bool) -> BusHand
             .map(|(i, b)| (0x1000 + i as u16, *b));
         bus.add_indexed_device(a, ident, micron.chain(version));
     }
-    BusHandle::new(Box::new(bus))
+    (BusHandle::new(Box::new(bus)), batches)
 }
 
 /// Discover the RAM bus and run the module at 0x39 for `frames` frames.
@@ -571,6 +603,19 @@ fn crucial_session_frame_is_three_locked_block_writes() {
 fn crucial_block_failure_falls_back_to_bytes() {
     let rec = TransactionRecorder::new();
     let report = run_ram(&rec, true, Rgb::new(1, 2, 3), 2);
+    // The frame goes out as one batch (SmbusBatchWrites): its first block
+    // write fails, the rest is dropped, TransactionUnlock() reports it and
+    // the plugin sends the planes again byte by byte, under a new lock.
+    let groups = locked_groups(&rec);
+    let first = groups
+        .iter()
+        .position(|g| g.first() == Some(&pointer(0x8300)))
+        .expect("the frame");
+    assert_eq!(
+        groups[first],
+        vec![pointer(0x8300)],
+        "the failed block write is not recorded"
+    );
     let bytes = |v: u8| vec![vec![0x39, 0x01, v]; 8];
     let mut expected = vec![pointer(0x8300)];
     expected.extend(bytes(1));
@@ -578,13 +623,179 @@ fn crucial_block_failure_falls_back_to_bytes() {
     expected.extend(bytes(2));
     expected.push(pointer(0x8380));
     expected.extend(bytes(3));
-    assert_eq!(locked_group(&rec), expected);
+    assert_eq!(groups[first + 1], expected);
     let stats = report.smbus.expect("SMBus counters");
     assert_eq!(
-        (stats.errors, stats.denied),
-        (3, 0),
-        "the three failed block writes"
+        (stats.errors, stats.denied, stats.contended),
+        (1, 0, 0),
+        "the one failed block write"
     );
+}
+
+/// The writes between each bus lock and its release.
+fn locked_groups(rec: &TransactionRecorder) -> Vec<Vec<Vec<u8>>> {
+    let mut groups = Vec::new();
+    let mut open: Option<Vec<Vec<u8>>> = None;
+    for t in rec.snapshot() {
+        match (t.kind, &mut open) {
+            (TransactionKind::SmbusLock, None) if !t.bytes.is_empty() => open = Some(Vec::new()),
+            (TransactionKind::SmbusLock, Some(_)) => groups.extend(open.take()),
+            (TransactionKind::SmbusWrite, Some(g)) => g.push(t.bytes),
+            _ => {}
+        }
+    }
+    groups
+}
+
+#[test]
+fn crucial_frame_is_one_batch() {
+    let rec = TransactionRecorder::new();
+    let (bus, batches) = ram_bus_with_log(&[0x39], &rec, false);
+    let (present, outcomes) = scan_buses(&catalog(), std::slice::from_ref(&bus), &ScanBudget::default());
+    assert_eq!(present.len(), 1, "{outcomes:?}");
+    assert!(
+        batches.lock().unwrap().is_empty(),
+        "Scan(bus) sends its writes one by one"
+    );
+    let report = run_present(
+        present.into_iter().next().unwrap(),
+        SessionOptions::default(),
+        Rgb::new(9, 8, 7),
+        3,
+    );
+    assert!(report.is_clean(), "{report:#?}");
+    let sizes = batches.lock().unwrap().clone();
+    // Initialize: 16 version reads (pointer write + read: one batch each),
+    // the effect mode (8 writes), 8 LEDs (16 writes each); then the frame:
+    // 3 pointers + 3 block writes.
+    // Shutdown: the 8 LEDs again, then the mode.
+    let mut expected = vec![2; 16];
+    expected.push(8);
+    expected.extend([16; 8]);
+    expected.push(6);
+    expected.extend([16; 8]);
+    expected.push(8);
+    assert_eq!(sizes, expected);
+    let stats = report.smbus.unwrap();
+    assert_eq!(stats.batches as usize, sizes.len());
+}
+
+#[test]
+fn two_modules_on_one_bus_take_turns() {
+    let rec = TransactionRecorder::new();
+    let bus = ram_bus(&[0x39, 0x3A], &rec, false);
+    let (present, outcomes) = scan_buses(&catalog(), std::slice::from_ref(&bus), &ScanBudget::default());
+    assert_eq!(present.len(), 2, "{outcomes:?}");
+    rec.clear();
+    let store = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    let backend: Arc<dyn HidBackend> = Arc::new(huedeck_hal::hid::NoHid);
+    let handles: Vec<_> = present
+        .into_iter()
+        .map(|p| {
+            session::spawn(
+                p.device,
+                p.plugin,
+                Arc::clone(&backend),
+                Arc::clone(&store),
+                SessionOptions::default(),
+            )
+            .unwrap()
+        })
+        .collect();
+    // A new colour every few milliseconds: every Render() writes a frame.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut shade = 0u8;
+    while handles.iter().any(|h| h.live().frames < 8) && Instant::now() < deadline {
+        shade = shade.wrapping_add(17);
+        store.publish(Frame::solid(
+            CANVAS_WIDTH,
+            CANVAS_HEIGHT,
+            Rgb::new(shade, 0, 255 - shade),
+        ));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let reports: Vec<SessionReport> = handles
+        .into_iter()
+        .map(|h| {
+            h.stop();
+            h.join().expect("session thread")
+        })
+        .collect();
+    for r in &reports {
+        assert!(r.frames >= 8, "both sessions render: {r:#?}");
+        let s = r.smbus.as_ref().unwrap();
+        assert_eq!((s.errors, s.denied, s.contended), (0, 0, 0), "{} {s:?}", r.device);
+    }
+    // Each module's locked sequences went out whole: no transfer of the
+    // other module between a lock and its release.
+    let mut owner: Option<u8> = None;
+    for t in rec.snapshot() {
+        match t.kind {
+            TransactionKind::SmbusLock if !t.bytes.is_empty() => owner = Some(0),
+            TransactionKind::SmbusLock => owner = None,
+            TransactionKind::SmbusWrite | TransactionKind::SmbusRead => {
+                if let Some(o) = owner.as_mut() {
+                    if *o == 0 {
+                        *o = t.bytes[0];
+                    }
+                    assert_eq!(*o, t.bytes[0], "interleaved inside a locked sequence");
+                }
+            }
+            _ => {}
+        }
+    }
+    let written: std::collections::BTreeSet<u8> = rec
+        .payloads(TransactionKind::SmbusWrite)
+        .iter()
+        .map(|w| w[0])
+        .collect();
+    assert_eq!(written.into_iter().collect::<Vec<_>>(), vec![0x39, 0x3A]);
+}
+
+#[test]
+fn ram_plugins_scan_only_where_the_spd_names_their_maker() {
+    let catalog = catalog();
+    let scan = |spd: Option<Vec<u8>>| {
+        let rec = TransactionRecorder::new();
+        let mut bus = MockSmbus::new("AMD PIIX4 Bus - 0x0b00", SmbusBusKind::Amd, rec.clone())
+            .with_pci(PIIX4)
+            .with_instance("0b00");
+        if let Some(spd) = spd {
+            bus.add_ddr4_spd(0x50, &spd);
+        }
+        let ident = (0..16u8).map(|i| (0xA0 + i, i));
+        let micron = b"Micron\0"
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (0x1025 + i as u16, *b));
+        bus.add_indexed_device(0x39, ident, micron);
+        let (present, outcomes) =
+            scan_buses(&catalog, &[BusHandle::new(Box::new(bus))], &ScanBudget::default());
+        let touched_rgb = rec.snapshot().iter().any(|t| t.bytes.first() == Some(&0x39));
+        (present.len(), outcomes, touched_rgb)
+    };
+    // Crucial Technology and Micron Technology modules: scanned, the slot handed over.
+    for spd in [ballistix_spd(), ddr4_spd(0x80, 0x2C, "MTA8ATF1G64AZ")] {
+        let (found, outcomes, touched) = scan(Some(spd));
+        assert_eq!(found, 1, "{outcomes:?}");
+        assert!(touched);
+        let slots = outcomes[0].spd_slots.as_ref().unwrap();
+        assert_eq!(slots[0].address, 0x50);
+    }
+    // Kingston (bank 2), no SPD at all, DDR5: the plugin never runs.
+    let mut ddr5 = vec![0u8; 512];
+    ddr5[..3].copy_from_slice(&[0x30, 0x10, 0x12]);
+    for (spd, why) in [
+        (Some(ddr4_spd(0x01, 0x98, "KF432C16BB/8")), "no module from"),
+        (None, "no SPD answered"),
+        (Some(ddr5), "DDR5"),
+    ] {
+        let (found, outcomes, touched) = scan(spd);
+        assert_eq!(found, 0);
+        assert!(!touched, "the RGB controller's addresses were never touched");
+        let e = outcomes[0].error.as_deref().unwrap();
+        assert!(e.contains(why), "{e}");
+    }
 }
 
 #[test]
@@ -597,4 +808,61 @@ fn ram_plugin_is_not_offered_gpu_buses_nor_gpu_plugin_ram_buses() {
     let (_, outcomes) = scan_buses(&catalog, &[gpu_bus(RTX3060, &rec)], &ScanBudget::default());
     let plugins: Vec<&str> = outcomes.iter().map(|o| o.plugin.as_str()).collect();
     assert_eq!(plugins, vec!["MSI GPU"]);
+}
+
+/// The EE1004 page select (a Send Byte to 0x36 / 0x37) is the host's own
+/// step of its SPD check: a plugin, even a RAM plugin offered the bus, has
+/// no member that reaches it and every write it tries in 0x30-0x37 or
+/// 0x50-0x57 is refused.
+#[test]
+fn plugins_cannot_select_spd_pages_or_write_the_spd() {
+    let dir = scratch("spd-pages");
+    std::fs::write(
+        dir.join("ram.js"),
+        "export function Name() { return 'Sneaky RAM'; }\n\
+         export function Type() { return 'SMBUS'; }\n\
+         export function DeviceType() { return 'ram'; }\n\
+         export function SmbusBuses() { return ['amd']; }\n\
+         export function SmbusAddresses() { return [0x36, 0x37, 0x50, 0x51]; }\n\
+         export function SpdManufacturers() { return [{ bank: 6, id: 0x9B, name: 'Crucial Technology' }]; }\n\
+         export function Scan(bus) {\n\
+           bus.log('members ' + Object.keys(bus).filter((k) => /spd|page|ee1004/i.test(k)).join(','));\n\
+           bus.log('slots ' + JSON.stringify(bus.SpdSlots().map((s) => [s.address, s.memoryType, s.jedecBank, s.jedecId])));\n\
+           const st = [bus.WriteByte(0x36, 0, 0), bus.WriteQuick(0x37), bus.WriteByte(0x50, 0, 0), bus.WriteWord(0x51, 0, 0)];\n\
+           bus.log('statuses ' + st.join(','));\n\
+           bus.log('read ' + bus.ReadByte(0x50, 2));\n\
+           return [];\n\
+         }\n\
+         export function Initialize() {}\n\
+         export function Render() {}\n\
+         export function Shutdown() {}\n",
+    )
+    .unwrap();
+    let catalog = Catalog::scan(std::slice::from_ref(&dir), Duration::from_secs(10));
+    let rec = TransactionRecorder::new();
+    let mut bus = MockSmbus::new("AMD PIIX4 Bus - 0x0b00", SmbusBusKind::Amd, rec.clone())
+        .with_pci(PIIX4)
+        .with_instance("0b00");
+    bus.add_ddr4_spd(0x50, &ballistix_spd());
+    let (_, outcomes) = scan_buses(&catalog, &[BusHandle::new(Box::new(bus))], &ScanBudget::default());
+    assert_eq!(outcomes.len(), 1);
+    let log = &outcomes[0].log;
+    let has = |needle: &str| log.iter().any(|l| l == needle || l.contains(needle));
+    assert!(has("members SpdSlots"), "only the read-only slot list: {log:?}");
+    assert!(has("slots [[80,\"DDR4\",6,155]]"), "{log:?}");
+    assert!(has("statuses -1,-1,-1,-1"), "{log:?}");
+    assert!(has("read 12"), "SPD reads are fine: {log:?}");
+    assert!(has("SPD / EEPROM / write-protect / PMIC address"), "{log:?}");
+    // On the wire: the host's page selects (page 1 then page 0, for the
+    // manufacturer id and the part number) and nothing the plugin asked.
+    let writes = rec.payloads(TransactionKind::SmbusWrite);
+    assert_eq!(writes.len(), 4, "{writes:?}");
+    assert!(
+        writes
+            .chunks(2)
+            .all(|w| w == [vec![0x37, 0x00], vec![0x36, 0x00]]),
+        "{writes:?}"
+    );
+    assert!(rec.payloads(TransactionKind::SmbusWriteQuick).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }

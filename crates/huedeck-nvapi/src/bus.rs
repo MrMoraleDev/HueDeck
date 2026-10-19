@@ -4,8 +4,9 @@
 //! Every operation becomes one [`I2cPlan`] sent to the hub's worker thread,
 //! addressed to the card by identity. Errors keep NvAPI's own status
 //! (`HalError::Bus { status }`), which the plugin host hands to plugins
-//! unchanged on NVIDIA buses (research §6.3). `TransactionLock` holds the
-//! global SMBus mutex on the worker for a lease (`bus_lock`).
+//! unchanged on NVIDIA buses (research §6.3). `TransactionLock` needs nothing
+//! here: the plugin host's per-bus turn queue keeps other sessions off the
+//! bus, and no other program shares NvAPI's I2C controller under a mutex.
 
 use crate::hub::{GpuInfo, Job, Request, REPLY_GRACE, REPLY_TIMEOUT};
 use crate::info::{I2cOp, I2cPlan};
@@ -13,7 +14,7 @@ use crate::NvapiError;
 use huedeck_hal::smbus::{validate_address, SmbusBus, SmbusBusDescriptor};
 use huedeck_hal::{HalError, HalResult};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// One GPU's RGB I2C port.
 #[derive(Debug)]
@@ -142,23 +143,12 @@ impl SmbusBus for NvapiBus {
     fn read_byte_no_reg(&mut self, addr: u8) -> HalResult<u8> {
         self.byte(addr, I2cOp::ReadByteNoReg)
     }
-
-    fn bus_lock(&mut self, lease_ms: u16) -> HalResult<()> {
-        self.ask(Job::Lock {
-            lease: Duration::from_millis(u64::from(lease_ms)),
-        })
-        .map(drop)
-    }
-
-    fn bus_unlock(&mut self) -> HalResult<()> {
-        self.ask(Job::Unlock).map(drop)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hub::{FakeLock, FakeNvI2c, GpuInfo, NvapiHub, BUSY, GPU_GONE};
+    use crate::hub::{FakeNvI2c, GpuInfo, NvapiHub, GPU_GONE};
     use huedeck_hal::smbus::{PciIds, SmbusBusKind};
 
     fn rtx3060() -> GpuInfo {
@@ -259,47 +249,21 @@ mod tests {
     }
 
     #[test]
-    fn every_transfer_holds_the_global_lock() {
-        let lock = FakeLock::new();
+    fn no_cross_process_lock_is_taken() {
+        // TransactionLock asks nothing of the worker: the GPU never waits for
+        // the chipset SMBus mutex (RAM traffic), as in OpenRGB and SignalRGB.
         let fake = FakeNvI2c::new(vec![rtx3060()]).add_device(0, 0x68, []);
         let log = fake.log();
-        let h = NvapiHub::with_transport_and_lock(fake, lock.clone()).unwrap();
+        let h = hub(fake);
         let mut bus = h.buses().remove(0);
-        bus.write_byte(0x68, 0x30, 1).unwrap();
-        bus.read_byte(0x68, 0x30).unwrap();
-        assert_eq!(lock.counts(), (2, 2), "taken and released per transfer");
-        assert!(!lock.held());
-        lock.contend(true);
-        assert_eq!(bus.write_byte(0x68, 0x30, 2).unwrap_err().plugin_status(), BUSY);
-        assert_eq!(
-            log.lock().unwrap().len(),
-            2,
-            "nothing sent while another program holds it"
-        );
-        lock.contend(false);
-        // A TransactionLock keeps it across transfers, until unlocked.
         bus.bus_lock(100).unwrap();
         bus.write_byte(0x68, 0x30, 3).unwrap();
-        bus.write_byte(0x68, 0x31, 3).unwrap();
-        assert!(lock.held());
-        assert_eq!(lock.counts(), (3, 2));
         bus.bus_unlock().unwrap();
-        assert!(!lock.held());
-        assert_eq!(lock.counts(), (3, 3));
-    }
-
-    #[test]
-    fn a_transaction_lock_lease_runs_out() {
-        let lock = FakeLock::new();
-        let h = NvapiHub::with_transport_and_lock(FakeNvI2c::new(vec![rtx3060()]), lock.clone()).unwrap();
-        let mut bus = h.buses().remove(0);
-        bus.bus_lock(20).unwrap();
-        assert!(lock.held());
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while lock.held() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(!lock.held(), "released when the lease ends, with no request");
+        assert_eq!(
+            log.lock().unwrap().len(),
+            1,
+            "only the transfer reached the worker"
+        );
     }
 
     #[test]
@@ -316,7 +280,7 @@ mod tests {
                     addr: 0x68,
                     plan: I2cPlan::of(&I2cOp::WriteByte { reg: 0x30, val: 9 }).unwrap(),
                 },
-                deadline: Instant::now() - Duration::from_millis(1),
+                deadline: Instant::now() - std::time::Duration::from_millis(1),
                 reply,
             })
             .unwrap();

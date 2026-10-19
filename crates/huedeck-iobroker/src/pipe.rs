@@ -12,7 +12,8 @@
 //! While a `BusLock` lease holds the global SMBus mutex the broker never
 //! blocks on the pipe: it reads a request only once the whole frame has
 //! arrived ([`frame_complete`]), and a client that stalls mid-frame loses its
-//! leases (and the mutex) when they run out.
+//! leases (and the mutex) when they run out. Between two looks at the pipe
+//! it yields for the first [`LEASE_SPIN`] ([`idle`]), then sleeps.
 //!
 //! Deferred (ADR-0004): a per-boot token proving the client is HueDeck. Until
 //! then the DACL is the gate, and the broker's static policy (deny ranges,
@@ -21,6 +22,7 @@
 use std::io;
 #[cfg(windows)]
 use std::io::{Read, Write};
+use std::time::Duration;
 
 pub use huedeck_protocol::broker::PIPE_NAME;
 /// Read + write for a client, without `FILE_APPEND_DATA` (= `FILE_CREATE_PIPE_INSTANCE`):
@@ -42,6 +44,34 @@ pub fn frame_complete(header: &[u8], available: u32) -> bool {
         return true;
     }
     available as usize >= 4 + len
+}
+
+/// While a lease holds the mutex, how long the broker only yields between
+/// looks at the pipe before it sleeps. The client's next request (the rest
+/// of a locked sequence) normally arrives within microseconds; a 1 ms sleep
+/// lasts a whole timer tick on Windows (up to 15.6 ms), which made every
+/// transfer of a locked sequence wait that long.
+pub const LEASE_SPIN: Duration = Duration::from_millis(2);
+
+/// What the broker does between two looks at the pipe while a lease holds
+/// the mutex.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Idle {
+    /// Give up the time slice and look again at once.
+    Yield,
+    /// Sleep (a timer tick or more).
+    Sleep(Duration),
+}
+
+/// [`Idle`] after waiting `waited` for the next request under a lease:
+/// yield for [`LEASE_SPIN`], then sleep 1 ms at a time (lease ends are
+/// still noticed within a tick).
+pub fn idle(waited: Duration) -> Idle {
+    if waited < LEASE_SPIN {
+        Idle::Yield
+    } else {
+        Idle::Sleep(Duration::from_millis(1))
+    }
 }
 
 /// The pipe's DACL: SYSTEM full control, and the client `sid` (a SID string
@@ -75,7 +105,7 @@ mod win {
     use crate::server::Server;
     use huedeck_protocol::broker::{BrokerError, BrokerRequest, BrokerResponse};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{
         CloseHandle, LocalFree, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE, HLOCAL,
@@ -254,6 +284,7 @@ mod win {
             // While a lease holds the SMBus mutex, never block: wait for a
             // whole frame, ending the leases that run out meanwhile. Once none
             // is left the mutex is free and a blocking read harms no one.
+            let waiting_since = Instant::now();
             while let Some(deadline) = server.lease_deadline() {
                 if pipe.frame_waiting()? {
                     break;
@@ -263,7 +294,10 @@ mod win {
                     server.expire(now);
                     continue;
                 }
-                std::thread::sleep(Duration::from_millis(1));
+                match idle(now.saturating_duration_since(waiting_since)) {
+                    Idle::Yield => std::thread::yield_now(),
+                    Idle::Sleep(d) => std::thread::sleep(d),
+                }
             }
             let Some(bytes) = read_frame(&mut &*pipe)? else {
                 return Ok(());
@@ -342,6 +376,13 @@ mod tests {
             read_frame(&mut &[5u8, 0, 0, 0, 1][..]).is_err(),
             "truncated payload"
         );
+    }
+
+    #[test]
+    fn under_a_lease_the_next_request_is_not_waited_for_with_a_timer_tick() {
+        assert_eq!(idle(Duration::ZERO), Idle::Yield);
+        assert_eq!(idle(LEASE_SPIN - Duration::from_micros(1)), Idle::Yield);
+        assert_eq!(idle(LEASE_SPIN), Idle::Sleep(Duration::from_millis(1)));
     }
 
     #[test]

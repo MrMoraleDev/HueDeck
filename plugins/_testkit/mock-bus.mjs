@@ -14,6 +14,12 @@
 //     WriteByte(0x01) / WriteBlock(0x03) go through it (the pointer does not advance), other
 //     commands and Receive Byte read the `direct` map. Writing 0xF0 to 0x82F0 moves the device
 //     to the 7-bit address (0x82EF) >> 1: the address remap of a module still at 0x27.
+//   * `dryRun` plays HueDeck's --dry-run: IsDryRun() answers true, writes are logged with
+//     `dry: true` and answer 0 but change nothing; reads still read the devices.
+//   * `batchWrites` plays HueDeck's SmbusBatchWrites(): inside TransactionLock writes answer 0 at
+//     once and are sent at the next read or TransactionUnlock(), which answers 0 or the status of
+//     the first that failed (the ones after it are dropped). Without it TransactionUnlock()
+//     answers nothing, as on SignalRGB.
 
 const KINDS = ["system", "amd", "intel", "nvidia", "amdgpu", "nuvoton"];
 
@@ -30,6 +36,8 @@ const KINDS = ["system", "amd", "intel", "nvidia", "amdgpu", "nuvoton"];
  * @param {Iterable<number>} [options.failBlockAt]  addresses whose WriteBlock returns -1
  * @param {Iterable<number>} [options.nack]  addresses that answer nothing (every transfer -1)
  * @param {boolean} [options.lockFails]  TransactionLock() answers false (another program keeps the bus)
+ * @param {boolean} [options.dryRun]  HueDeck --dry-run: writes logged, never applied
+ * @param {boolean} [options.batchWrites]  HueDeck SmbusBatchWrites(): writes queued under the lock
  */
 export function createMockBus(options = {}) {
   const kind = options.kind ?? "amd";
@@ -49,6 +57,10 @@ export function createMockBus(options = {}) {
   const failBlock = new Set(options.failBlockAt ?? []);
   const lockFails = options.lockFails === true;
   const nack = new Set(options.nack ?? []);
+  const dryRun = options.dryRun === true;
+  const batchWrites = options.batchWrites === true;
+  const queue = [];
+  let queueStatus;
   const ops = [];
   const logs = [];
   const pauses = [];
@@ -79,8 +91,36 @@ export function createMockBus(options = {}) {
     return Array.from({ length: n }, (_, i) => (i < data.length ? Number(data[i]) & 0xFF : 0));
   };
   const record = (op, addr, reg, data) => ops.push({ op, addr, reg, data, locked });
+  // Send the queued writes; the status of the first that failed (the rest dropped), or 0.
+  const flush = () => {
+    let status = 0;
+    while (queue.length) {
+      const send = queue.shift();
+      const r = send();
+      if (r < 0) {
+        status = r;
+        queue.length = 0;
+      }
+    }
+    if (status < 0 && queueStatus === undefined) queueStatus = status;
+    return status;
+  };
+  // A write as the host makes it: logged only in a dry run, queued under the lock with batchWrites.
+  const write = (fn, op, addr, reg, data) => {
+    if (dryRun) {
+      ops.push({ op, addr, reg, data, locked, dry: true });
+      return 0;
+    }
+    if (batchWrites && locked) {
+      queue.push(fn);
+      return 0;
+    }
+    return fn();
+  };
+  // A read after the queued writes; not sent when one of them failed.
+  const read = (fn) => (flush() < 0 ? -1 : fn());
 
-  const io = {
+  const raw = {
     WriteQuick(a) {
       record("WriteQuick", a, undefined, []);
       if (kind === "nvidia") return -1;
@@ -144,6 +184,17 @@ export function createMockBus(options = {}) {
       return ix(a) ? ix(a).direct.get(0) ?? 0xFF : regsOf(a).get(0) ?? 0xFF;
     },
   };
+  // The transfers as the host hands them over (dry run, queued writes).
+  const io = {
+    WriteQuick: (a) => write(() => raw.WriteQuick(a), "WriteQuick", a, undefined, []),
+    ReadByte: (a, r) => read(() => raw.ReadByte(a, r)),
+    WriteByte: (a, r, v) => write(() => raw.WriteByte(a, r, v), "WriteByte", a, r, [v]),
+    ReadWord: (a, r) => read(() => raw.ReadWord(a, r)),
+    WriteWord: (a, r, w) => write(() => raw.WriteWord(a, r, w), "WriteWord", a, r, [w & 0xFF, (w >> 8) & 0xFF]),
+    WriteBlock: (a, r, data) => write(() => raw.WriteBlock(a, r, data), "WriteBlock", a, r, [data.length, ...data]),
+    ReadBlockBytes: (a, r, len) => (flush() < 0 ? [-1, []] : raw.ReadBlockBytes(a, r, len)),
+    ReadByteWithoutRegister: (a) => read(() => raw.ReadByteWithoutRegister(a)),
+  };
 
   const identity = (fixed) => ({
     Vendor: () => pci.vendor,
@@ -159,6 +210,7 @@ export function createMockBus(options = {}) {
     IsNvidiaBus: () => kind === "nvidia",
     IsAMDGpuBus: () => kind === "amdgpu",
     IsNuvotonBus: () => kind === "nuvoton",
+    IsDryRun: () => dryRun,
     log: (msg) => logs.push(String(msg)),
     pause: (ms) => pauses.push(ms),
     // HueDeck's TransactionLock() answers whether the bus is held (host.js).
@@ -168,7 +220,15 @@ export function createMockBus(options = {}) {
       return true;
     },
     TransactionUnlock: () => {
+      if (!batchWrites) {
+        locked = false;
+        return undefined;
+      }
+      flush();
       locked = false;
+      const status = queueStatus ?? 0;
+      queueStatus = undefined;
+      return status;
     },
     HasTransactionLock: () => locked,
     toString: () => (fixed ? `I2CBusWrapperFixedAddress(${name})` : `I2CBusWrapper(${name})`),

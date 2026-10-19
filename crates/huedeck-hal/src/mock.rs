@@ -443,6 +443,12 @@ pub struct MockSmbus {
     devices: BTreeMap<u8, BTreeMap<u8, u8>>,
     indexed: BTreeMap<u8, IndexedDevice>,
     fail_block: BTreeSet<u8>,
+    /// DDR4 SPD EEPROMs (EE1004, 512 bytes) by address.
+    spd: BTreeMap<u8, Vec<u8>>,
+    /// The EE1004 page every DDR4 SPD on the bus has selected.
+    spd_page: u8,
+    /// Sizes of the batches [`SmbusBus::run_batch`] was given.
+    batches: Arc<Mutex<Vec<usize>>>,
     recorder: TransactionRecorder,
 }
 
@@ -480,8 +486,58 @@ impl MockSmbus {
             devices: BTreeMap::new(),
             indexed: BTreeMap::new(),
             fail_block: BTreeSet::new(),
+            spd: BTreeMap::new(),
+            spd_page: 0,
+            batches: Arc::default(),
             recorder,
         }
+    }
+
+    /// A DDR4 SPD EEPROM (JEDEC EE1004) at `addr` (0x50..=0x57) holding
+    /// `contents` (padded with 0xFF to 512 bytes). Plain reads at `addr` see
+    /// the page selected on the bus (page 0 at first); a Send Byte to 0x36 /
+    /// 0x37 inside [`SmbusBus::spd_read`] switches it, as on the wire, and
+    /// is recorded as an `SmbusWrite` of `[0x36 or 0x37, 0x00]`.
+    pub fn add_ddr4_spd(&mut self, addr: u8, contents: &[u8]) {
+        let mut bytes = vec![0xFF; usize::from(crate::smbus::SPD_DDR4_LEN)];
+        let n = contents.len().min(bytes.len());
+        bytes[..n].copy_from_slice(&contents[..n]);
+        self.spd.insert(addr, bytes);
+    }
+
+    /// The sizes of the batches handed to [`SmbusBus::run_batch`] so far
+    /// (shared: keep it before the bus is boxed). Each op of a batch is
+    /// still recorded as its own transaction.
+    pub fn batch_log(&self) -> Arc<Mutex<Vec<usize>>> {
+        Arc::clone(&self.batches)
+    }
+
+    /// Leave page `page` selected on the bus's DDR4 SPDs (another program did).
+    pub fn set_spd_page(&mut self, page: u8) {
+        self.spd_page = page & 1;
+    }
+
+    /// The EE1004 page currently selected.
+    pub fn spd_page(&self) -> u8 {
+        self.spd_page
+    }
+
+    fn spd_byte(&self, addr: u8, reg: u8) -> Option<u8> {
+        self.spd
+            .get(&addr)
+            .map(|b| b[usize::from(self.spd_page) * 256 + usize::from(reg)])
+    }
+
+    /// EE1004 Set Page Address: a Send Byte (data 0x00) to 0x36 or 0x37.
+    fn spd_set_page(&mut self, page: u8) -> HalResult<()> {
+        let at = crate::smbus::SPD_SET_PAGE[usize::from(page & 1)];
+        self.rec(TransactionKind::SmbusWrite, vec![at, 0x00]);
+        if self.spd.is_empty() {
+            // No EE1004 on the bus: nothing acknowledges.
+            return Err(HalError::Bus { status: -1 });
+        }
+        self.spd_page = page & 1;
+        Ok(())
     }
 
     /// The bus's controller PCI ids (`bus.Vendor()` and friends).
@@ -568,6 +624,10 @@ impl SmbusBus for MockSmbus {
     }
 
     fn read_byte(&mut self, addr: u8, reg: u8) -> HalResult<u8> {
+        if let Some(v) = self.spd_byte(addr, reg) {
+            self.rec(TransactionKind::SmbusRead, vec![addr, reg, v]);
+            return Ok(v);
+        }
         let v = match self.indexed(addr) {
             Some(d) if reg == INDEX_READ => *d.memory.get(&d.pointer).unwrap_or(&0xFF),
             Some(d) => *d.direct.get(&reg).unwrap_or(&0xFF),
@@ -703,11 +763,75 @@ impl SmbusBus for MockSmbus {
         self.rec(TransactionKind::SmbusLock, Vec::new());
         Ok(())
     }
+
+    fn run_batch(&mut self, ops: &[crate::smbus::SmbusOp]) -> crate::smbus::SmbusBatch {
+        self.batches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(ops.len());
+        crate::smbus::run_one_by_one(self, ops)
+    }
+
+    fn spd_read(&mut self, addr: u8, offset: u16, buf: &mut [u8]) -> HalResult<usize> {
+        if !self.descriptor.kind.is_chipset() {
+            return Err(HalError::Unsupported("SPD read on this bus"));
+        }
+        crate::smbus::validate_spd_read(addr, offset, buf.len())?;
+        let page = (offset / crate::smbus::SPD_PAGE_LEN) as u8;
+        self.spd_set_page(page)?;
+        let mut result = Ok(buf.len());
+        for (i, slot) in buf.iter_mut().enumerate() {
+            match self.read_byte(addr, (offset % crate::smbus::SPD_PAGE_LEN) as u8 + i as u8) {
+                Ok(v) => *slot = v,
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                }
+            }
+        }
+        if page != 0 {
+            // Page 0 again, whatever the reads did.
+            self.spd_set_page(0)?;
+        }
+        result
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ddr4_spd_pages_switch_on_the_wire() {
+        let rec = TransactionRecorder::new();
+        let mut bus = MockSmbus::new("AMD PIIX4 Bus - 0x0b00", SmbusBusKind::Amd, rec.clone());
+        let mut spd = vec![0u8; 512];
+        spd[2] = 0x0C;
+        spd[320] = 0x85;
+        spd[321] = 0x9B;
+        bus.add_ddr4_spd(0x51, &spd);
+        assert_eq!(bus.read_byte(0x51, 2).unwrap(), 0x0C);
+        let mut id = [0u8; 2];
+        assert_eq!(bus.spd_read(0x51, 320, &mut id).unwrap(), 2);
+        assert_eq!(id, [0x85, 0x9B]);
+        assert_eq!(bus.spd_page(), 0, "page 0 again");
+        assert_eq!(
+            rec.payloads(TransactionKind::SmbusWrite),
+            vec![vec![0x37, 0x00], vec![0x36, 0x00]]
+        );
+        // Page 1 left selected by someone else: plain reads see it.
+        bus.set_spd_page(1);
+        assert_eq!(bus.read_byte(0x51, 0x40).unwrap(), 0x85);
+        let mut ty = [0u8; 1];
+        bus.spd_read(0x51, 2, &mut ty).unwrap();
+        assert_eq!((ty[0], bus.spd_page()), (0x0C, 0));
+        assert!(bus.spd_read(0x51, 250, &mut [0u8; 8]).is_err(), "within one page");
+        let mut gpu = MockSmbus::new("GPU", SmbusBusKind::Nvidia, rec);
+        assert!(matches!(
+            gpu.spd_read(0x50, 0, &mut ty),
+            Err(HalError::Unsupported(_))
+        ));
+    }
 
     #[test]
     fn unplugged_devices_vanish_and_their_old_handles_stay_stale() {

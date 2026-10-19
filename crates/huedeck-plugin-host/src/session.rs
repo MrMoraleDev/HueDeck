@@ -477,7 +477,7 @@ struct LiveStats {
     state: AtomicU8,
     frames: AtomicU64,
     render_errors: AtomicU64,
-    hid_errors: AtomicU64,
+    io_errors: AtomicU64,
     hid_disconnects: AtomicU64,
     hid_disconnected: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
@@ -497,8 +497,9 @@ pub struct LiveSnapshot {
     pub frames: u64,
     /// Failed `Render()` calls so far.
     pub render_errors: u64,
-    /// Failed HID operations so far (SMBus devices: failed or refused bus operations).
-    pub hid_errors: u64,
+    /// Failed I/O operations so far: HID operations, or for SMBus devices
+    /// failed or refused bus operations.
+    pub io_errors: u64,
     /// Failed HID operations whose device is gone (see [`IoStats::disconnects`]).
     pub disconnects: u64,
     /// The latest HID operation failed because the device is gone.
@@ -540,7 +541,7 @@ impl LiveStats {
             state,
             frames: self.frames.load(Ordering::Relaxed),
             render_errors: self.render_errors.load(Ordering::Relaxed),
-            hid_errors: self.hid_errors.load(Ordering::Relaxed),
+            io_errors: self.io_errors.load(Ordering::Relaxed),
             disconnects: self.hid_disconnects.load(Ordering::Relaxed),
             disconnected: self.hid_disconnected.load(Ordering::Relaxed),
             first_write_ms: match self.first_write_us.load(Ordering::Relaxed) {
@@ -650,7 +651,7 @@ pub fn spawn(
         state: AtomicU8::new(SessionState::Starting as u8),
         frames: AtomicU64::new(0),
         render_errors: AtomicU64::new(0),
-        hid_errors: AtomicU64::new(0),
+        io_errors: AtomicU64::new(0),
         hid_disconnects: AtomicU64::new(0),
         hid_disconnected: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
@@ -734,6 +735,7 @@ fn run(
     let guard: Option<SharedGuard> = device.smbus.as_ref().map(|t| {
         let mut g = GuardedBus::new(t.bus.clone(), Phase::Run { addr: t.addr }, opts.write_mode);
         g.deny_registers(meta.smbus_denied_registers.iter().copied());
+        g.set_batch_writes(meta.smbus_batch_writes);
         let dev = Arc::clone(&shared);
         g.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
         g.shared()
@@ -1060,7 +1062,7 @@ fn drive(
             }
         }
         let dev = lock_device(shared);
-        live.hid_errors.store(
+        live.io_errors.store(
             bus_errors.unwrap_or_else(|| dev.stats().errors()),
             Ordering::Relaxed,
         );

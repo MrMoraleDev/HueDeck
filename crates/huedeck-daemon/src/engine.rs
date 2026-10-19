@@ -10,8 +10,9 @@
 //! seconds. Every session ends with the plugin's `Shutdown(false)` when the
 //! daemon stops.
 //!
-//! SMBus devices (GPU and RAM RGB) are opt-in (`[smbus] enabled`, the dashboard
-//! setting). Their buses are scanned at start, on a rescan request and when
+//! SMBus devices (GPU RGB; RAM RGB when the I/O broker is installed and
+//! healthy) are on unless turned off (`[smbus] enabled = false`, the
+//! dashboard setting). Their buses are scanned at start, on a rescan request and when
 //! the setting is turned on, never on HID hotplug, never while SignalRGB,
 //! OpenRGB or a vendor lighting service runs
 //! ([`huedeck_runtime::conflicts::smbus_blockers`]), and never while their
@@ -19,8 +20,9 @@
 //! controllers' register pointers). While SMBus is on, the engine looks for
 //! those programs again every [`SMBUS_RECHECK`] and stops the SMBus sessions
 //! as soon as one shows up. Only one HueDeck process drives SMBus at a time
-//! ([`huedeck_runtime::conflicts::claim_smbus`]): with a `huedeck --smbus`
-//! run going, the daemon leaves the buses alone.
+//! ([`huedeck_runtime::conflicts::claim_smbus`]): with a `huedeck` run on
+//! the buses, the daemon leaves them alone (and a `huedeck` run started
+//! while the daemon drives them leaves its SMBus devices out).
 
 use crate::config::Config;
 use crate::lifecycle::LifecycleState;
@@ -310,7 +312,7 @@ struct Engine {
     /// A scan is wanted at the next rescan (start, request, setting turned on,
     /// SMBus devices stopped for a blocking program).
     smbus_scan_due: bool,
-    /// Running programs that keep HueDeck off SMBus (or `huedeck --smbus`):
+    /// Running programs that keep HueDeck off SMBus (or a `huedeck` run on the buses):
     /// only the SMBus devices stop for them.
     smbus_blockers: Vec<String>,
     /// This process is the one HueDeck process driving SMBus (real hardware).
@@ -1120,7 +1122,7 @@ impl Engine {
                 view.state = state_name(live.state).into();
                 view.frames = live.frames;
                 view.render_errors = live.render_errors;
-                view.hid_errors = live.hid_errors;
+                view.io_errors = live.io_errors;
                 let endpoints = h.endpoints();
                 if let Some(first) = endpoints.first() {
                     view.name = first.name.clone();

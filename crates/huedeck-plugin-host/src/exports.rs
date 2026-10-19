@@ -242,6 +242,26 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
             }
         }
     }
+    if let Some(a) = get("SpdManufacturers").and_then(J::as_array) {
+        for v in a {
+            let entry = v.as_object().and_then(|o| {
+                let byte = |k: &str| o.get(k)?.as_u64().and_then(|n| u8::try_from(n).ok());
+                Some(crate::spd::SpdManufacturer {
+                    bank: byte("bank").filter(|b| (1..=32).contains(b))?,
+                    id: byte("id").filter(|id| id & 0x7F != 0 && id & 0x7F != 0x7F)?,
+                    name: o.get("name").and_then(as_string).unwrap_or_default(),
+                })
+            });
+            match entry {
+                Some(m) if !meta.spd_manufacturers.contains(&m) => meta.spd_manufacturers.push(m),
+                Some(_) => {}
+                None => warnings.push(format!(
+                    "SpdManufacturers() entries must be {{bank: 1..=32, id: JEP106 id byte, name}}: {v}"
+                )),
+            }
+        }
+    }
+    meta.smbus_batch_writes = get("SmbusBatchWrites").is_some_and(|v| v.as_bool() == Some(true));
     if let Some(a) = get("SmbusBuses").and_then(J::as_array) {
         for v in a {
             let name = as_string(v).unwrap_or_default();
@@ -346,7 +366,13 @@ mod tests {
         let ns = json!({
             "exports": {
                 "Name": "GPU", "Type": "SMBUS", "SmbusAddresses": [0x68, 0x68, 300],
-                "SmbusBuses": ["nvidia", "any", "toaster"], "SmbusDeniedRegisters": [0x3F, 0x3F, 256]
+                "SmbusBuses": ["nvidia", "any", "toaster"], "SmbusDeniedRegisters": [0x3F, 0x3F, 256],
+                "SmbusBatchWrites": true,
+                "SpdManufacturers": [
+                    {"bank": 1, "id": 0x2C, "name": "Micron Technology"},
+                    {"bank": 6, "id": 0x9B},
+                    {"bank": 0, "id": 0x2C}, {"bank": 1, "id": 0x7F}, "Micron"
+                ]
             },
             "lifecycle": {"Scan": true, "Initialize": true, "Render": true}
         });
@@ -354,7 +380,16 @@ mod tests {
         assert_eq!(r.meta.smbus_addresses, vec![0x68]);
         assert_eq!(r.meta.smbus_buses, vec![huedeck_hal::SmbusBusKind::Nvidia]);
         assert_eq!(r.meta.smbus_denied_registers, vec![0x3F]);
-        assert_eq!(r.warnings.len(), 3, "{:?}", r.warnings);
+        let spd: Vec<(u8, u8, &str)> = r
+            .meta
+            .spd_manufacturers
+            .iter()
+            .map(|m| (m.bank, m.id, m.name.as_str()))
+            .collect();
+        assert_eq!(spd, vec![(1, 0x2C, "Micron Technology"), (6, 0x9B, "")]);
+        assert!(r.meta.spd_gated());
+        assert!(r.meta.smbus_batch_writes);
+        assert_eq!(r.warnings.len(), 6, "{:?}", r.warnings);
     }
 
     #[test]

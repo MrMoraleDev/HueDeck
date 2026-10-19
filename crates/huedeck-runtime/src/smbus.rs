@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The SMBus buses of a hardware run and the devices the SMBus plugins find on them.
 //!
-//! SMBus is opt-in (`--smbus`, the daemon's `smbus.enabled`). The buses are
-//! the NVIDIA GPUs' I2C ports through NvAPI, reached from this (unelevated)
-//! process, and the chipset SMBus (RAM) served by the privileged HueDeck I/O
-//! broker over its named pipe. This process never opens PawnIO: when the
-//! broker is not there, [`SmbusHardware::notes`] says what is missing (PawnIO
-//! not installed, too old, or the broker not registered), from PawnIO's
-//! uninstall entry.
+//! SMBus is on unless turned off (`huedeck --no-smbus`, the daemon's
+//! `smbus.enabled = false`). The buses are the NVIDIA GPUs' I2C ports
+//! through NvAPI, reached from this (unelevated) process, and the chipset
+//! SMBus (RAM) served by the privileged HueDeck I/O broker over its named
+//! pipe, used only when the broker answers and reports itself healthy (same
+//! protocol, official PawnIO 2.2.0 or later, its module loaded). This
+//! process never opens PawnIO: when the broker is not there,
+//! [`SmbusHardware::notes`] says what is missing (PawnIO not installed, too
+//! old, or the broker not registered), from PawnIO's uninstall entry.
 //!
 //! Discovery runs plugins' `Scan(bus)`, which may write; it is refused while
 //! SignalRGB, OpenRGB or a vendor lighting service runs
@@ -224,6 +226,14 @@ mod tests {
                 sub_device: 0x790B,
             })
             .with_instance("0b00");
+        // Two Crucial Ballistix DDR4 modules: their SPDs name Crucial
+        // Technology (JEP106 bank 6, 0x9B), which the host's SPD check needs.
+        let mut spd = vec![0u8; 512];
+        spd[2] = 0x0C;
+        spd[320] = 0x85;
+        spd[321] = 0x9B;
+        ram.add_ddr4_spd(0x50, &spd);
+        ram.add_ddr4_spd(0x51, &spd);
         for addr in [0x39, 0x3A] {
             let ident = (0..16u8).map(|i| (0xA0 + i, i));
             let micron = b"Micron\0"

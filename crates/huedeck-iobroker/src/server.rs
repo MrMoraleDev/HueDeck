@@ -13,7 +13,8 @@
 //! Renewals never stretch one continuous hold past [`MAX_HOLD`]: every lease
 //! ends by then (each request first ends the leases that ran out), the mutex
 //! is let go, and a program waiting for it gets its turn before the next
-//! `BusLock` takes it again.
+//! `BusLock` takes it again. A `Batch` runs its ops under one hold (or
+//! inside the lease), each through the same checks as a lone op.
 
 use crate::mutex::{GlobalMutex, ACQUIRE_TIMEOUT_MS};
 use crate::pawnio::PawnExec;
@@ -21,9 +22,9 @@ use crate::piix4::Piix4Bus;
 use crate::policy::{audit, Lease, Policy, MAX_HOLD};
 use huedeck_protocol::broker::{
     BrokerError, BrokerOp, BrokerPayload, BrokerRequest, BrokerResponse, BusInfo, HealthReport, ModuleStatus,
-    PawnIoEdition, BROKER_PROTOCOL_VERSION,
+    PawnIoEdition, BATCH_HOLD_LIMIT_MS, BROKER_PROTOCOL_VERSION,
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// One bus the broker serves.
 #[derive(Debug)]
@@ -159,17 +160,27 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
                 self.end_lease(*bus);
                 Ok(BrokerPayload::Ack)
             }
+            BrokerOp::Batch { bus, ops } => self.batch(*bus, ops, now),
             _ => {
                 let index = self.bus_index(op.bus().unwrap_or(u8::MAX))?;
                 let info = self.buses[index].info.clone();
                 self.policy.check(op, &info, now)?;
                 // Operations the PIIX4 module cannot do are refused before the mutex.
-                crate::piix4::xfer_input(op)?;
+                if !matches!(op, BrokerOp::SpdRead { .. }) {
+                    crate::piix4::xfer_input(op)?;
+                }
                 let leased = self.leased(index);
                 if !leased {
                     self.begin(index)?;
                 }
-                let result = self.buses[index].piix4.transfer(op);
+                // An SPD read (page select, reads, page 0 again) runs whole
+                // under this one hold of the mutex.
+                let result = match *op {
+                    BrokerOp::SpdRead {
+                        addr, offset, len, ..
+                    } => self.buses[index].piix4.spd_read(addr, offset, len),
+                    _ => self.buses[index].piix4.transfer(op),
+                };
                 if !leased {
                     self.end(index);
                 }
@@ -181,6 +192,60 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
                 result
             }
         }
+    }
+
+    /// `BrokerOp::Batch`: each op checked as if it came alone (policy, the
+    /// PIIX4 module's capabilities), then sent, all under one hold of the
+    /// mutex (or the client's lease). Stops at the first op refused or
+    /// failed, and before an op once [`BATCH_HOLD_LIMIT_MS`] has passed.
+    fn batch(&mut self, bus: u8, ops: &[BrokerOp], now: Instant) -> Result<BrokerPayload, BrokerError> {
+        let index = self.bus_index(bus)?;
+        let info = self.buses[index].info.clone();
+        let leased = self.leased(index);
+        let limit = Duration::from_millis(BATCH_HOLD_LIMIT_MS);
+        let mut results = Vec::with_capacity(ops.len());
+        let mut error = None;
+        let mut held_since: Option<Instant> = None;
+        for op in ops {
+            if held_since.is_some_and(|t| t.elapsed() >= limit) {
+                error = Some(BrokerError::BatchTimeLimit);
+                break;
+            }
+            let checked = self
+                .policy
+                .check(op, &info, now)
+                .and_then(|()| crate::piix4::xfer_input(op).map(drop));
+            if let Err(e) = checked {
+                error = Some(e);
+                break;
+            }
+            if held_since.is_none() {
+                if !leased {
+                    if let Err(e) = self.begin(index) {
+                        error = Some(e);
+                        break;
+                    }
+                }
+                held_since = Some(Instant::now());
+            }
+            let result = self.buses[index].piix4.transfer(op);
+            self.ops_served += 1;
+            match result {
+                Ok(payload) => {
+                    audit(&info, op, "ok (batch)");
+                    results.push(payload);
+                }
+                Err(e) => {
+                    audit(&info, op, &format!("failed (batch): {e}"));
+                    error = Some(e);
+                    break;
+                }
+            }
+        }
+        if held_since.is_some() && !leased {
+            self.end(index);
+        }
+        Ok(BrokerPayload::Batch { results, error })
     }
 
     fn leased(&self, index: usize) -> bool {
@@ -270,7 +335,6 @@ mod tests {
     use super::*;
     use crate::fake::{FakeMutex, FakePiix4};
     use huedeck_protocol::broker::BusKind;
-    use std::time::Duration;
 
     fn info(name: &str) -> BusInfo {
         BusInfo {
@@ -409,6 +473,286 @@ mod tests {
         );
         assert!(r.primary.calls().is_empty());
         assert_eq!(r.mutex.counts(), (0, 0), "refused before the mutex");
+    }
+
+    fn ddr4_spd() -> Vec<u8> {
+        let mut spd = vec![0u8; 512];
+        spd[2] = 0x0C;
+        spd[320] = 0x85;
+        spd[321] = 0x9B;
+        spd
+    }
+
+    #[test]
+    fn spd_read_runs_under_one_hold_of_the_mutex() {
+        let mut r = rig(FakePiix4::new().with_spd(0x50, &ddr4_spd()), false);
+        let op = BrokerOp::SpdRead {
+            bus: 0,
+            addr: 0x50,
+            offset: 320,
+            len: 2,
+        };
+        assert_eq!(call(&mut r, op), Ok(BrokerPayload::Block(vec![0x85, 0x9B])));
+        assert_eq!(
+            r.mutex.counts(),
+            (1, 1),
+            "one acquire for select, reads and restore"
+        );
+        assert_eq!(r.primary.spd_page(), 0);
+        let targets: Vec<u64> = r
+            .primary
+            .calls()
+            .iter()
+            .filter(|(f, _)| f == "ioctl_smbus_xfer")
+            .map(|(_, c)| c[0])
+            .collect();
+        assert_eq!(targets, vec![0x37, 0x50, 0x50, 0x36]);
+    }
+
+    #[test]
+    fn spd_read_is_served_in_dry_run() {
+        let mut r = rig(FakePiix4::new().with_spd(0x50, &ddr4_spd()), true);
+        let op = BrokerOp::SpdRead {
+            bus: 0,
+            addr: 0x50,
+            offset: 2,
+            len: 1,
+        };
+        assert_eq!(call(&mut r, op), Ok(BrokerPayload::Block(vec![0x0C])));
+    }
+
+    /// Whatever a client sends, the only transfers to 0x30-0x37 are the
+    /// Send Bytes to 0x36 / 0x37 inside `SpdRead`, and SPD 0x50-0x57 is
+    /// never written.
+    #[test]
+    fn page_select_is_reachable_only_through_spd_read() {
+        let mut r = rig(
+            FakePiix4::new().with_spd(0x50, &ddr4_spd()).with_device(0x39, []),
+            false,
+        );
+        let mut ops = Vec::new();
+        for addr in (0x30..=0x37u8).chain(0x50..=0x57) {
+            ops.extend([
+                BrokerOp::SmbusWriteQuick { bus: 0, addr },
+                BrokerOp::SmbusWriteByte {
+                    bus: 0,
+                    addr,
+                    reg: 0,
+                    value: 0,
+                },
+                BrokerOp::SmbusWriteWord {
+                    bus: 0,
+                    addr,
+                    reg: 0,
+                    value: 0,
+                },
+                BrokerOp::SmbusWriteBlock {
+                    bus: 0,
+                    addr,
+                    reg: 0,
+                    data: vec![0],
+                },
+                BrokerOp::SmbusWriteBlockNoReg {
+                    bus: 0,
+                    addr,
+                    data: vec![0],
+                },
+                BrokerOp::SpdRead {
+                    bus: 0,
+                    addr,
+                    offset: 0,
+                    len: 1,
+                },
+                BrokerOp::Batch {
+                    bus: 0,
+                    ops: vec![BrokerOp::SmbusWriteByte {
+                        bus: 0,
+                        addr,
+                        reg: 0,
+                        value: 0,
+                    }],
+                },
+            ]);
+        }
+        for op in ops {
+            let spd_read_of_spd = matches!(op, BrokerOp::SpdRead { addr: 0x50, .. });
+            let result = call(&mut r, op.clone());
+            if let BrokerOp::Batch { .. } = op {
+                assert!(
+                    matches!(result, Ok(BrokerPayload::Batch { ref results, error: Some(BrokerError::AddressDenied { .. }) }) if results.is_empty()),
+                    "{op:?}: {result:?}"
+                );
+            } else if spd_read_of_spd {
+                assert!(result.is_ok(), "{op:?}");
+            } else if !matches!(
+                op,
+                BrokerOp::SpdRead {
+                    addr: 0x51..=0x57,
+                    ..
+                }
+            ) {
+                assert!(
+                    matches!(result, Err(BrokerError::AddressDenied { .. })),
+                    "{op:?}: {result:?}"
+                );
+            }
+        }
+        for (f, c) in r.primary.calls() {
+            if f != "ioctl_smbus_xfer" {
+                continue;
+            }
+            let (addr, write) = (c[0] as u8, c[1] == 0);
+            if (0x30..=0x37).contains(&addr) {
+                assert!(
+                    write && (addr == 0x36 || addr == 0x37) && c[3] == 1 && c[2] == 0,
+                    "only Send Byte 0x00 to SPA0/SPA1: {c:?}"
+                );
+            }
+            assert!(!(write && (0x50..=0x57).contains(&addr)), "SPD written: {c:?}");
+        }
+        assert_eq!(r.primary.spd_page(), 0);
+    }
+
+    fn ww(addr: u8, value: u16) -> BrokerOp {
+        BrokerOp::SmbusWriteWord {
+            bus: 0,
+            addr,
+            reg: 0x00,
+            value,
+        }
+    }
+
+    fn batch(ops: Vec<BrokerOp>) -> BrokerOp {
+        BrokerOp::Batch { bus: 0, ops }
+    }
+
+    #[test]
+    fn a_batch_runs_under_one_hold_of_the_mutex() {
+        let mut r = rig(FakePiix4::new().with_device(0x39, [(0x81, 0x42)]), false);
+        let ops = vec![
+            ww(0x39, 0x0083),
+            BrokerOp::SmbusWriteBlock {
+                bus: 0,
+                addr: 0x39,
+                reg: 0x03,
+                data: vec![1; 8],
+            },
+            BrokerOp::SmbusReadByte {
+                bus: 0,
+                addr: 0x39,
+                reg: 0x81,
+            },
+        ];
+        assert_eq!(
+            call(&mut r, batch(ops)),
+            Ok(BrokerPayload::Batch {
+                results: vec![BrokerPayload::Ack, BrokerPayload::Ack, BrokerPayload::Byte(0x42)],
+                error: None
+            })
+        );
+        assert_eq!(r.mutex.counts(), (1, 1), "one acquire for the whole batch");
+        assert_eq!(xfers(&r.primary), 3);
+        let port_sels = r
+            .primary
+            .calls()
+            .iter()
+            .filter(|(f, _)| f == "ioctl_piix4_port_sel")
+            .count();
+        assert_eq!(port_sels, 1, "port 0 selected once per batch");
+    }
+
+    #[test]
+    fn a_batch_stops_at_the_first_refused_or_failed_op() {
+        let mut r = rig(FakePiix4::new().with_device(0x39, []), false);
+        // An SPD write in the middle: refused by the policy, the rest never sent.
+        let spd = BrokerOp::SmbusWriteByte {
+            bus: 0,
+            addr: 0x50,
+            reg: 0,
+            value: 0,
+        };
+        assert_eq!(
+            call(&mut r, batch(vec![ww(0x39, 1), spd, ww(0x39, 2)])),
+            Ok(BrokerPayload::Batch {
+                results: vec![BrokerPayload::Ack],
+                error: Some(BrokerError::AddressDenied { addr: 0x50 })
+            })
+        );
+        assert_eq!(xfers(&r.primary), 1);
+        // A NACK from an absent device ends it too.
+        assert_eq!(
+            call(&mut r, batch(vec![ww(0x3A, 1), ww(0x39, 2)])),
+            Ok(BrokerPayload::Batch {
+                results: Vec::new(),
+                error: Some(BrokerError::Nack)
+            })
+        );
+        assert_eq!(xfers(&r.primary), 2);
+        // Refused before anything is sent: the mutex is not even taken.
+        let before = r.mutex.counts();
+        let quick_outside = BrokerOp::SmbusWriteQuick { bus: 0, addr: 0x48 };
+        assert!(matches!(
+            call(&mut r, batch(vec![quick_outside])),
+            Ok(BrokerPayload::Batch { ref results, error: Some(BrokerError::AddressDenied { .. }) }) if results.is_empty()
+        ));
+        assert_eq!(r.mutex.counts(), before);
+        assert_eq!(
+            r.mutex.counts().0,
+            r.mutex.counts().1,
+            "released after every batch"
+        );
+    }
+
+    #[test]
+    fn a_batch_obeys_dry_run_and_leases() {
+        let mut r = rig(FakePiix4::new().with_device(0x39, [(0xA0, 0)]), true);
+        let read = BrokerOp::SmbusReadByte {
+            bus: 0,
+            addr: 0x39,
+            reg: 0xA0,
+        };
+        assert_eq!(
+            call(&mut r, batch(vec![read.clone(), ww(0x39, 1), read.clone()])),
+            Ok(BrokerPayload::Batch {
+                results: vec![BrokerPayload::Byte(0)],
+                error: Some(BrokerError::DryRun)
+            }),
+            "dry-run: reads served, the first write stops it"
+        );
+        let mut r = rig(FakePiix4::new().with_device(0x39, []), false);
+        call(
+            &mut r,
+            BrokerOp::BusLock {
+                bus: 0,
+                lease_ms: 100,
+            },
+        )
+        .unwrap();
+        assert_eq!(r.mutex.counts(), (1, 0));
+        let ok = call(&mut r, batch(vec![ww(0x39, 1), ww(0x39, 2)])).unwrap();
+        assert!(matches!(ok, BrokerPayload::Batch { ref results, error: None } if results.len() == 2));
+        assert_eq!(
+            r.mutex.counts(),
+            (1, 0),
+            "inside the lease: no second acquire, still held"
+        );
+        call(&mut r, BrokerOp::BusUnlock { bus: 0 }).unwrap();
+        assert_eq!(r.mutex.counts(), (1, 1));
+        // Malformed batches are refused whole.
+        assert!(matches!(
+            call(&mut r, batch(Vec::new())),
+            Err(BrokerError::LengthOutOfRange { .. })
+        ));
+        assert!(call(
+            &mut r,
+            batch(vec![BrokerOp::SpdRead {
+                bus: 0,
+                addr: 0x50,
+                offset: 320,
+                len: 2
+            }])
+        )
+        .is_err());
     }
 
     #[test]

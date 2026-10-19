@@ -39,5 +39,5 @@ pub use hotplug::{DeviceClass, DeviceEvent, HotplugSource};
 pub use key::{DeviceKey, EndpointUid};
 pub use serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};
 pub use smbios::SystemInfo;
-pub use smbus::{PciIds, SmbusBus, SmbusBusDescriptor, SmbusBusKind};
+pub use smbus::{PciIds, SmbusBatch, SmbusBus, SmbusBusDescriptor, SmbusBusKind, SmbusOp, SmbusReply};
 pub use usb::{UsbBackend, UsbDeviceInfo, UsbHandle};

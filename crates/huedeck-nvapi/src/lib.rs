@@ -20,12 +20,12 @@
 //! (`NVAPI_ARGUMENT_EXCEED_MAX_SIZE` otherwise). DDC/display ports are never
 //! used: every transfer goes to port 1 with `bIsDDCPort = 0`.
 //!
-//! Every transfer runs under the global SMBus mutex
-//! `Global\Access_SMBUS.HTP.Method` (`mutex`, Windows), as HueDeck's hard
-//! rule asks for all SMBus traffic. NvAPI I2C is a different controller from
-//! the chipset SMBus and neither OpenRGB nor SignalRGB takes the mutex here
-//! (§4); HueDeck takes it anyway, at the cost of at most [`hub::LOCK_TIMEOUT_MS`]
-//! of waiting (ADR-0004).
+//! No cross-process mutex is taken: NvAPI I2C is the GPU's own controller,
+//! not the chipset SMBus `Global\Access_SMBUS.HTP.Method` guards, and neither
+//! OpenRGB nor SignalRGB takes that mutex here (§4). HueDeck did until the
+//! M5 hardware test showed its GPU frames failing with `NVAPI_DEVICE_BUSY`
+//! while its own RAM sessions held the mutex (ADR-0004). One worker thread
+//! per process serialises the transfers to every GPU.
 
 #![deny(unsafe_op_in_unsafe_fn, clippy::undocumented_unsafe_blocks)]
 
@@ -37,12 +37,10 @@ mod ffi;
 pub mod hub;
 pub mod ids;
 pub mod info;
-#[cfg(windows)]
-mod mutex;
 pub mod status;
 
 pub use bus::NvapiBus;
-pub use hub::{FakeLock, FakeNvI2c, GlobalLock, GpuInfo, I2cTransport, NoLock, NvapiHub};
+pub use hub::{FakeNvI2c, GpuInfo, I2cTransport, NvapiHub};
 pub use info::{I2cOp, I2cPlan};
 pub use status::NvStatus;
 
@@ -76,9 +74,6 @@ pub enum NvapiError {
     /// The worker thread is gone.
     #[error("NvAPI worker thread has stopped")]
     WorkerGone,
-    /// The global SMBus mutex could not be opened or waited for.
-    #[error("global SMBus mutex: {0}")]
-    GlobalMutex(String),
 }
 
 /// Whether `nvapi64.dll` can be loaded from System32. No NvAPI function is

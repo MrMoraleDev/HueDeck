@@ -59,7 +59,7 @@ impl PawnIoStatus {
         match self {
             PawnIoStatus::Ready(_) => None,
             PawnIoStatus::NotInstalled => Some(
-                "PawnIO is not installed (official edition 2.2.0 or later, https://pawnio.eu); HueDeck never installs it"
+                "PawnIO is not installed (official edition 2.2.0 or later, https://pawnio.eu); the broker does not install it"
                     .into(),
             ),
             PawnIoStatus::NoAccess => Some("PawnIO can only be opened by SYSTEM or an elevated administrator".into()),
@@ -258,7 +258,7 @@ mod tests {
         assert!(PawnIoStatus::NotInstalled
             .problem()
             .unwrap()
-            .contains("never installs"));
+            .contains("does not install it"));
         assert!(PawnIoStatus::TooOld(0x0002_0100)
             .problem()
             .unwrap()

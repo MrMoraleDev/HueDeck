@@ -7,12 +7,15 @@ cards, at 7-bit address `0x68` on the GPU's own I2C bus. On NVIDIA cards HueDeck
 that bus through NvAPI (`crates/huedeck-nvapi`), port 1, from its own (unelevated)
 process.
 
-**Status: untested on hardware.** The plugin and HueDeck's NvAPI path are proven
-against mock buses only. `tested` in `manifest.json` stays empty until someone runs it.
+**Status: tested on the reference card (2026-10-19).** `huedeck light red|green|blue|white`
+and `huedeck rainbow` with `--smbus` on the RTX 3060 Gaming X Trio LHR: the card showed each
+colour and the rainbow (checked by eye). Solid colours: 19 writes per run, 0 errors. Rainbow
+at 30 fps: 1811 writes in 15 s with 1 transient NvAPI error (status -1), recovered on the next
+frame; a 4 s run had 0 errors. Register 0x3F was never written.
 
 | Card | PCI vendor:device | Subsystem | Status |
 |---|---|---|---|
-| MSI GeForce RTX 3060 Gaming X Trio LHR | `10DE:2504` | `1462:3903` | untested (reference machine) |
+| MSI GeForce RTX 3060 Gaming X Trio LHR | `10DE:2504` | `1462:3903` | tested 2026-10-19 |
 
 ## Sources
 

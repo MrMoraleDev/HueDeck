@@ -44,13 +44,17 @@ and gives you a modern dashboard in your browser.
   20 out of 20 effects came out bit-identical to Chrome.
 - **Fast and light.** A Rust daemon with one thread per device: colours reach the
   hardware 2 to 4 ms after the effect paints them, 30 times a second.
-- **Easy to extend.** One small JavaScript file per device family; supporting a new
-  model of a known family is usually one more product id. An effect is one `.html`
-  file.
+- **New devices without recompiling.** Device support lives in plugins: one small
+  JavaScript file per device family, loaded at start-up. Supporting a new model of a
+  known family is usually one more product id, and anyone can do it with a text
+  editor: no toolchain, no rebuild, no new release. An effect is one `.html` file.
 - **Kind to your hardware.** No kernel driver, no admin rights for USB devices,
   `--dry-run` to see every packet before anything is written, devices handed back
   cleanly on exit, and other apps are never killed: HueDeck tells you what to close.
-- **Already using SignalRGB?** HueDeck can optionally use your SignalRGB effects,
+- **Speaks the SignalRGB plugin language.** Plugins use the same JavaScript
+  interface as SignalRGB's, so community plugins and effects written for it run in
+  HueDeck unchanged, and whoever writes one for SignalRGB already knows how to write
+  one for HueDeck. Already using SignalRGB? HueDeck can optionally use your effects,
   plugins and layout too ([details](#signalrgb-compatibility-optional)).
 - **Free forever.** GPL-3.0-or-later: nobody can ship a closed HueDeck with ads or
   spyware added. Plugins and effects can use any license.

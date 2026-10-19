@@ -91,8 +91,10 @@ pub struct DeviceView {
     pub frames: u64,
     /// Failed `Render()` calls.
     pub render_errors: u64,
-    /// Failed HID operations.
+    /// Failed HID operations (SMBus devices: failed or refused bus operations).
     pub hid_errors: u64,
+    /// SMBus devices: `<bus name> · 0x<address>`; `None` for HID devices.
+    pub bus: Option<String>,
     /// `DefaultScale()`.
     pub default_scale: f32,
     /// `ImageUrl()` or a `data:` URL of `Image()`.
@@ -170,6 +172,8 @@ pub struct Settings {
     pub signalrgb_available: bool,
     /// Composite effects on the GPU instead of in software.
     pub gpu_compositing: bool,
+    /// Drive SMBus devices (GPU RGB through NvAPI); opt-in.
+    pub smbus: bool,
     /// Effect frame rate.
     pub fps: u32,
     /// Never write to devices.
@@ -298,6 +302,9 @@ pub enum Request {
         signalrgb: Option<bool>,
         /// GPU compositing for effects.
         gpu_compositing: Option<bool>,
+        /// Drive SMBus devices (scans the buses when turned on).
+        #[serde(default)]
+        smbus: Option<bool>,
     },
     /// Import the local SignalRGB setup (read in place): its canvas placements
     /// as a layout, and the component arrays of its channels.

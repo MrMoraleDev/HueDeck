@@ -6,23 +6,49 @@
 //! [`BrokerOp::validate`] on both sides, and the response is a
 //! [`BrokerResponse`] carrying the request id. Frames are length-prefixed
 //! postcard messages (`u32 LE length` + payload) on the pipe.
+//!
+//! Version 2 adds the [`BrokerOp::BusLock`] / [`BrokerOp::BusUnlock`] lease
+//! (a plugin's `TransactionLock`), [`BrokerError::BusContended`], the PawnIO
+//! fields of [`HealthReport`], and bus-kind-aware rules: the DIMM write denial
+//! and the 32-byte block limit depend on the bus kind
+//! ([`BrokerOp::validate_for`], [`BrokerOp::touches_spd`]). Writes are only
+//! accepted at the addresses of [`BROKER_WRITE_ALLOWLIST`]
+//! ([`BrokerOp::write_allowed`]).
 
 use serde::{Deserialize, Serialize};
 
 /// Protocol version; bumped on any incompatible change.
-pub const BROKER_PROTOCOL_VERSION: u16 = 1;
+pub const BROKER_PROTOCOL_VERSION: u16 = 2;
 /// Largest block payload the broker will accept on the wire (per-bus limits may be lower).
 pub const MAX_BLOCK_LEN: usize = 64;
+/// Largest block on a chipset bus (SMBus block transfers carry 1..=32 bytes).
+pub const CHIPSET_BLOCK_MAX: usize = 32;
+/// Longest [`BrokerOp::BusLock`] lease.
+pub const BUS_LOCK_MAX_MS: u16 = 250;
+/// The broker's named pipe (Windows).
+pub const PIPE_NAME: &str = r"\\.\pipe\lightloom-iobroker";
 /// Largest encoded request/response frame.
 pub const MAX_FRAME_BYTES: usize = 4096;
 /// Lowest valid 7-bit SMBus address.
 pub const SMBUS_ADDR_MIN: u8 = 0x03;
 /// Highest valid 7-bit SMBus address.
 pub const SMBUS_ADDR_MAX: u8 = 0x77;
-/// SPD EEPROM address range: writes denied by default.
+/// SPD EEPROM address range: writes denied on every bus.
 pub const SPD_EEPROM_RANGE: std::ops::RangeInclusive<u8> = 0x50..=0x57;
-/// SPD write-protect / page-select range: writes denied by default.
+/// SPD write-protect / page-select range: writes denied on DIMM buses.
 pub const SPD_WRITE_PROTECT_RANGE: std::ops::RangeInclusive<u8> = 0x30..=0x37;
+/// DDR5 PMIC range: writes denied on DIMM buses.
+pub const DDR5_PMIC_RANGE: std::ops::RangeInclusive<u8> = 0x48..=0x4F;
+/// EEPROM area (SPD, DDR5 RCD 0x58-0x5F, 24RF08-class EEPROMs): writes and
+/// Quick commands denied on DIMM buses.
+pub const EEPROM_AREA_RANGE: std::ops::RangeInclusive<u8> = 0x50..=0x5F;
+/// The only addresses the broker writes to (Quick commands included): the
+/// union of the `SmbusAddresses()` windows of the first-party chipset
+/// plugins, today Crucial Ballistix (0x20-0x23, the 0x27 remap address,
+/// 0x39-0x3C). The broker is the privilege boundary and does not know which
+/// plugin asks, so this static list holds whatever a client sends; a new
+/// chipset plugin adds its window here, after review. Reads are not limited.
+pub const BROKER_WRITE_ALLOWLIST: &[u8] = &[0x20, 0x21, 0x22, 0x23, 0x27, 0x39, 0x3A, 0x3B, 0x3C];
 
 /// Broker-side bus index.
 pub type BusId = u8;
@@ -43,6 +69,29 @@ pub enum BusKind {
     Intel,
     /// AMD FCH / PIIX4.
     Amd,
+}
+
+impl BusKind {
+    /// Chipset SMBus: System, Intel, Amd.
+    pub fn is_chipset(self) -> bool {
+        matches!(self, BusKind::System | BusKind::Intel | BusKind::Amd)
+    }
+
+    /// A bus that may reach the DIMMs: the chipset kinds and Nuvoton.
+    pub fn is_dimm_bus(self) -> bool {
+        self.is_chipset() || self == BusKind::Nuvoton
+    }
+}
+
+/// Which PawnIO build the broker talks to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PawnIoEdition {
+    /// The signed official driver: only namazso-signed modules load.
+    Official,
+    /// The unsigned / test-signed build that loads any module (refused).
+    Unrestricted,
+    /// Not determined (no device, or the probes did not run).
+    Unknown,
 }
 
 /// Static bus description returned by [`BrokerOp::ListBuses`].
@@ -92,6 +141,14 @@ pub struct HealthReport {
     pub ops_served: u64,
     /// PawnIO modules and their pins.
     pub modules: Vec<ModuleStatus>,
+    /// PawnIO driver version (`IOCTL_PIO_VERSION`, `maj<<16 | min<<8 | patch`), 0 if unknown.
+    pub pawnio_version: u32,
+    /// PawnIO edition.
+    pub pawnio_edition: PawnIoEdition,
+    /// `SYSTEM_CODEINTEGRITY_INFORMATION.CodeIntegrityOptions`.
+    pub ci_options: u32,
+    /// PIIX4 `ioctl_set_sleep_mode` setting (0 AlwaysBusy, 1 ShortBusy, 2 AlwaysSleep).
+    pub sleep_mode: u8,
 }
 
 /// The closed operation set.
@@ -184,12 +241,25 @@ pub enum BrokerOp {
         /// Bytes to read.
         len: u8,
     },
-    /// SMBus Receive Byte (NvAPI only).
+    /// SMBus Receive Byte.
     SmbusReadByteNoReg {
         /// Bus.
         bus: BusId,
         /// 7-bit address.
         addr: u8,
+    },
+    /// Hold the bus (on chipset buses the global SMBus mutex) across the
+    /// following ops until [`BrokerOp::BusUnlock`] or until the lease ends.
+    BusLock {
+        /// Bus.
+        bus: BusId,
+        /// Lease, 1..=[`BUS_LOCK_MAX_MS`] ms; the broker releases the bus when it runs out.
+        lease_ms: u16,
+    },
+    /// Release a [`BrokerOp::BusLock`].
+    BusUnlock {
+        /// Bus.
+        bus: BusId,
     },
     /// Enumerate buses.
     ListBuses,
@@ -210,7 +280,9 @@ impl BrokerOp {
             | BrokerOp::SmbusReadBlock { bus, .. }
             | BrokerOp::SmbusWriteBlockNoReg { bus, .. }
             | BrokerOp::SmbusReadBlockNoReg { bus, .. }
-            | BrokerOp::SmbusReadByteNoReg { bus, .. } => Some(*bus),
+            | BrokerOp::SmbusReadByteNoReg { bus, .. }
+            | BrokerOp::BusLock { bus, .. }
+            | BrokerOp::BusUnlock { bus } => Some(*bus),
             BrokerOp::ListBuses | BrokerOp::Health => None,
         }
     }
@@ -228,11 +300,15 @@ impl BrokerOp {
             | BrokerOp::SmbusWriteBlockNoReg { addr, .. }
             | BrokerOp::SmbusReadBlockNoReg { addr, .. }
             | BrokerOp::SmbusReadByteNoReg { addr, .. } => Some(*addr),
-            BrokerOp::ListBuses | BrokerOp::Health => None,
+            BrokerOp::BusLock { .. }
+            | BrokerOp::BusUnlock { .. }
+            | BrokerOp::ListBuses
+            | BrokerOp::Health => None,
         }
     }
 
-    /// Whether the op changes device state (subject to dry-run, SPD denial, allowlists).
+    /// Whether the op changes device state (subject to dry-run, SPD denial,
+    /// allowlists). A Quick command counts as a write.
     pub fn is_write(&self) -> bool {
         matches!(
             self,
@@ -251,25 +327,62 @@ impl BrokerOp {
                 return Err(BrokerError::AddressOutOfRange { addr });
             }
         }
-        let len = match self {
-            BrokerOp::SmbusWriteBlock { data, .. } | BrokerOp::SmbusWriteBlockNoReg { data, .. } => {
-                data.len()
+        if let BrokerOp::BusLock { lease_ms, .. } = self {
+            if *lease_ms == 0 || *lease_ms > BUS_LOCK_MAX_MS {
+                return Err(BrokerError::LengthOutOfRange {
+                    len: usize::from(*lease_ms),
+                });
             }
-            BrokerOp::SmbusReadBlock { len, .. } | BrokerOp::SmbusReadBlockNoReg { len, .. } => *len as usize,
-            _ => 1,
-        };
+        }
+        let len = self.block_len();
         if len == 0 || len > MAX_BLOCK_LEN {
             return Err(BrokerError::LengthOutOfRange { len });
         }
         Ok(())
     }
 
-    /// Default-deny rule for SPD EEPROM and write-protect addresses.
-    pub fn touches_spd(&self) -> bool {
+    /// [`BrokerOp::validate`] plus the limits of a bus of `kind`: blocks of at
+    /// most [`CHIPSET_BLOCK_MAX`] bytes on chipset buses.
+    pub fn validate_for(&self, kind: BusKind) -> Result<(), BrokerError> {
+        self.validate()?;
+        let len = self.block_len();
+        if kind.is_chipset() && len > CHIPSET_BLOCK_MAX {
+            return Err(BrokerError::LengthOutOfRange { len });
+        }
+        Ok(())
+    }
+
+    /// Bytes moved by a block op (1 for every other op).
+    fn block_len(&self) -> usize {
+        match self {
+            BrokerOp::SmbusWriteBlock { data, .. } | BrokerOp::SmbusWriteBlockNoReg { data, .. } => {
+                data.len()
+            }
+            BrokerOp::SmbusReadBlock { len, .. } | BrokerOp::SmbusReadBlockNoReg { len, .. } => *len as usize,
+            _ => 1,
+        }
+    }
+
+    /// Deny rule for the DIMMs' own parts: a write (or Quick command) to the
+    /// SPD EEPROM on any bus, and on a DIMM bus also to the write-protect
+    /// addresses, the DDR5 PMIC and the EEPROM area 0x50-0x5F. GPU buses keep
+    /// the others (the ASRock GPU plugin quick-writes 0x36 on its ADLX bus).
+    /// Mirrors `lightloom_hal::smbus::write_denied`.
+    pub fn touches_spd(&self, kind: BusKind) -> bool {
         self.is_write()
-            && self
-                .addr()
-                .is_some_and(|a| SPD_EEPROM_RANGE.contains(&a) || SPD_WRITE_PROTECT_RANGE.contains(&a))
+            && self.addr().is_some_and(|a| {
+                SPD_EEPROM_RANGE.contains(&a)
+                    || (kind.is_dimm_bus()
+                        && (SPD_WRITE_PROTECT_RANGE.contains(&a)
+                            || DDR5_PMIC_RANGE.contains(&a)
+                            || EEPROM_AREA_RANGE.contains(&a)))
+            })
+    }
+
+    /// Whether the broker may send this op: anything but a write, or a write
+    /// to an address of [`BROKER_WRITE_ALLOWLIST`].
+    pub fn write_allowed(&self) -> bool {
+        !self.is_write() || self.addr().is_some_and(|a| BROKER_WRITE_ALLOWLIST.contains(&a))
     }
 }
 
@@ -327,7 +440,8 @@ pub enum BrokerError {
         /// Offending address.
         addr: u8,
     },
-    /// Address not in the plugin's Scan()-derived allowlist or in the SPD deny range.
+    /// Address outside the write allowlist (the plugin's Scan()-derived one in
+    /// the client, [`BROKER_WRITE_ALLOWLIST`] in the broker) or in a deny range.
     #[error("address {addr:#04x} denied by policy")]
     AddressDenied {
         /// Offending address.
@@ -351,6 +465,9 @@ pub enum BrokerError {
     /// Too many ops per second.
     #[error("rate limited")]
     RateLimited,
+    /// The bus (its global SMBus mutex, or another client's lease) stayed busy.
+    #[error("bus busy: another program holds it")]
+    BusContended,
     /// Write skipped because the broker runs in dry-run mode (reported, not silent).
     #[error("dry run: write not performed")]
     DryRun,
@@ -374,6 +491,42 @@ pub struct BrokerResponse {
     pub id: u64,
     /// Result.
     pub result: Result<BrokerPayload, BrokerError>,
+}
+
+/// Read one frame (`u32 LE length` + payload, at most [`MAX_FRAME_BYTES`]);
+/// `None` when the peer closed the stream before a new frame.
+pub fn read_frame<R: std::io::Read>(r: &mut R) -> std::io::Result<Option<Vec<u8>>> {
+    let mut len = [0u8; 4];
+    match r.read_exact(&mut len) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_le_bytes(len) as usize;
+    if len == 0 || len > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("frame of {len} bytes"),
+        ));
+    }
+    let mut payload = vec![0u8; len];
+    r.read_exact(&mut payload)?;
+    Ok(Some(payload))
+}
+
+/// Write one frame.
+pub fn write_frame<W: std::io::Write>(w: &mut W, payload: &[u8]) -> std::io::Result<()> {
+    if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("frame of {} bytes", payload.len()),
+        ));
+    }
+    let mut frame = Vec::with_capacity(4 + payload.len());
+    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame.extend_from_slice(payload);
+    w.write_all(&frame)?;
+    w.flush()
 }
 
 #[cfg(test)]
@@ -429,6 +582,11 @@ mod tests {
                 len: 4,
             },
             BrokerOp::SmbusReadByteNoReg { bus: 2, addr: 0x47 },
+            BrokerOp::BusLock {
+                bus: 0,
+                lease_ms: 100,
+            },
+            BrokerOp::BusUnlock { bus: 0 },
             BrokerOp::ListBuses,
             BrokerOp::Health,
         ]
@@ -473,8 +631,13 @@ mod tests {
                     sha256: "00".repeat(32),
                     loaded: true,
                 }],
+                pawnio_version: 0x0002_0200,
+                pawnio_edition: PawnIoEdition::Official,
+                ci_options: 0xF401,
+                sleep_mode: 1,
             })),
             Err(BrokerError::AddressDenied { addr: 0x50 }),
+            Err(BrokerError::BusContended),
             Err(BrokerError::Backend {
                 status: -5,
                 message: "NVAPI_ERROR".into(),
@@ -542,20 +705,97 @@ mod tests {
             reg: 0,
             value: 0
         }
-        .touches_spd());
-        assert!(BrokerOp::SmbusWriteQuick { bus: 0, addr: 0x37 }.touches_spd());
+        .touches_spd(BusKind::Amd));
+        assert!(BrokerOp::SmbusWriteQuick { bus: 0, addr: 0x37 }.touches_spd(BusKind::Amd));
         assert!(!BrokerOp::SmbusReadByte {
             bus: 0,
             addr: 0x50,
             reg: 0
         }
-        .touches_spd());
+        .touches_spd(BusKind::Amd));
         assert!(!BrokerOp::SmbusWriteByte {
             bus: 0,
             addr: 0x39,
             reg: 0,
             value: 0
         }
-        .touches_spd());
+        .touches_spd(BusKind::Amd));
+        assert!(!BrokerOp::BusLock { bus: 0, lease_ms: 1 }.touches_spd(BusKind::Amd));
+    }
+
+    #[test]
+    fn spd_denial_depends_on_bus_kind() {
+        let quick = |addr| BrokerOp::SmbusWriteQuick { bus: 0, addr };
+        for kind in [BusKind::System, BusKind::Intel, BusKind::Amd, BusKind::Nuvoton] {
+            for addr in [0x30, 0x36, 0x48, 0x4F, 0x50, 0x57, 0x58, 0x5F] {
+                assert!(quick(addr).touches_spd(kind), "{kind:?} 0x{addr:02x}");
+            }
+            for addr in [0x2F, 0x39, 0x47, 0x60] {
+                assert!(!quick(addr).touches_spd(kind), "{kind:?} 0x{addr:02x}");
+            }
+        }
+        for kind in [BusKind::Nvidia, BusKind::AmdGpu] {
+            assert!(quick(0x50).touches_spd(kind) && quick(0x57).touches_spd(kind));
+            for addr in [0x36, 0x48, 0x58] {
+                assert!(!quick(addr).touches_spd(kind), "{kind:?} 0x{addr:02x}");
+            }
+        }
+    }
+
+    #[test]
+    fn write_allowlist_holds_writes_only() {
+        let write = |addr| BrokerOp::SmbusWriteByte {
+            bus: 0,
+            addr,
+            reg: 0,
+            value: 0,
+        };
+        for &addr in BROKER_WRITE_ALLOWLIST {
+            assert!(write(addr).write_allowed(), "0x{addr:02x}");
+            assert!(
+                !write(addr).touches_spd(BusKind::Amd),
+                "allowlist and deny ranges overlap"
+            );
+        }
+        for addr in [0x08, 0x24, 0x2D, 0x3D, 0x48, 0x50, 0x68, 0x77] {
+            assert!(!write(addr).write_allowed(), "0x{addr:02x}");
+            assert!(!BrokerOp::SmbusWriteQuick { bus: 0, addr }.write_allowed());
+        }
+        assert!(BrokerOp::SmbusReadByte {
+            bus: 0,
+            addr: 0x68,
+            reg: 0
+        }
+        .write_allowed());
+        assert!(BrokerOp::SmbusReadByteNoReg { bus: 0, addr: 0x50 }.write_allowed());
+    }
+
+    #[test]
+    fn bus_lock_lease_bounds() {
+        let lease = |lease_ms| BrokerOp::BusLock { bus: 0, lease_ms }.validate();
+        assert!(lease(0).is_err());
+        assert!(lease(1).is_ok());
+        assert!(lease(BUS_LOCK_MAX_MS).is_ok());
+        assert!(lease(BUS_LOCK_MAX_MS + 1).is_err());
+        assert!(!BrokerOp::BusLock { bus: 0, lease_ms: 50 }.is_write());
+        assert_eq!(BrokerOp::BusUnlock { bus: 3 }.bus(), Some(3));
+        assert_eq!(BrokerOp::BusUnlock { bus: 3 }.addr(), None);
+    }
+
+    #[test]
+    fn chipset_block_limit_is_32() {
+        let block = |n: usize| BrokerOp::SmbusWriteBlock {
+            bus: 0,
+            addr: 0x39,
+            reg: 3,
+            data: vec![0; n],
+        };
+        assert!(block(32).validate_for(BusKind::Amd).is_ok());
+        assert_eq!(
+            block(33).validate_for(BusKind::Amd),
+            Err(BrokerError::LengthOutOfRange { len: 33 })
+        );
+        assert!(block(33).validate_for(BusKind::Nvidia).is_ok());
+        assert!(block(65).validate_for(BusKind::Nvidia).is_err());
     }
 }

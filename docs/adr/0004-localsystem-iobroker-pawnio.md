@@ -118,3 +118,98 @@ Open, to settle in the M5 spike:
   `nvapi64.dll` into a LocalSystem service only adds attack surface. Whether NvAPI I2C
   works from session 0 is untested. If the spike confirms the user-process path, the
   NvAPI part of this decision moves to the daemon with the same op validation.
+
+### 2026-10-19: NvAPI GPU I2C runs in the user's process
+
+Decided for M5: GPU I2C goes through NvAPI **inside `lightloom` / `lightloomd`**, the
+unelevated user process, not through the broker (`crates/lightloom-nvapi`). Any user process
+can already call NvAPI (SignalRGB does so unelevated on the reference machine), so the
+broker would add attack surface without adding capability. The policy the broker would
+enforce is enforced in the plugin host instead, for every bus alike
+(`crates/lightloom-plugin-host/src/smbus.rs`): the plugin's scan window, the allowlist from
+the scan, no DDC/display ports (port 1, `bIsDDCPort = 0` only), SPD write denial on
+every bus, the plugin's denied registers, and nothing while SignalRGB, OpenRGB or a vendor
+lighting service runs.
+
+- `nvapi64.dll` is loaded from System32 only and every call runs on one worker thread
+  (`lightloom-nvapi`), which owns the GPU handles.
+- Superseded (see the review amendment below): the worker now takes the global SMBus
+  mutex around every NvAPI transfer.
+- The broker keeps the chipset SMBus (PawnIO) only; its protocol work (v2, `BusLock`
+  leases) belongs to the RAM part of M5.
+
+### 2026-10-19: the broker for RAM lighting (chipset SMBus)
+
+Implemented in M5 (`crates/lightloom-iobroker`, `crates/lightloom-hal-windows/src/broker.rs`,
+`crates/lightloom-setup`), proven against fakes only until the run on the reference machine:
+
+- **Broker protocol v2**: `BusLock { bus, lease_ms }` / `BusUnlock { bus }` (a plugin's
+  `TransactionLock`; lease 1..=250 ms, the broker lets go when it runs out or the client
+  leaves), `BrokerError::BusContended`, PawnIO version / edition / code-integrity / sleep
+  mode in `Health`, and the SPD denial and 32-byte block limit applied by bus kind.
+- **PawnIO** through raw IOCTLs on `\\?\GLOBALROOT\Device\PawnIO`; `SmbusPIIX4` from
+  PawnIO.Modules 0.2.11, SHA-256 pinned, on one handle per port (0x0B00, 0x0B20); ports
+  2-4 of the primary controller's mux are never selected for Lightloom's own use, and a mux
+  another program left there is put back after each batch. Only the AMD FCH is served for
+  now (the reference board); `SmbusI801` joins the same way.
+- **Edition check**: code-integrity TESTSIGN off and a copy of `Echo` with a flipped
+  signature byte refused by the driver; 2.2.0 or later.
+- **Mutex**: `Global\Access_SMBUS.HTP.Method`, created with an Everyone DACL (or opened),
+  50 ms bounded waits per operation or lease; no mutex, no SMBus.
+- **Pipe**: one reused instance, remote clients rejected, DACL SYSTEM plus the interactive
+  user's SID recorded by `lightloom-setup` (read/write without `FILE_CREATE_PIPE_INSTANCE`).
+  **Deferred**: the per-boot token of the Decision section; the DACL is the gate for M5.
+- **Allowlists** from `Scan()` live in the client's plugin host (it knows which plugin
+  asks); the broker keeps the static rules (ranges, SPD, chipset kinds only, rate limit,
+  dry-run, audit log) and, since the review below, its own write allowlist.
+- **Setup** never downloads or installs PawnIO: it refuses when PawnIO is missing or too
+  old, copies the user-supplied pinned modules (with `COPYING` and sources) and the
+  broker executable under `%ProgramFiles%\Lightloom\`, and registers `LightloomIoBroker`
+  (LocalSystem, automatic start, unrestricted service SID, restart on failure).
+  `--uninstall` removes only what it added. Not yet set: the service's required
+  privileges list.
+
+### 2026-10-19: hardening after the M5 review
+
+The broker is the privilege boundary and the pipe client is not authenticated yet, so the
+rules that matter for safety no longer rely on the client:
+
+- **Broker write allowlist**: writes and Quick commands go only to
+  `BROKER_WRITE_ALLOWLIST` (`lightloom-protocol`), the union of the first-party chipset
+  plugins' `SmbusAddresses()` windows: 0x20-0x23, 0x27, 0x39-0x3C (Crucial). Everything
+  else is `AddressDenied` before the mutex; reads are not limited. A new chipset plugin adds
+  its window there, after review. A per-connection list sent after `Scan()` could narrow it
+  later, never widen it.
+- **DIMM deny ranges**, on chipset and Nuvoton buses (Nuvoton masters reach the DIMMs on
+  some boards): writes and Quick commands to 0x30-0x37 (SPD write-protect), 0x48-0x4F
+  (DDR5 PMIC) and 0x50-0x5F (SPD, DDR5 RCD, 24RF08-class EEPROMs that a Quick write can
+  corrupt). 0x50-0x57 is denied on every bus. A future Corsair DDR4 port (controllers at
+  0x58-0x5F) needs an explicit, reviewed exception.
+- **Lease limits**: a `BusLock` hold never runs past 250 ms from its start, renewals and
+  other buses' leases included; the mutex is then released (a waiting program gets it)
+  before the next lease. While a lease holds the mutex the broker reads a request only
+  once the whole frame has arrived, so a client stalling mid-frame cannot keep it.
+- **Edition check fails closed**: a missing or altered pinned `Echo` blob makes PawnIO
+  unavailable instead of skipping the tamper probe.
+- **Setup** reads Program Files from `HKLM` (not the environment), takes the client SID
+  from its process token (no `whoami` from the search path), and checks the broker copy
+  against the hash of the file it read. The remaining trust root is the folder setup runs
+  from: someone who can replace the broker there can replace `lightloom-setup.exe` too, so
+  only signed releases (an Authenticode check) close that; open until releases are signed.
+- **GPU I2C and the global mutex** (decision): Lightloom's rule is that SMBus traffic runs
+  under `Global\Access_SMBUS.HTP.Method`, and it now covers NvAPI too. The NvAPI worker
+  creates or opens the mutex (Everyone DACL, as the broker) and holds it around every
+  transfer (50 ms bounded wait, `NVAPI_DEVICE_BUSY` to the plugin when another program
+  keeps it) and across a `TransactionLock` lease (at most 250 ms). Without the mutex no
+  GPU is driven. OpenRGB and SignalRGB do not take it for NvAPI, so it orders Lightloom
+  against the programs that follow the convention (and Lightloom's own processes) only;
+  vendor tools are kept away by the process check below.
+- **One driver at a time**: `lightloomd` and `lightloom --smbus` take `Global\Lightloom.SmbusOwner`
+  before touching SMBus; the second one refuses. SignalRGB, OpenRGB and the vendor
+  lighting services that drive the same controllers (MSI `LEDKeeper*` /
+  `LightKeeperService*` / `Mystic_Light_Service`, ASUS `LightingService`, Gigabyte
+  `RGBFusion`) are looked for before every scan and every second while SMBus devices run;
+  one that starts stops the SMBus sessions (the daemon) or the run (the CLI).
+- **NvAPI identity**: requests name the card by PCI bus and ids, resolved at every
+  transfer; a card gone after a driver reset fails instead of reaching whatever GPU now
+  sits at the old index. Requests whose caller timed out are dropped, never sent late.

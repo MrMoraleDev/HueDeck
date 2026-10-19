@@ -11,6 +11,7 @@
 
 use crate::error::{HalError, HalResult};
 use serde::{Deserialize, Serialize};
+use std::ops::RangeInclusive;
 
 /// Lowest valid 7-bit slave address.
 pub const SMBUS_ADDR_MIN: u8 = 0x03;
@@ -18,6 +19,16 @@ pub const SMBUS_ADDR_MIN: u8 = 0x03;
 pub const SMBUS_ADDR_MAX: u8 = 0x77;
 /// SMBus block transfers carry at most 32 data bytes.
 pub const SMBUS_BLOCK_MAX: usize = 32;
+/// DDR4/DDR5 SPD EEPROM addresses. Never written, on any bus.
+pub const SPD_EEPROM: RangeInclusive<u8> = 0x50..=0x57;
+/// DDR4 SPD write-protect / page-select addresses. Never written on a DIMM bus.
+pub const SPD_WRITE_PROTECT: RangeInclusive<u8> = 0x30..=0x37;
+/// DDR5 PMIC addresses. Never written on a DIMM bus.
+pub const DDR5_PMIC: RangeInclusive<u8> = 0x48..=0x4F;
+/// The EEPROM area 0x50-0x5F: the SPD, then the DDR5 RCD (0x58-0x5F) and
+/// 24RF08-class EEPROMs, which a Quick write can corrupt (Linux never sends
+/// one there). Never written on a DIMM bus.
+pub const EEPROM_AREA: RangeInclusive<u8> = 0x50..=0x5F;
 
 /// Which family of host controller owns a bus. Drives the plugin-visible
 /// `IsSystemBus/IsAMDBus/IsIntelBus/IsNvidiaBus/IsNuvotonBus/IsAMDGpuBus` predicates.
@@ -65,14 +76,44 @@ impl SmbusBusKind {
     pub fn is_amd_gpu_bus(self) -> bool {
         self == SmbusBusKind::AmdGpu
     }
+    /// Chipset SMBus: System, Amd, Intel.
+    pub fn is_chipset(self) -> bool {
+        self.is_system_bus()
+    }
+    /// A bus that may reach the DIMMs (SPD, write-protect, PMIC, RCD): the
+    /// chipset buses and Nuvoton SuperIO masters (wired to the DIMMs on
+    /// some boards).
+    pub fn is_dimm_bus(self) -> bool {
+        self.is_chipset() || self == SmbusBusKind::Nuvoton
+    }
     /// NvAPI buses have no Quick command.
     pub fn supports_write_quick(self) -> bool {
         self != SmbusBusKind::Nvidia
     }
-    /// Register-less byte receive exists only on NvAPI buses.
+    /// SMBus Receive Byte: NvAPI, and the AMD PIIX4 / Intel i801 chipset
+    /// controllers (protocol BYTE). SignalRGB refuses it on chipset buses by
+    /// policy; Lightloom allows it because OpenRGB's RAM detection probes with
+    /// it (docs/host-api/smbus.md, Lightloom section).
     pub fn supports_read_byte_no_reg(self) -> bool {
-        self == SmbusBusKind::Nvidia
+        matches!(
+            self,
+            SmbusBusKind::Nvidia | SmbusBusKind::Amd | SmbusBusKind::Intel
+        )
     }
+}
+
+/// Whether a write (or Quick command) to `addr` is refused on a bus of
+/// `kind`: the SPD EEPROM addresses on every bus; on DIMM buses
+/// ([`SmbusBusKind::is_dimm_bus`]) also the SPD write-protect addresses, the
+/// DDR5 PMIC and the whole EEPROM area 0x50-0x5F. GPU buses keep the other
+/// addresses (the ASRock GPU plugin quick-writes 0x36 on its ADLX bus).
+/// Mirrored by `lightloom_protocol::broker::BrokerOp::touches_spd`.
+pub fn write_denied(kind: SmbusBusKind, addr: u8) -> bool {
+    SPD_EEPROM.contains(&addr)
+        || (kind.is_dimm_bus()
+            && (SPD_WRITE_PROTECT.contains(&addr)
+                || DDR5_PMIC.contains(&addr)
+                || EEPROM_AREA.contains(&addr)))
 }
 
 /// PCI identifiers of the controller that owns a bus (`bus.Vendor()/Product()/SubVendor()/SubDevice()`).
@@ -97,8 +138,25 @@ pub struct SmbusBusDescriptor {
     pub kind: SmbusBusKind,
     /// PCI ids of the controller.
     pub pci: PciIds,
+    /// Which bus of that controller: the PIIX4 port base (`"0b00"`, `"0b20"`)
+    /// or the GPU's PCI bus (`"pci01"`). Two PIIX4 buses share one PCI device,
+    /// so the PCI ids alone do not tell buses apart.
+    #[serde(default)]
+    pub instance: String,
     /// Largest block transfer the backend accepts (data bytes).
     pub max_block_len: usize,
+}
+
+impl SmbusBusDescriptor {
+    /// Stable key of the bus: `vendor:device:subvendor:subdevice@instance`
+    /// in lower-case hex, e.g. `10de:2504:1462:3903@pci01`.
+    pub fn key(&self) -> String {
+        let p = self.pci;
+        format!(
+            "{:04x}:{:04x}:{:04x}:{:04x}@{}",
+            p.vendor, p.device, p.sub_vendor, p.sub_device, self.instance
+        )
+    }
 }
 
 /// Validate a 7-bit address against the SMBus reserved ranges.
@@ -131,7 +189,9 @@ pub trait SmbusBus: Send {
     fn read_word(&mut self, addr: u8, reg: u8) -> HalResult<u16>;
     /// SMBus Write Word (LSB first on the wire).
     fn write_word(&mut self, addr: u8, reg: u8, value: u16) -> HalResult<()>;
-    /// Block write with command byte `reg` (I2C combined write: reg + data).
+    /// SMBus Block Write with command byte `reg`: on the wire `reg`, a count
+    /// byte (`data.len()`), then `data` (PIIX4 protocol 5; on NvAPI the
+    /// payload `[len, data…]` after the register, as OpenRGB sends it).
     fn write_block(&mut self, addr: u8, reg: u8, data: &[u8]) -> HalResult<()>;
     /// Block read with command byte `reg`, exactly `buf.len()` bytes expected
     /// (I2C combined write-reg/read-N, *not* count-prefixed). Returns bytes read.
@@ -140,8 +200,22 @@ pub trait SmbusBus: Send {
     fn write_block_no_reg(&mut self, addr: u8, data: &[u8]) -> HalResult<()>;
     /// Raw I2C read of `buf.len()` bytes with no command byte. Returns bytes read.
     fn read_block_no_reg(&mut self, addr: u8, buf: &mut [u8]) -> HalResult<usize>;
-    /// SMBus Receive Byte (no command byte). NvAPI buses only.
+    /// SMBus Receive Byte (no command byte); see
+    /// [`SmbusBusKind::supports_read_byte_no_reg`].
     fn read_byte_no_reg(&mut self, addr: u8) -> HalResult<u8>;
+
+    /// Keep the bus for this client across the next operations (a plugin's
+    /// `TransactionLock`), for at most `lease_ms`. Buses owned by this
+    /// process need nothing beyond their own mutex, hence the default; the
+    /// I/O broker client holds the global SMBus mutex in the broker
+    /// (`BusLock`).
+    fn bus_lock(&mut self, _lease_ms: u16) -> HalResult<()> {
+        Ok(())
+    }
+    /// End [`SmbusBus::bus_lock`].
+    fn bus_unlock(&mut self) -> HalResult<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -155,7 +229,59 @@ mod tests {
         assert!(!SmbusBusKind::Nvidia.is_system_bus());
         assert!(!SmbusBusKind::Nvidia.supports_write_quick());
         assert!(SmbusBusKind::Nvidia.supports_read_byte_no_reg());
+        assert!(SmbusBusKind::Amd.supports_read_byte_no_reg());
+        assert!(SmbusBusKind::Intel.supports_read_byte_no_reg());
         assert!(!SmbusBusKind::Nuvoton.supports_read_byte_no_reg());
+        assert!(!SmbusBusKind::System.supports_read_byte_no_reg());
+        assert!(SmbusBusKind::System.is_chipset() && SmbusBusKind::Amd.is_chipset());
+        assert!(!SmbusBusKind::Nvidia.is_chipset() && !SmbusBusKind::AmdGpu.is_chipset());
+    }
+
+    #[test]
+    fn descriptor_key_distinguishes_piix4_ports() {
+        let piix4 = |instance: &str| SmbusBusDescriptor {
+            name: format!("AMD PIIX4 Bus - 0x{instance}"),
+            kind: SmbusBusKind::Amd,
+            pci: PciIds {
+                vendor: 0x1022,
+                device: 0x790B,
+                sub_vendor: 0x1022,
+                sub_device: 0x790B,
+            },
+            instance: instance.into(),
+            max_block_len: SMBUS_BLOCK_MAX,
+        };
+        assert_eq!(piix4("0b00").key(), "1022:790b:1022:790b@0b00");
+        assert_ne!(piix4("0b00").key(), piix4("0b20").key());
+    }
+
+    #[test]
+    fn dimm_addresses_denied_on_dimm_buses() {
+        for kind in [
+            SmbusBusKind::System,
+            SmbusBusKind::Amd,
+            SmbusBusKind::Intel,
+            SmbusBusKind::Nuvoton,
+        ] {
+            assert!(kind.is_dimm_bus());
+            for addr in [0x30, 0x37, 0x48, 0x4F, 0x50, 0x57, 0x58, 0x5F] {
+                assert!(write_denied(kind, addr), "{kind:?} 0x{addr:02x}");
+            }
+            for addr in [0x20, 0x27, 0x2F, 0x38, 0x39, 0x3C, 0x47, 0x60, 0x68] {
+                assert!(!write_denied(kind, addr), "{kind:?} 0x{addr:02x}");
+            }
+        }
+    }
+
+    #[test]
+    fn spd_denied_on_every_bus_the_rest_only_on_dimm_buses() {
+        for kind in [SmbusBusKind::Nvidia, SmbusBusKind::AmdGpu] {
+            assert!(!kind.is_dimm_bus());
+            assert!(write_denied(kind, 0x50) && write_denied(kind, 0x57));
+            for addr in [0x36, 0x48, 0x58, 0x68] {
+                assert!(!write_denied(kind, addr), "{kind:?} 0x{addr:02x}");
+            }
+        }
     }
 
     #[test]

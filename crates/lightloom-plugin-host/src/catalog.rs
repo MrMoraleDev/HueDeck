@@ -8,6 +8,12 @@
 //! scanned wins* rule ([`PluginIndex`]) lets a later directory override an
 //! earlier one. No plugin lifecycle function runs here.
 //!
+//! SMBus plugins (`Type() == "SMBUS"`) are not keyed by VID:PID: they are
+//! offered buses ([`Catalog::smbus_candidates`]) and find their devices with
+//! `Scan(bus)`. Only those that declare their scan window with the Lightloom
+//! extension `SmbusAddresses()` are kept, so a third-party SMBus plugin never
+//! runs its `Scan()` writes on a chipset bus.
+//!
 //! Loading a file costs a few milliseconds, so a full SignalRGB corpus (about
 //! a thousand files) would cost seconds on every start. [`Catalog::scan_with`]
 //! keeps an index cache: one entry per file, keyed by path, size and
@@ -23,6 +29,7 @@ use crate::meta::{PluginMeta, PluginType};
 use crate::runtime::{run_isolated, PluginRuntime, RuntimeOptions};
 use crate::PluginIndex;
 use lightloom_hal::hid::HidEndpointInfo;
+use lightloom_hal::smbus::{SmbusBusDescriptor, SMBUS_ADDR_MAX, SMBUS_ADDR_MIN};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -34,7 +41,7 @@ use std::time::{Duration, UNIX_EPOCH};
 const SKIP_DIRS: &[&str] = &["tests", "test", "fixtures", "_testkit", "node_modules", ".git"];
 
 /// Bumped whenever what the cache stores (or how metadata is read) changes.
-const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION: u32 = 3;
 
 /// One discovered plugin.
 #[derive(Clone, Debug)]
@@ -239,7 +246,9 @@ impl Catalog {
         for ((root, file, _), loaded) in files.iter().zip(results) {
             match loaded.map(accept) {
                 Some(Ok(meta)) => {
-                    catalog.index.insert(&meta);
+                    if meta.plugin_type != PluginType::Smbus {
+                        catalog.index.insert(&meta);
+                    }
                     catalog.entries.push(CatalogEntry {
                         meta,
                         root: root.clone(),
@@ -287,6 +296,30 @@ impl Catalog {
     /// Counters of the scan that built this catalog.
     pub fn stats(&self) -> ScanStats {
         self.stats
+    }
+
+    /// The SMBus plugins, in scan order.
+    pub fn smbus_plugins(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries
+            .iter()
+            .filter(|e| e.meta.plugin_type == PluginType::Smbus)
+    }
+
+    /// The SMBus plugins whose `Scan(bus)` is offered the bus `d`
+    /// ([`PluginMeta::smbus_offered`]), in scan order; of two plugins with the
+    /// same `Name()` the later scanned one is kept.
+    pub fn smbus_candidates(&self, d: &SmbusBusDescriptor) -> Vec<&CatalogEntry> {
+        let offered: Vec<&CatalogEntry> = self.smbus_plugins().filter(|e| e.meta.smbus_offered(d)).collect();
+        offered
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| {
+                !offered[i + 1..]
+                    .iter()
+                    .any(|later| later.meta.name == e.meta.name)
+            })
+            .map(|(_, e)| *e)
+            .collect()
     }
 
     /// The plugin owning `(vid, pid)` under the last-scanned-wins rule.
@@ -339,12 +372,32 @@ fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
         Loaded::Meta(meta) => *meta,
         Loaded::Failed(why) => return Err(why),
     };
-    if (meta.product_ids.is_empty() || meta.vendor_id == 0) && meta.hid_usages.is_empty() {
-        return Err("no VendorId/ProductId exports (helper module?)".into());
-    }
     // Hybrid plugins also need libusb bulk/control transfers, which device
     // sessions do not provide yet: refusing them beats faking that I/O.
     match meta.plugin_type {
+        PluginType::Smbus => {
+            if meta.smbus_addresses.is_empty() {
+                return Err(
+                    "SMBus plugin without a SmbusAddresses() scan window (Lightloom only runs SMBus \
+                            plugins that declare it)"
+                        .into(),
+                );
+            }
+            if let Some(a) = meta
+                .smbus_addresses
+                .iter()
+                .find(|a| !(SMBUS_ADDR_MIN..=SMBUS_ADDR_MAX).contains(a))
+            {
+                return Err(format!("SmbusAddresses() lists 0x{a:02x}, outside 0x03..=0x77"));
+            }
+            if !meta.lifecycle.scan || !meta.lifecycle.is_device() {
+                return Err("SMBus plugin without Scan(bus), Initialize() and Render() exports".into());
+            }
+            Ok(meta)
+        }
+        _ if (meta.product_ids.is_empty() || meta.vendor_id == 0) && meta.hid_usages.is_empty() => {
+            Err("no VendorId/ProductId exports (helper module?)".into())
+        }
         PluginType::Hid => Ok(meta),
         other => Err(format!(
             "plugin type {other:?} is not supported by device sessions yet"
@@ -454,6 +507,22 @@ mod tests {
         assert_eq!(msi.meta.size, [6, 1]);
         assert_eq!(msi.meta.led_positions.len(), 6);
         assert!(catalog.lookup(0x1462, 0x0001).is_none());
+        let gpu = catalog
+            .smbus_plugins()
+            .find(|e| e.meta.name == "MSI GPU")
+            .expect("MSI GPU plugin catalogued");
+        assert_eq!(gpu.meta.smbus_addresses, vec![0x68]);
+        assert_eq!(gpu.meta.gpu_ids().len(), 1);
+        let ram = catalog
+            .smbus_plugins()
+            .find(|e| e.meta.name == "Crucial Ballistix DRAM")
+            .expect("Crucial plugin catalogued");
+        assert_eq!(
+            ram.meta.smbus_addresses,
+            vec![0x20, 0x21, 0x22, 0x23, 0x27, 0x39, 0x3A, 0x3B, 0x3C]
+        );
+        assert!(ram.meta.gpu_ids().is_empty());
+        assert_eq!(ram.meta.size, [8, 1]);
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -558,6 +627,50 @@ mod tests {
         assert!(catalog
             .lookup_device(0x9999, 1, &[endpoint(0x01, 0x02)])
             .is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const SMBUS_PLUGIN: &str = "export function Name() { return 'GPU'; }\n\
+         export function Type() { return 'SMBUS'; }\n\
+         export function BrandGPUList() { return [{ Vendor: 0x10DE, Device: 0x2504, SubVendor: 0x1462, SubDevice: 0x3903, Address: 0x68, Name: 'x' }]; }\n\
+         export function Scan(bus) { return [0x68]; }\n\
+         export function Initialize() {}\n\
+         export function Render() {}\n";
+
+    #[test]
+    fn smbus_plugins_need_a_scan_window() {
+        let dir = scratch("smbus-window");
+        std::fs::write(
+            dir.join("a.js"),
+            format!("{SMBUS_PLUGIN}export function SmbusAddresses() {{ return [0x68]; }}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("b.js"),
+            format!("{SMBUS_PLUGIN}export function SmbusAddresses() {{ return [0x02]; }}\n"),
+        )
+        .unwrap();
+        let catalog = Catalog::scan(std::slice::from_ref(&dir), Duration::from_secs(10));
+        assert_eq!(catalog.smbus_plugins().count(), 1, "{:?}", catalog.skipped());
+        assert!(catalog.skipped()[0].1.contains("outside 0x03..=0x77"));
+        assert!(
+            catalog.index().is_empty(),
+            "SMBus plugins are not keyed by VID:PID"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signalrgb_style_smbus_plugin_is_skipped_with_reason() {
+        let dir = scratch("smbus-signalrgb");
+        std::fs::write(dir.join("MSI_GPU.js"), SMBUS_PLUGIN).unwrap();
+        let catalog = Catalog::scan(std::slice::from_ref(&dir), Duration::from_secs(10));
+        assert!(catalog.entries().is_empty());
+        assert!(
+            catalog.skipped()[0].1.contains("SmbusAddresses()"),
+            "{:?}",
+            catalog.skipped()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

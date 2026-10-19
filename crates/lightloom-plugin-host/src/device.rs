@@ -209,6 +209,8 @@ pub struct DeviceContext {
     system_info: String,
     /// The plugin call's watchdog (device sessions): long reads end early on a stop request.
     deadline: Option<Deadline>,
+    /// `getDeviceInfo()` strings of a device without HID endpoints (SMBus).
+    info_override: Option<Vec<String>>,
 }
 
 impl std::fmt::Debug for DeviceContext {
@@ -305,6 +307,7 @@ impl DeviceContext {
             children: Children::default(),
             system_info: String::new(),
             deadline: None,
+            info_override: None,
         };
         ctx.update_factor();
         ctx
@@ -1085,8 +1088,17 @@ impl DeviceContext {
         report_fields_json(tlc).to_string()
     }
 
+    /// What `device.getDeviceInfo()` reports for a device without HID
+    /// endpoints: `[manufacturer, product, serial]`.
+    pub fn set_device_info(&mut self, info: [String; 3]) {
+        self.info_override = Some(info.to_vec());
+    }
+
     /// `device.getDeviceInfo()` strings: `[manufacturer, product, serial]`.
     pub fn device_info(&self) -> Vec<String> {
+        if let Some(info) = &self.info_override {
+            return info.clone();
+        }
         let info = self.active_endpoint().or_else(|| self.endpoints.first());
         info.map(|e| vec![e.manufacturer.clone(), e.product.clone(), e.serial.clone()])
             .unwrap_or_else(|| vec![String::new(), String::new(), String::new()])

@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.crucial-ballistix",
+  "name": "Crucial Ballistix DRAM",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Crucial Ballistix DDR4 RGB modules (8 LEDs each) on the chipset SMBus (AMD FCH PIIX4, Intel), adapted from OpenRGB's CrucialController (GPL-2.0-or-later). On Windows the bus is reached through the Lightloom I/O broker and the PawnIO driver. Modules: BL8G32C16U4WL (2x on the reference machine), untested. SPD addresses are never touched; the controller has no save register. Protocol notes: docs/hardware/crucial-ballistix.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "ram",
+  "devices": [
+    {
+      "smbus": {
+        "addresses": [32, 33, 34, 35, 39, 57, 58, 59, 60],
+        "buses": ["amd", "intel"],
+        "tested": []
+      }
+    }
+  ],
+  "permissions": ["smbus"],
+  "keywords": ["crucial", "ballistix", "micron", "ram", "dram", "ddr4", "smbus"]
+}

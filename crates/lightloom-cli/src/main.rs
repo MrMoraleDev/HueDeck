@@ -85,8 +85,12 @@ enum Command {
         #[arg(long, default_value_t = 30.0, value_parser = run::parse_fps)]
         fps: f64,
         /// Use a scripted in-memory device with this VID:PID instead of hardware (CI, no device needed).
-        #[arg(long, value_name = "VID:PID", value_parser = run::parse_vid_pid)]
+        #[arg(long, value_name = "VID:PID", value_parser = run::parse_vid_pid, conflicts_with = "mock_smbus")]
         mock: Option<(u16, u16)>,
+        /// Run this SMBus plugin (its name or directory, e.g. msi-gpu or crucial-ballistix)
+        /// on a scripted in-memory bus instead of hardware (CI, no device needed).
+        #[arg(long, value_name = "PLUGIN")]
+        mock_smbus: Option<String>,
         #[command(flatten)]
         run: run::RunArgs,
     },
@@ -94,6 +98,10 @@ enum Command {
     Plugins {
         #[command(flatten)]
         catalog: run::CatalogArgs,
+        /// Also list the SMBus buses and scan them with the SMBus plugins (this touches
+        /// hardware; refused while SignalRGB or OpenRGB runs).
+        #[arg(long)]
+        smbus: bool,
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
@@ -126,9 +134,20 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
             seconds,
             fps,
             mock,
+            mock_smbus,
             run,
-        } => run::run(run::Mode::Bench { fps, seconds, mock }, &run),
-        Command::Plugins { catalog, json } => run::list_plugins(&catalog, json).map(|_| run::Outcome::Clean),
+        } => run::run(
+            run::Mode::Bench {
+                fps,
+                seconds,
+                mock,
+                mock_smbus,
+            },
+            &run,
+        ),
+        Command::Plugins { catalog, smbus, json } => {
+            run::list_plugins(&catalog, smbus, json).map(|_| run::Outcome::Clean)
+        }
         Command::Compat { command } => compat::run(command).map(|clean| {
             if clean {
                 run::Outcome::Clean
@@ -222,7 +241,7 @@ mod tests {
         let cli =
             Cli::try_parse_from(["lightloom", "plugins", "--signalrgb", "--plugins", "x", "--json"]).unwrap();
         assert!(
-            matches!(cli.command, Command::Plugins { ref catalog, json: true } if catalog.signalrgb && catalog.plugin_dirs.len() == 1)
+            matches!(cli.command, Command::Plugins { ref catalog, smbus: false, json: true } if catalog.signalrgb && catalog.plugin_dirs.len() == 1)
         );
         // Out-of-range times and rates are rejected before anything starts.
         assert!(Cli::try_parse_from(["lightloom", "light", "red", "--duration", "1e30"]).is_err());
@@ -232,6 +251,22 @@ mod tests {
         assert!(Cli::try_parse_from(["lightloom", "rainbow", "--fps", "0"]).is_err());
         assert!(Cli::try_parse_from(["lightloom", "rainbow", "--fps", "1000"]).is_err());
         assert!(Cli::try_parse_from(["lightloom", "light", "red", "--brightness", "101"]).is_err());
+    }
+
+    #[test]
+    fn smbus_flag_parses() {
+        let cli = Cli::try_parse_from(["lightloom", "light", "red", "--smbus", "--dry-run"]).unwrap();
+        assert!(matches!(cli.command, Command::Light { ref run, .. } if run.smbus && run.dry_run));
+        let cli = Cli::try_parse_from(["lightloom", "rainbow"]).unwrap();
+        assert!(matches!(cli.command, Command::Rainbow { ref run, .. } if !run.smbus));
+        let cli = Cli::try_parse_from(["lightloom", "plugins", "--smbus"]).unwrap();
+        assert!(matches!(cli.command, Command::Plugins { smbus: true, .. }));
+        let cli = Cli::try_parse_from(["lightloom", "bench", "--mock-smbus", "msi-gpu"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Bench { mock_smbus: Some(ref p), mock: None, .. } if p == "msi-gpu"
+        ));
+        assert!(Cli::try_parse_from(["lightloom", "bench", "--mock-smbus", "x", "--mock", "1:2"]).is_err());
     }
 
     #[test]

@@ -1035,6 +1035,7 @@ dependencies = [
  "hidapi",
  "lightloom-hal",
  "lightloom-hid-desc",
+ "lightloom-protocol",
  "tracing",
  "windows",
 ]
@@ -1058,11 +1059,22 @@ name = "lightloom-iobroker"
 version = "0.0.1"
 dependencies = [
  "lightloom-protocol",
+ "sha2",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+ "windows-service",
 ]
 
 [[package]]
 name = "lightloom-nvapi"
 version = "0.0.1"
+dependencies = [
+ "lightloom-hal",
+ "thiserror",
+ "tracing",
+ "windows",
+]
 
 [[package]]
 name = "lightloom-plugin-host"
@@ -1126,14 +1138,21 @@ dependencies = [
  "lightloom-engine",
  "lightloom-hal",
  "lightloom-hal-windows",
+ "lightloom-nvapi",
  "lightloom-plugin-host",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
 name = "lightloom-setup"
 version = "0.0.1"
+dependencies = [
+ "lightloom-iobroker",
+ "windows",
+ "windows-service",
+]
 
 [[package]]
 name = "humantime"
@@ -2818,6 +2837,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2929,6 +2954,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "windows-service"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "857224b3b211c6f3616921f081ee54721ee3ad2ace2fac6a6337e032f7b4dcf2"
+dependencies = [
+ "bitflags",
+ "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

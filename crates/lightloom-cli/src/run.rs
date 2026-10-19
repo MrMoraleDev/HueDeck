@@ -6,22 +6,33 @@
 //! Nothing is written to hardware while conflicting RGB software runs (it is
 //! reported, never terminated), and every session ends with the plugin's
 //! `Shutdown(false)` — on Ctrl-C too — unless `--keep` is given.
+//!
+//! With `--smbus` the SMBus devices (GPU RGB over NvAPI, RAM RGB through the
+//! Lightloom I/O broker) join the run:
+//! the SMBus plugins scan the buses once before the sessions start, never
+//! while SignalRGB, OpenRGB or a vendor lighting service runs and never
+//! alongside lightloomd or another `--smbus` run (`--ignore-conflicts` does not
+//! apply). Those programs are looked for again every second while the SMBus
+//! devices run; one that starts ends the run (every `Shutdown()` runs).
 
 use anyhow::{bail, Context};
 use clap::Args;
 use lightloom_engine::{ComponentInstance, FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
-use lightloom_hal::mock::MockHid;
+use lightloom_hal::mock::{MockHid, MockSmbus, TransactionRecorder};
 use lightloom_hal::trace::{RecordingHid, TraceOptions, TraceRestoreCheck};
 use lightloom_hal::{HidBackend, ReportLengths};
 use lightloom_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use lightloom_plugin_host::device::{Brightness, IoKind, LogSink, WriteMode};
+use lightloom_plugin_host::discover::{ScanBudget, ScanOutcome};
 use lightloom_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
 use lightloom_plugin_host::session::{
     RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
 };
+use lightloom_plugin_host::smbus::BusHandle;
 use lightloom_render::{CefRenderer, CefRendererConfig, NullRenderer, Pattern, RendererClient};
 use lightloom_runtime::hardware::Hardware;
 use lightloom_runtime::hotplug::{Hotplug, HOTPLUG_SETTLE};
+use lightloom_runtime::smbus::SmbusHardware;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 #[cfg(not(windows))]
@@ -59,8 +70,14 @@ pub struct RunArgs {
     #[arg(long)]
     pub keep: bool,
     /// Run even when conflicting RGB software (SignalRGB, OpenRGB, the plugin's list) is running.
+    /// Never applies to --smbus.
     #[arg(long)]
     pub ignore_conflicts: bool,
+    /// Also drive SMBus devices (NVIDIA GPU RGB controllers through NvAPI, RAM through
+    /// the Lightloom I/O broker): the SMBus plugins scan the buses first. Refused while
+    /// SignalRGB or OpenRGB runs.
+    #[arg(long)]
+    pub smbus: bool,
     /// Compare feature reports before Initialize and after Shutdown. Alone: every
     /// feature report the device's report descriptor declares. `=ID:LEN`: that
     /// report only (repeatable, e.g. --restore-check=0x52:185).
@@ -171,6 +188,9 @@ pub enum Mode {
         seconds: f64,
         /// Drive a scripted in-memory device with this VID:PID instead of hardware.
         mock: Option<(u16, u16)>,
+        /// Drive the SMBus plugin with this name (or directory name) on a scripted
+        /// in-memory bus instead of hardware.
+        mock_smbus: Option<String>,
     },
 }
 
@@ -459,12 +479,94 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
         mock.set_feature_report(&info.path, report)?;
     }
     let device = SessionDevice {
+        smbus: None,
         key: format!("{vid:04x}:{pid:04x}:MOCK"),
         vid,
         pid,
         endpoints: vec![info],
     };
     Ok((Arc::new(mock), device))
+}
+
+// Used by `bench --mock-smbus` (and tests).
+/// A scripted bus for the SMBus plugin `meta`: the first `BrandGPUList()`
+/// card's NVIDIA bus with a device answering at every `SmbusAddresses()`
+/// address (unset registers read 0xFF); else an AMD PIIX4 bus with one DRAM
+/// RGB controller at the first `SmbusAddresses()` address: the ENE-style
+/// indexed register file OpenRGB's DRAM detectors identify (0xA0..0xAF read
+/// 0..15, "Micron" at 0x1025, a version string at 0x1000).
+pub(crate) fn permissive_mock_smbus(meta: &lightloom_plugin_host::PluginMeta) -> BusHandle {
+    let rec = TransactionRecorder::new();
+    let mut bus = match meta.gpu_ids().first() {
+        Some(gpu) => MockSmbus::new("MOCK NVIDIA GPU", lightloom_hal::SmbusBusKind::Nvidia, rec)
+            .with_pci(lightloom_hal::PciIds {
+                vendor: gpu.vendor,
+                device: gpu.device,
+                sub_vendor: gpu.sub_vendor,
+                sub_device: gpu.sub_device,
+            })
+            .with_instance("pci01"),
+        None => MockSmbus::new("MOCK AMD PIIX4 Bus - 0x0b00", lightloom_hal::SmbusBusKind::Amd, rec)
+            .with_pci(lightloom_hal::PciIds {
+                vendor: 0x1022,
+                device: 0x790B,
+                sub_vendor: 0x1022,
+                sub_device: 0x790B,
+            })
+            .with_instance("0b00"),
+    };
+    if meta.gpu_ids().is_empty() {
+        if let Some(&a) = meta.smbus_addresses.first() {
+            let ident = (0..16u8).map(|i| (0xA0 + i, i));
+            let micron = b"Micron\0"
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (0x1025 + i as u16, *b));
+            let version = b"Lightloom mock\0"
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (0x1000 + i as u16, *b));
+            bus.add_indexed_device(a, ident, micron.chain(version));
+        }
+    } else {
+        for a in &meta.smbus_addresses {
+            bus.add_device(*a, []);
+        }
+    }
+    BusHandle::new(Box::new(bus))
+}
+
+/// The SMBus plugin `name` (its `Name()` or its directory's name).
+fn smbus_plugin<'c>(catalog: &'c Catalog, name: &str) -> Option<&'c CatalogEntry> {
+    catalog.smbus_plugins().find(|e| {
+        e.meta.name.eq_ignore_ascii_case(name)
+            || e.meta
+                .source_path
+                .parent()
+                .and_then(|d| d.file_name())
+                .is_some_and(|d| d.to_string_lossy().eq_ignore_ascii_case(name))
+    })
+}
+
+fn print_scan(outcomes: &[ScanOutcome]) {
+    for o in outcomes {
+        let found = o
+            .addrs
+            .iter()
+            .map(|a| format!("0x{a:02x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        match &o.error {
+            Some(e) => eprintln!("  SMBus scan [{}] {}: {e}", o.bus, o.plugin),
+            None => eprintln!(
+                "  SMBus scan [{}] {}: {} ({:.0} ms)",
+                o.bus,
+                o.plugin,
+                if found.is_empty() { "nothing".into() } else { found },
+                o.took.as_secs_f64() * 1000.0
+            ),
+        }
+    }
 }
 
 /// The options of the session for `device`: the run's flags, SignalRGB's
@@ -611,9 +713,76 @@ fn trace_restore_check(mode: &RestoreCheckMode) -> TraceRestoreCheck {
     }
 }
 
+/// `lightloom plugins --smbus`: the SMBus buses, the plugins offered each, and
+/// what their `Scan(bus)` found (this runs the scans: hardware access).
+fn list_smbus(catalog: &Catalog, json: bool) -> anyhow::Result<serde_json::Value> {
+    // Not even NvAPI is loaded while SignalRGB or OpenRGB runs.
+    let blockers = lightloom_runtime::conflicts::smbus_blockers()?;
+    if !blockers.is_empty() {
+        let text = format!("{} {}", blockers.join(", "), lightloom_runtime::smbus::BLOCKED);
+        if !json {
+            println!("SMBus: {text}");
+        }
+        return Ok(serde_json::json!({ "error": text }));
+    }
+    let hw = SmbusHardware::open();
+    let buses: Vec<serde_json::Value> = hw
+        .buses()
+        .iter()
+        .map(|b| {
+            let d = b.descriptor();
+            serde_json::json!({
+                "name": d.name,
+                "key": d.key(),
+                "kind": lightloom_plugin_host::bus::kind_name(d.kind),
+                "plugins": catalog.smbus_candidates(d).iter().map(|e| &e.meta.name).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let scan = hw.targets(catalog, &[], &ScanBudget::default());
+    if !json {
+        for note in hw.notes() {
+            println!("SMBus: {note}");
+        }
+        for b in &buses {
+            println!(
+                "SMBus bus {} [{}] ({}): plugins {}",
+                b["name"].as_str().unwrap_or_default(),
+                b["key"].as_str().unwrap_or_default(),
+                b["kind"].as_str().unwrap_or_default(),
+                b["plugins"]
+            );
+        }
+        match &scan {
+            Ok((found, outcomes)) => {
+                print_scan(outcomes);
+                for p in found {
+                    println!("  {}  ->  {}", p.device.key, p.plugin.meta.name);
+                }
+            }
+            Err(e) => println!("SMBus scan not run: {e:#}"),
+        }
+    }
+    Ok(serde_json::json!({
+        "notes": hw.notes(),
+        "buses": buses,
+        "scan": match &scan {
+            Ok((found, outcomes)) => serde_json::json!({
+                "outcomes": outcomes,
+                "devices": found.iter().map(|p| serde_json::json!({
+                    "device": p.device.key,
+                    "plugin": p.plugin.meta.source_path,
+                })).collect::<Vec<_>>(),
+            }),
+            Err(e) => serde_json::json!({ "error": format!("{e:#}") }),
+        },
+    }))
+}
+
 /// `lightloom plugins`: the plugins found and, for each connected HID device
-/// (read-only enumeration), the plugin that would drive it.
-pub fn list_plugins(args: &CatalogArgs, json: bool) -> anyhow::Result<()> {
+/// (read-only enumeration), the plugin that would drive it; with `smbus`, the
+/// SMBus buses and what the SMBus plugins' scans find on them.
+pub fn list_plugins(args: &CatalogArgs, smbus: bool, json: bool) -> anyhow::Result<()> {
     let started = Instant::now();
     let (catalog, dirs) = args.scan()?;
     let scan_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -626,8 +795,14 @@ pub fn list_plugins(args: &CatalogArgs, json: bool) -> anyhow::Result<()> {
         .iter()
         .map(|(key, vid, pid)| (key.clone(), catalog.lookup(*vid, *pid)))
         .collect();
+    let smbus_view = if smbus {
+        Some(list_smbus(&catalog, json)?)
+    } else {
+        None
+    };
     if json {
         let value = serde_json::json!({
+            "smbus": smbus_view,
             "directories": dirs,
             "files": stats.files,
             "cached": stats.cached,
@@ -737,17 +912,40 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     let started = Instant::now();
     let (catalog, _) = args.catalog.scan()?;
     // Subscribe before enumerating, so a device plugged in meanwhile is not missed.
-    let hotplug = if matches!(mode, Mode::Bench { mock: Some(_), .. }) {
+    let mocked = matches!(
+        &mode,
+        Mode::Bench { mock: Some(_), .. }
+            | Mode::Bench {
+                mock_smbus: Some(_),
+                ..
+            }
+    );
+    let hotplug = if mocked {
         Hotplug::inactive()
     } else {
         Hotplug::start()
     };
+    let scan_budget = ScanBudget {
+        mode: if args.dry_run {
+            WriteMode::DryRun
+        } else {
+            WriteMode::Live
+        },
+        ..ScanBudget::default()
+    };
 
-    let (backend, hardware, initial) = match mode {
+    // SMBus devices are found once, before any session starts; hotplug only
+    // follows HID devices, so the SMBus ones are handed to every reconcile.
+    let mut smbus_present: Vec<Present> = Vec::new();
+    let mut _smbus_hardware: Option<SmbusHardware> = None;
+    // Held until the run ends: no other Lightloom process drives SMBus meanwhile.
+    let mut _smbus_claim: Option<lightloom_runtime::conflicts::SmbusClaim> = None;
+    let (backend, hardware, initial) = match &mode {
         Mode::Bench {
             mock: Some((vid, pid)),
             ..
         } => {
+            let (vid, pid) = (*vid, *pid);
             let plugin = catalog
                 .lookup(vid, pid)
                 .with_context(|| format!("no plugin claims {vid:04x}:{pid:04x}"))?
@@ -756,17 +954,69 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             let backend: Arc<dyn HidBackend> = mock;
             (backend, None, vec![Present { device, plugin }])
         }
+        Mode::Bench {
+            mock_smbus: Some(name),
+            ..
+        } => {
+            let plugin =
+                smbus_plugin(&catalog, name).with_context(|| format!("no SMBus plugin named {name}"))?;
+            let hw = SmbusHardware::from_buses(vec![permissive_mock_smbus(&plugin.meta)]);
+            let (found, outcomes) = hw.scan(&catalog, &args.devices, &scan_budget);
+            print_scan(&outcomes);
+            let found: Vec<Present> = found
+                .into_iter()
+                .filter(|p| p.plugin.meta.source_path == plugin.meta.source_path)
+                .collect();
+            if found.is_empty() {
+                bail!("{name}: Scan(bus) found no device on the scripted bus");
+            }
+            _smbus_hardware = Some(hw);
+            smbus_present = found.clone();
+            let backend: Arc<dyn HidBackend> = Arc::new(MockHid::new());
+            (backend, None, found)
+        }
         _ => {
             let hardware = Hardware::open()?;
-            let (targets, total) = hardware.targets(&catalog, &args.devices)?;
+            let (mut targets, total) = hardware.targets(&catalog, &args.devices)?;
+            if args.smbus {
+                // Checked before NvAPI is even loaded; never bypassed (Scan() itself writes).
+                let blockers = lightloom_runtime::conflicts::smbus_blockers()?;
+                if !blockers.is_empty() {
+                    bail!("{} {}", blockers.join(", "), lightloom_runtime::smbus::BLOCKED);
+                }
+                // The daemon may drive the same buses: never scan alongside it either.
+                let daemon = lightloom_runtime::conflicts::running_conflicts(&[], &["lightloomd.exe"])?;
+                if daemon.iter().any(|n| n.eq_ignore_ascii_case("lightloomd.exe")) {
+                    bail!(
+                        "lightloomd is running: stop it before using --smbus (both would drive the same buses)"
+                    );
+                }
+                // Nor alongside another `lightloom --smbus` run (or a daemon started meanwhile).
+                _smbus_claim = Some(lightloom_runtime::conflicts::claim_smbus()?);
+                let hw = SmbusHardware::open();
+                for note in hw.notes() {
+                    eprintln!("lightloom {}: SMBus: {note}", mode.name());
+                }
+                // Never bypassed: Scan() itself writes.
+                let (found, outcomes) = hw.targets(&catalog, &args.devices, &scan_budget)?;
+                print_scan(&outcomes);
+                smbus_present = found.clone();
+                targets.extend(found);
+                _smbus_hardware = Some(hw);
+            }
             if targets.is_empty() {
                 bail!(
-                    "no supported device found: {total} device(s) match the {} loaded plugin(s){}",
+                    "no supported device found: {total} device(s) match the {} loaded plugin(s){}{}",
                     catalog.entries().len(),
                     if args.devices.is_empty() {
                         ""
                     } else {
                         " (after --device filters)"
+                    },
+                    if args.smbus {
+                        ", and no SMBus device was found"
+                    } else {
+                        ""
                     }
                 );
             }
@@ -880,6 +1130,10 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     }
     // Devices plugged in, out or back in while the run goes on are followed.
     let mut settle: Option<Instant> = None;
+    // While SMBus devices run, the programs that forbid SMBus are looked for
+    // again every SMBUS_RECHECK; one that shows up ends the run.
+    let mut last_smbus_check = Instant::now();
+    let mut smbus_stopped: Option<String> = None;
 
     let limit = match mode {
         Mode::Bench { seconds, .. } => Some(seconds),
@@ -945,7 +1199,8 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             if since.elapsed() >= HOTPLUG_SETTLE {
                 settle = None;
                 match hw.targets(&catalog, &args.devices) {
-                    Ok((present, _)) => {
+                    Ok((mut present, _)) => {
+                        present.extend(smbus_present.iter().cloned());
                         if let Some(r) = &recorder {
                             for t in &present {
                                 r.note_device(&t.device.key, t.device.vid, t.device.pid, &t.device.endpoints);
@@ -957,6 +1212,28 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                     }
                     Err(e) => eprintln!("lightloom {}: enumerating again failed: {e:#}", mode.name()),
                 }
+            }
+        }
+        if hardware.is_some()
+            && !smbus_present.is_empty()
+            && last_smbus_check.elapsed() >= lightloom_runtime::conflicts::SMBUS_RECHECK
+        {
+            last_smbus_check = Instant::now();
+            match lightloom_runtime::conflicts::smbus_blockers() {
+                Ok(blockers) if !blockers.is_empty() => {
+                    eprintln!(
+                        "lightloom {}: {} started: Lightloom never drives SMBus/GPU I2C alongside it, stopping",
+                        mode.name(),
+                        blockers.join(", ")
+                    );
+                    smbus_stopped = Some(blockers.join(", "));
+                    break;
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!(
+                    "lightloom {}: cannot check for conflicting software: {e:#}",
+                    mode.name()
+                ),
             }
         }
         let interrupted = interrupt.requested();
@@ -1013,7 +1290,10 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         std::fs::write(path, serde_json::to_string_pretty(&report)?)
             .with_context(|| format!("writing {}", path.display()))?;
     }
-    Ok(if report.is_clean() {
+    if let Some(blockers) = &smbus_stopped {
+        eprintln!("lightloom {}: stopped because {blockers} started", mode.name());
+    }
+    Ok(if report.is_clean() && smbus_stopped.is_none() {
         Outcome::Clean
     } else {
         Outcome::Failed
@@ -1084,7 +1364,28 @@ fn print_report(r: &RunReport) {
             "  frames {}  render p50 {:.2} ms p99 {:.2} ms max {:.2} ms  render errors {}",
             s.frames, s.render.p50_ms, s.render.p99_ms, s.render.max_ms, s.render_errors
         );
-        println!(
+        if let Some(b) = &s.smbus {
+            println!(
+                "  SMBus: {} operations, {} writes, {} errors, {} refused{}",
+                b.ops,
+                b.writes,
+                b.errors,
+                b.denied,
+                b.last_error
+                    .as_ref()
+                    .map(|e| format!("; last: {e}"))
+                    .unwrap_or_default()
+            );
+            if r.dry_run {
+                for w in b.dry_run_log.iter().take(6) {
+                    println!("  would write: {}", hex(w));
+                }
+                if b.dry_run_log.len() > 6 {
+                    println!("  ... {} more recorded writes", b.dry_run_log.len() - 6);
+                }
+            }
+        } else {
+            println!(
             "  HID: {} writes, {} feature sends, {} feature reads, {} errors; write p50 {:.2} ms p99 {:.2} ms{}",
             s.io.writes,
             s.io.feature_sends,
@@ -1094,6 +1395,7 @@ fn print_report(r: &RunReport) {
             s.write.p99_ms,
             s.io.last_error.as_ref().map(|e| format!("; last error: {e}")).unwrap_or_default()
         );
+        }
         if let Some(ms) = s.first_write_ms {
             println!("  first write {ms:.1} ms after session start");
         }
@@ -1274,6 +1576,7 @@ mod tests {
             duration: None,
             keep: false,
             ignore_conflicts: false,
+            smbus: false,
             restore_check: vec![RestoreArg::Report(RestoreProbe {
                 report_id: 0x52,
                 len: 185,
@@ -1288,7 +1591,81 @@ mod tests {
             fps: 60.0,
             seconds: 1.0,
             mock: Some((0x1462, 0x7C91)),
+            mock_smbus: None,
         };
         assert_eq!(run(mode, &args).unwrap(), Outcome::Clean);
+    }
+
+    fn mock_args(json: Option<PathBuf>) -> RunArgs {
+        RunArgs {
+            devices: Vec::new(),
+            catalog: CatalogArgs {
+                plugin_dirs: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")],
+                signalrgb: false,
+                no_plugin_cache: true,
+            },
+            dry_run: false,
+            layout: None,
+            record: None,
+            duration: None,
+            keep: false,
+            ignore_conflicts: false,
+            smbus: false,
+            restore_check: Vec::new(),
+            params: Vec::new(),
+            brightness: 100,
+            stats_every: 0.0,
+            json,
+            verbose: false,
+        }
+    }
+
+    #[test]
+    fn bench_mock_smbus_runs_msi_gpu_end_to_end() {
+        let out = std::env::temp_dir().join(format!("lightloom-bench-smbus-{}.json", std::process::id()));
+        let mode = Mode::Bench {
+            fps: 60.0,
+            seconds: 1.0,
+            mock: None,
+            mock_smbus: Some("msi-gpu".into()),
+        };
+        assert_eq!(run(mode, &mock_args(Some(out.clone()))).unwrap(), Outcome::Clean);
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let s = &report["sessions"][0];
+        assert_eq!(s["name"], "MSI GPU");
+        assert_eq!(s["device"], "smbus:10de:2504:1462:3903@pci01:68");
+        assert!(s["smbus"]["writes"].as_u64().unwrap() >= 6, "{s}");
+        let _ = std::fs::remove_file(&out);
+        let unknown = Mode::Bench {
+            fps: 60.0,
+            seconds: 1.0,
+            mock: None,
+            mock_smbus: Some("nope".into()),
+        };
+        assert!(run(unknown, &mock_args(None)).is_err());
+    }
+
+    #[test]
+    fn bench_mock_smbus_runs_crucial_end_to_end() {
+        let out = std::env::temp_dir().join(format!("lightloom-bench-ram-{}.json", std::process::id()));
+        let mode = Mode::Bench {
+            fps: 60.0,
+            seconds: 1.0,
+            mock: None,
+            mock_smbus: Some("crucial-ballistix".into()),
+        };
+        assert_eq!(run(mode, &mock_args(Some(out.clone()))).unwrap(), Outcome::Clean);
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let sessions = report["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1, "{report}");
+        let s = &sessions[0];
+        assert_eq!(s["name"], "Crucial Ballistix DRAM");
+        assert_eq!(s["device"], "smbus:1022:790b:1022:790b@0b00:20");
+        // Initialize alone is 68 register writes (two transfers each).
+        assert!(s["smbus"]["writes"].as_u64().unwrap() >= 136 + 6, "{s}");
+        assert_eq!(s["smbus"]["errors"], 0, "{s}");
+        let _ = std::fs::remove_file(&out);
     }
 }

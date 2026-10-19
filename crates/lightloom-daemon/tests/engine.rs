@@ -79,11 +79,13 @@ fn the_engine_drives_a_device_and_follows_requests() {
         hardware: HardwareMode::Fixed {
             backend,
             devices: vec![SessionDevice {
+                smbus: None,
                 key: KEY.into(),
                 vid: 0x1234,
                 pid: 0x4D4D,
                 endpoints: vec![info],
             }],
+            smbus: Vec::new(),
         },
         ephemeral: true,
         plugins_dir: Some(plugins),
@@ -342,4 +344,95 @@ fn the_engine_drives_a_device_and_follows_requests() {
     drop(shared);
     let _ = std::fs::remove_dir_all(&home);
     let _: PathBuf = PathBuf::new();
+}
+
+#[test]
+fn fixed_smbus_device_runs_and_is_listed() {
+    use lightloom_hal::mock::{MockSmbus, TransactionKind, TransactionRecorder};
+    use lightloom_hal::{PciIds, SmbusBusKind};
+    use lightloom_plugin_host::smbus::BusHandle;
+
+    let home = std::env::temp_dir().join(format!("lightloom-engine-smbus-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let rec = TransactionRecorder::new();
+    let mut bus = MockSmbus::new("NVIDIA GeForce RTX 3060", SmbusBusKind::Nvidia, rec.clone())
+        .with_pci(PciIds {
+            vendor: 0x10DE,
+            device: 0x2504,
+            sub_vendor: 0x1462,
+            sub_device: 0x3903,
+        })
+        .with_instance("pci01");
+    bus.add_device(0x68, []);
+    let mut config = Config::default();
+    config.smbus.enabled = true;
+    let backend: Arc<dyn HidBackend> = Arc::new(MockHid::new());
+    let handle = engine::start(EngineOptions {
+        paths: Paths::under(&home),
+        config,
+        dry_run: false,
+        hardware: HardwareMode::Fixed {
+            backend,
+            devices: Vec::new(),
+            smbus: vec![BusHandle::new(Box::new(bus))],
+        },
+        ephemeral: true,
+        plugins_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")),
+        effects_dir: paths::resource_dir("effects", "effects"),
+        components_dir: None,
+        renderer: None,
+        plugin_cache: None,
+    })
+    .unwrap();
+    let shared = handle.shared();
+    let b: &dyn Backend = &*shared;
+    const GPU: &str = "smbus:10de:2504:1462:3903@pci01:68";
+    let s = wait_for(b, "the GPU rendering", |s| {
+        s.devices
+            .iter()
+            .any(|d| d.key == GPU && d.state == "running" && d.frames > 2)
+    });
+    let d = s.devices.iter().find(|d| d.key == GPU).unwrap();
+    assert_eq!(d.bus.as_deref(), Some("NVIDIA GeForce RTX 3060 · 0x68"));
+    assert_eq!((d.vid, d.pid, d.hid_errors), (0x10DE, 0x2504, 0));
+    assert!(s.settings.smbus);
+    assert!(!rec.payloads(TransactionKind::SmbusWrite).is_empty());
+
+    // A rescan stops the SMBus session first (Shutdown() puts the speed register 0x38
+    // back; Initialize() never writes it), then scans and starts it again.
+    let speed_writes = || {
+        rec.payloads(TransactionKind::SmbusWrite)
+            .iter()
+            .filter(|w| w[..2] == [0x68, 0x38])
+            .count()
+    };
+    assert_eq!(speed_writes(), 0);
+    call(b, Request::Rescan).unwrap();
+    assert_eq!(speed_writes(), 1, "the session was shut down before the scan");
+    let frames_before = rec.payloads(TransactionKind::SmbusWrite).len();
+    wait_for(b, "the GPU rendering again", |s| {
+        s.devices
+            .iter()
+            .any(|d| d.key == GPU && d.state == "running" && d.frames > 2)
+    });
+    assert!(rec.payloads(TransactionKind::SmbusWrite).len() > frames_before);
+
+    // Turned off: the device goes away (its plugin restores it first).
+    call(
+        b,
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            smbus: Some(false),
+        },
+    )
+    .unwrap();
+    wait_for(b, "the GPU stopped", |s| {
+        s.devices.iter().all(|d| d.key != GPU || d.state == "absent")
+    });
+    let last = rec.payloads(TransactionKind::SmbusWrite).pop().unwrap();
+    assert_eq!(&last[..2], &[0x68, 0x22], "Shutdown() writes the mode last");
+    handle.shutdown();
+    drop(shared);
+    let _ = std::fs::remove_dir_all(&home);
 }

@@ -184,9 +184,30 @@ pub trait HidBackend: Send + Sync {
     fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>>;
 }
 
+/// A backend without devices: enumerates nothing and opens nothing. Device
+/// sessions that drive an SMBus device instead of HID use it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoHid;
+
+impl HidBackend for NoHid {
+    fn enumerate(&self) -> HalResult<Vec<HidEndpointInfo>> {
+        Ok(Vec::new())
+    }
+
+    fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>> {
+        Err(HalError::NotFound(path.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_hid_has_nothing() {
+        assert!(NoHid.enumerate().unwrap().is_empty());
+        assert!(matches!(NoHid.open("x"), Err(HalError::NotFound(_))));
+    }
 
     #[test]
     fn tuple_matching_follows_set_endpoint_rules() {

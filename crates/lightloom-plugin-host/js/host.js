@@ -23,7 +23,10 @@
 //   (crates/lightloom-plugin-host src/device.rs and src/children.rs), which this
 //   module captures and removes from the global object before plugin code
 //   runs. An API gap is logged once and throws `HostApiMissing` when called
-//   (architecture-synthesis.md D6).
+//   (architecture-synthesis.md D6). An SMBus device session also gets the
+//   `bus*` natives (src/bus.rs): the global `bus` is then the fixed-address bus.
+// * "scan" (`Scan(bus)` of an SMBus plugin): only the `bus*`, `log` and
+//   `pause` natives exist; `freeBus()` hands `Scan` the free-address bus.
 //
 // The Rust side reads state back through `globalThis.__lightloomHost`
 // (non-writable, non-configurable: plugin code cannot replace it).
@@ -50,7 +53,8 @@ const freeze = Object.freeze;
 const cfg = globalThis.__lightloomConfig ?? {};
 
 // Device mode: capture the natives and take them out of plugin reach.
-const native = cfg.mode === "device" ? globalThis.__lightloomNative : undefined;
+const native = cfg.mode === "device" || cfg.mode === "scan" ? globalThis.__lightloomNative : undefined;
+const deviceMode = cfg.mode === "device";
 delete globalThis.__lightloomNative;
 const strictGaps = native !== undefined;
 
@@ -594,7 +598,7 @@ function deviceLog(value, ...rest) {
 
 const channelObjects = new Map();
 
-if (native !== undefined) {
+if (deviceMode) {
   const stubAddFeature = deviceTarget.addFeature;
   Object.assign(deviceTarget, {
     // Not implemented in device sessions yet: these throw instead of answering
@@ -717,7 +721,7 @@ function busMembers(fixed) {
     WriteBlockWithoutRegister: () => 0,
     ReadBlockWithoutRegister: (...args) => [0, zeros(args[a])],
     ReadByteWithoutRegister: () => 0,
-    TransactionLock: noop,
+    TransactionLock: () => true,
     TransactionUnlock: noop,
     HasTransactionLock: () => false,
     Vendor: () => 0,
@@ -738,6 +742,132 @@ function busMembers(fixed) {
     pause: noop,
     toString: () => (fixed ? "I2CBusWrapperFixedAddress(stub)" : "I2CBusWrapper(stub)"),
   };
+}
+
+// ---------------------------------------------------------------- SMBus (native)
+// smbus.md §3: the engine validates arguments and throws for bad ones;
+// transfers never throw, they return a negative status. Lightloom extensions
+// (docs/host-api/smbus.md, Lightloom section): WriteBlock clips data longer
+// than `len` (logged once) and zero-pads shorter data.
+
+function busNumber(method, what, v, max) {
+  if (typeof v !== "number" || !isFiniteNumber(v) || v < 0 || v > max) {
+    throw new RangeError(`${method}(): ${what} must be a number between 0 and ${max}`);
+  }
+  return Math.trunc(v);
+}
+
+let clipLogged = false;
+
+function busData(method, len, data, max) {
+  if (!isArray(data) && !isView(data)) {
+    throw new TypeError(`${method}(): Data must be an array.`);
+  }
+  if (typeof len !== "number" || !isFiniteNumber(len) || len < 0 || len > 255) {
+    throw new RangeError(`${method}(): Length must be a number between 0 and ${max}`);
+  }
+  const n = Math.trunc(len);
+  if (n > max) {
+    throw new RangeError(`${method}(): This operation has a max length of ${max} Bytes`);
+  }
+  if (data.length > n && !clipLogged) {
+    clipLogged = true;
+    hostLog(`bus: ${method}(): Array Size [${data.length}] is greater than length parameter [${n}]; sending ${n} bytes`);
+  }
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    out[i] = i < data.length ? Number(data[i]) & 0xff : 0;
+  }
+  return out;
+}
+
+function splitBlock(raw) {
+  return [raw[0], raw.slice(1)];
+}
+
+/** The `bus` object over the natives: fixed (bound address) or free (address first). */
+function nativeBusMembers(fixed) {
+  const info = parseJson(native.busInfo());
+  const kind = info.kind;
+  const bound = info.address ?? 0;
+  const MAX_BLOCK = 32;
+  // Free buses take the address first; fixed buses use the bound one.
+  const call = (method, args, count, body) => {
+    if (fixed) {
+      return body(bound, ...args.slice(0, count));
+    }
+    const addr = busNumber(method, "Address", args[0], 255);
+    return body(addr, ...args.slice(1, 1 + count));
+  };
+  const members = {
+    WriteQuick: (...args) => call("WriteQuick", args, 0, (a) => native.busQuick(a)),
+    ReadByte: (...args) =>
+      call("ReadByte", args, 1, (a, r) => native.busReadByte(a, busNumber("ReadByte", "Register", r, 255))),
+    WriteByte: (...args) =>
+      call("WriteByte", args, 2, (a, r, v) =>
+        native.busWriteByte(a, busNumber("WriteByte", "Register", r, 255), busNumber("WriteByte", "Byte", v, 255)),
+      ),
+    ReadWord: (...args) =>
+      call("ReadWord", args, 1, (a, r) => native.busReadWord(a, busNumber("ReadWord", "Register", r, 255))),
+    WriteWord: (...args) =>
+      call("WriteWord", args, 2, (a, r, w) =>
+        native.busWriteWord(a, busNumber("WriteWord", "Register", r, 255), busNumber("WriteWord", "Word", w, 65535)),
+      ),
+    WriteBlock: (...args) =>
+      call("WriteBlock", args, 3, (a, r, len, data) =>
+        native.busWriteBlock(a, busNumber("WriteBlock", "Register", r, 255), busData("WriteBlock", len, data, MAX_BLOCK)),
+      ),
+    ReadBlockBytes: (...args) =>
+      call("ReadBlockBytes", args, 2, (a, r, len) =>
+        splitBlock(
+          native.busReadBlock(
+            a,
+            busNumber("ReadBlockBytes", "Register", r, 255),
+            busNumber("ReadBlockBytes", "Length", len, MAX_BLOCK),
+          ),
+        ),
+      ),
+    WriteBlockWithoutRegister: (...args) =>
+      call("WriteBlockWithoutRegister", args, 2, (a, len, data) =>
+        native.busWriteNoReg(a, busData("WriteBlockWithoutRegister", len, data, MAX_BLOCK)),
+      ),
+    ReadBlockWithoutRegister: (...args) =>
+      call("ReadBlockWithoutRegister", args, 1, (a, len) =>
+        splitBlock(native.busReadNoReg(a, busNumber("ReadBlockWithoutRegister", "Length", len, MAX_BLOCK))),
+      ),
+    ReadByteWithoutRegister: (...args) => call("ReadByteWithoutRegister", args, 0, (a) => native.busReadByteNoReg(a)),
+    // Lightloom answers whether the bus is held (SignalRGB returns nothing).
+    TransactionLock: () => native.busLock(),
+    TransactionUnlock: () => {
+      native.busUnlock();
+    },
+    HasTransactionLock: () => native.busHasLock(),
+    Vendor: () => info.vendor,
+    SubVendor: () => info.subVendor,
+    Product: () => info.device,
+    SubDevice: () => info.subDevice,
+    Name: () => info.name,
+    Type: () => (fixed ? "Fixed" : "Free"),
+    GetAddress: () => bound,
+    IsSystemBus: () => kind === "system" || kind === "amd" || kind === "intel",
+    IsAMDBus: () => kind === "amd",
+    IsIntelBus: () => kind === "intel",
+    IsNvidiaBus: () => kind === "nvidia",
+    IsAMDGpuBus: () => kind === "amdgpu",
+    IsNuvotonBus: () => kind === "nuvoton",
+    FetchRamInfo: unimplementedMember("bus.FetchRamInfo"),
+    log: logFn,
+    pause: (ms) => native.pause(Number(ms) || 0),
+    toString: () =>
+      fixed
+        ? `I2CBusWrapperFixedAddress(${info.name} @0x${bound.toString(16).padStart(2, "0")})`
+        : `I2CBusWrapper(${info.name})`,
+  };
+  if (fixed) {
+    // The fixed bus has no free-only member (smbus.md §4).
+    delete members.WriteQuick;
+  }
+  return members;
 }
 
 // ---------------------------------------------------------------- network
@@ -938,7 +1068,7 @@ const systeminfoModule = freeze({
   },
 });
 
-const nativeModules = native === undefined ? {} : { permissions: permissionsModule, systeminfo: systeminfoModule };
+const nativeModules = deviceMode ? { permissions: permissionsModule, systeminfo: systeminfoModule } : {};
 
 // ---------------------------------------------------------------- install
 const g = globalThis;
@@ -955,8 +1085,17 @@ g.__lightloom = {
 };
 g.console = consoleStub;
 g.device = recording("device", deviceTarget);
-// SMBus is not available to device sessions yet (M5): every `bus.*` member throws there.
-g.bus = native !== undefined ? recording("bus", {}) : recording("bus", busMembers(true));
+// A device session has the fixed-address bus when it drives an SMBus device;
+// for a HID device every `bus.*` member throws.
+const nativeBus = native !== undefined && typeof native.busInfo === "function";
+if (deviceMode) {
+  g.bus = nativeBus ? recording("bus", nativeBusMembers(true)) : recording("bus", {});
+} else if (native !== undefined) {
+  // Scan mode: "bus doesn't exist in the global scope" during Scan (smbus.md §1).
+  g.bus = recording("bus", {});
+} else {
+  g.bus = recording("bus", busMembers(true));
+}
 g.service = recording("service", serviceTarget);
 // Plain-data snapshot of the plugin's own controller object / the plugin's
 // DiscoveryService instance: unknown fields are plugin data, not host API.
@@ -996,6 +1135,9 @@ const METADATA = [
   "AllowConflictBypass",
   "BrandGPUList",
   "HidUsages",
+  "SmbusAddresses",
+  "SmbusBuses",
+  "SmbusDeniedRegisters",
 ];
 const LIFECYCLE = ["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService"];
 
@@ -1128,9 +1270,9 @@ function namespace() {
   return state.namespace;
 }
 
-/** Host-side `Scan(bus)` argument. */
+/** Host-side `Scan(bus)` argument: the native free-address bus in scan mode, else a stub. */
 function freeBus() {
-  return recording("bus", busMembers(false));
+  return recording("bus", nativeBus ? nativeBusMembers(false) : busMembers(false));
 }
 
 function report() {

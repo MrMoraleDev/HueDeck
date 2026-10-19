@@ -12,9 +12,9 @@
 
 use crate::error::{HalError, HalResult};
 use crate::hid::{HidBackend, HidEndpointInfo, HidHandle, ReportLengths};
-use crate::smbus::{validate_address, SmbusBus, SmbusBusDescriptor, SmbusBusKind};
+use crate::smbus::{validate_address, PciIds, SmbusBus, SmbusBusDescriptor, SmbusBusKind};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -37,10 +37,13 @@ pub enum TransactionKind {
     Close,
     /// SMBus Quick command (`bytes` = `[addr]`).
     SmbusWriteQuick,
-    /// SMBus write (`bytes` = `[addr, reg, data…]`; `reg` omitted for no-reg ops).
+    /// SMBus write (`bytes` = `[addr, reg, data…]`; `reg` omitted for no-reg
+    /// ops; a Block Write is `[addr, reg, len, data…]`, count byte included).
     SmbusWrite,
     /// SMBus read (`bytes` = `[addr, reg, data…]`).
     SmbusRead,
+    /// SMBus bus lock taken (`bytes` = lease in ms, LE) or released (`bytes` empty).
+    SmbusLock,
 }
 
 /// One recorded operation.
@@ -432,13 +435,36 @@ impl Drop for MockHidHandle {
 }
 
 /// Register-map SMBus bus. Every `(addr, reg)` cell is a byte; devices exist
-/// only at the addresses given to [`MockSmbus::add_device`].
+/// only at the addresses given to [`MockSmbus::add_device`] or
+/// [`MockSmbus::add_indexed_device`].
 #[derive(Debug)]
 pub struct MockSmbus {
     descriptor: SmbusBusDescriptor,
     devices: BTreeMap<u8, BTreeMap<u8, u8>>,
+    indexed: BTreeMap<u8, IndexedDevice>,
+    fail_block: BTreeSet<u8>,
     recorder: TransactionRecorder,
 }
+
+/// A DRAM RGB controller with the ENE-style indexed register file (Crucial
+/// Ballistix, ENE/Aura DRAM): Write Word to command 0x00 sets the 16-bit
+/// register pointer (sent byte-swapped, so the pointer's high byte goes
+/// first on the wire), Read Byte 0x81 reads the pointed register, Write Byte
+/// 0x01 writes it and a Block Write to 0x03 writes from it. The pointer does
+/// not advance. Plain commands (0xA0..0xAF identification bytes, Receive
+/// Byte) read the direct map.
+#[derive(Debug, Default)]
+struct IndexedDevice {
+    pointer: u16,
+    direct: BTreeMap<u8, u8>,
+    memory: BTreeMap<u16, u8>,
+}
+
+/// ENE-style commands (see [`MockSmbus::add_indexed_device`]).
+const INDEX_POINTER: u8 = 0x00;
+const INDEX_WRITE: u8 = 0x01;
+const INDEX_BLOCK: u8 = 0x03;
+const INDEX_READ: u8 = 0x81;
 
 impl MockSmbus {
     /// New bus of `kind` named `name`, logging into `recorder`.
@@ -448,11 +474,32 @@ impl MockSmbus {
                 name: name.to_string(),
                 kind,
                 pci: Default::default(),
+                instance: String::new(),
                 max_block_len: crate::smbus::SMBUS_BLOCK_MAX,
             },
             devices: BTreeMap::new(),
+            indexed: BTreeMap::new(),
+            fail_block: BTreeSet::new(),
             recorder,
         }
+    }
+
+    /// The bus's controller PCI ids (`bus.Vendor()` and friends).
+    pub fn with_pci(mut self, pci: PciIds) -> Self {
+        self.descriptor.pci = pci;
+        self
+    }
+
+    /// The bus instance (PIIX4 port base, GPU PCI bus).
+    pub fn with_instance(mut self, instance: &str) -> Self {
+        self.descriptor.instance = instance.to_string();
+        self
+    }
+
+    /// Block writes to `addr` fail with a bus error (status -1) and change nothing.
+    pub fn fail_block_writes(mut self, addr: u8) -> Self {
+        self.fail_block.insert(addr);
+        self
     }
 
     /// Make a device answer at `addr` with the given initial registers.
@@ -460,14 +507,43 @@ impl MockSmbus {
         self.devices.insert(addr, registers.into_iter().collect());
     }
 
+    /// Make an ENE-style indexed controller (Crucial / ENE DRAM RGB) answer
+    /// at `addr`: `direct` holds the plain command registers (identification
+    /// bytes 0xA0..0xAF), `memory` the 16-bit register file behind the
+    /// pointer. Writes land in the register file, recorded as usual.
+    pub fn add_indexed_device(
+        &mut self,
+        addr: u8,
+        direct: impl IntoIterator<Item = (u8, u8)>,
+        memory: impl IntoIterator<Item = (u16, u8)>,
+    ) {
+        self.indexed.insert(
+            addr,
+            IndexedDevice {
+                pointer: 0,
+                direct: direct.into_iter().collect(),
+                memory: memory.into_iter().collect(),
+            },
+        );
+    }
+
     /// Current register map of the device at `addr`.
     pub fn registers(&self, addr: u8) -> Option<&BTreeMap<u8, u8>> {
         self.devices.get(&addr)
     }
 
+    /// One register of the indexed device at `addr`.
+    pub fn indexed_register(&self, addr: u8, reg: u16) -> Option<u8> {
+        self.indexed.get(&addr).and_then(|d| d.memory.get(&reg).copied())
+    }
+
     fn device(&mut self, addr: u8) -> HalResult<&mut BTreeMap<u8, u8>> {
         validate_address(addr)?;
         self.devices.get_mut(&addr).ok_or(HalError::Bus { status: -1 })
+    }
+
+    fn indexed(&mut self, addr: u8) -> Option<&mut IndexedDevice> {
+        self.indexed.get_mut(&addr)
     }
 
     fn rec(&self, kind: TransactionKind, bytes: Vec<u8>) {
@@ -485,17 +561,34 @@ impl SmbusBus for MockSmbus {
             return Err(HalError::Unsupported("WriteQuick on NvAPI bus"));
         }
         self.rec(TransactionKind::SmbusWriteQuick, vec![addr]);
+        if self.indexed.contains_key(&addr) {
+            return Ok(());
+        }
         self.device(addr).map(|_| ())
     }
 
     fn read_byte(&mut self, addr: u8, reg: u8) -> HalResult<u8> {
-        let v = *self.device(addr)?.get(&reg).unwrap_or(&0xFF);
+        let v = match self.indexed(addr) {
+            Some(d) if reg == INDEX_READ => *d.memory.get(&d.pointer).unwrap_or(&0xFF),
+            Some(d) => *d.direct.get(&reg).unwrap_or(&0xFF),
+            None => *self.device(addr)?.get(&reg).unwrap_or(&0xFF),
+        };
         self.rec(TransactionKind::SmbusRead, vec![addr, reg, v]);
         Ok(v)
     }
 
     fn write_byte(&mut self, addr: u8, reg: u8, value: u8) -> HalResult<()> {
-        self.device(addr)?.insert(reg, value);
+        match self.indexed(addr) {
+            Some(d) if reg == INDEX_WRITE => {
+                d.memory.insert(d.pointer, value);
+            }
+            Some(d) => {
+                d.direct.insert(reg, value);
+            }
+            None => {
+                self.device(addr)?.insert(reg, value);
+            }
+        }
         self.rec(TransactionKind::SmbusWrite, vec![addr, reg, value]);
         Ok(())
     }
@@ -510,9 +603,16 @@ impl SmbusBus for MockSmbus {
 
     fn write_word(&mut self, addr: u8, reg: u8, value: u16) -> HalResult<()> {
         let [lo, hi] = value.to_le_bytes();
-        let dev = self.device(addr)?;
-        dev.insert(reg, lo);
-        dev.insert(reg.wrapping_add(1), hi);
+        match self.indexed(addr) {
+            // The pointer arrives byte-swapped: its high byte is the word's low byte.
+            Some(d) if reg == INDEX_POINTER => d.pointer = u16::from_be_bytes([lo, hi]),
+            Some(_) => return Err(HalError::Bus { status: -1 }),
+            None => {
+                let dev = self.device(addr)?;
+                dev.insert(reg, lo);
+                dev.insert(reg.wrapping_add(1), hi);
+            }
+        }
         self.rec(TransactionKind::SmbusWrite, vec![addr, reg, lo, hi]);
         Ok(())
     }
@@ -525,11 +625,24 @@ impl SmbusBus for MockSmbus {
                 self.descriptor.max_block_len
             )));
         }
-        let dev = self.device(addr)?;
-        for (i, b) in data.iter().enumerate() {
-            dev.insert(reg.wrapping_add(i as u8), *b);
+        if self.fail_block.contains(&addr) {
+            return Err(HalError::Bus { status: -1 });
         }
-        let mut bytes = vec![addr, reg];
+        match self.indexed(addr) {
+            Some(d) if reg == INDEX_BLOCK => {
+                for (i, b) in data.iter().enumerate() {
+                    d.memory.insert(d.pointer.wrapping_add(i as u16), *b);
+                }
+            }
+            Some(_) => return Err(HalError::Bus { status: -1 }),
+            None => {
+                let dev = self.device(addr)?;
+                for (i, b) in data.iter().enumerate() {
+                    dev.insert(reg.wrapping_add(i as u8), *b);
+                }
+            }
+        }
+        let mut bytes = vec![addr, reg, data.len() as u8];
         bytes.extend_from_slice(data);
         self.rec(TransactionKind::SmbusWrite, bytes);
         Ok(())
@@ -571,11 +684,24 @@ impl SmbusBus for MockSmbus {
 
     fn read_byte_no_reg(&mut self, addr: u8) -> HalResult<u8> {
         if !self.descriptor.kind.supports_read_byte_no_reg() {
-            return Err(HalError::Unsupported("ReadByteWithoutRegister outside NvAPI"));
+            return Err(HalError::Unsupported("ReadByteWithoutRegister on this bus kind"));
         }
-        let v = *self.device(addr)?.get(&0).unwrap_or(&0xFF);
+        let v = match self.indexed(addr) {
+            Some(d) => *d.direct.get(&0).unwrap_or(&0xFF),
+            None => *self.device(addr)?.get(&0).unwrap_or(&0xFF),
+        };
         self.rec(TransactionKind::SmbusRead, vec![addr, v]);
         Ok(v)
+    }
+
+    fn bus_lock(&mut self, lease_ms: u16) -> HalResult<()> {
+        self.rec(TransactionKind::SmbusLock, lease_ms.to_le_bytes().to_vec());
+        Ok(())
+    }
+
+    fn bus_unlock(&mut self) -> HalResult<()> {
+        self.rec(TransactionKind::SmbusLock, Vec::new());
+        Ok(())
     }
 }
 
@@ -691,10 +817,72 @@ mod tests {
         let mut back = [0u8; 3];
         assert_eq!(bus.read_block(0x39, 0x10, &mut back).unwrap(), 3);
         assert_eq!(back, [1, 2, 3]);
-        assert!(bus.read_byte_no_reg(0x39).is_err());
+        assert_eq!(
+            bus.read_byte_no_reg(0x39).unwrap(),
+            0xF8,
+            "receive byte on PIIX4 (register 0)"
+        );
+        assert!(bus.read_byte_no_reg(0x3A).is_err(), "no device");
         assert_eq!(
             rec.payloads(TransactionKind::SmbusWriteQuick),
             vec![vec![0x39], vec![0x3A]]
+        );
+        assert!(
+            rec.payloads(TransactionKind::SmbusWrite)
+                .contains(&vec![0x39, 0x10, 3, 1, 2, 3]),
+            "block writes carry their count byte"
+        );
+        let nuvoton = &mut MockSmbus::new("Nuvoton", SmbusBusKind::Nuvoton, rec.clone());
+        nuvoton.add_device(0x39, []);
+        assert!(nuvoton.read_byte_no_reg(0x39).is_err());
+    }
+
+    #[test]
+    fn indexed_device_reads_and_writes_through_the_pointer() {
+        let rec = TransactionRecorder::new();
+        let mut bus = MockSmbus::new("AMD PIIX4 Bus - 0x0b00", SmbusBusKind::Amd, rec.clone());
+        bus.add_indexed_device(0x39, [(0xA0, 0x00), (0xA1, 0x01)], [(0x1025, b'M')]);
+        assert_eq!(bus.read_byte_no_reg(0x39).unwrap(), 0xFF);
+        assert_eq!(bus.read_byte(0x39, 0xA1).unwrap(), 0x01);
+        // Pointer 0x1025 goes out byte-swapped: word 0x2510.
+        bus.write_word(0x39, 0x00, 0x2510).unwrap();
+        assert_eq!(bus.read_byte(0x39, 0x81).unwrap(), b'M');
+        bus.write_word(0x39, 0x00, 0x0083).unwrap();
+        bus.write_block(0x39, 0x03, &[1, 2, 3]).unwrap();
+        assert_eq!(bus.indexed_register(0x39, 0x8302), Some(3));
+        bus.write_word(0x39, 0x00, 0xEE82).unwrap();
+        bus.write_byte(0x39, 0x01, 0x07).unwrap();
+        assert_eq!(bus.indexed_register(0x39, 0x82EE), Some(0x07));
+        assert!(bus.write_quick(0x39).is_ok());
+        assert!(bus.read_byte(0x3A, 0).is_err(), "nothing else answers");
+        bus.bus_lock(100).unwrap();
+        bus.bus_unlock().unwrap();
+        assert_eq!(
+            rec.payloads(TransactionKind::SmbusLock),
+            vec![vec![100, 0], vec![]]
+        );
+    }
+
+    #[test]
+    fn block_write_failure_is_scriptable() {
+        let rec = TransactionRecorder::new();
+        let mut bus = MockSmbus::new("AMD PIIX4 Bus - 0x0b00", SmbusBusKind::Amd, rec.clone())
+            .with_instance("0b00")
+            .with_pci(PciIds {
+                vendor: 0x1022,
+                device: 0x790B,
+                sub_vendor: 0x1022,
+                sub_device: 0x790B,
+            })
+            .fail_block_writes(0x39);
+        bus.add_device(0x39, []);
+        assert_eq!(bus.descriptor().key(), "1022:790b:1022:790b@0b00");
+        let err = bus.write_block(0x39, 0x03, &[1; 8]).unwrap_err();
+        assert_eq!(err.plugin_status(), -1);
+        assert!(bus.write_byte(0x39, 0x01, 7).is_ok(), "byte writes still work");
+        assert_eq!(
+            rec.payloads(TransactionKind::SmbusWrite),
+            vec![vec![0x39, 0x01, 7]]
         );
     }
 }

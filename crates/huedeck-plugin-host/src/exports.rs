@@ -9,8 +9,8 @@
 //! dry-run can count every problem at once.
 
 use crate::meta::{
-    coerce_number, ControllableParameter, DeviceMessage, DeviceType, LifecycleExports, ParamType, ParamValue,
-    PluginMeta, PluginType, ProductIdExport,
+    coerce_number, smbus_kind, ControllableParameter, DeviceMessage, DeviceType, LifecycleExports, ParamType,
+    ParamValue, PluginMeta, PluginType, ProductIdExport,
 };
 use serde_json::Value as J;
 use std::collections::BTreeMap;
@@ -216,6 +216,43 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
         }
     }
 
+    if let Some(a) = get("SmbusAddresses").and_then(J::as_array) {
+        for v in a {
+            match v
+                .as_u64()
+                .and_then(|n| u8::try_from(n).ok())
+                .filter(|n| *n <= 0x7F)
+            {
+                Some(addr) if !meta.smbus_addresses.contains(&addr) => meta.smbus_addresses.push(addr),
+                Some(_) => {}
+                None => warnings.push(format!("SmbusAddresses() entries must be 7-bit addresses: {v}")),
+            }
+        }
+    }
+    if let Some(a) = get("SmbusDeniedRegisters").and_then(J::as_array) {
+        for v in a {
+            match v.as_u64().and_then(|n| u8::try_from(n).ok()) {
+                Some(reg) if !meta.smbus_denied_registers.contains(&reg) => {
+                    meta.smbus_denied_registers.push(reg)
+                }
+                Some(_) => {}
+                None => warnings.push(format!(
+                    "SmbusDeniedRegisters() entries must be register bytes: {v}"
+                )),
+            }
+        }
+    }
+    if let Some(a) = get("SmbusBuses").and_then(J::as_array) {
+        for v in a {
+            let name = as_string(v).unwrap_or_default();
+            match smbus_kind(&name) {
+                Some(kind) => meta.smbus_buses.push(kind),
+                None if name.eq_ignore_ascii_case("any") => {}
+                None => warnings.push(format!("SmbusBuses(): unknown bus kind {v}")),
+            }
+        }
+    }
+
     let flag = |k: &str| {
         ns.get("lifecycle")
             .and_then(|l| l.get(k))
@@ -302,6 +339,22 @@ mod tests {
         );
         assert!(r.has("ImageUrl") && r.has("Name") && !r.has("Version"));
         assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+    }
+
+    #[test]
+    fn reads_smbus_extensions() {
+        let ns = json!({
+            "exports": {
+                "Name": "GPU", "Type": "SMBUS", "SmbusAddresses": [0x68, 0x68, 300],
+                "SmbusBuses": ["nvidia", "any", "toaster"], "SmbusDeniedRegisters": [0x3F, 0x3F, 256]
+            },
+            "lifecycle": {"Scan": true, "Initialize": true, "Render": true}
+        });
+        let r = read_exports(Path::new("gpu.js"), &ns);
+        assert_eq!(r.meta.smbus_addresses, vec![0x68]);
+        assert_eq!(r.meta.smbus_buses, vec![huedeck_hal::SmbusBusKind::Nvidia]);
+        assert_eq!(r.meta.smbus_denied_registers, vec![0x3F]);
+        assert_eq!(r.warnings.len(), 3, "{:?}", r.warnings);
     }
 
     #[test]

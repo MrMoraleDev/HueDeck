@@ -24,6 +24,9 @@
 //!
 //! [devices]
 //! ignore = []                   # "vid:pid" or "vid:pid:serial" prefixes HueDeck never opens
+//!
+//! [smbus]
+//! enabled = false               # drive SMBus devices (GPU and RAM RGB) from the start; the dashboard can turn it on too
 //! ```
 
 use anyhow::Context;
@@ -46,6 +49,18 @@ pub struct Config {
     pub ui: UiConfig,
     /// Devices.
     pub devices: DevicesConfig,
+    /// SMBus devices.
+    pub smbus: SmbusConfig,
+}
+
+/// `[smbus]`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SmbusConfig {
+    /// Drive SMBus devices (NVIDIA GPU RGB through NvAPI, RAM RGB through the
+    /// HueDeck I/O broker) unless the dashboard setting says otherwise. Off
+    /// by default: discovery runs plugins' Scan().
+    pub enabled: bool,
 }
 
 /// `[api]`.
@@ -147,6 +162,9 @@ mod tests {
         assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (16138, true, 30));
         let c: Config = toml::from_str("[api]\nport = 17000\n[lighting]\nfps = 60\n").unwrap();
         assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (17000, true, 60));
+        assert!(!c.smbus.enabled, "SMBus is opt-in");
+        let c: Config = toml::from_str("[smbus]\nenabled = true\n").unwrap();
+        assert!(c.smbus.enabled);
         assert!(
             toml::from_str::<Config>("[api]\nprot = 1\n").is_err(),
             "typos are reported"

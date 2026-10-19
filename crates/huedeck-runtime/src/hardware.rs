@@ -82,6 +82,7 @@ impl Hardware {
             if let Some(plugin) = catalog.lookup_device(g.key.vid, g.key.pid, &endpoints) {
                 targets.push(Present {
                     device: SessionDevice {
+                        smbus: None,
                         key,
                         vid: g.key.vid,
                         pid: g.key.pid,

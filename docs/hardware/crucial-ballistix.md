@@ -1,0 +1,126 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
+# Crucial Ballistix RAM: RGB controller on the chipset SMBus
+
+The plugin is `plugins/crucial-ballistix/`. It drives the RGB controller of Crucial
+Ballistix DDR4 RGB modules (8 LEDs per module) on the chipset SMBus: the AMD FCH
+("PIIX4", port 0x0B00) or one of the Intel SMBus controllers OpenRGB lists for DRAM. On
+Windows HueDeck reaches that bus only through the HueDeck I/O broker
+(`crates/huedeck-iobroker`, a LocalSystem service) and the PawnIO driver; HueDeck's own
+processes never open PawnIO.
+
+**Status: untested on hardware.** The plugin, the broker and the client are proven
+against mock buses and fakes only. `tested` in `manifest.json` stays empty until someone
+runs it.
+
+| Module | Bus on the reference machine | Addresses seen | Status |
+|---|---|---|---|
+| 2 x Crucial Ballistix BL8G32C16U4WL | `AMD PIIX4 Bus - 0x0b00` (`1022:790B`, MSI MAG B550 Tomahawk) | `0x39`, `0x3A` (SignalRGB log, research §1.7) | untested |
+
+## What the user needs
+
+1. The PawnIO driver, official edition, 2.2.0 or later (https://pawnio.eu), installed by
+   the user. **HueDeck never installs it.** Without it `huedeck --smbus` and the daemon
+   say so (from PawnIO's uninstall entry) and GPU lighting keeps working.
+2. Once, from an elevated prompt: `huedeck-setup --smbus --pawnio-modules <dir>`, with
+   `<dir>` the PawnIO.Modules 0.2.11 release as downloaded (`SmbusPIIX4.bin`, `Echo.bin`,
+   `COPYING`; SHA-256 pinned). It registers the `HueDeckIoBroker` service.
+3. SignalRGB and OpenRGB closed: HueDeck never touches the SMBus alongside them.
+
+## Sources
+
+OpenRGB files at commit `d4798c12` (https://gitlab.com/CalcProgrammer1/OpenRGB), each
+"part of the OpenRGB project" with `SPDX-License-Identifier: GPL-2.0-or-later`; the
+controller files carry "Adam Honse (CalcProgrammer1) 19 Jan 2020".
+
+| # | Source | Used for |
+|---|--------|----------|
+| S1 | `Controllers/CrucialController/CrucialController.h` | Register map (version 0x1000, "Micron" at 0x1025 / 0x1030), mode values (static 0xCF) |
+| S2 | `Controllers/CrucialController/CrucialController.cpp` | Indexed register access, effect mode, effect colours, the three direct colour planes, the byte fallback |
+| S3 | `Controllers/CrucialController/CrucialControllerDetect.cpp` | Address list, the remap of modules at 0x27, detection (`TestForCrucialController`) |
+| S4 | `Controllers/CrucialController/RGBController_Crucial.cpp` | Zone (8 LEDs, "DRAM LED n"), "Direct" mode sequence, what a frame sends |
+| S5 | `pci_ids/pci_ids.h` | `IF_DRAM_SMBUS`: the chipset SMBus controllers scanned for DRAM |
+| S6 | `docs/research/m5-privileged-buses.md` §1, §6 | PawnIO, `SmbusPIIX4` transfers, the global SMBus mutex, the broker |
+
+The plugin's code is adapted from S1-S5 (GPL-2.0-or-later, so it can be GPL-3.0-or-later
+here); no SignalRGB code is used.
+
+## Protocol (S1, S2)
+
+The controller has a 16-bit indexed register file behind three SMBus commands:
+
+| Transfer | Meaning |
+|---|---|
+| Write Word, command `0x00`, value `((reg << 8) & 0xFF00) \| (reg >> 8)` | set the register pointer (byte-swapped: the register's high byte goes out first) |
+| Read Byte, command `0x81` | read the pointed register |
+| Write Byte, command `0x01` | write the pointed register |
+| SMBus Block Write, command `0x03`, count `n`, `n` bytes | write `n` registers from the pointer |
+
+| Register | Name | HueDeck |
+|---|---|---|
+| `0x1000..0x100F` | version string | read at Initialize, shown in the device name |
+| `0x1025` / `0x1030` | "Micron" | detection |
+| `0x820F` | mode | `0xCF` (static) |
+| `0x82E9` | effect LED mask (`1 << led`) | effect colours |
+| `0x82EA..0x82EC` | effect arguments | `0x00` |
+| `0x82ED`, `0x82EE`, `0x82EF` | effect red, green, blue; also mode arguments (`0x82EE` = 0, `0x82EF` = speed 0x10) and remap arguments | |
+| `0x82F0` | apply: `0x01` colour, `0x84` mode, `0xF0` remap | |
+| `0x8300..0x8307` | direct red, LEDs 0-7 | frame |
+| `0x8340..0x8347` | direct green | frame |
+| `0x8380..0x8387` | direct blue | frame |
+
+There is no save/EEPROM register: nothing persists past a power cycle, and HueDeck writes
+nothing else. The SPD EEPROM (0x50-0x57) and its write-protect addresses (0x30-0x37) are
+never addressed; the plugin host and the broker both refuse writes there anyway.
+
+## Sequences
+
+All of them are in `plugins/crucial-ballistix/fixtures/expected.json`, worked out from S2-S4.
+
+- **Scan** (S3), only on a chipset bus whose controller is in `IF_DRAM_SMBUS` (S5):
+  1. Remap, up to 4 slots: while a module answers Receive Byte at `0x27`, find the next
+     address of `0x39 0x3A 0x3B 0x3C 0x20 0x21 0x22 0x23` that does not answer (the list
+     position carries over between slots) and send it the module at `0x27`:
+     `0x82EE ← slot`, `0x82EF ← address << 1`, `0x82F0 ← 0xF0`; 1 ms pause. The new
+     address lasts until the next power cycle. **HueDeck differs:** before writing to
+     `0x27` it reads registers `0xA0..0xAF` there and remaps only when they read
+     `0x00..0x0F` (the controller's identification, as in step 2); anything else at `0x27`
+     is left alone and the remap stops. OpenRGB writes to whatever answers.
+  2. Detection at each of the 8 addresses: Receive Byte answers, registers `0xA0..0xAF`
+     (plain Read Byte) read `0x00..0x0F`, and 16 registers from `0x1025` (else `0x1030`)
+     read "Micron" and a NUL; 1 ms pause between addresses.
+- **Initialize** ("Direct", `DeviceUpdateMode()`): version string read; mode
+  `0x820F ← 0xCF`, `0x82EE ← 0x00`, `0x82EF ← 0x10`, `0x82F0 ← 0x84`; then each LED's
+  current colour as an effect colour (`0x82E9 ← 1 << led`, `0x82EA..EC ← 0`,
+  `0x82ED/EE/EF ← r/g/b`, `0x82F0 ← 0x01`).
+- **Frame** (`DeviceUpdateLEDs()` in Direct, only when a colour changed): pointer `0x8300`
+  then a Block Write of the 8 red values to `0x03`; the same for green at `0x8340` and blue
+  at `0x8380`. Six transfers. If a Block Write fails, the 8 bytes go one by one to `0x01`
+  (S2's fallback). HueDeck holds `TransactionLock` for the whole frame: through the broker
+  that keeps the global SMBus mutex (a 100 ms `BusLock` lease) so no other program's
+  transfer lands between a pointer write and its data. When the bus cannot be held the
+  frame is not sent and goes out with the next one.
+- **Every register access** (pointer write plus its data transfer), in Scan, Initialize and
+  Shutdown too, runs under `TransactionLock` (sequences such as a mode change or one LED's
+  effect colour under one hold), so neither another session's scan nor another program
+  moves the pointer in between; when the bus cannot be held nothing is sent. The host also
+  stops the RAM sessions before a rescan.
+- **Shutdown**: the shutdown colour (parameter `shutdownColor`, default black; black when
+  the system suspends) as effect colours on all 8 LEDs, then static mode (S4's
+  `DeviceUpdateLEDs()` order for "Static").
+
+## Bus and safety
+
+- The plugin's `SmbusAddresses()` is `0x20-0x23, 0x27, 0x39-0x3C`: its scan reaches nothing
+  else, and each device session only its own address, which the scan must have found
+  (`crates/huedeck-plugin-host/src/smbus.rs`).
+- The broker serves chipset kinds only, writes only to `0x20-0x23, 0x27, 0x39-0x3C` (its
+  own allowlist), refuses writes to the SPD, PMIC and EEPROM ranges, block reads and
+  register-less block transfers, limits blocks to 32 bytes and 2000 operations per second, takes
+  `Global\Access_SMBUS.HTP.Method` around every transfer (50 ms bounded wait), and
+  re-selects PIIX4 port 0 at each batch (putting back a mux another program left on
+  port 2-4).
+- Failures reach the plugin as `-1` (SignalRGB's chipset convention).
+- HueDeck refuses to touch the SMBus while SignalRGB, OpenRGB or a vendor lighting service
+  runs, with no override, and stops the RAM sessions when one starts (checked every second).
+- Frames go out at most every 33 ms.

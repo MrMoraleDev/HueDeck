@@ -64,6 +64,21 @@
   </section>
 
   <section class="panel">
+    <h2>Graphics card lighting</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.smbus}
+        onchange={(e) => daemon.run(() => api.setSettings({ smbus: (e.target as HTMLInputElement).checked }))}
+      /> Drive SMBus devices (GPU and RAM RGB)</label
+    >
+    <p class="muted">
+      Off by default. When on, HueDeck looks for supported graphics cards (MSI, through the NVIDIA driver) and drives
+      their lighting. It never does so while SignalRGB or OpenRGB is running. RAM lighting is not available yet.
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>Effects</h2>
     <label class="check"
       ><input

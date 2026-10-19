@@ -14,6 +14,8 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 | `steelseries-arctis-5` | SteelSeries Arctis 5 | `1038:12AA` |
 | `sony-dualsense` | Sony DualSense light bar, over USB | `054C:0CE6` |
 | `hid-lamparray` | any HID LampArray (Windows Dynamic Lighting) device no other plugin claims | Razer DeathAdder V2 Pro's LampArray collection |
+| `msi-gpu` | MSI graphics card RGB at I2C 0x68 (SMBus plugin, NVIDIA through NvAPI): RTX 3060 Gaming X Trio LHR | none yet |
+| `crucial-ballistix` | Crucial Ballistix DDR4 RGB modules (SMBus plugin, chipset SMBus through the HueDeck I/O broker and PawnIO): BL8G32C16U4WL | none yet |
 
 ## A plugin directory
 
@@ -64,6 +66,33 @@ copy SignalRGB plugin code: it has no license. The full rules are in
 5. **Run it.** `huedeck bench --mock <vid:pid>` runs it in HueDeck's real host against
    a scripted device; `huedeck effect effects/rainbow-wave.html --device <vid:pid> --dry-run`
    then without `--dry-run` drives the real device (close other RGB software first).
+
+## SMBus plugins
+
+`Type()` `"SMBUS"` plugins (GPU and RAM lighting) find their devices with `Scan(bus)`
+instead of USB ids, and HueDeck runs them only when they declare where they may look:
+
+- `SmbusAddresses()` (required, HueDeck extension): the 7-bit addresses `Scan()` may touch
+  and the devices may live at. Nothing else on the bus is reachable.
+- `SmbusBuses()` (optional): bus kinds to be offered (`"nvidia"`, `"amd"`, `"intel"`, ...).
+- `SmbusDeniedRegisters()` (optional, HueDeck extension): registers the host never lets the
+  plugin write (save-to-flash and the like; MSI GPU: `0x3F`). The manifest lists them as
+  `smbus.deniedRegisters` (checked against the export).
+- GPU plugins export `BrandGPUList()`; a GPU bus is offered only to the plugins that list
+  that card's four PCI ids.
+- `manifest.json` has an `smbus` claim with the same `addresses` (the manifest test
+  checks they match), `buses`, and for GPU plugins `pci` / `tested` card tuples.
+
+Writes to the SPD EEPROM (0x50-0x57) are refused on every bus, and on DIMM buses also
+0x30-0x37, 0x48-0x4F and 0x50-0x5F; nothing runs while SignalRGB, OpenRGB or a vendor
+lighting service is running. `TransactionLock()` returns `false` when the bus cannot be
+held: send nothing then. An SMBus session renders at most every 33 ms. On Windows the
+chipset SMBus (RAM) is reached through the HueDeck I/O broker, which needs the PawnIO
+driver installed by the user and `huedeck-setup --smbus` run once, and which writes only to
+the reviewed addresses of the first-party RAM plugins; GPU buses need neither. Test with
+`plugins/_testkit/mock-bus.mjs` (the `bus` objects, both shapes) next to `mock-device.mjs`,
+and in HueDeck's host with `huedeck bench --mock-smbus <plugin>`. Details:
+[docs/host-api/smbus.md](../docs/host-api/smbus.md), HueDeck section.
 
 ## Adapting a device from OpenRGB
 

@@ -9,6 +9,18 @@
 //! in the snapshot, never terminated); the engine checks again every few
 //! seconds. Every session ends with the plugin's `Shutdown(false)` when the
 //! daemon stops.
+//!
+//! SMBus devices (GPU and RAM RGB) are opt-in (`[smbus] enabled`, the dashboard
+//! setting). Their buses are scanned at start, on a rescan request and when
+//! the setting is turned on, never on HID hotplug, never while SignalRGB,
+//! OpenRGB or a vendor lighting service runs
+//! ([`huedeck_runtime::conflicts::smbus_blockers`]), and never while their
+//! sessions run: those are stopped first (a plugin's `Scan()` moves the
+//! controllers' register pointers). While SMBus is on, the engine looks for
+//! those programs again every [`SMBUS_RECHECK`] and stops the SMBus sessions
+//! as soon as one shows up. Only one HueDeck process drives SMBus at a time
+//! ([`huedeck_runtime::conflicts::claim_smbus`]): with a `huedeck --smbus`
+//! run going, the daemon leaves the buses alone.
 
 use crate::config::Config;
 use crate::lifecycle::LifecycleState;
@@ -24,14 +36,18 @@ use huedeck_engine::{
 use huedeck_hal::HidBackend;
 use huedeck_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use huedeck_plugin_host::device::{Brightness, LogSink, WriteMode};
+use huedeck_plugin_host::discover::ScanBudget;
 use huedeck_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
 use huedeck_plugin_host::meta::{ControllableParameter, ParamValue};
 use huedeck_plugin_host::session::{
     Control, EndpointKind, SessionDevice, SessionHandle, SessionOptions, SessionState,
 };
+use huedeck_plugin_host::smbus::BusHandle;
 use huedeck_render::{CefRenderer, CefRendererConfig, NullRenderer, Pattern, RendererClient};
+use huedeck_runtime::conflicts::{SmbusClaim, SMBUS_RECHECK};
 use huedeck_runtime::effects::{EffectLibrary, EffectSource};
 use huedeck_runtime::hotplug::{Hotplug, HOTPLUG_SETTLE};
+use huedeck_runtime::smbus::SmbusHardware;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -50,12 +66,15 @@ mod keys {
     pub const LAYOUT: &str = "lighting.layout";
     pub const SIGNALRGB: &str = "settings.signalrgb";
     pub const GPU: &str = "settings.gpuCompositing";
+    pub const SMBUS: &str = "settings.smbus";
 }
 
 /// The layout every installation starts with.
 pub const DEFAULT_LAYOUT: &str = "Default";
 /// The effect shown when none was chosen yet.
 pub const DEFAULT_EFFECT: &str = "huedeck:rainbow-wave";
+/// What the snapshot names while another HueDeck process drives SMBus.
+const OTHER_HUEDECK: &str = "another HueDeck process";
 /// How often conflicting software is looked for again while it blocks the devices.
 const CONFLICT_RECHECK: Duration = Duration::from_secs(3);
 /// How often counters refresh the snapshot.
@@ -73,6 +92,8 @@ pub enum HardwareMode {
         backend: Arc<dyn HidBackend>,
         /// The devices on it.
         devices: Vec<SessionDevice>,
+        /// SMBus buses scanned when SMBus is enabled.
+        smbus: Vec<BusHandle>,
     },
 }
 
@@ -280,6 +301,21 @@ struct Engine {
     layout: Layout,
     signalrgb: bool,
     gpu: bool,
+    /// SMBus devices are driven.
+    smbus: bool,
+    /// The SMBus buses (opened when SMBus is first enabled).
+    smbus_hw: Option<SmbusHardware>,
+    /// SMBus devices found by the last scan.
+    smbus_present: Vec<Present>,
+    /// A scan is wanted at the next rescan (start, request, setting turned on,
+    /// SMBus devices stopped for a blocking program).
+    smbus_scan_due: bool,
+    /// Running programs that keep HueDeck off SMBus (or `huedeck --smbus`):
+    /// only the SMBus devices stop for them.
+    smbus_blockers: Vec<String>,
+    /// This process is the one HueDeck process driving SMBus (real hardware).
+    smbus_claim: Option<SmbusClaim>,
+    last_smbus_check: Instant,
     conflicts: Vec<String>,
     warnings: Vec<String>,
     settle: Option<Instant>,
@@ -337,6 +373,13 @@ impl Engine {
             layout: Layout::default(),
             signalrgb: false,
             gpu: false,
+            smbus: false,
+            smbus_hw: None,
+            smbus_present: Vec::new(),
+            smbus_scan_due: true,
+            smbus_blockers: Vec::new(),
+            smbus_claim: None,
+            last_smbus_check: Instant::now(),
             conflicts: Vec::new(),
             warnings: Vec::new(),
             settle: None,
@@ -388,6 +431,9 @@ impl Engine {
         self.enabled = get(keys::ENABLED).and_then(|v| v.as_bool()).unwrap_or(true);
         self.signalrgb = get(keys::SIGNALRGB).and_then(|v| v.as_bool()).unwrap_or(false);
         self.gpu = get(keys::GPU).and_then(|v| v.as_bool()).unwrap_or(false);
+        self.smbus = get(keys::SMBUS)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(self.opts.config.smbus.enabled);
         let name = get(keys::LAYOUT)
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| DEFAULT_LAYOUT.into());
@@ -527,7 +573,10 @@ impl Engine {
             let key = device.key.clone();
             let channels = match d.channels.get(&key) {
                 Some(c) if !c.is_empty() => c.clone(),
-                _ if d.use_signalrgb => huedeck_runtime::signalrgb::channels(&key).0,
+                // SignalRGB keys channels by HID device; SMBus devices have none.
+                _ if d.use_signalrgb && device.smbus.is_none() => {
+                    huedeck_runtime::signalrgb::channels(&key).0
+                }
                 _ => BTreeMap::new(),
             };
             let label = key.clone();
@@ -598,6 +647,28 @@ impl Engine {
             Vec::new()
         };
         self.last_conflict_check = Instant::now();
+        self.scan_smbus();
+        self.merge_smbus();
+        self.reconcile();
+        if !self.smbus {
+            // Sessions stopped: another HueDeck process may drive the buses now.
+            self.smbus_claim = None;
+        }
+    }
+
+    /// Put the SMBus devices of the last scan (after `[devices] ignore`) into
+    /// the devices present, in place of the earlier ones, and record them.
+    fn merge_smbus(&mut self) {
+        self.present.retain(|p| p.device.smbus.is_none());
+        let ignore = &self.opts.config.devices.ignore;
+        self.present.extend(
+            self.smbus_present
+                .iter()
+                .filter(|p| {
+                    ignore.is_empty() || !huedeck_runtime::hardware::matches_filter(&p.device.key, ignore)
+                })
+                .cloned(),
+        );
         for p in &self.present {
             if let Err(e) = self.store.device_seen(
                 &p.device.key,
@@ -609,7 +680,145 @@ impl Engine {
                 tracing::warn!("recording {}: {e:#}", p.device.key);
             }
         }
-        self.reconcile();
+    }
+
+    /// Whether an SMBus device session is running.
+    fn smbus_sessions_live(&self) -> bool {
+        self.sessions()
+            .any(|h| h.key().starts_with("smbus:") && !h.is_finished())
+    }
+
+    /// While SMBus is on (real hardware): look for the programs that keep
+    /// HueDeck off SMBus. One that shows up stops the SMBus sessions at once
+    /// (their `Shutdown()` runs) and the scan waits; once they are gone the
+    /// scan runs again.
+    fn check_smbus(&mut self) {
+        self.last_smbus_check = Instant::now();
+        let blockers = match huedeck_runtime::conflicts::smbus_blockers() {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("SMBus: cannot check for conflicting software: {e:#}");
+                return;
+            }
+        };
+        if !blockers.is_empty() {
+            if !self.smbus_present.is_empty() || self.smbus_sessions_live() {
+                self.log(format!(
+                    "SMBus: {} started: SMBus devices stopped (HueDeck never drives SMBus alongside it)",
+                    blockers.join(", ")
+                ));
+                self.smbus_present.clear();
+                self.smbus_scan_due = true;
+                self.merge_smbus();
+                self.reconcile();
+            }
+            if self.smbus_blockers != blockers {
+                self.smbus_blockers = blockers;
+                self.dirty = true;
+            }
+        } else if self.smbus_scan_due {
+            self.scan_smbus();
+            self.merge_smbus();
+            self.reconcile();
+        }
+    }
+
+    /// Stop the SMBus sessions before a scan: a plugin's `Scan()` writes the
+    /// controllers' register pointers, which must not move under a session.
+    fn stop_smbus_sessions(&mut self) {
+        if self.smbus_sessions_live() {
+            let wanted: Vec<Present> = self
+                .sessions()
+                .filter(|h| !h.key().starts_with("smbus:"))
+                .filter_map(|h| self.present.iter().find(|p| p.device.key == h.key()).cloned())
+                .collect();
+            self.reconcile_with(wanted);
+        }
+    }
+
+    /// Scan the SMBus buses when a scan is due (opening them the first time),
+    /// unless a program of `smbus_blockers` runs or another HueDeck process
+    /// drives SMBus; forget the SMBus devices when SMBus is off.
+    fn scan_smbus(&mut self) {
+        if !self.smbus {
+            self.smbus_present.clear();
+            self.smbus_blockers.clear();
+            return;
+        }
+        if !self.smbus_scan_due {
+            return;
+        }
+        let real = match &self.opts.hardware {
+            HardwareMode::Real => true,
+            HardwareMode::None => return,
+            HardwareMode::Fixed { smbus, .. } => {
+                if self.smbus_hw.is_none() {
+                    self.smbus_hw = Some(SmbusHardware::from_buses(smbus.clone()));
+                }
+                false
+            }
+        };
+        if real {
+            self.last_smbus_check = Instant::now();
+            match huedeck_runtime::conflicts::smbus_blockers() {
+                Ok(blockers) if blockers.is_empty() => {}
+                Ok(blockers) => {
+                    // Retried every SMBUS_RECHECK: the scan stays due.
+                    self.smbus_present.clear();
+                    self.smbus_blockers = blockers;
+                    return;
+                }
+                Err(e) => {
+                    self.log(format!("SMBus: cannot check for conflicting software: {e:#}"));
+                    return;
+                }
+            }
+            if self.smbus_claim.is_none() {
+                match huedeck_runtime::conflicts::claim_smbus() {
+                    Ok(claim) => self.smbus_claim = Some(claim),
+                    Err(e) => {
+                        let other = vec![OTHER_HUEDECK.to_string()];
+                        if self.smbus_blockers != other {
+                            self.log(format!("SMBus: {e:#}"));
+                            self.smbus_blockers = other;
+                            self.dirty = true;
+                        }
+                        self.smbus_present.clear();
+                        return;
+                    }
+                }
+            }
+            self.smbus_blockers.clear();
+            if self.smbus_hw.is_none() {
+                let hw = SmbusHardware::open();
+                for note in hw.notes() {
+                    let line = format!("SMBus: {note}");
+                    if !self.warnings.contains(&line) {
+                        self.warnings.push(line);
+                    }
+                }
+                self.smbus_hw = Some(hw);
+            }
+        }
+        self.smbus_scan_due = false;
+        self.stop_smbus_sessions();
+        let budget = ScanBudget {
+            mode: lock(&self.defaults).write_mode,
+            ..ScanBudget::default()
+        };
+        let Some(hw) = &self.smbus_hw else { return };
+        let (found, outcomes) = hw.scan(&self.catalog, &[], &budget);
+        let mut lines = Vec::new();
+        for o in &outcomes {
+            if let Some(e) = &o.error {
+                lines.push(format!("SMBus scan of {} by {}: {e}", o.bus, o.plugin));
+            }
+        }
+        self.smbus_present = found;
+        for line in lines {
+            self.log(line);
+        }
+        self.log(format!("SMBus: {} device(s) found", self.smbus_present.len()));
     }
 
     /// Sessions for the enabled devices present (none while conflicts run).
@@ -755,6 +964,12 @@ impl Engine {
             if !self.conflicts.is_empty() && self.last_conflict_check.elapsed() >= CONFLICT_RECHECK {
                 self.rescan();
             }
+            if self.smbus
+                && matches!(self.opts.hardware, HardwareMode::Real)
+                && self.last_smbus_check.elapsed() >= SMBUS_RECHECK
+            {
+                self.check_smbus();
+            }
             if self.last_stats.elapsed() >= STATS_EVERY {
                 self.last_stats = Instant::now();
                 self.dirty = true;
@@ -835,10 +1050,20 @@ impl Engine {
                 signalrgb: self.signalrgb,
                 signalrgb_available: huedeck_plugin_host::catalog::signalrgb_app_dir().is_some(),
                 gpu_compositing: self.gpu,
+                smbus: self.smbus,
                 fps: self.fps(),
                 dry_run: self.opts.dry_run,
             },
-            conflicts: self.conflicts.clone(),
+            conflicts: {
+                let mut all = self.conflicts.clone();
+                all.extend(
+                    self.smbus_blockers
+                        .iter()
+                        .filter(|b| !self.conflicts.contains(b))
+                        .map(|b| format!("{b} (SMBus devices stopped)")),
+                );
+                all
+            },
             warnings: self.warnings.clone(),
         }
     }
@@ -868,6 +1093,11 @@ impl Engine {
                 key: key.to_string(),
                 vid: p.device.vid,
                 pid: p.device.pid,
+                bus: p
+                    .device
+                    .smbus
+                    .as_ref()
+                    .map(|t| format!("{} · 0x{:02x}", t.bus.descriptor().name, t.addr)),
                 name: meta.name.clone(),
                 plugin: meta.name.clone(),
                 plugin_path: meta.source_path.to_string_lossy().into_owned(),
@@ -1188,7 +1418,16 @@ impl Engine {
             Request::SetSettings {
                 signalrgb,
                 gpu_compositing,
+                smbus,
             } => {
+                if let Some(on) = smbus {
+                    if on != self.smbus {
+                        self.smbus = on;
+                        self.store.set(keys::SMBUS, &on).map_err(internal)?;
+                        self.smbus_scan_due = on;
+                        self.rescan();
+                    }
+                }
                 if let Some(gpu) = gpu_compositing {
                     if gpu != self.gpu {
                         self.gpu = gpu;
@@ -1204,7 +1443,7 @@ impl Engine {
                         self.reload_libraries();
                     }
                 }
-                Ok(json!({ "signalrgb": self.signalrgb, "gpuCompositing": self.gpu }))
+                Ok(json!({ "signalrgb": self.signalrgb, "gpuCompositing": self.gpu, "smbus": self.smbus }))
             }
             Request::ImportSignalRgb { name } => {
                 self.import_signalrgb(name.unwrap_or_else(|| "SignalRGB".into()))
@@ -1240,6 +1479,7 @@ impl Engine {
                 Ok(json!({ "imported": true }))
             }
             Request::Rescan => {
+                self.smbus_scan_due = true;
                 self.rescan();
                 Ok(json!({ "devices": self.present.len() }))
             }

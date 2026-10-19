@@ -40,6 +40,7 @@ fn present(mock: &MockHid, plugin: &CatalogEntry) -> Vec<Present> {
         .into_iter()
         .map(|e| Present {
             device: SessionDevice {
+                smbus: None,
                 key: format!("1234:5555:{}", e.serial),
                 vid: e.vid,
                 pid: e.pid,
@@ -152,6 +153,7 @@ fn a_session_that_failed_before_removal_stays_failed() {
     );
     let device = Present {
         device: SessionDevice {
+            smbus: None,
             key: "1234:3333:F".into(),
             vid: 0x1234,
             pid: 0x3333,
@@ -232,4 +234,52 @@ fn restarts_of_a_device_back_off() {
     publisher.join().unwrap();
     assert!(failed.is_empty(), "{failed:?}");
     assert_eq!(reports.len(), 3);
+}
+
+#[test]
+fn smbus_devices_reconcile_by_key() {
+    use huedeck_hal::mock::{MockSmbus, TransactionRecorder};
+    use huedeck_hal::{PciIds, SmbusBusKind};
+    use huedeck_plugin_host::discover::{scan_buses, ScanBudget};
+    use huedeck_plugin_host::smbus::BusHandle;
+
+    let rec = TransactionRecorder::new();
+    let mut bus = MockSmbus::new("NVIDIA GeForce RTX 3060", SmbusBusKind::Nvidia, rec)
+        .with_pci(PciIds {
+            vendor: 0x10DE,
+            device: 0x2504,
+            sub_vendor: 0x1462,
+            sub_device: 0x3903,
+        })
+        .with_instance("pci01");
+    bus.add_device(0x68, []);
+    let bus = BusHandle::new(Box::new(bus));
+    let catalog = Catalog::scan(
+        &[PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")],
+        Duration::from_secs(10),
+    );
+    let (found, _) = scan_buses(&catalog, &[bus], &ScanBudget::default());
+    assert_eq!(found.len(), 1);
+    let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    // The manager's HID backend is never used for SMBus devices.
+    let backend: Arc<dyn HidBackend> = Arc::new(MockHid::new());
+    let mut manager = DeviceManager::new(
+        backend,
+        frames,
+        Box::new(|_: &SessionDevice, _: &CatalogEntry| SessionOptions::default()),
+    );
+    let key = "smbus:10de:2504:1462:3903@pci01:68".to_string();
+    assert_eq!(
+        manager.reconcile(found.clone()),
+        vec![Change::Started {
+            key: key.clone(),
+            plugin: "MSI GPU".into()
+        }]
+    );
+    assert!(manager.reconcile(found).is_empty(), "same key: nothing to do");
+    assert_eq!(manager.reconcile(Vec::new()), vec![Change::Removed { key }]);
+    let (reports, failed) = manager.finish();
+    assert!(failed.is_empty(), "{failed:?}");
+    assert_eq!(reports.len(), 1);
+    assert!(reports[0].smbus.is_some());
 }

@@ -9,7 +9,7 @@
 // the GPU's own bus (NVIDIA: NvAPI, port 1). One zone, driven in OpenRGB's "Direct" mode:
 // static mode at full brightness, then colour 1 (R1/G1/B1) per frame.
 //
-// Protocol notes and sources: docs/hardware/msi-gpu.md. Status: untested on hardware.
+// Protocol notes and sources: docs/hardware/msi-gpu.md. Status: tested on 10DE:2504 / 1462:3903 (2026-10-19).
 //
 // Safety, as in OpenRGB: one write per register, no retries; register 0x3F (MSI_GPU_REG_SAVE,
 // which stores the current state in the card's flash) is never written (the plugin skips it,

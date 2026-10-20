@@ -1,6 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/huedeck-logotype.svg">
+  <img alt="HueDeck" src="docs/brand/huedeck-logotype-light.svg" width="420">
+</picture>
+
 # HueDeck
 
 ### Every light in your setup. One open app. Nothing else to install.

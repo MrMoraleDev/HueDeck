@@ -6,13 +6,14 @@ Distribution artifacts for HueDeck. Release builds are produced by
 today). Nothing here is signed yet; Authenticode via SignPath OSS is the planned step
 for Windows (see the SIGNING block in the release workflow).
 
-Only `systemd/` and `udev/` contain real files at the moment; every other directory is
+Only `systemd/`, `udev/` and `wix/huedeck.ico` (the app icon, rendered from
+`docs/brand/huedeck-icon.svg`) are real files at the moment; everything else is
 a placeholder with the file names already decided so later milestones (M4 Windows
 packaging, M7 Linux packaging) drop files into known places.
 
 | Directory   | Target               | Planned files                                                                 | Milestone |
 |-------------|----------------------|-------------------------------------------------------------------------------|-----------|
-| `wix/`      | Windows MSI (WiX v4+) | `huedeck.wxs`, `Product.wxs` fragments, `License.rtf`, `huedeck.ico`, `build.ps1` | M4 |
+| `wix/`      | Windows MSI (WiX v4+) | `huedeck.wxs`, `Product.wxs` fragments, `License.rtf`, `huedeck.ico` (present), `build.ps1` | M4 |
 | `winget/`   | winget manifest       | `manifests/h/HueDeck/HueDeck/<version>/HueDeck.HueDeck.yaml`, `HueDeck.HueDeck.installer.yaml`, `HueDeck.HueDeck.locale.en-US.yaml` | M4 |
 | `systemd/`  | Linux user service    | `huedeckd.service` (present)                                                  | M7 |
 | `udev/`     | Linux device access   | `70-huedeck.rules.template` (present); generated `70-huedeck.rules` via `tools/gen-udev` | M7 |

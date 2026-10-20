@@ -7,6 +7,7 @@
   import Layout from "./components/Layout.svelte";
   import Devices from "./components/Devices.svelte";
   import Settings from "./components/Settings.svelte";
+  import logotype from "./assets/lightloom-logotype.svg";
 
   type Tab = "effects" | "layout" | "devices" | "settings";
   const tabs: { id: Tab; label: string }[] = [
@@ -41,7 +42,7 @@
 </script>
 
 <header>
-  <div class="brand">Lightloom</div>
+  <img class="brand" src={logotype} alt="Lightloom" />
   {#if s}
     <div class="row now">
       <span class="muted">Effect</span>
@@ -129,12 +130,9 @@
     flex-wrap: wrap;
   }
   .brand {
-    font-weight: 700;
-    font-size: 18px;
-    background: linear-gradient(90deg, #ff4d6d, #ffb84d, #57d68d, #4fa3ff, #b36bff);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    display: block;
+    height: 26px;
+    width: auto;
   }
   .now {
     flex: 1;

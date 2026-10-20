@@ -1,6 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/lightloom-logotype.svg">
+  <img alt="Lightloom" src="docs/brand/lightloom-logotype-light.svg" width="420">
+</picture>
+
 # Lightloom
 
 ### Every light in your setup. One open app. Nothing else to install.

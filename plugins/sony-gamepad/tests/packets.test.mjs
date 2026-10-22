@@ -53,15 +53,15 @@ function dualSenseCanvas(frame) {
   };
 }
 
-test("metadata: OpenRGB's DualShock 4 ids (DualSense ids kept by sony-dualsense), in the manifest too", async () => {
+test("metadata: OpenRGB's DualShock 4 and DualSense ids (the sony-dualsense plugin was retired), in the manifest too", async () => {
   const { plugin, restore } = await setup({ productId: 0x0CE6 });
   try {
     assert.equal(plugin.VendorId(), 0x054C);
-    assert.deepEqual(plugin.ProductId(), [...DS4_PIDS]);
+    assert.deepEqual(plugin.ProductId(), [...DS4_PIDS, ...DUALSENSE_PIDS]);
     assert.equal(manifest.devices.length, 1);
     assert.equal(Number(manifest.devices[0].vid), 0x054C);
     assert.deepEqual(manifest.devices[0].pids.map(Number), plugin.ProductId());
-    assert.deepEqual(manifest.devices[0].tested, []);
+    assert.deepEqual(manifest.devices[0].tested, ["0x0CE6"]);
     assert.equal(manifest.devices[0].transport, "hid");
     assert.equal(plugin.Type(), "Hid");
     assert.equal(plugin.Publisher(), "HueDeck");

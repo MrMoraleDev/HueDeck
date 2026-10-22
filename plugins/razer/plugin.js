@@ -16,6 +16,9 @@
 // 04 Sep 2021" (RazerDevices). The product tables in devices.js are generated from OpenRGB's
 // tables; the protocol below is written by hand. The DeathAdder V2 Pro (1532:007C/007D) keeps the
 // packets of HueDeck's own recording (see RECORDED_PROFILE below), which is not OpenRGB code.
+// Tested on hardware (2026-10-22): DeathAdder V2 Pro wired (1532:007C) and wireless through the
+// dock (1532:007D), Razer Mouse Dock Chroma (1532:007E), with Razer Synapse 4 (RazerAppEngine.exe,
+// reported as a conflicting process) closed.
 //
 // Protocol notes: docs/hardware/razer.md. In short: 91-byte feature reports (report id 0x00, or
 // 0x07 on the Leviathan V2 / V2 X) with transaction id, data size, command class and id, 80
@@ -57,8 +60,8 @@ const KEEPALIVE_MS = 1000;
 const LAMPARRAY_USAGE_PAGE = 0x59;
 
 // HueDeck's own recording of the DeathAdder V2 Pro (docs/hardware/razer-deathadder-v2-pro.md,
-// plugins/razer-deathadder-v2-pro): the wired mouse and its receiver keep exactly the packets of
-// that recording, which the mouse is known to accept, instead of OpenRGB's (transaction id 0x3F,
+// the notes of the retired single-device plugin): the wired mouse and its receiver keep exactly
+// the packets of that recording (tested on 007C and 007D, 2026-10-22), which the mouse is known to accept, instead of OpenRGB's (transaction id 0x3F,
 // LED id 0x05, effect report after every frame). See docs/hardware/razer.md.
 const RECORDED_PROFILE = new Set([0x007C, 0x007D]);
 const RECORDED_TRANSACTION_IDS = [0x1F, 0x3F, 0x9F, 0xFF];
@@ -69,8 +72,7 @@ export function Publisher() { return "HueDeck"; }
 export function Version() { return "0.1.0"; }
 export function Documentation() { return "hardware/razer"; }
 export function VendorId() { return VENDOR_ID; }
-// 007C/007D stay with plugins/razer-deathadder-v2-pro (tested) until the family plugin is run on it.
-export function ProductId() { return PRODUCT_IDS.filter((pid) => !RECORDED_PROFILE.has(pid)); }
+export function ProductId() { return PRODUCT_IDS.slice(); }
 export function Type() { return "Hid"; }
 export function DeviceType() { return "other"; }
 export function Size() { return [1, 1]; }

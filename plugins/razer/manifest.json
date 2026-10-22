@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "license": "GPL-3.0-or-later",
   "publisher": "HueDeck",
-  "description": "Razer keyboards, laptops, mice, keypads, mousemats, headsets, speakers and accessories that use the 90-byte Razer report (including devices paired to a Razer wireless receiver), the Razer Chroma Addressable RGB Controller and the Kraken V4 family; adapted from OpenRGB, untested on hardware. The DeathAdder V2 Pro (1532:007C/007D) keeps HueDeck's recorded packets. Protocol notes: docs/hardware/razer.md.",
+  "description": "Razer keyboards, laptops, mice, keypads, mousemats, headsets, speakers and accessories that use the 90-byte Razer report (including devices paired to a Razer wireless receiver), the Razer Chroma Addressable RGB Controller and the Kraken V4 family; adapted from OpenRGB. Tested on hardware: DeathAdder V2 Pro (1532:007C wired, 1532:007D wireless) and Mouse Dock Chroma (1532:007E), with Razer Synapse 4 (RazerAppEngine.exe) closed; every other product is untested. The DeathAdder V2 Pro (1532:007C/007D) keeps HueDeck's recorded packets. Protocol notes: docs/hardware/razer.md.",
   "entry": "plugin.js",
   "compat": "signalrgb-2.5",
   "deviceType": "other",
@@ -44,6 +44,8 @@
         "0x0078",
         "0x007A",
         "0x007B",
+        "0x007C",
+        "0x007D",
         "0x007E",
         "0x0084",
         "0x0085",
@@ -200,7 +202,7 @@
         "0x0F52"
       ],
       "transport": "hid",
-      "tested": []
+      "tested": ["0x007C", "0x007D", "0x007E"]
     }
   ],
   "permissions": [

@@ -22,6 +22,7 @@
 // "Channel <i+1>" whose LED count comes from the user's components (at most 40, the zone's leds_max).
 // Left out: hardware effects (0x28 / 0x2A), fan speed (0x62) and the fan status read; HueDeck never
 // changes fan or pump speeds.
+// Tested on hardware (2026-10-22): Kraken X3 (1E71:2007), pump ring and logo.
 
 /* global device */
 
@@ -93,8 +94,7 @@ export function Publisher() { return "HueDeck"; }
 export function Version() { return "0.1.0"; }
 export function Documentation() { return "hardware/nzxt-hue2"; }
 export function VendorId() { return NZXT_VID; }
-// 2007 stays with plugins/nzxt-kraken-x3 (tested) until the family plugin is run on it.
-export function ProductId() { return PRODUCTS.map((p) => p.pid).filter((pid) => pid !== 0x2007); }
+export function ProductId() { return PRODUCTS.map((p) => p.pid); }
 export function Type() { return "Hid"; }
 export function DeviceType() { return "lightingcontroller"; }
 export function Size() { return [1, 1]; }
@@ -136,8 +136,8 @@ const KEEPALIVE_MS = 1000;
 
 // Kraken X3 (0x2007, 0x2014): zone 1 "Ring" and zone 2 "Logo" (RGBController_NZXTHue2::SetupZones),
 // 8 and 1 LEDs (accessory ids 0x10 and 0x11). OpenRGB's zones are linear; HueDeck places the ring
-// LEDs on a circle, clockwise from the top (the layout of plugins/nzxt-kraken-x3), with the logo in
-// the centre. The wire order is unchanged: ring LED n is cell n of RING_CELLS.
+// LEDs on a circle, clockwise from the top (the layout of the retired nzxt-kraken-x3 plugin), with
+// the logo in the centre. The wire order is unchanged: ring LED n is cell n of RING_CELLS.
 const RING_CELLS = [[3, 0], [4, 1], [4, 3], [3, 4], [1, 4], [0, 3], [0, 1], [1, 0]];
 const LOGO_CELLS = [[2, 2]];
 const KRAKEN_X3_SIZE = [5, 5];

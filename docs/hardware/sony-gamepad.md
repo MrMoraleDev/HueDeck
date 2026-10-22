@@ -5,8 +5,19 @@
 The plugin is `plugins/sony-gamepad/`, adapted from OpenRGB's `SonyGamepadController`. It drives
 the light bar of the DualShock 4 (and of its USB wireless adapter), and the light bar and the five
 player LEDs of the DualSense and DualSense Edge. USB only. It never enables rumble, haptics, the
-adaptive triggers, volume, audio routing or the microphone LED. Nothing has been run on hardware:
-no product id is in `tested`.
+adaptive triggers, volume, audio routing or the microphone LED. Only the DualSense (`054C:0CE6`)
+has been run on hardware (see below).
+
+## Tested on hardware
+
+2026-10-22, on the user's DualSense (`054C:0CE6`) over USB: the plugin (run from a copy without
+the `ProductId()` filter that then left the DualSense ids to the single-device plugin) lit the
+light bar red, green and blue in turn, with 0 errors. This plugin now owns `0CE6` and `0DF2`; the
+light-bar-only single-device plugin `sony-dualsense` was retired the same day (its report field
+table and bench runs stay in `docs/hardware/sony-dualsense.md`). `0CE6` is marked tested in
+`manifest.json`. The DualSense Edge (`0DF2`) goes through exactly the same code path as the
+DualSense (OpenRGB registers both with the same detector, and the plugin picks the DualSense
+protocol for both), but has not been run on hardware. The DualShock 4 ids are untested too.
 
 ## Sources
 
@@ -17,7 +28,7 @@ no product id is in `tested`.
 | S3 | Linux `drivers/hid/hid-playstation.c` (`GPL-2.0-or-later`), read 2026-10-18 | Names of the report fields and valid-flag bits. Facts only, no code |
 | S4 | Linux v5.15 `drivers/hid/hid-sony.c` (`GPL-2.0-or-later`) | The DualShock 4 USB report there also used `buf[1] = 0x07; /* blink + LEDs + motor */`; "If both delay values are zero the DualShock 4 disables blinking."; over Bluetooth the DualShock 4 sends report 1 until "feature report 2 is requested", then report 17 |
 | S5 | pydualsense (`pydualsense/pydualsense.py`, `pydualsense/enums.py`), read 2026-10-18 | DualSense bits S3 leaves unnamed: `valid_flag0` 0x04/0x08 "set the right/left trigger motor"; `valid_flag1` 0x40 "adjustment of overall motor/effect power (index 37)"; `valid_flag2` 0x01 `PlayerLedBrightness`, 0x02 `UninterrumpableLed`; byte 43 `high = 0`, `medium = 1`, `low = 2`. Facts only |
-| S6 | HueDeck's device listing on the reference machine, and a recording of the `sony-dualsense` plugin on the user's DualSense (`huedeck light red --record`, 2026-10-18) | The DualSense's only HID collection (interface 3, usage page 0x0001, usage 0x0005, 48-byte output report); the replay below |
+| S6 | HueDeck's device listing on the reference machine, and a recording of the (since retired) `sony-dualsense` plugin on the user's DualSense (`huedeck light red --record`, 2026-10-18) | The DualSense's only HID collection (interface 3, usage page 0x0001, usage 0x0005, 48-byte output report); the replay below |
 
 ## Products
 
@@ -69,7 +80,8 @@ ids, where it does nothing (the DualShock 4 report has no such byte).
   controller sends an input report every few milliseconds), so a silent device costs 0.5 s once.
   Both are reads; nothing is written at start.
 - **DualSense** (`SonyDualSenseController` constructor): no I/O. Nothing is sent at start (the
-  `sony-dualsense` plugin's "light bar setup" start report is not part of OpenRGB's USB path).
+  retired `sony-dualsense` plugin's "light bar setup" start report is not part of OpenRGB's USB
+  path; the 2026-10-22 hardware test showed the light bar following the host without it).
 
 ## Every frame (`Render()`)
 
@@ -167,28 +179,22 @@ same on exit and on system suspend:
 - Serial number and location strings: OpenRGB only displays them.
 - No flash or profile write exists in this family.
 
-## Collision with `plugins/sony-dualsense` (decision needed before merging)
+## Ownership of the DualSense ids (formerly a collision with `plugins/sony-dualsense`)
 
-Both plugins claim `054C:0CE6` and `054C:0DF2`. HueDeck indexes plugins by VID:PID with the
-last-scanned plugin winning (`crates/huedeck-plugin-host/src/catalog.rs`, "last scanned wins"),
-and files are scanned in sorted order. **So with both directories in `plugins/`, this untested
-plugin (`sony-gamepad`) replaces the tested, light-bar-only `sony-dualsense` on the user's own
-DualSense, with no notice.** Confirmed with `huedeck compat replay --plugins plugins`: the
-DualSense is matched to "Sony DualShock 4 / DualSense".
+Until 2026-10-22 the single-device plugin `plugins/sony-dualsense` (light bar only, tested on
+2026-10-18) also claimed `054C:0CE6` and `054C:0DF2`, and this plugin left them out of its
+`ProductId()` so the two would not collide in HueDeck's VID:PID index
+(`crates/huedeck-plugin-host/src/catalog.rs`, "last scanned wins"). After this plugin was tested on
+the user's DualSense (see "Tested on hardware") the single-device plugin was retired and this
+plugin claims both DualSense ids.
 
-What changes on the controller when that happens (all lighting, nothing else):
+What changed on the controller compared with the retired plugin (all lighting, nothing else):
 
-- no "light bar setup" start report (`sony-dualsense` sends one; OpenRGB's USB path does not);
+- no "light bar setup" start report (`sony-dualsense` sent one; OpenRGB's USB path does not);
 - the five player LEDs are driven on every frame: all five lit whenever their canvas cells are
   not black, and `valid_flag2` `0x03` plus `led_brightness` in every report;
 - at shutdown the player LEDs are turned off, including a player indicator that Steam or a game
   had set before HueDeck started.
-
-The DualSense ids are kept in this plugin because the port was asked to cover them and to be
-replayed against the user's recording. Which plugin owns them is for the maintainer to decide
-before both directories ship together: either drop `0x0CE6` and `0x0DF2` from this plugin's
-`ProductId()` and manifest (keeping the DualSense code path for later), or retire
-`sony-dualsense` on purpose once this plugin has been tested on the controller.
 
 ## Validation (2026-10-18, repeated 2026-10-19 after review; no hardware)
 
@@ -206,6 +212,8 @@ before both directories ship together: either drop `0x0CE6` and `0x0DF2` from th
 
 ## Untested
 
-Everything: no product id has been run with this plugin. On the DualSense it differs from what
-the user's controller accepted from `sony-dualsense` in three ways: no start report, the light bar
-setup flag (with `lightbar_setup` 0) in every report, and the player LED fields.
+Every product id except the DualSense `0CE6` (see "Tested on hardware"): the DualShock 4 ids
+(`05C4`, `09CC`, `0BA0`) and the DualSense Edge (`0DF2`). On the DualSense the plugin differs from
+what the user's controller first accepted from `sony-dualsense` in three ways: no start report, the
+light bar setup flag (with `lightbar_setup` 0) in every report, and the player LED fields; the
+2026-10-22 test covered the light bar with these reports.

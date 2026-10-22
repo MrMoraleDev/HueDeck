@@ -94,15 +94,17 @@ for (const c of expected.cases) {
   });
 }
 
-test("metadata: OpenRGB's product ids except 2007 (kept by nzxt-kraken-x3), in the manifest too", async () => {
+test("metadata: OpenRGB's product ids, 2007 included (the nzxt-kraken-x3 plugin was retired), in the manifest too", async () => {
   const { plugin, restore } = await setup();
   try {
     assert.equal(plugin.VendorId(), 0x1E71);
-    assert.deepEqual(plugin.ProductId(), PRODUCTS.map(([pid]) => pid).filter((pid) => pid !== 0x2007));
+    assert.deepEqual(plugin.ProductId(), PRODUCTS.map(([pid]) => pid));
+    assert.ok(plugin.ProductId().includes(0x2007));
     assert.equal(manifest.devices.length, 1);
     assert.equal(Number(manifest.devices[0].vid), 0x1E71);
     assert.deepEqual(manifest.devices[0].pids.map(Number), plugin.ProductId());
-    assert.deepEqual(manifest.devices[0].tested, []);
+    assert.deepEqual(manifest.devices[0].tested, ["0x2007"]);
+    assert.deepEqual(manifest.conflictingProcesses, ["NZXT CAM.exe"]);
     assert.equal(plugin.Publisher(), "HueDeck");
     assert.equal(plugin.Version(), manifest.version);
     assert.equal(plugin.Documentation(), "hardware/nzxt-hue2");

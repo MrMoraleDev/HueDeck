@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "license": "GPL-3.0-or-later",
   "publisher": "HueDeck",
-  "description": "Per-LED lighting of NZXT's Hue 2 family, adapted from OpenRGB's NZXTHue2Controller: Hue 2 and Hue 2 Ambient, RGB & Fan Controllers, RGB Controllers, Smart Device V2, the Hue 2 / B650E motherboard controllers (ARGB channels of up to 40 LEDs each) and the Kraken X3 / Kraken 2024 Elite RGB coolers (Kraken X3: pump ring and logo plus the RGB header channel). Fan and pump speeds are never touched. Protocol notes: docs/hardware/nzxt-hue2.md.",
+  "description": "Per-LED lighting of NZXT's Hue 2 family, adapted from OpenRGB's NZXTHue2Controller: Hue 2 and Hue 2 Ambient, RGB & Fan Controllers, RGB Controllers, Smart Device V2, the Hue 2 / B650E motherboard controllers (ARGB channels of up to 40 LEDs each) and the Kraken X3 / Kraken 2024 Elite RGB coolers (Kraken X3: pump ring and logo plus the RGB header channel). Tested on hardware: Kraken X3 (1E71:2007, pump ring and logo); every other product is untested. Fan and pump speeds are never touched. Protocol notes: docs/hardware/nzxt-hue2.md.",
   "entry": "plugin.js",
   "compat": "signalrgb-2.5",
   "deviceType": "lightingcontroller",
@@ -26,6 +26,7 @@
         "0x2002",
         "0x2005",
         "0x200B",
+        "0x2007",
         "0x2014",
         "0x3012",
         "0x2012",
@@ -35,12 +36,13 @@
         "0x200F"
       ],
       "transport": "hid",
-      "tested": []
+      "tested": ["0x2007"]
     }
   ],
   "permissions": [
     "hid"
   ],
+  "conflictingProcesses": ["NZXT CAM.exe"],
   "keywords": [
     "nzxt",
     "hue 2",

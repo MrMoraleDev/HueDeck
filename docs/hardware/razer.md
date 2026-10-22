@@ -13,9 +13,29 @@ own plugins: `plugins/razer-kraken/` (Kraken 7.1 and Kraken V3 families,
 `docs/hardware/razer-hanbo.md`). Razer LampArray collections (usage page `0x59`) are left to
 `plugins/hid-lamparray/`.
 
-Nothing here has run on hardware yet, except the DeathAdder V2 Pro packets (see "DeathAdder V2
-Pro" below), which are HueDeck's own recording and the same bytes as
-`plugins/razer-deathadder-v2-pro/`.
+Only the DeathAdder V2 Pro (`1532:007C` wired, `1532:007D` wireless) and the Razer Mouse Dock
+Chroma (`1532:007E`) have run on hardware with this plugin (see "Tested on hardware" below); the
+mouse uses HueDeck's own recorded packets, the same bytes as the retired
+single-device plugin `razer-deathadder-v2-pro` (its protocol notes stay in
+`docs/hardware/razer-deathadder-v2-pro.md`).
+
+## Tested on hardware
+
+2026-10-22, with the user's devices (the plugin run from a copy without the `ProductId()` filter
+that then left `007C`/`007D` to the single-device plugin), red, green and blue in turn, 0 errors
+on each:
+
+- Razer DeathAdder V2 Pro, wired (`1532:007C`): the mouse's logo showed each colour.
+- Razer DeathAdder V2 Pro, wireless through the dock (`1532:007D`): the same.
+- Razer Mouse Dock Chroma (`1532:007E`): the dock's light showed each colour, and a 20 s solid
+  red hold stayed red (the keepalive works). After the run the dock goes to spectrum cycle: that
+  is this plugin's `Shutdown()` (`SetModeSpectrumCycle`, see "Exit"), as expected.
+
+All of this was with Razer Synapse closed. With Synapse 4 running the light flickered, because Synapse keeps writing its own
+lighting: Synapse 4's `RazerAppEngine.exe` must be closed, and HueDeck reports it as a
+conflicting process (`conflictingProcesses` in `manifest.json`, with `RazerCentralService.exe`
+and the Synapse 3 / Synapse executables). `007C`, `007D` and `007E` are marked tested in
+`manifest.json`; every other product is not.
 
 ## Sources
 
@@ -29,7 +49,7 @@ Pro" below), which are HueDeck's own recording and the same bytes as
 | S6 | OpenRGB `Controllers/RazerController/RazerKrakenV4Controller/RazerKrakenV4Controller.cpp`, `.h`, `RGBController_RazerKrakenV4.cpp`, `.h` | GPL-2.0-or-later | The 64-byte Kraken V4 reports (direct, brightness, wave), wireless flag |
 | S7 | OpenRGB `KeyboardLayoutManager/KeyboardLayoutManager.cpp`, `.h`; `RGBController/RGBControllerKeyNames.cpp` | GPL-2.0-or-later | Key names of keyboard zones (simulated by the table generator, see below) |
 | S8 | OpenRGB `Controllers/RazerController/RazerDeviceGuard.cpp`, `DetectionManager.cpp` | GPL-2.0-or-later | Read only, nothing taken: the global mutex OpenRGB shares with Synapse; how detectors run per HID collection |
-| S9 | HueDeck's recordings `trace_1532_007c.json` (`#00ff00`) and `trace_multi.json` (`#ff8000`) of the user's DeathAdder V2 Pro, and `plugins/razer-deathadder-v2-pro/` (HueDeck, GPL-3.0-or-later) | data / HueDeck | The DeathAdder V2 Pro packets |
+| S9 | HueDeck's recordings `trace_1532_007c.json` (`#00ff00`) and `trace_multi.json` (`#ff8000`) of the user's DeathAdder V2 Pro, and the retired plugin `razer-deathadder-v2-pro` (HueDeck, GPL-3.0-or-later; `docs/hardware/razer-deathadder-v2-pro.md`, `fixtures/deathadder-v2-pro-recorded.json`) | data / HueDeck | The DeathAdder V2 Pro packets |
 
 All OpenRGB files are at commit `d4798c120659ec5ba2e664a9e87bedff8d36f880`
 (https://gitlab.com/CalcProgrammer1/OpenRGB); every one carries
@@ -231,8 +251,9 @@ the crc (only its receive function does), so the crc byte goes out as `0x00`; th
 OpenRGB drives it as an extended-matrix mouse with transaction id `0x3F`, LED id `0x05`, the
 brightness report on start and the custom effect after every frame. HueDeck's own recordings
 (S9) show the mouse answering transaction ids `0x1F` to `0x9F` and taking frames without the
-effect report. Because this family plugin replaces `plugins/razer-deathadder-v2-pro/`, it keeps
-that plugin's packets for these two ids instead of OpenRGB's: serial-number query `00 82` with
+effect report. Because this family plugin replaced the single-device plugin
+`razer-deathadder-v2-pro` (retired 2026-10-22; report layout and commands in
+`docs/hardware/razer-deathadder-v2-pro.md`), it keeps that plugin's packets for these two ids instead of OpenRGB's: serial-number query `00 82` with
 transaction ids `1F`, `3F`, `9F`, `FF` until one is confirmed, frame mode `0F 02` with
 `00 00 08 00 01 00`, each frame `0F 03` with `00 00 00 00 00 r g b` (every frame, no skipping),
 and on exit a black frame and `00 04 00 00`. No paired-device query.
@@ -240,18 +261,17 @@ and on exit a black frame and `00 04 00 00`. No paired-device query.
 Replay (`huedeck compat replay`, no hardware): with `trace_multi.json` (`#ff8000`) the plugin
 sends the mouse 162 reports (serial query, frame mode, 158 frames `0F 03 ... FF 80 00`, black
 frame, `00 04`), and every send and read of the replay is byte for byte what
-`plugins/razer-deathadder-v2-pro/` does in the same replay. The recorded colour frames are the
+the single-device plugin did in the same replay (before it was retired). The recorded colour frames are the
 same bytes (`00 00 1F 00 00 00 08 0F 03 00 00 00 00 00 FF 80 00 ...`, crc `7B`). Both plugins
 diverge from the recording at packet 1: it was made with a SignalRGB plugin, which probes
 transaction ids `0x2F`..`0x9F` and sends other queries first, sets brightness with the save flag
 and writes the DPI stages (`04 06`) on exit; HueDeck sends none of that. Same with
 `trace_1532_007c.json` (5 reports, identical to the single-device plugin's).
 
-Double claim: `plugins/razer-deathadder-v2-pro/` still claims `007C` and `007D` with the same
-Validate filter (interface 0, usage page 1, usage 2). While both are installed, which one binds
-the mouse depends on the catalog's directory order (later directories win collisions). The bytes
-are the same either way, but one of the two claims must go (retire the single-device plugin, or
-drop the ids from one of them) before this plugin can replace it; that is the maintainer's call.
+Ownership: this plugin claims `007C` and `007D` (Validate: interface 0, usage page 1, usage 2).
+The single-device plugin `plugins/razer-deathadder-v2-pro/` that claimed them too was retired
+on 2026-10-22, after this plugin was tested on the mouse (see "Tested on hardware"), so there is
+no double claim.
 
 ## Geometry
 
@@ -265,8 +285,9 @@ listed as LEDs. Paired devices are subdevices with their own grid.
 
 ## Untested
 
-Everything except the DeathAdder V2 Pro packets: no product of this plugin has run on hardware
-with these packets (`tested` is empty in `manifest.json`). In particular the paired-device path,
+Everything except the DeathAdder V2 Pro (`007C`, `007D`) and the Mouse Dock Chroma (`007E`; see
+"Tested on hardware"): no other product of this plugin has run on hardware (`tested` in
+`manifest.json` lists those three only). In particular the paired-device path,
 the ARGB controller's interface selection, the Kraken V4 reports and the custom-matrix devices
 are unverified.
 

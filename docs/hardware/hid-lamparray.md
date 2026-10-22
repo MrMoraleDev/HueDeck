@@ -62,7 +62,7 @@ Each report sits in a logical collection with the report's usage; LampArrayKind:
 7. Shutdown: AutonomousMode 1, the device takes its own lighting back.
 
 A plugin that claims the device by VID:PID always wins over this one (on the reference
-machine the Razer keeps `razer-deathadder-v2-pro`); run with `--plugins plugins/hid-lamparray`
+machine the Razer DeathAdder V2 Pro is claimed by `razer`); run with `--plugins plugins/hid-lamparray`
 to use LampArray on such a device.
 
 Windows' own Dynamic Lighting drives LampArray devices when it is on (Settings > Personalization

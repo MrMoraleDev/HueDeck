@@ -262,12 +262,16 @@ test("ProductId lists every product of the plugin's detectors", async () => {
   const { plugin, restore } = await setup();
   try {
     const ids = plugin.ProductId();
-    assert.equal(ids.length, 185, "187 minus 007C/007D, kept by razer-deathadder-v2-pro");
-    assert.ok(!ids.includes(0x007C) && !ids.includes(0x007D));
+    assert.equal(ids.length, 187);
+    // The DeathAdder V2 Pro (wired and wireless) and the Mouse Dock Chroma belong to this plugin
+    // (the single-device razer-deathadder-v2-pro plugin was retired), tested on hardware.
+    for (const pid of [0x007C, 0x007D, 0x007E]) assert.ok(ids.includes(pid), `0x${pid.toString(16)} claimed`);
     assert.equal(new Set(ids).size, ids.length);
     for (const id of ids) assert.ok(DEVICES[id], `0x${id.toString(16)} has a table entry`);
     const manifest = JSON.parse(readFileSync(join(here, "..", "manifest.json"), "utf8"));
     assert.deepEqual(manifest.devices[0].pids.map(Number).sort((a, b) => a - b), ids.slice().sort((a, b) => a - b));
+    assert.deepEqual(manifest.devices[0].tested.map(Number), [0x007C, 0x007D, 0x007E]);
+    assert.ok(manifest.conflictingProcesses.includes("RazerAppEngine.exe"), "Synapse 4 is reported as a conflict");
   } finally {
     restore();
   }

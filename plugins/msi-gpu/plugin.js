@@ -85,7 +85,7 @@ const BRIGHTNESS_FULL = 5 * 20;
 // What the RGBController constructor reads, in its order: SetupZones() reads the three colours,
 // then GetDeviceMode(), GetSpeed() and the brightness. Kept to restore the card on Shutdown().
 const COLOR_REGS = [REG_R1, REG_G1, REG_B1, REG_R2, REG_G2, REG_B2, REG_R3, REG_G3, REG_B3];
-const STARTUP_REGS = [...COLOR_REGS, REG_MODE, REG_SPEED, REG_BRIGHTNESS];
+const STARTUP_REGS = [...COLOR_REGS, REG_UNKNOWN, REG_MODE, REG_SPEED, REG_BRIGHTNESS];
 
 function matches(b, gpu) {
   return b.Vendor() === gpu.Vendor && b.Product() === gpu.Device &&
@@ -129,6 +129,15 @@ function readStartupState() {
   return values;
 }
 
+// Put back one saved register; read it back and write it once more if the card did not take it
+// (a single NvAPI write can fail, and a missed register leaves the card's effect changed).
+function restore(reg) {
+  write(reg, saved[reg]);
+  if (bus.ReadByte(reg) !== saved[reg]) {
+    write(reg, saved[reg]);
+  }
+}
+
 export function Initialize() {
   const gpu = GPUS.find((g) => matches(bus, g));
   if (gpu) {
@@ -168,13 +177,13 @@ function hexColor(text) {
 // When the startup state could not be read, show the shutdown colour in static mode instead.
 export function Shutdown() {
   if (saved) {
-    write(REG_UNKNOWN, 0x00);
+    restore(REG_UNKNOWN);
     for (const reg of COLOR_REGS) {
-      write(reg, saved[reg]);
+      restore(reg);
     }
-    write(REG_SPEED, saved[REG_SPEED]);
-    write(REG_BRIGHTNESS, saved[REG_BRIGHTNESS]);
-    write(REG_MODE, saved[REG_MODE]);
+    restore(REG_SPEED);
+    restore(REG_BRIGHTNESS);
+    restore(REG_MODE);
   } else {
     const [r, g, b] = hexColor(typeof shutdownColor === "string" ? shutdownColor : "#000000");
     setColor(r, g, b);

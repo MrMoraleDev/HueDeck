@@ -13,6 +13,12 @@ colour and the rainbow (checked by eye). Solid colours: 19 writes per run, 0 err
 at 30 fps: 1811 writes in 15 s with 1 transient NvAPI error (status -1), recovered on the next
 frame; a 4 s run had 0 errors. Register 0x3F was never written.
 
+2026-10-22: after a run together with the RAM, the card came back to its startup effect
+but darker. `Shutdown()` cleared register 0x26 instead of restoring it and did not check
+the restore writes (one NvAPI write in a few hundred fails with status -1). Register 0x26
+is now saved at `Initialize()` and restored, and each restored register is read back and
+written once more if the card did not take it.
+
 | Card | PCI vendor:device | Subsystem | Status |
 |---|---|---|---|
 | MSI GeForce RTX 3060 Gaming X Trio LHR | `10DE:2504` | `1462:3903` | tested 2026-10-19 |

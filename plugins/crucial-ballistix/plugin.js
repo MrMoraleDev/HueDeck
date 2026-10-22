@@ -13,7 +13,7 @@
 // through it. Driven in OpenRGB's "Direct" mode: static effect mode once, then the three colour
 // planes per frame.
 //
-// Protocol notes and sources: docs/hardware/crucial-ballistix.md. Status: untested on hardware.
+// Protocol notes and sources: docs/hardware/crucial-ballistix.md. Status: tested on 2x BL8G32C16U4WL (2026-10-22).
 //
 // Safety: only the addresses of SmbusAddresses(); the SPD EEPROM (0x50-0x57) and its
 // write-protect addresses (0x30-0x37) are never touched; the controller has no save/EEPROM

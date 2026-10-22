@@ -8,6 +8,18 @@ Controllers, the RGB Controllers, the Smart Device V2, the NZXT USB lighting con
 Hue 2 / B650E motherboards, and the Kraken X3 and Kraken 2024 Elite RGB coolers. It never
 changes fan or pump speeds and sends no hardware effect.
 
+## Tested on hardware
+
+2026-10-22, on the user's NZXT Kraken X3 (`1E71:2007`): the plugin (run from a copy without the
+`ProductId()` filter that then left `2007` to the single-device plugin) lit the pump ring and the
+logo red, green and blue in turn, with 0 errors. That confirms the OpenRGB logo path (zone 2,
+`22 10 04` + apply `22 A0 04`), which had never been seen on this cooler before (see Untested).
+This plugin now owns `2007`; the single-device plugin `nzxt-kraken-x3` was retired the same day
+(its recording-based protocol notes stay in `docs/hardware/nzxt-kraken-x3.md`, its recording in
+`fixtures/recorded-kraken-x3.json`). `2007` is marked tested in `manifest.json`; every other
+product id is not. NZXT CAM (`NZXT CAM.exe`) is reported as a conflicting process, as it was for
+the single-device plugin.
+
 ## Sources
 
 | # | Source | License | Used for |
@@ -131,8 +143,8 @@ reports every frame already uses.
   component setup carries over). Zone 1 "Ring" and zone 2 "Logo" are fixed parts of the pump
   (accessory ids `10` and `11`, 8 LEDs and 1 LED), so they are LEDs of the device itself: a
   5x5 grid with "Ring LED 1" .. "Ring LED 8" on a circle, clockwise from the top, at `(3,0)`,
-  `(4,1)`, `(4,3)`, `(3,4)`, `(1,4)`, `(0,3)`, `(0,1)`, `(1,0)` (the layout of
-  `plugins/nzxt-kraken-x3`), and "Logo LED" in the centre at `(2,2)`. OpenRGB's zones are linear;
+  `(4,1)`, `(4,3)`, `(3,4)`, `(1,4)`, `(0,3)`, `(0,1)`, `(1,0)` (the layout of the retired
+  `nzxt-kraken-x3` plugin, `docs/hardware/nzxt-kraken-x3.md`), and "Logo LED" in the centre at `(2,2)`. OpenRGB's zones are linear;
   only the placement differs, the LED order on the wire is OpenRGB's.
 - **Kraken 2024 Elite (`3012`).** OpenRGB has no fixed zone for it: its 24-LED ring is an
   accessory (`1E`) detected on RGB channel 1 like any fan or strip, so Lightloom exposes it as
@@ -182,21 +194,16 @@ reports every frame already uses.
 
 ## Untested
 
-No product id has been run with this plugin on hardware (`tested` is empty in the manifest).
-What is known first hand: the user's Kraken X3 (`1E71:2007`) accepted, from another plugin,
-header and ring reports byte-identical to the ones this plugin sends (S5, see Replay). Never
-sent to real hardware by Lightloom: the firmware and device-list requests, the logo as zone 2
-(`22 10 04` + apply), and a group 1 report with colours in it.
+Only the Kraken X3 (`2007`) has run with this plugin on hardware (see "Tested on hardware");
+every other product id is untested. Before that test, what was known first hand was that the
+user's Kraken X3 accepted, from another plugin, header and ring reports byte-identical to the
+ones this plugin sends (S5, see Replay); the logo had only ever been seen lit through `2A 04`
+(S5), and the OpenRGB way this plugin uses (zone 2, `22 10 04` + `22 A0 04`) was checked on the
+cooler on 2026-10-22. Still never seen on real hardware: a group 1 report with colours in it
+(a channel with more than 20 LEDs) and any product other than the Kraken X3.
 
-Lightloom's tested plugin `plugins/nzxt-kraken-x3/` also claims `1E71:2007`. Plugins are scanned
-in path order and the last one wins a VID:PID, so with both in `plugins/`,
-`nzxt-kraken-x3` keeps driving the user's cooler. Nothing but that order enforces it: renaming a
-directory or passing a different `--plugins` order would hand the cooler to this plugin. **The
-Kraken X3 logo path is unverified:** this plugin lights the logo the OpenRGB way (zone 2,
-`22 10 04` + `22 A0 04`), while the user's X3 has only ever been seen lit through `2A 04` (S5).
-If this plugin ever wins `2007` before the logo is checked on hardware, the logo may stay unlit
-(header and ring reports are byte-identical to the recordings). Check the logo on hardware before
-making this plugin the owner of `2007`.
+Ownership: the single-device plugin `plugins/nzxt-kraken-x3/` also claimed `1E71:2007` until it
+was retired on 2026-10-22; this plugin is now the only one that claims it.
 
 ## Replay (`lightloom compat replay`, 2026-10-18, re-run 2026-10-19)
 

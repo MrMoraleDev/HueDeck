@@ -2,7 +2,15 @@
 
 # Sony DualSense (`054C:0CE6`): light bar over USB
 
-The plugin is `plugins/sony-dualsense/`. It drives the light bar only, and only over USB.
+> **Plugin retired (2026-10-22).** The single-device plugin `plugins/sony-dualsense/` was removed
+> in favour of the OpenRGB-derived family plugin `plugins/sony-gamepad/`
+> (`docs/hardware/sony-gamepad.md`), which was tested on this controller on 2026-10-22 (light bar
+> red, green, blue, 0 errors) and also drives the five player LEDs. This page stays as the protocol
+> notes of the retired plugin: the field table of report `0x02` and the 2026-10-18 bench runs.
+> The differences between the two plugins are listed in `docs/hardware/sony-gamepad.md`
+> ("Ownership of the DualSense ids").
+
+The retired plugin drove the light bar only, and only over USB.
 
 ## Sources
 
@@ -53,7 +61,7 @@ Byte 0 is the report id. The fields the plugin uses are marked; it leaves every 
 
 Every report keeps `valid_flag0` at 0 and sets no `valid_flag1`/`valid_flag2` bit other
 than the light bar ones, so volume, audio routing, vibration, triggers, the microphone LED
-and the player LEDs are never changed. The plugin's tests check this for every report.
+and the player LEDs are never changed. The retired plugin's tests checked this for every report.
 The other plugin seen in S2 sets `valid_flag0` to `0xFC` (volumes and audio routing) and
 `valid_flag1` to `0xD7`; Lightloom deliberately does not.
 

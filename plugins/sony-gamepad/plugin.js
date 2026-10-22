@@ -26,6 +26,9 @@
 //     parameter.
 //   * OpenRGB sends nothing when it exits; Shutdown() turns the LEDs it drove off (black), since
 //     the protocol as OpenRGB uses it has no command that hands the lighting back.
+//
+// Tested on hardware (2026-10-22): DualSense (054C:0CE6) over USB, light bar. The DualShock 4 ids
+// and the DualSense Edge (0x0DF2) are untested.
 
 /* global device */
 
@@ -71,12 +74,9 @@ export function Publisher() { return "Lightloom"; }
 export function Version() { return "0.1.0"; }
 export function Documentation() { return "hardware/sony-gamepad"; }
 export function VendorId() { return SONY_VID; }
-// 0x0CE6 and 0x0DF2 are also claimed by plugins/sony-dualsense; Lightloom's index keeps the
-// last-scanned plugin, so this one wins on scan order. Ownership is an open maintainer decision
-// (docs/hardware/sony-gamepad.md, "Collision with plugins/sony-dualsense").
+// The DualSense Edge takes the DualSense code path unchanged (same OpenRGB detector function).
 export function ProductId() {
-  // DualSense ids stay with plugins/sony-dualsense (tested) until both are compared on the device.
-  return [SONY_DS4_V1_PID, SONY_DS4_V2_PID, SONY_DS4_RECEIVER_PID];
+  return [SONY_DS4_V1_PID, SONY_DS4_V2_PID, SONY_DS4_RECEIVER_PID, SONY_DUALSENSE_PID, SONY_DUALSENSE_EDGE_PID];
 }
 export function Type() { return "Hid"; }
 export function DeviceType() { return "other"; }

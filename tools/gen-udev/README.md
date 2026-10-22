@@ -25,7 +25,7 @@ documented requirement). `network` plugins are skipped.
 Example output fragment:
 
 ```
-# Razer DeathAdder V2 Pro (razer-deathadder-v2-pro)
+# Razer (OpenRGB port) (razer)
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="007c", TAG+="uaccess"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="007c", TAG+="uaccess"
 ```

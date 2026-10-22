@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Components: the fans, strips and other addressable devices plugged into a
 //! controller channel (docs/host-api/components-channels.md §3-4).
 //!

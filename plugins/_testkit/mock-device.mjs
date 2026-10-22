@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Tiny mock of the SignalRGB-compatible `device` global for first-party plugin tests
 // (Node 24, node:test). It records every I/O call so a test can assert the exact bytes a
@@ -19,6 +19,15 @@ import { pathToFileURL } from "node:url";
  * @param {number} [options.productId]
  * @param {number} [options.vendorId]
  * @param {Set<number> | number[]} [options.failSendReportIds]  report ids for which send_report returns -1
+ * @param {Record<string, number[][]>} [options.channelColors]  per channel name, one [r, g, b] per LED;
+ *   channel(name) of a channel the plugin added returns them through getColors(format, order)
+ * @param {(sent: number[]) => (number[] | undefined)} [options.featureReply]  called after every
+ *   send_report with the bytes sent; a returned array (report id first) becomes what get_report
+ *   answers for its report id (a device that answers each request)
+ * @param {object | null} [options.reportFields]  what getHidReportFields() returns (HueDeck
+ *   extension: { usagePage, usage, reports, fields }); null when absent
+ * @param {Record<string, number[]>} [options.subdeviceColors]  per subdevice id, the colour
+ *   subdeviceColor(id, x, y) returns (black when absent)
  */
 export function createMockDevice(options = {}) {
   const featureReports = toReportMap(options.featureReports);
@@ -26,6 +35,8 @@ export function createMockDevice(options = {}) {
   const failSend = new Set(options.failSendReportIds ?? []);
   let colorSource = options.color ?? [0, 0, 0];
   let lastReadSize = 0;
+  const channelColors = new Map(Object.entries(options.channelColors ?? {}));
+  const subdeviceColors = new Map(Object.entries(options.subdeviceColors ?? {}));
 
   const device = {
     // --- recordings ---------------------------------------------------------------------
@@ -35,6 +46,7 @@ export function createMockDevice(options = {}) {
     logs: [],           // log:         { message, options }
     pauses: [],         // pause(ms)
     channels: [],       // addChannel(name, ledLimit, defaultLedCount)
+    subdevices: [],     // createSubdevice(id): { id, name, size, leds }
 
     // --- test controls ------------------------------------------------------------------
     setColor(color) { colorSource = color; },
@@ -53,7 +65,10 @@ export function createMockDevice(options = {}) {
       record("send_report", [data, length]);
       const bytes = normalise(data, length);
       device.sent.push({ reportId: bytes[0], length, bytes });
-      return failSend.has(bytes[0]) ? -1 : length;
+      if (failSend.has(bytes[0])) return -1;
+      const reply = options.featureReply?.(bytes);
+      if (reply) featureReports.set(Number(reply[0]), Array.from(reply));
+      return length;
     },
     get_report(reportIdBytes, length) {
       record("get_report", [reportIdBytes, length]);
@@ -84,6 +99,7 @@ export function createMockDevice(options = {}) {
     productId() { return options.productId ?? 0; },
     vendorId() { return options.vendorId ?? 0; },
     getDeviceInfo() { return { product: "mock" }; },
+    getHidReportFields() { record("getHidReportFields", []); return options.reportFields ?? null; },
     setName(name) { record("setName", [name]); },
     setSize(size) { record("setSize", [size]); },
     setControllableLeds(names, positions) { record("setControllableLeds", [names, positions]); },
@@ -92,6 +108,40 @@ export function createMockDevice(options = {}) {
       record("addChannel", [name, ledLimit, defaultLedCount]);
       device.channels.push({ name, ledLimit, defaultLedCount });
     },
+    setChannelColors(name, colors) { channelColors.set(name, colors); },
+    createSubdevice(id) {
+      record("createSubdevice", [id]);
+      if (!device.subdevices.some((s) => s.id === id)) device.subdevices.push({ id });
+    },
+    setSubdeviceName(id, name) { record("setSubdeviceName", [id, name]); subdevice(id).name = name; },
+    setSubdeviceSize(id, w, h) { record("setSubdeviceSize", [id, w, h]); subdevice(id).size = [w, h]; },
+    setSubdeviceLeds(id, names, positions) {
+      record("setSubdeviceLeds", [id, names, positions]);
+      subdevice(id).leds = { names, positions };
+    },
+    subdeviceColor(id, x, y) {
+      record("subdeviceColor", [id, x, y]);
+      subdevice(id);
+      const c = subdeviceColors.get(id) ?? [0, 0, 0];
+      return [c[0] & 0xFF, c[1] & 0xFF, c[2] & 0xFF];
+    },
+    channel(name) {
+      const added = device.channels.find((c) => c.name === name);
+      if (!added) return undefined;
+      const colors = (channelColors.get(name) ?? []).slice(0, added.ledLimit || Infinity);
+      return {
+        ledCount: colors.length,
+        LedCount() { return colors.length; },
+        LedLimit() { return added.ledLimit; },
+        getColors(format = "Inline", order = "RGB") {
+          const pick = { R: 0, G: 1, B: 2 };
+          const reorder = (c) => Array.from(String(order).toUpperCase(), (ch) => c[pick[ch]] & 0xFF);
+          const each = colors.map(reorder);
+          if (String(format).toLowerCase() === "inline") return each.flat();
+          return [0, 1, 2].map((k) => each.map((c) => c[k]));
+        },
+      };
+    },
 
     // --- diagnostics --------------------------------------------------------------------
     log(message, opts) { device.logs.push({ message: String(message), options: opts ?? {} }); },
@@ -99,6 +149,11 @@ export function createMockDevice(options = {}) {
   };
 
   function record(method, args) { device.calls.push({ method, args }); }
+  function subdevice(id) {
+    const found = device.subdevices.find((s) => s.id === id);
+    if (!found) throw new Error(`subdevice '${id}' was never created`);
+    return found;
+  }
   return device;
 }
 

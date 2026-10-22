@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Allocates until the runtime memory cap stops it (HueDeck test fixture).
 const hoard = [];
 for (;;) {

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Device manager: one session per present device, following hotplug.
 //!
 //! The caller enumerates (at start, and after hotplug notifications once they
@@ -256,6 +256,17 @@ impl DeviceManager {
     /// Whether a session lost its device and may be restarted now (a reconcile is due).
     pub fn has_disconnected(&self) -> bool {
         self.sessions.iter().any(|(k, h)| self.restartable(k, h))
+    }
+
+    /// The reports of sessions that ended so far, and the sessions that panicked
+    /// or did not stop in time, handing them over (a long-running caller drains
+    /// them so they do not pile up).
+    pub fn drain_reports(&mut self) -> (Vec<SessionReport>, Vec<String>) {
+        self.reap_stopping();
+        (
+            std::mem::take(&mut self.reports),
+            std::mem::take(&mut self.failed),
+        )
     }
 
     /// Stop every session and return all reports (including those of sessions

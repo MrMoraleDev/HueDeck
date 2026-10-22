@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # packaging/
 
 Distribution artifacts for HueDeck. Release builds are produced by
@@ -6,13 +6,14 @@ Distribution artifacts for HueDeck. Release builds are produced by
 today). Nothing here is signed yet; Authenticode via SignPath OSS is the planned step
 for Windows (see the SIGNING block in the release workflow).
 
-Only `systemd/` and `udev/` contain real files at the moment; every other directory is
+Only `systemd/`, `udev/` and `wix/huedeck.ico` (the app icon, rendered from
+`docs/brand/huedeck-icon.svg`) are real files at the moment; everything else is
 a placeholder with the file names already decided so later milestones (M4 Windows
 packaging, M7 Linux packaging) drop files into known places.
 
 | Directory   | Target               | Planned files                                                                 | Milestone |
 |-------------|----------------------|-------------------------------------------------------------------------------|-----------|
-| `wix/`      | Windows MSI (WiX v4+) | `huedeck.wxs`, `Product.wxs` fragments, `License.rtf`, `huedeck.ico`, `build.ps1` | M4 |
+| `wix/`      | Windows MSI (WiX v4+) | `huedeck.wxs`, `Product.wxs` fragments, `License.rtf`, `huedeck.ico` (present), `build.ps1` | M4 |
 | `winget/`   | winget manifest       | `manifests/h/HueDeck/HueDeck/<version>/HueDeck.HueDeck.yaml`, `HueDeck.HueDeck.installer.yaml`, `HueDeck.HueDeck.locale.en-US.yaml` | M4 |
 | `systemd/`  | Linux user service    | `huedeckd.service` (present)                                                  | M7 |
 | `udev/`     | Linux device access   | `70-huedeck.rules.template` (present); generated `70-huedeck.rules` via `tools/gen-udev` | M7 |
@@ -21,6 +22,12 @@ packaging, M7 Linux packaging) drop files into known places.
 
 ## Windows (MSI, winget)
 
+- The **portable build** is what the release workflow publishes today: one directory
+  (zipped) staged by `tools/package/stage-windows.ps1` with `huedeckd.exe`, `huedeck.exe`,
+  `huedeck-renderer.exe` and its CEF runtime, `ui/`, `plugins/`, `effects/`, the license
+  texts and `THIRD-PARTY/CEF-Chromium-CREDITS.html`. Unzip anywhere and run
+  `huedeckd.exe --open`; settings go to `%LOCALAPPDATA%\HueDeck` and `%APPDATA%\HueDeck`.
+  About 400 MB unpacked, most of it Chromium.
 - The MSI installs `huedeckd.exe`, `huedeck.exe`, `huedeck-renderer.exe` plus the CEF
   runtime under `%ProgramFiles%\HueDeck`, registers the `huedeck://` URL scheme and an
   optional per-user autostart entry. It never installs a kernel driver.

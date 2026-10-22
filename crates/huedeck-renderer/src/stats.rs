@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Paint-interval statistics for the frame pacing acceptance check.
 
 use serde::Serialize;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Synthetic plugin with `export default class` and a relative import (HueDeck test fixture).
 import { PIDLibrary, checksum } from "./lib/protocol.js";
 

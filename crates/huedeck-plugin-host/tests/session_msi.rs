@@ -1,9 +1,10 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
-//! Golden test of a full device session (M1): the first-party MSI Mystic
-//! Light plugin runs through the same catalog → session → device-host path
-//! the CLI uses on hardware, against a scripted mock HID endpoint. Expected
-//! packets come from `plugins/msi-mystic-light-7c91/fixtures/expected-packet.json`,
-//! which was produced independently of the plugin.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Golden test of a full device session: the first-party MSI Mystic Light
+//! plugin (per-LED mode) runs through the same catalog → session → device-host
+//! path the CLI uses on hardware, against a scripted mock HID endpoint. The
+//! reset and configuration packets come from
+//! `plugins/msi-mystic-light-7c91/fixtures/per-led.json` (recorded on the
+//! wire); the colour streams are built here from the documented slot order.
 
 use huedeck_engine::{Frame, FrameStore, Rgb, CANVAS_HEIGHT, CANVAS_WIDTH};
 use huedeck_hal::mock::{MockHid, TransactionKind};
@@ -23,8 +24,7 @@ fn repo() -> PathBuf {
 
 fn fixture() -> serde_json::Value {
     let text =
-        std::fs::read_to_string(repo().join("plugins/msi-mystic-light-7c91/fixtures/expected-packet.json"))
-            .unwrap();
+        std::fs::read_to_string(repo().join("plugins/msi-mystic-light-7c91/fixtures/per-led.json")).unwrap();
     serde_json::from_str(&text).unwrap()
 }
 
@@ -35,14 +35,24 @@ fn hex(s: &str) -> Vec<u8> {
         .collect()
 }
 
-fn case(fx: &serde_json::Value, name: &str) -> Vec<u8> {
-    let c = fx["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["name"] == name)
-        .unwrap_or_else(|| panic!("fixture case {name}"));
-    hex(c["expectedPacket"].as_str().unwrap())
+fn packet(fx: &serde_json::Value, name: &str) -> Vec<u8> {
+    hex(fx[name]
+        .as_str()
+        .unwrap_or_else(|| panic!("fixture packet {name}")))
+}
+
+/// Slots a session lights: 6 onboard LEDs, JRGB1, JRGB2 and the two channels'
+/// default strips of 60 LEDs.
+const LIT: usize = 6 + 2 + 60 + 60;
+
+/// The 0x53 colour stream with its first `lit` slots in `rgb`, the rest black.
+fn stream(rgb: [u8; 3], lit: usize) -> Vec<u8> {
+    let mut s = vec![0u8; 725];
+    s[..5].copy_from_slice(&[0x53, 0x25, 0x06, 0x00, 0x00]);
+    for slot in 0..lit {
+        s[5 + 3 * slot..8 + 3 * slot].copy_from_slice(&rgb);
+    }
+    s
 }
 
 fn msi_plugin() -> CatalogEntry {
@@ -122,7 +132,7 @@ fn run(rig: &Rig, opts: SessionOptions, color: Rgb, frames: u64) -> SessionRepor
 }
 
 #[test]
-fn solid_red_frame_drives_the_golden_packet_and_shutdown_restores() {
+fn solid_red_frame_streams_every_led_and_shutdown_restores() {
     let fx = fixture();
     let rig = rig(0);
     let report = run(
@@ -145,11 +155,16 @@ fn solid_red_frame_drives_the_golden_packet_and_shutdown_restores() {
     assert_eq!(report.io.errors(), 0);
 
     let sends = rig.mock.recorder().feature_sends();
-    // One packet for the colour (unchanged frames are not resent within the
-    // plugin's 1 s keepalive), then the restore image on Shutdown(false).
-    assert_eq!(sends.len(), 2, "{} sends", sends.len());
-    assert_eq!(sends[0], case(&fx, "solid red via device.color"));
-    assert_eq!(sends[1], hex(fx["expectedRestorePacket"].as_str().unwrap()));
+    // The recorded reset and configuration, one stream for the colour
+    // (unchanged frames are not resent within the plugin's 1 s keepalive),
+    // then a black stream and the restore image on Shutdown(false).
+    assert_eq!(sends.len(), 5, "{} sends", sends.len());
+    assert_eq!(sends[0], packet(&fx, "reset"));
+    assert_eq!(sends[1], packet(&fx, "config_60_60"));
+    assert_eq!(sends[2], stream([255, 0, 0], LIT));
+    assert_eq!(sends[3], stream([0, 0, 0], 0));
+    assert_eq!(sends[4], packet(&fx, "expectedRestorePacket"));
+    assert_eq!(rig.mock.recorder().writes(), vec![packet(&fx, "ezLedQuery")]);
 
     // The device was read before Initialize (plugin restore image) and the
     // restore check read it again after Shutdown. The mock stores what was
@@ -171,7 +186,6 @@ fn solid_red_frame_drives_the_golden_packet_and_shutdown_restores() {
 
 #[test]
 fn forced_mode_parameters_override_the_canvas() {
-    let fx = fixture();
     let rig = rig(0);
     let mut parameters = serde_json::Map::new();
     parameters.insert("LightingMode".into(), "Forced".into());
@@ -187,7 +201,7 @@ fn forced_mode_parameters_override_the_canvas() {
     );
     assert!(report.failures.is_empty(), "{:#?}", report.failures);
     let sends = rig.mock.recorder().feature_sends();
-    assert_eq!(sends[0], case(&fx, "forced colour #00FF00"));
+    assert_eq!(sends[2], stream([0, 255, 0], LIT));
 }
 
 #[test]
@@ -214,7 +228,8 @@ fn dry_run_reads_the_device_but_never_writes() {
         .filter(|r| r.kind == IoKind::SendFeature)
         .collect();
     assert!(dry.iter().all(|r| r.dry_run));
-    assert_eq!(dry[0].bytes, case(&fx, "solid red via device.color"));
+    assert_eq!(dry[1].bytes, packet(&fx, "config_60_60"));
+    assert_eq!(dry[2].bytes, stream([255, 0, 0], LIT));
     assert_eq!(
         report.io_log[0].kind,
         IoKind::GetFeature,

@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # ADR-0002: Effects render in real Chromium via CEF offscreen rendering
 
 - Status: Accepted (2026-10-17); risk retired by SPIKE A in M0

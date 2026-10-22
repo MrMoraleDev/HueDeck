@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // HostApiMissing: the typed error every HueDeck prelude facade throws when a
 // plugin reaches a host member that this build does not implement yet

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! rquickjs (QuickJS-NG) plugin runtime — M0 spike B.
 //!
 //! * One [`rquickjs::Runtime`] + [`rquickjs::Context`] per plugin, created and

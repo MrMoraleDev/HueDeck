@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `huedeck light | rainbow | bench`: the headless M1 pipeline.
 //!
 //! Null renderer → [`FrameStore`] → one plugin session per supported device
@@ -20,6 +20,8 @@ use huedeck_plugin_host::session::{
     RestoreCheckMode, RestoreProbe, SessionDevice, SessionOptions, SessionReport,
 };
 use huedeck_render::{CefRenderer, CefRendererConfig, NullRenderer, Pattern, RendererClient};
+use huedeck_runtime::hardware::Hardware;
+use huedeck_runtime::hotplug::{Hotplug, HOTPLUG_SETTLE};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 #[cfg(not(windows))]
@@ -28,10 +30,6 @@ use std::sync::Arc;
 #[cfg(not(windows))]
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-
-/// RGB software that holds the devices HueDeck drives. Reported, never terminated.
-#[cfg(windows)]
-pub const KNOWN_CONFLICTS: &[&str] = &["SignalRgb.exe", "OpenRGB.exe"];
 
 /// Options shared by `light`, `rainbow` and `bench`.
 #[derive(Debug, Clone, Args)]
@@ -437,14 +435,6 @@ impl RunReport {
 
 // Used by the Windows device path (and tests); Linux drives no hardware yet.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn matches_filter(key: &str, filters: &[String]) -> bool {
-    filters.is_empty()
-        || filters.iter().any(|f| {
-            key.to_ascii_lowercase()
-                .starts_with(&f.trim().to_ascii_lowercase())
-        })
-}
-
 /// A scripted device that answers every feature-report id with 1024 zero bytes
 /// (report id first), so any HID plugin can run its Initialize against it.
 pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid>, SessionDevice)> {
@@ -477,144 +467,6 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
     Ok((Arc::new(mock), device))
 }
 
-/// The HID backend of a hardware run, kept to enumerate again after hotplug events.
-#[cfg(windows)]
-enum Hardware {
-    Native(Arc<huedeck_hal_windows::NativeHidBackend>),
-    Hidapi(Arc<huedeck_hal_windows::WindowsHidBackend>),
-}
-
-#[cfg(windows)]
-impl Hardware {
-    fn open() -> anyhow::Result<Self> {
-        Ok(if crate::devices::use_hidapi() {
-            Self::Hidapi(Arc::new(
-                huedeck_hal_windows::WindowsHidBackend::new().context("initialising hidapi")?,
-            ))
-        } else {
-            Self::Native(Arc::new(huedeck_hal_windows::NativeHidBackend::new()))
-        })
-    }
-
-    fn backend(&self) -> Arc<dyn HidBackend> {
-        match self {
-            Self::Native(b) => b.clone(),
-            Self::Hidapi(b) => b.clone(),
-        }
-    }
-
-    /// The present devices some plugin claims (enumerating and probing only
-    /// those), after `filters`, each with its plugin; plus how many matched
-    /// before filtering.
-    fn targets(&self, catalog: &Catalog, filters: &[String]) -> anyhow::Result<(Vec<Present>, usize)> {
-        let wanted: std::collections::BTreeSet<(u16, u16)> =
-            catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
-        let groups = match self {
-            Self::Native(b) => b.enumerate_grouped_for(&wanted),
-            Self::Hidapi(b) => b.enumerate_grouped_for(&wanted),
-        }
-        .context("enumerating HID devices")?;
-        let total = groups.len();
-        let mut targets = Vec::new();
-        for g in groups {
-            let key = g.key.to_string();
-            if !matches_filter(&key, filters) {
-                continue;
-            }
-            if let Some(plugin) = catalog.lookup(g.key.vid, g.key.pid) {
-                targets.push(Present {
-                    device: SessionDevice {
-                        key,
-                        vid: g.key.vid,
-                        pid: g.key.pid,
-                        endpoints: g.endpoints.into_iter().map(|e| e.info).collect(),
-                    },
-                    plugin: plugin.clone(),
-                });
-            }
-        }
-        Ok((targets, total))
-    }
-}
-
-/// No hardware backend on this platform yet.
-#[cfg(not(windows))]
-enum Hardware {}
-
-#[cfg(not(windows))]
-impl Hardware {
-    fn open() -> anyhow::Result<Self> {
-        bail!("driving hardware is only implemented on Windows so far (Linux backend: milestone M7); try `huedeck bench --mock VID:PID`")
-    }
-
-    fn backend(&self) -> Arc<dyn HidBackend> {
-        match *self {}
-    }
-
-    fn targets(&self, _: &Catalog, _: &[String]) -> anyhow::Result<(Vec<Present>, usize)> {
-        match *self {}
-    }
-}
-
-/// HID arrival/removal notifications; inactive for mock runs and where the
-/// platform has none yet.
-struct Hotplug {
-    #[cfg(windows)]
-    _source: Option<huedeck_hal_windows::hotplug::HidHotplug>,
-    events: Option<std::sync::mpsc::Receiver<huedeck_hal::DeviceEvent>>,
-}
-
-impl Hotplug {
-    fn inactive() -> Self {
-        Self {
-            #[cfg(windows)]
-            _source: None,
-            events: None,
-        }
-    }
-
-    #[cfg(windows)]
-    fn start() -> Self {
-        use huedeck_hal::HotplugSource;
-        let mut source = huedeck_hal_windows::hotplug::HidHotplug::new();
-        match source.subscribe() {
-            Ok(events) => Self {
-                _source: Some(source),
-                events: Some(events),
-            },
-            Err(e) => {
-                eprintln!("huedeck: hotplug notifications unavailable ({e}); devices plugged in later are not driven");
-                Self::inactive()
-            }
-        }
-    }
-
-    #[cfg(not(windows))]
-    fn start() -> Self {
-        Self::inactive()
-    }
-
-    fn active(&self) -> bool {
-        self.events.is_some()
-    }
-
-    /// Whether any device arrived or left since the last call.
-    fn changed(&self) -> bool {
-        let Some(rx) = &self.events else {
-            return false;
-        };
-        let mut any = false;
-        while rx.try_recv().is_ok() {
-            any = true;
-        }
-        any
-    }
-}
-
-/// How long hotplug events must be quiet before enumerating again (one plug
-/// produces a burst of events, one per HID collection).
-const HOTPLUG_SETTLE: Duration = Duration::from_millis(250);
-
 /// The options of the session for `device`: the run's flags, SignalRGB's
 /// channel setup with `--signalrgb`, and a log sink labelled with the device.
 fn session_options(
@@ -625,7 +477,7 @@ fn session_options(
 ) -> SessionOptions {
     let label = device.key.clone();
     let channel_components = if args.catalog.signalrgb {
-        let (channels, notes) = signalrgb_channels(&device.key);
+        let (channels, notes) = huedeck_runtime::signalrgb::channels(&device.key);
         for note in notes {
             eprintln!("  [{label}] SignalRGB setup: {note}");
         }
@@ -683,27 +535,6 @@ fn print_change(mode: &Mode, change: &Change) {
         Change::Restarted { key } => eprintln!("huedeck {name}: {key} reconnected, session restarted"),
         Change::Failed { key, error } => eprintln!("huedeck {name}: {key}: cannot start a session: {error}"),
     }
-}
-
-#[cfg(windows)]
-fn running_conflicts(targets: &[Present]) -> anyhow::Result<Vec<String>> {
-    let running = huedeck_hal_windows::system::running_process_names().map_err(anyhow::Error::msg)?;
-    let mut wanted: Vec<String> = KNOWN_CONFLICTS.iter().map(|s| s.to_string()).collect();
-    for t in targets {
-        wanted.extend(t.plugin.meta.conflicting_processes.iter().cloned());
-    }
-    let mut found: Vec<String> = running
-        .into_iter()
-        .filter(|r| wanted.iter().any(|w| w.eq_ignore_ascii_case(r)))
-        .collect();
-    found.sort_by_key(|s| s.to_ascii_lowercase());
-    found.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-    Ok(found)
-}
-
-#[cfg(not(windows))]
-fn running_conflicts(_: &[Present]) -> anyhow::Result<Vec<String>> {
-    Ok(Vec::new())
 }
 
 /// Stop requests from the console: Ctrl-C and Ctrl-Break everywhere; on
@@ -780,17 +611,6 @@ fn trace_restore_check(mode: &RestoreCheckMode) -> TraceRestoreCheck {
     }
 }
 
-fn rss_bytes() -> Option<u64> {
-    #[cfg(windows)]
-    {
-        huedeck_hal_windows::system::working_set_bytes()
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
-}
-
 /// `huedeck plugins`: the plugins found and, for each connected HID device
 /// (read-only enumeration), the plugin that would drive it.
 pub fn list_plugins(args: &CatalogArgs, json: bool) -> anyhow::Result<()> {
@@ -798,7 +618,7 @@ pub fn list_plugins(args: &CatalogArgs, json: bool) -> anyhow::Result<()> {
     let (catalog, dirs) = args.scan()?;
     let scan_ms = started.elapsed().as_secs_f64() * 1000.0;
     let stats = catalog.stats();
-    let devices = connected_devices().unwrap_or_else(|e| {
+    let devices = huedeck_runtime::hardware::connected_devices().unwrap_or_else(|e| {
         eprintln!("huedeck: device enumeration unavailable: {e}");
         Vec::new()
     });
@@ -842,66 +662,6 @@ pub fn list_plugins(args: &CatalogArgs, json: bool) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(windows)]
-fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
-    let groups = huedeck_hal_windows::NativeHidBackend::new().enumerate_grouped()?;
-    Ok(groups
-        .into_iter()
-        .map(|g| (g.key.to_string(), g.key.vid, g.key.pid))
-        .collect())
-}
-
-#[cfg(not(windows))]
-fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
-    bail!("HID enumeration is only implemented on Windows so far")
-}
-
-/// SignalRGB's component setup of the device `key` (read-only): the channel
-/// arrays under `HKCU\Software\WhirlwindFX\SignalRgb\devices\<key>`. Other
-/// values there (plugin property values) are not component arrays and are skipped.
-#[cfg(windows)]
-fn signalrgb_channels(key: &str) -> (BTreeMap<String, Vec<ComponentInstance>>, Vec<String>) {
-    let mut channels = BTreeMap::new();
-    let mut notes = Vec::new();
-    let subkey = format!("Software\\WhirlwindFX\\SignalRgb\\devices\\{key}");
-    let values = match huedeck_hal_windows::registry::current_user_strings(&subkey) {
-        Ok(v) => v,
-        Err(e) => {
-            notes.push(format!("cannot read SignalRGB's settings for {key}: {e}"));
-            return (channels, notes);
-        }
-    };
-    for (name, value) in values {
-        if !value.trim_start().starts_with('[') {
-            continue;
-        }
-        match huedeck_engine::parse_channel(&value) {
-            Ok((instances, warnings)) if !instances.is_empty() || value.trim() == "[]" => {
-                notes.extend(warnings.into_iter().map(|w| format!("{name}: {w}")));
-                channels.insert(name, instances);
-            }
-            _ => {}
-        }
-    }
-    (channels, notes)
-}
-
-#[cfg(not(windows))]
-fn signalrgb_channels(_key: &str) -> (BTreeMap<String, Vec<ComponentInstance>>, Vec<String>) {
-    (BTreeMap::new(), Vec::new())
-}
-
-/// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
-#[cfg(windows)]
-fn machine_info() -> Option<huedeck_hal::SystemInfo> {
-    huedeck_hal_windows::system::system_info()
-}
-
-#[cfg(not(windows))]
-fn machine_info() -> Option<huedeck_hal::SystemInfo> {
-    None
 }
 
 /// `huedeck effects`: every `*.html` effect in `dirs` (default `./effects`) with its controls.
@@ -1046,7 +806,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     };
 
     if hardware.is_some() {
-        let conflicts = running_conflicts(&initial)?;
+        let conflicts = huedeck_runtime::conflicts::running_conflicts(&initial, &["huedeckd.exe"])?;
         if !conflicts.is_empty() && !args.ignore_conflicts {
             bail!(
                 "conflicting RGB software is running: {}. Close it first (HueDeck never terminates other \
@@ -1073,7 +833,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     let mut renderer = mode.renderer()?;
     renderer.start(Arc::clone(&store))?;
 
-    let system_info = machine_info().map(Arc::new);
+    let system_info = huedeck_runtime::system::machine_info().map(Arc::new);
     let layout = match &args.layout {
         Some(path) => {
             let text =
@@ -1129,7 +889,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     .map(Duration::from_secs_f64);
     let stats_every = (args.stats_every.is_finite() && args.stats_every > 0.0)
         .then(|| Duration::from_secs_f64(args.stats_every));
-    let mut max_rss = rss_bytes();
+    let mut max_rss = huedeck_runtime::system::rss_bytes();
     let mut first_write: Option<f64> = None;
     let mut last_stats = Instant::now();
     let mut last_rss = Instant::now();
@@ -1153,7 +913,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
         }
         if last_rss.elapsed() >= Duration::from_secs(1) {
             last_rss = Instant::now();
-            max_rss = max_rss.max(rss_bytes());
+            max_rss = max_rss.max(huedeck_runtime::system::rss_bytes());
         }
         if let Some(every) = stats_every {
             if last_stats.elapsed() >= every {
@@ -1168,7 +928,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
                         l.frames,
                         l.render_errors,
                         l.hid_errors,
-                        rss_bytes()
+                        huedeck_runtime::system::rss_bytes()
                             .map(|b| format!("{:.1} MB", b as f64 / 1e6))
                             .unwrap_or_else(|| "n/a".into())
                     );
@@ -1216,7 +976,7 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
     if let Some(line) = renderer.status_line() {
         eprintln!("huedeck {}: {line}", mode.name());
     }
-    max_rss = max_rss.max(rss_bytes());
+    max_rss = max_rss.max(huedeck_runtime::system::rss_bytes());
     // A held console close/log-off/shutdown is released only when `interrupt` drops,
     // after the trace and the JSON report are written.
     if let (Some(r), Some(path)) = (&recorder, &args.record) {
@@ -1497,13 +1257,6 @@ mod tests {
         assert_eq!(diff_ranges(&[1, 2, 3, 4], &[1, 9, 9, 4]), "0x01..0x02");
         assert_eq!(diff_ranges(&[1, 2], &[1, 2]), "none");
         assert_eq!(diff_ranges(&[1, 2, 3], &[0, 2, 0]), "0x00, 0x02");
-    }
-
-    #[test]
-    fn filters_match_key_prefixes() {
-        assert!(matches_filter("1462:7c91:A1", &[]));
-        assert!(matches_filter("1462:7c91:A1", &["1462:7C91".into()]));
-        assert!(!matches_filter("1462:7c91:A1", &["1532".into()]));
     }
 
     #[test]

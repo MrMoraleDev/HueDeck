@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Device sessions: one plugin driving one physical device.
 //!
 //! [`spawn`] starts a dedicated plugin thread with its own QuickJS runtime
@@ -25,6 +25,7 @@
 
 use crate::catalog::CatalogEntry;
 use crate::children::ChildSetup;
+pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
@@ -425,6 +426,10 @@ struct LiveStats {
     hid_disconnected: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
     first_write_us: AtomicU64,
+    /// The device and its children as canvas endpoints (empty until `Initialize()` ran).
+    endpoints: std::sync::Mutex<Arc<Vec<EndpointView>>>,
+    /// The device's channels (empty until `Initialize()` ran).
+    channels: std::sync::Mutex<Arc<Vec<ChannelInfo>>>,
 }
 
 /// Counters readable while the session runs.
@@ -449,6 +454,23 @@ pub struct LiveSnapshot {
 impl LiveStats {
     fn set_state(&self, s: SessionState) {
         self.state.store(s as u8, Ordering::Release);
+    }
+
+    fn endpoints(&self) -> Arc<Vec<EndpointView>> {
+        Arc::clone(&self.endpoints.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Replace the endpoint views and channel list when they changed.
+    fn publish_endpoints(&self, (views, channels): (Vec<EndpointView>, Vec<ChannelInfo>)) {
+        let mut slot = self.endpoints.lock().unwrap_or_else(|e| e.into_inner());
+        if **slot != views {
+            *slot = Arc::new(views);
+        }
+        drop(slot);
+        let mut slot = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        if **slot != channels {
+            *slot = Arc::new(channels);
+        }
     }
 
     fn snapshot(&self) -> LiveSnapshot {
@@ -485,6 +507,13 @@ pub enum Control {
     /// Where the device sits on the canvas; a new device brightness then
     /// calls the plugin's `onBrightnessChanged()`.
     Placement(Placement),
+    /// Where a subdevice (`<device key>:<id>`) or a component instance (its id) sits.
+    ChildPlacement {
+        /// The child's uid.
+        uid: String,
+        /// Its placement.
+        placement: Placement,
+    },
 }
 
 /// A running session.
@@ -513,6 +542,17 @@ impl SessionHandle {
     /// `false` when the session has ended.
     pub fn control(&self, control: Control) -> bool {
         self.control.send(control).is_ok()
+    }
+
+    /// The device and its children as canvas endpoints, as of the last update
+    /// (after `Initialize()`, after placement changes and about once a second).
+    pub fn endpoints(&self) -> Arc<Vec<EndpointView>> {
+        self.live.endpoints()
+    }
+
+    /// The device's channels, updated with [`SessionHandle::endpoints`].
+    pub fn channels(&self) -> Arc<Vec<ChannelInfo>> {
+        Arc::clone(&self.live.channels.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Ask the session to finish its current frame, shut down and return.
@@ -558,6 +598,8 @@ pub fn spawn(
         hid_disconnects: AtomicU64::new(0),
         hid_disconnected: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
+        endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
+        channels: std::sync::Mutex::new(Arc::new(Vec::new())),
     });
     let key = device.key.clone();
     let started = Instant::now();
@@ -843,6 +885,10 @@ fn drive(
     }
 
     live.set_state(SessionState::Running);
+    {
+        let dev = lock_device(shared);
+        live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+    }
     let mut last_seq = 0;
     let mut consecutive_timeouts = 0u32;
     while !stop.load(Ordering::Acquire) {
@@ -854,8 +900,14 @@ fn drive(
             break;
         }
         last_seq = seq;
+        let mut controlled = false;
         while let Ok(control) = controls.try_recv() {
             apply_control(rt, shared, control, &budgets, stop, report);
+            controlled = true;
+        }
+        if controlled || report.frames.is_multiple_of(30) {
+            let dev = lock_device(shared);
+            live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
         }
         let (_, frame, captured) = frames.latest_stamped();
         lock_device(shared).set_frame_at(frame, captured);
@@ -944,6 +996,11 @@ fn apply_control(
             }
         }
         Control::Brightness(b) => lock_device(shared).set_brightness(b),
+        Control::ChildPlacement { uid, placement } => {
+            if !lock_device(shared).set_child_placement(&uid, placement) {
+                report.notes.push(format!("no endpoint {uid} to place"));
+            }
+        }
         Control::Placement(p) => {
             let changed = {
                 let mut dev = lock_device(shared);

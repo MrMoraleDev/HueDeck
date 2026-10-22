@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Wire types shared by the HueDeck processes.
 //!
 //! * [`shm`]: layout of the shared-memory frame ring written by

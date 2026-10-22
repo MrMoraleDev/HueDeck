@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! HueDeck engine core.
 //!
 //! * [`color`]: [`Rgb`](color::Rgb) and the global × layout × device brightness math.

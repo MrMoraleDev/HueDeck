@@ -118,6 +118,13 @@ impl BusState {
             if t.holder == Some(session) {
                 return true;
             }
+            // Nobody holds it and this session is first in line (a holder
+            // went away without handing over): take it.
+            if t.holder.is_none() && t.waiting.front() == Some(&session) {
+                t.waiting.pop_front();
+                t.holder = Some(session);
+                return true;
+            }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 t.waiting.retain(|s| *s != session);

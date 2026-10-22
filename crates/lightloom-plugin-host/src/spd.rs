@@ -86,7 +86,8 @@ impl SpdSlot {
         Some((self.jedec_bank?, self.jedec_id?))
     }
 
-    fn describe(&self) -> String {
+    /// One line for people: address, type, JEP106 bank and id, part number.
+    pub fn describe(&self) -> String {
         let mut text = format!("0x{:02x} {}", self.address, self.memory_type);
         if let Some((bank, id)) = self.jedec() {
             text.push_str(&format!(" bank {bank} id 0x{id:02x}"));

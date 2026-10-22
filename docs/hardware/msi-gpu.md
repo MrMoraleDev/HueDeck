@@ -8,7 +8,7 @@ that bus through NvAPI (`crates/lightloom-nvapi`), port 1, from its own (uneleva
 process.
 
 **Status: tested on the reference card (2026-10-19).** `lightloom light red|green|blue|white`
-and `lightloom rainbow` with `--smbus` on the RTX 3060 Gaming X Trio LHR: the card showed each
+and `lightloom rainbow` (then with `--smbus`) on the RTX 3060 Gaming X Trio LHR: the card showed each
 colour and the rainbow (checked by eye). Solid colours: 19 writes per run, 0 errors. Rainbow
 at 30 fps: 1811 writes in 15 s with 1 transient NvAPI error (status -1), recovered on the next
 frame; a 4 s run had 0 errors. Register 0x3F was never written.
@@ -79,20 +79,25 @@ One write per register and no retries (OpenRGB's behaviour); a failed write is l
   address (`crates/lightloom-plugin-host/src/smbus.rs`).
 - Register `0x3F` is refused by the host as well (`SmbusDeniedRegisters()`), so no edit of
   the plugin and no other plugin bound to `0x68` can store state in the card's flash.
-- Every NvAPI transfer runs under `Global\Access_SMBUS.HTP.Method` and goes to the card by
-  PCI bus and ids, re-resolved after a driver reset (ADR-0004).
+- Every NvAPI transfer goes to the card by PCI bus and ids, re-resolved after a driver
+  reset, on one worker thread. It does not take `Global\Access_SMBUS.HTP.Method` (neither
+  do OpenRGB and SignalRGB): with Lightloom's RAM sessions running, waiting for that mutex
+  cut the card to 13 frames in 4 s with `NVAPI_DEVICE_BUSY` (-108) on 2026-10-19
+  (ADR-0004, 2026-10-22).
 - Lightloom refuses to touch SMBus/GPU I2C while SignalRGB, OpenRGB or a vendor lighting
   service (MSI `LEDKeeper*` / `Mystic_Light_Service`, ...) runs, with no override, and stops
   the GPU session when one starts (checked every second).
 - NvAPI statuses reach the plugin unchanged as negative values (e.g. `-105`
   `NVAPI_PORTID_NOT_FOUND`); NvAPI has no NACK status.
 
-## Trying it (later, with the card)
+## Trying it (with the card)
+
+SMBus devices are on by default (`--no-smbus` leaves them out):
 
 ```
-lightloom plugins --smbus                      # bus list and scan result (SignalRGB closed)
-lightloom light red --smbus --device smbus:10de --dry-run
-lightloom light red --smbus --device smbus:10de
+lightloom plugins                              # bus list and scan result (SignalRGB closed)
+lightloom light red --device smbus:10de --dry-run
+lightloom light red --device smbus:10de
 ```
 
 `bench --mock-smbus msi-gpu` runs the plugin end to end on a scripted bus (no card needed).

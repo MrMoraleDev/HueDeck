@@ -49,10 +49,10 @@ daemon/CLI wiring arrives with M1 and the graph above shows the intended shape.
 | `lightloom-api` | lib | stub (M4) | ports (16138 native, 16038/16034 compat, 6742 OpenRGB) and route tables |
 | `lightloom-daemon` | bin `lightloomd` | M0 | clap + tracing, `--config`, `LifecycleState` |
 | `lightloom-cli` | bin `lightloom` | M0 | `devices | light | rainbow | bench | compat dry-run`, each returning `NotImplemented` with its milestone |
-| `lightloom-iobroker` | lib + bin | M5 | LocalSystem service for the chipset SMBus (RAM): raw PawnIO IOCTLs (`pawnio`), SHA-256 pinned modules (`pins`), `SmbusPIIX4` transfers on ports 0x0B00/0x0B20 (`piix4`), `Global\Access_SMBUS.HTP.Method` (`mutex`), static policy and rate limit (`policy`), PawnIO detection (`detect`), the request handler with `BusLock` leases (`server`), the named pipe (`pipe`); fakes for tests |
+| `lightloom-iobroker` | lib + bin | M5 | LocalSystem service for the chipset SMBus (RAM): raw PawnIO IOCTLs (`pawnio`), SHA-256 pinned modules (`pins`), `SmbusPIIX4` transfers on ports 0x0B00/0x0B20 (`piix4`), `Global\Access_SMBUS.HTP.Method` (`mutex`), static policy and rate limit (`policy`), PawnIO detection (`detect`), the request handler with `BusLock` leases, `Batch` and `SpdRead` (`server`), the named pipe (`pipe`); fakes for tests |
 | `lightloom-nvapi` | lib | M5 | dynamic `nvapi64.dll` binding (System32 only): `NV_I2C_INFO_V3` and the SMBus → NvAPI transfer mapping, `NvapiHub` (one `lightloom-nvapi` worker thread owns NvAPI), `NvapiBus: SmbusBus` per GPU (port 1, never DDC), `FakeNvI2c` for tests |
 | `lightloom-renderer` | bin | stub (M3) | prints shm geometry |
-| `lightloom-setup` | bin | M5 | `--smbus`: checks PawnIO (never installs it), copies the pinned modules and the broker under `%ProgramFiles%\Lightloom`, registers and starts `LightloomIoBroker`; `--uninstall`, `--plan` |
+| `lightloom-setup` | bin | M5 | `--smbus`: checks PawnIO (does not install it), copies the pinned modules and the broker under `%ProgramFiles%\Lightloom`, registers and starts `LightloomIoBroker`; `--uninstall`, `--plan` |
 
 ## Conventions
 

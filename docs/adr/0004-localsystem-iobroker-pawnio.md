@@ -133,8 +133,8 @@ lighting service runs.
 
 - `nvapi64.dll` is loaded from System32 only and every call runs on one worker thread
   (`lightloom-nvapi`), which owns the GPU handles.
-- Superseded (see the review amendment below): the worker now takes the global SMBus
-  mutex around every NvAPI transfer.
+- The review amendment below made the worker take the global SMBus mutex around every
+  NvAPI transfer; the 2026-10-22 amendment reverts that.
 - The broker keeps the chipset SMBus (PawnIO) only; its protocol work (v2, `BusLock`
   leases) belongs to the RAM part of M5.
 
@@ -196,7 +196,7 @@ rules that matter for safety no longer rely on the client:
   against the hash of the file it read. The remaining trust root is the folder setup runs
   from: someone who can replace the broker there can replace `lightloom-setup.exe` too, so
   only signed releases (an Authenticode check) close that; open until releases are signed.
-- **GPU I2C and the global mutex** (decision): Lightloom's rule is that SMBus traffic runs
+- **GPU I2C and the global mutex** (decision, reverted on 2026-10-22, see below): Lightloom's rule is that SMBus traffic runs
   under `Global\Access_SMBUS.HTP.Method`, and it now covers NvAPI too. The NvAPI worker
   creates or opens the mutex (Everyone DACL, as the broker) and holds it around every
   transfer (50 ms bounded wait, `NVAPI_DEVICE_BUSY` to the plugin when another program
@@ -204,12 +204,76 @@ rules that matter for safety no longer rely on the client:
   GPU is driven. OpenRGB and SignalRGB do not take it for NvAPI, so it orders Lightloom
   against the programs that follow the convention (and Lightloom's own processes) only;
   vendor tools are kept away by the process check below.
-- **One driver at a time**: `lightloomd` and `lightloom --smbus` take `Global\Lightloom.SmbusOwner`
-  before touching SMBus; the second one refuses. SignalRGB, OpenRGB and the vendor
-  lighting services that drive the same controllers (MSI `LEDKeeper*` /
-  `LightKeeperService*` / `Mystic_Light_Service`, ASUS `LightingService`, Gigabyte
-  `RGBFusion`) are looked for before every scan and every second while SMBus devices run;
-  one that starts stops the SMBus sessions (the daemon) or the run (the CLI).
+- **One driver at a time**: `lightloomd` and a `lightloom` run on the buses take
+  `Global\Lightloom.SmbusOwner` before touching SMBus; the second one leaves the buses
+  alone. SignalRGB, OpenRGB and the vendor lighting services that drive the same
+  controllers (MSI `LEDKeeper*` / `LightKeeperService*` / `Mystic_Light_Service`, ASUS
+  `LightingService`, Gigabyte `RGBFusion`) are looked for before every scan and every
+  second while SMBus devices run; one that starts stops the SMBus sessions (the daemon)
+  or the run (the CLI).
 - **NvAPI identity**: requests name the card by PCI bus and ids, resolved at every
   transfer; a card gone after a driver reset fails instead of reaching whatever GPU now
   sits at the old index. Requests whose caller timed out are dropped, never sent late.
+
+### 2026-10-22: after the first hardware runs (seven-point follow-up)
+
+Source: the runs of 2026-10-19 on the reference machine (build 9311108, PawnIO 2.2.0, the
+broker installed): the MSI RTX 3060 at 30 fps with no error; one Crucial module lit, but
+its `Initialize()` took about 3 s; with both modules and the GPU together the second module
+never lit (`TransactionLock` refused) and the GPU dropped to 13 frames in 4 s
+(`NVAPI_DEVICE_BUSY`).
+
+- **SMBus is on by default** (opt-out: `lightloom --no-smbus`, `[smbus] enabled = false`, the
+  dashboard setting). GPU I2C is used whenever NvAPI is there; the chipset buses only when
+  the broker answers and its `Health` shows it healthy (protocol 3, official PawnIO 2.2.0
+  or later, `SmbusPIIX4` loaded). Installing PawnIO and registering the broker remain the
+  user's steps, and the consent to RAM lighting; an option of the Lightloom installer and an
+  install / remove button in Settings are planned. Every other rule stands: no SMBus while
+  SignalRGB, OpenRGB or a vendor lighting service runs (looked for again every second),
+  one Lightloom process on the buses (`Global\Lightloom.SmbusOwner`; a `lightloom` run while
+  `lightloomd` runs leaves its SMBus devices out with one line), the SPD / write-protect /
+  PMIC denials, the broker's allowlist, `SmbusDeniedRegisters()`, one `Render()` per 33 ms.
+- **No global mutex on the NvAPI path** (reverts the review decision above). NvAPI I2C is
+  the GPU's own controller; OpenRGB and SignalRGB do not take
+  `Global\Access_SMBUS.HTP.Method` for it, and taking it made the GPU wait for Lightloom's own
+  RAM traffic. Transfers to a GPU stay serialised on the one NvAPI worker thread, and a
+  plugin's `TransactionLock` on a GPU bus by the plugin host's turn queue.
+- **Broker protocol v3**:
+  - `Batch { bus, ops }`: 1..=32 plain transfers on one bus in one request and one hold
+    of the global mutex (or inside the client's lease). Each op goes through the same
+    validation, policy, rate limit, dry-run refusal and audit line as when sent alone. The
+    batch stops at the first op refused or failed; the answer carries the results of the
+    ops done and that op's error (its index is the number of results). No op starts once
+    the batch has held the bus 25 ms (`BatchTimeLimit`; the client sends the rest again).
+    `SpdRead`, locks and nested batches cannot be batched.
+  - `SpdRead { bus, addr, offset, len }`: 1..=32 bytes of a DDR4 SPD (EE1004, 0x50-0x57)
+    within one 256-byte page. The broker selects the page itself with an EE1004 Set Page
+    Address (a Send Byte, data 0x00, to 0x36 for page 0 or 0x37 for page 1), reads byte
+    by byte, and selects page 0 again even when a read failed, all under one hold of the
+    global mutex. It is the only transfer the broker ever sends into 0x30-0x37: no client
+    op names those addresses (every write op there stays denied, and `SpdRead` accepts only
+    0x50-0x57). The select is volatile (page 0 at power-on and after every `SpdRead`), so
+    `SpdRead` is served in dry-run too. A module that switches page without acknowledging
+    the select is accepted for page 0 only, after a Read Page Address (Receive Byte at 0x36)
+    confirms page 0.
+- **SPD check of RAM plugins** (plugin host): on chipset buses a RAM plugin's `Scan(bus)`
+  runs only when the SPD of a DIMM names a manufacturer of its `SpdManufacturers()` (JEP106
+  bank and id, SPD bytes 320-321 on DDR4); a RAM plugin without the export is never offered
+  a chipset bus. Bytes 0-2 of 0x50-0x57 are read with plain reads first; the page select
+  happens only when a slot reads DDR4 (byte 2 = 0x0C). DDR5 is not supported yet (its
+  manufacturer id needs a write to the SPD5118 hub's page register): RAM plugins do not
+  scan there, and say so. Plugins only see the result (`bus.SpdSlots()`), never a way to
+  the page select.
+- **Speed**: the 3 s were about 190 broker requests (one per transfer, plus the locks) that
+  each waited at least one Windows timer tick (15.6 ms): the PIIX4 module's ShortBusy
+  polling sleeps with `KeDelayExecutionThread`, and the broker slept 1 ms between requests
+  under a lease. The broker now sets AlwaysBusy (sleep mode 0: `KeStallExecutionProcessor`,
+  the module's default, bounded by its 64 ms timeout), yields instead of sleeping for the
+  first 2 ms of a lease, and plugins that declare `SmbusBatchWrites()` get their writes
+  inside a `TransactionLock` queued and sent as one `Batch` at the next read or at
+  `TransactionUnlock()`. The Crucial `Initialize()` becomes 45 requests for 168 transfers
+  (estimated well under 300 ms), a frame 3 requests for 6 transfers (a few ms).
+- **Sessions on one bus take turns**: a `TransactionLock`, and a lone transfer of a session
+  that holds none, waits in one first-come-first-served queue per bus for at most 100 ms,
+  then the operation (usually the frame) is skipped and counted as `contended`, not as an
+  error.

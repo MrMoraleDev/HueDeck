@@ -80,6 +80,18 @@ instead of USB ids, and Lightloom runs them only when they declare where they ma
   `smbus.deniedRegisters` (checked against the export).
 - GPU plugins export `BrandGPUList()`; a GPU bus is offered only to the plugins that list
   that card's four PCI ids.
+- RAM plugins export `SpdManufacturers()` (Lightloom extension): the JEP106 module
+  manufacturers they drive, as `[{bank, id, name}]`. On chipset buses the host reads the
+  DIMMs' SPD first and runs `Scan(bus)` only when a module of one of them is there
+  (`bus.SpdSlots()` lists the matching slots); a RAM plugin without it is never offered a
+  chipset bus. DDR4 only for now. The manifest repeats it as `smbus.spdManufacturers`.
+- `SmbusBatchWrites()` (optional, Lightloom extension): `true` lets the host queue the
+  writes made inside `TransactionLock` and send them as one batch at the next read or at
+  `TransactionUnlock()`, which then returns `0` or the status of the first write that
+  failed. The manifest repeats it as `smbus.batchWrites`.
+- `bus.IsDryRun()` (Lightloom extension) is `true` under `--dry-run`: writes are recorded,
+  never sent, reads are real; a scan that needs a write to identify a device can say so
+  with `bus.log()` (shown with the scan's outcome).
 - `manifest.json` has an `smbus` claim with the same `addresses` (the manifest test
   checks they match), `buses`, and for GPU plugins `pci` / `tested` card tuples.
 

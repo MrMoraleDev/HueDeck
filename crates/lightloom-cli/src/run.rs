@@ -550,7 +550,7 @@ pub(crate) fn permissive_mock_smbus(meta: &lightloom_plugin_host::PluginMeta) ->
 fn mock_ddr4_spd(bank: u8, id: u8) -> Vec<u8> {
     let parity = |v: u8| {
         let v = v & 0x7F;
-        if v.count_ones() % 2 == 0 {
+        if v.count_ones().is_multiple_of(2) {
             v | 0x80
         } else {
             v
@@ -577,6 +577,10 @@ fn smbus_plugin<'c>(catalog: &'c Catalog, name: &str) -> Option<&'c CatalogEntry
 
 fn print_scan(outcomes: &[ScanOutcome]) {
     for o in outcomes {
+        if let Some(slots) = &o.spd_slots {
+            let text = slots.iter().map(|s| s.describe()).collect::<Vec<_>>().join("; ");
+            eprintln!("  SMBus scan [{}] {}: SPD check passed: {text}", o.bus, o.plugin);
+        }
         for line in &o.log {
             eprintln!("  SMBus scan [{}] {}: {line}", o.bus, o.plugin);
         }
@@ -777,7 +781,7 @@ fn claim_smbus_now() -> Result<lightloom_runtime::conflicts::SmbusClaim, String>
 /// `lightloom plugins` (unless `--no-smbus`): the SMBus buses, the plugins
 /// offered each, and what their `Scan(bus)` found (this runs the scans:
 /// hardware access).
-fn list_smbus(catalog: &Catalog, json: bool) -> anyhow::Result<serde_json::Value> {
+fn list_smbus(catalog: &Catalog, dry_run: bool, json: bool) -> anyhow::Result<serde_json::Value> {
     // Not even NvAPI is loaded while SignalRGB, OpenRGB or lightloomd runs.
     let _claim = match claim_smbus_now() {
         Ok(claim) => claim,
@@ -803,7 +807,15 @@ fn list_smbus(catalog: &Catalog, json: bool) -> anyhow::Result<serde_json::Value
             })
         })
         .collect();
-    let scan = hw.targets(catalog, &[], &ScanBudget::default());
+    let budget = ScanBudget {
+        mode: if dry_run {
+            WriteMode::DryRun
+        } else {
+            WriteMode::Live
+        },
+        ..ScanBudget::default()
+    };
+    let scan = hw.targets(catalog, &[], &budget);
     if !json {
         for note in hw.notes() {
             println!("SMBus: {note}");
@@ -846,7 +858,8 @@ fn list_smbus(catalog: &Catalog, json: bool) -> anyhow::Result<serde_json::Value
 /// `lightloom plugins`: the plugins found and, for each connected HID device
 /// (read-only enumeration), the plugin that would drive it; with `smbus` (the
 /// default), the SMBus buses and what the SMBus plugins' scans find on them.
-pub fn list_plugins(args: &CatalogArgs, smbus: bool, json: bool) -> anyhow::Result<()> {
+/// `dry_run`: the scans' writes are recorded, never sent (reads still reach the buses).
+pub fn list_plugins(args: &CatalogArgs, smbus: bool, dry_run: bool, json: bool) -> anyhow::Result<()> {
     let started = Instant::now();
     let (catalog, dirs) = args.scan()?;
     let scan_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -860,7 +873,7 @@ pub fn list_plugins(args: &CatalogArgs, smbus: bool, json: bool) -> anyhow::Resu
         .map(|(key, vid, pid)| (key.clone(), catalog.lookup(*vid, *pid)))
         .collect();
     let smbus_view = if smbus {
-        Some(list_smbus(&catalog, json)?)
+        Some(list_smbus(&catalog, dry_run, json)?)
     } else {
         None
     };
@@ -1428,11 +1441,13 @@ fn print_report(r: &RunReport) {
         );
         if let Some(b) = &s.smbus {
             println!(
-                "  SMBus: {} operations, {} writes, {} errors, {} refused{}",
+                "  SMBus: {} operations, {} writes, {} batches, {} errors, {} refused, {} skipped (bus busy){}",
                 b.ops,
                 b.writes,
+                b.batches,
                 b.errors,
                 b.denied,
+                b.contended,
                 b.last_error
                     .as_ref()
                     .map(|e| format!("; last: {e}"))
@@ -1457,6 +1472,9 @@ fn print_report(r: &RunReport) {
             s.write.p99_ms,
             s.io.last_error.as_ref().map(|e| format!("; last error: {e}")).unwrap_or_default()
         );
+        }
+        if let Some(ms) = s.initialize_ms {
+            println!("  Initialize took {ms:.1} ms");
         }
         if let Some(ms) = s.first_write_ms {
             println!("  first write {ms:.1} ms after session start");
@@ -1698,6 +1716,8 @@ mod tests {
         assert_eq!(s["name"], "MSI GPU");
         assert_eq!(s["device"], "smbus:10de:2504:1462:3903@pci01:68");
         assert!(s["smbus"]["writes"].as_u64().unwrap() >= 6, "{s}");
+        assert_eq!(s["io_errors"], 0, "{s}");
+        assert!(s.get("hid_errors").is_none(), "{s}");
         let _ = std::fs::remove_file(&out);
         let unknown = Mode::Bench {
             fps: 60.0,
@@ -1728,6 +1748,10 @@ mod tests {
         // Initialize alone is 68 register writes (two transfers each).
         assert!(s["smbus"]["writes"].as_u64().unwrap() >= 136 + 6, "{s}");
         assert_eq!(s["smbus"]["errors"], 0, "{s}");
+        assert_eq!(s["io_errors"], 0, "{s}");
+        // The frame and Initialize go out as batches (SmbusBatchWrites).
+        assert!(s["smbus"]["batches"].as_u64().unwrap() >= 25, "{s}");
+        assert!(s["initialize_ms"].as_f64().is_some(), "{s}");
         let _ = std::fs::remove_file(&out);
     }
 }

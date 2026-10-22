@@ -292,11 +292,17 @@ Lightloom implements the surface above in `crates/lightloom-plugin-host` (`js/ho
   negative status (e.g. -105), elsewhere -1. Argument errors throw `RangeError` /
   `TypeError` with the engine's messages (`WriteByte(): Register must be a number between
   0 and 255`, `WriteBlock(): Data must be an array.`). The fixed bus has no `WriteQuick`.
-- **TransactionLock** holds the bus against the other sessions on it; another session
-  waits at most 250 ms, then its operation fails. It also asks the bus for a lease
-  (100 ms): on a chipset bus the I/O broker's `BusLock`, on an NVIDIA bus the NvAPI
-  worker; both keep the global SMBus mutex across the locked operations, so other
-  programs' transfers cannot land in between. Lightloom's `TransactionLock()` returns
+- **TransactionLock** holds the bus against the other sessions on it. Sessions on one bus
+  take turns: a `TransactionLock`, and every lone transfer of a session that holds none,
+  waits in one first-come-first-served queue per bus (a session letting go hands the bus
+  to the first in line) for at most 100 ms; past that the operation is not sent, the
+  plugin gets -1 (`TransactionLock()`: `false`) and the report counts it as `contended`
+  (skipped, not an error: the frame goes out with the next `Render()`). On a chipset bus
+  the lock also asks the I/O broker for a 100 ms `BusLock` lease, which keeps the global
+  SMBus mutex across the locked operations, so other programs' transfers cannot land in
+  between; on an NVIDIA bus nothing more is needed (one NvAPI worker thread serialises
+  the transfers, and no other program shares the GPU's I2C controller under that mutex).
+  Lightloom's `TransactionLock()` returns
   whether the bus is held (`false`: nothing should be sent); SignalRGB's returns nothing,
   so plugins test `=== false`. A lock still held when `Render()` returns is released by
   the host, which logs "bus: Transaction Lock wasn't unlocked before Render() returned!"
@@ -304,10 +310,12 @@ Lightloom implements the surface above in `crates/lightloom-plugin-host` (`js/ho
 - **Frame rate.** An SMBus session calls `Render()` at most every 33 ms (about 30 fps,
   OpenRGB's `TimeToSend` for the MSI GPU controller), whatever the canvas rate; the latest
   frame is rendered.
-- **GPU I2C** (NvAPI) runs in Lightloom's own process, every transfer under
-  `Global\Access_SMBUS.HTP.Method` (50 ms bounded wait; `NVAPI_DEVICE_BUSY`, -108, when
-  another program keeps it), on one worker thread that addresses the card by PCI bus and
-  ids. A request still queued when its caller gave up (500 ms) is dropped, never sent late.
+- **GPU I2C** (NvAPI) runs in Lightloom's own process, on one worker thread that addresses
+  the card by PCI bus and ids. A request still queued when its caller gave up (500 ms) is
+  dropped, never sent late. It does not take `Global\Access_SMBUS.HTP.Method`, like OpenRGB
+  and SignalRGB: NvAPI I2C is the GPU's own controller, not the chipset SMBus, and holding
+  the mutex made the GPU wait for Lightloom's own RAM traffic (`NVAPI_DEVICE_BUSY`, -108,
+  13 frames in 4 s on the reference machine; ADR-0004, 2026-10-22).
 - **Chipset buses on Windows** are served by the Lightloom I/O broker (`lightloom-iobroker`,
   a LocalSystem service registered once with `lightloom-setup --smbus`) through the PawnIO
   driver's signed `SmbusPIIX4` module; Lightloom's own processes never open PawnIO. Every
@@ -315,9 +323,45 @@ Lightloom implements the surface above in `crates/lightloom-plugin-host` (`js/ho
   the operation), at most 2000 operations per second, and the broker refuses the DIMM
   ranges again on its side and writes only to its own allowlist of first-party chipset
   addresses (0x20-0x23, 0x27, 0x39-0x3C). `ReadBlockBytes`, `WriteBlockWithoutRegister` and
-  `ReadBlockWithoutRegister` are refused on chipset buses, as on SignalRGB. Without
-  PawnIO (official edition 2.2.0 or later) or the broker, the run says what is missing;
-  Lightloom never installs PawnIO.
+  `ReadBlockWithoutRegister` are refused on chipset buses, as on SignalRGB. The chipset
+  buses are used only while the broker answers and reports itself healthy (protocol 3,
+  official PawnIO 2.2.0 or later, `SmbusPIIX4` loaded); otherwise the run says what is
+  missing and drives the other devices. Installing PawnIO and registering the broker are
+  the user's steps (an option of the Lightloom installer and an install / remove button in
+  Settings are planned).
+- **Batched writes (`SmbusBatchWrites()`, Lightloom extension, optional).** A plugin whose
+  `SmbusBatchWrites()` returns `true` (manifest `smbus.batchWrites`) gets its writes inside
+  a `TransactionLock` queued after every policy check (a refused write still answers its
+  negative status at once and is never queued) and answered `0` at once. The queue goes
+  out as one batch at the next read (sent last in the batch, it returns its value; a
+  failed queued write fails the read too), at `TransactionUnlock()`, when 32 writes wait,
+  and when the host releases a lock the plugin left held. Through the I/O broker a batch
+  is one `Batch` request and one hold of the global mutex; the broker still checks each op
+  as if sent alone and stops at the first op refused or failed (the ops after it are not
+  sent). Lightloom's `TransactionUnlock()` then returns `0`, or the status of the first
+  queued write that failed since the lock was taken (SignalRGB's returns nothing).
+  `Scan(bus)` writes, dry-run writes and writes outside a lock are never queued.
+- **SPD check of RAM plugins (`SpdManufacturers()`, Lightloom extension).** RGB controllers
+  of different brands answer at overlapping addresses and a RAM plugin's `Scan(bus)`
+  writes (to identify or remap), so on DIMM buses (chipset and Nuvoton) a RAM plugin
+  (`DeviceType()` "ram", or any plugin that declares the export) is offered `Scan(bus)` only
+  when the SPD of a module names one of its manufacturers: `SpdManufacturers()` returns
+  `[{bank, id, name}]`, the JEP106 bank (1-based) and id byte (compared on its low 7 bits),
+  repeated in the manifest as `smbus.spdManufacturers`. A RAM plugin without it is never
+  offered a chipset bus. Before the first RAM plugin's scan of a bus the host reads bytes
+  0-2 of 0x50-0x57 with plain Read Byte (an empty slot does not answer; byte 2 = 0x0C is
+  DDR4, an SPD5118 hub or byte 2 = 0x12 is DDR5), then, for DDR4 slots only, the module
+  manufacturer (bytes 320-321) and part number (329-348) on page 1. The EE1004 page select
+  (a Send Byte to 0x36 / 0x37) is done by the bus backend itself, inside the broker's
+  `SpdRead` under the global mutex, with page 0 selected again before the mutex is let go;
+  it is the only write Lightloom sends into 0x30-0x37 and plugins have no way to it. DDR5 is
+  not supported yet (its manufacturer id needs a write to the hub's page register): RAM
+  plugins do not scan on a bus with a DDR5 module, and the scan outcome says so, as it
+  says which modules were found when none matched. The plugin then sees the matching
+  slots through `bus.SpdSlots()` on the free bus (copies of `{address, memoryType,
+  typeByte, jedecBank, jedecId, partNumber}`; reading them touches no hardware). Page 0 is
+  the power-on page and Lightloom always leaves page 0 selected; if another program left
+  page 1 selected, the type byte reads wrong and RAM plugins do not scan (fail closed).
 - **Conflicts.** SMBus discovery and SMBus sessions never run while `SignalRgb.exe`,
   `OpenRGB.exe` or a vendor lighting service that drives the same controllers runs (MSI
   `LEDKeeper*` / `LightKeeperService*` / `Mystic_Light_Service`, ASUS `LightingService`,
@@ -325,10 +369,23 @@ Lightloom implements the surface above in `crates/lightloom-plugin-host` (`js/ho
   itself may write). They are looked for again every second while SMBus devices run: one
   that starts stops the SMBus sessions (daemon) or ends the run (CLI), `Shutdown()`
   included. Only one Lightloom process drives SMBus at a time (`Global\Lightloom.SmbusOwner`).
-  A rescan stops the SMBus sessions before the plugins' `Scan()` runs. SMBus is opt-in:
-  `--smbus` on the CLI, `[smbus] enabled` or the dashboard setting in the daemon.
+  A rescan stops the SMBus sessions before the plugins' `Scan()` runs. SMBus is on by
+  default (GPU I2C when NvAPI is there, chipset buses when the broker is healthy); opt out
+  with `--no-smbus` on the CLI, `[smbus] enabled = false` or the dashboard setting in the
+  daemon. A `lightloom` run while `lightloomd` runs leaves its SMBus devices out with one line
+  (the HID devices run), and `lightloom plugins` scans the SMBus buses too unless
+  `--no-smbus` (with `--dry-run` the scans' writes are only recorded).
 - **Dry-run.** With `--dry-run` every bus write, in `Scan()` too, is recorded and reported
-  successful but never sent; reads still reach the device.
+  successful but never sent; reads still reach the device, the host's SPD check included
+  (its page select is a volatile step of the read, put back to page 0). `bus.IsDryRun()`
+  (Lightloom extension) tells the plugin, so a scan whose identification needs a write can
+  stop there and say so: the Crucial plugin finds modules already given an address on
+  reads alone and reports a module still at 0x27 as needing a remap, instead of finding
+  nothing. What a plugin logs during `Scan(bus)` is shown with the scan's outcome.
+- **Reports.** A session's report (`--json`) has `io_errors`: failed HID operations, or for
+  SMBus devices failed or refused bus operations (`smbus.errors + smbus.denied`;
+  `smbus.contended` counts the skipped ones), and `initialize_ms`. The daemon's device
+  list has `ioErrors` likewise (formerly `hidErrors`).
 - **Device keys.** `smbus:<vendor>:<device>:<subvendor>:<subdevice>@<instance>:<addr>` in
   lower-case hex, e.g. `smbus:10de:2504:1462:3903@pci01:68` (instance: the GPU's PCI bus,
   or the PIIX4 port base `0b00` / `0b20`).

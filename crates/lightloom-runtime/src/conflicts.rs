@@ -79,14 +79,14 @@ pub struct SmbusClaim {
 }
 
 /// Become the one Lightloom process that drives SMBus and GPU I2C on this
-/// machine: `lightloomd` and `lightloom … --smbus` never drive the buses side by
+/// machine: `lightloomd` and a `lightloom` run never drive the buses side by
 /// side. Fails while another Lightloom process holds the claim.
 #[cfg(windows)]
 pub fn claim_smbus() -> anyhow::Result<SmbusClaim> {
     match lightloom_hal_windows::owner::SmbusOwner::try_acquire().map_err(anyhow::Error::msg)? {
         Some(owner) => Ok(SmbusClaim { _owner: owner }),
         None => anyhow::bail!(
-            "another Lightloom process (lightloomd with SMBus on, or a `lightloom --smbus` run) drives SMBus and GPU I2C:              stop it first"
+            "another Lightloom process (lightloomd with SMBus on, or another `lightloom` run) drives SMBus and GPU I2C"
         ),
     }
 }

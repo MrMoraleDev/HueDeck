@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! One Lightloom process at a time drives SMBus and GPU I2C.
 //!
-//! `lightloomd` (with SMBus on) and `lightloom … --smbus` both take
+//! `lightloomd` (with SMBus on) and a `lightloom` run on the buses (SMBus is on
+//! unless `--no-smbus`) both take
 //! [`SmbusOwner`] before they touch a bus: the named mutex
 //! `Global\Lightloom.SmbusOwner`, held for as long as they drive SMBus devices.
-//! The second process finds it taken and refuses, whichever started first.
+//! The second process finds it taken and leaves the buses alone, whichever
+//! started first.
 //! A process that dies without letting go leaves the mutex abandoned, which
 //! the next one takes as free.
 //!

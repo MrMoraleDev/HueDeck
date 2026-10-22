@@ -24,6 +24,9 @@
 //!
 //! [devices]
 //! ignore = []                   # "vid:pid" or "vid:pid:serial" prefixes Lightloom never opens
+//!
+//! [smbus]
+//! enabled = true                # drive SMBus devices (GPU RGB; RAM RGB when the I/O broker is installed); false turns it off (the dashboard setting wins)
 //! ```
 
 use anyhow::Context;
@@ -46,6 +49,26 @@ pub struct Config {
     pub ui: UiConfig,
     /// Devices.
     pub devices: DevicesConfig,
+    /// SMBus devices.
+    pub smbus: SmbusConfig,
+}
+
+/// `[smbus]`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SmbusConfig {
+    /// Drive SMBus devices (NVIDIA GPU RGB through NvAPI; RAM RGB through
+    /// the Lightloom I/O broker, used only when it is installed and healthy)
+    /// unless the dashboard setting says otherwise. On by default (opt-out);
+    /// the safety rules hold either way: never alongside SignalRGB, OpenRGB,
+    /// a vendor lighting service or another Lightloom process on the buses.
+    pub enabled: bool,
+}
+
+impl Default for SmbusConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// `[api]`.
@@ -147,6 +170,9 @@ mod tests {
         assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (16138, true, 30));
         let c: Config = toml::from_str("[api]\nport = 17000\n[lighting]\nfps = 60\n").unwrap();
         assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (17000, true, 60));
+        assert!(c.smbus.enabled, "SMBus is on unless turned off");
+        let c: Config = toml::from_str("[smbus]\nenabled = false\n").unwrap();
+        assert!(!c.smbus.enabled);
         assert!(
             toml::from_str::<Config>("[api]\nprot = 1\n").is_err(),
             "typos are reported"

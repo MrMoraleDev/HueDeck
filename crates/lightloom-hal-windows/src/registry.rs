@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Read-only access to values under `HKEY_CURRENT_USER`: importing another
-//! application's per-user settings (SignalRGB keeps its component assignments
-//! and canvas placements there). Lightloom never writes the registry.
+//! Read-only access to registry values: under `HKEY_CURRENT_USER`, importing
+//! another application's per-user settings (SignalRGB keeps its component
+//! assignments and canvas placements there); under `HKEY_LOCAL_MACHINE`,
+//! whether a driver is installed (PawnIO's uninstall entry). Lightloom never
+//! writes the registry.
 
 use std::io;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, HKEY, HKEY_CURRENT_USER,
-    KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_QWORD, REG_SZ,
+    HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_QWORD, REG_SZ,
 };
 
 /// Values larger than this are skipped (a channel array is a few KB).
@@ -57,18 +59,15 @@ fn wide(s: &str) -> Vec<u16> {
 
 /// `HKCU\<subkey>` opened for reading; `None` when it does not exist.
 fn open(subkey: &str) -> io::Result<Option<Key>> {
+    open_in(HKEY_CURRENT_USER, subkey)
+}
+
+/// `<root>\<subkey>` opened for reading; `None` when it does not exist.
+fn open_in(root: HKEY, subkey: &str) -> io::Result<Option<Key>> {
     let wkey = wide(subkey);
     let mut hkey = HKEY::default();
     // SAFETY: NUL-terminated key name that outlives the call; valid out pointer.
-    let err = unsafe {
-        RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            PCWSTR(wkey.as_ptr()),
-            None,
-            KEY_READ,
-            &mut hkey,
-        )
-    };
+    let err = unsafe { RegOpenKeyExW(root, PCWSTR(wkey.as_ptr()), None, KEY_READ, &mut hkey) };
     if err == ERROR_FILE_NOT_FOUND {
         return Ok(None);
     }
@@ -112,7 +111,30 @@ pub fn current_user_values(subkey: &str) -> io::Result<Vec<(String, RegValue)>> 
     let Some(key) = open(subkey)? else {
         return Ok(Vec::new());
     };
-    let (_, _, count, max_name, max_data) = info(&key)?;
+    values(&key)
+}
+
+/// The string values directly under `HKLM\<subkey>` (read-only), as
+/// [`current_user_strings`] does for `HKCU`.
+pub fn local_machine_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {
+    let Some(key) = open_in(HKEY_LOCAL_MACHINE, subkey)? else {
+        return Ok(Vec::new());
+    };
+    Ok(strings(values(&key)?))
+}
+
+fn strings(values: Vec<(String, RegValue)>) -> Vec<(String, String)> {
+    values
+        .into_iter()
+        .filter_map(|(name, value)| match value {
+            RegValue::Text(text) => Some((name, text)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn values(key: &Key) -> io::Result<Vec<(String, RegValue)>> {
+    let (_, _, count, max_name, max_data) = info(key)?;
     let mut name = vec![0u16; max_name as usize + 1];
     let mut data = vec![0u8; max_data.min(MAX_VALUE_BYTES) as usize + 2];
     let mut out = Vec::new();
@@ -175,13 +197,7 @@ pub fn current_user_values(subkey: &str) -> io::Result<Vec<(String, RegValue)>> 
 /// `HKCU\<subkey>`, as `(name, value)` in enumeration order. A missing key is
 /// an empty list; other value types and oversized values are skipped.
 pub fn current_user_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {
-    Ok(current_user_values(subkey)?
-        .into_iter()
-        .filter_map(|(name, value)| match value {
-            RegValue::Text(text) => Some((name, text)),
-            _ => None,
-        })
-        .collect())
+    Ok(strings(current_user_values(subkey)?))
 }
 
 /// The names of the keys directly under `HKCU\<subkey>`, in enumeration order.
@@ -238,5 +254,14 @@ mod tests {
         assert!(values.iter().all(|(n, _)| !n.contains('\0')));
         assert!(values.iter().any(|(_, v)| matches!(v, RegValue::Dword(_))));
         assert!(!current_user_subkeys("Software").unwrap().is_empty());
+    }
+
+    #[test]
+    fn reads_local_machine_strings() {
+        assert!(local_machine_strings(r"SOFTWARE\Lightloom\definitely-not-here")
+            .unwrap()
+            .is_empty());
+        let nt = local_machine_strings(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion").unwrap();
+        assert!(nt.iter().any(|(n, _)| n == "ProductName"), "{nt:?}");
     }
 }

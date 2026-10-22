@@ -56,7 +56,9 @@ export interface DeviceView {
   connected: boolean;
   frames: number;
   renderErrors: number;
-  hidErrors: number;
+  ioErrors: number;
+  /** SMBus devices: "<bus name> · 0x<address>". */
+  bus?: string | null;
   defaultScale: number;
   image?: string | null;
   parameters: Parameter[];
@@ -101,6 +103,7 @@ export interface Settings {
   signalrgb: boolean;
   signalrgbAvailable: boolean;
   gpuCompositing: boolean;
+  smbus: boolean;
   fps: number;
   dryRun: boolean;
 }

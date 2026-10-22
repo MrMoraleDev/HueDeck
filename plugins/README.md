@@ -14,6 +14,8 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 | `steelseries-arctis-5` | SteelSeries Arctis 5 | `1038:12AA` |
 | `sony-gamepad` | Sony DualShock 4 light bar; DualSense / DualSense Edge light bar and player LEDs, over USB (from OpenRGB) | DualSense `054C:0CE6` (light bar) |
 | `hid-lamparray` | any HID LampArray (Windows Dynamic Lighting) device no other plugin claims | Razer DeathAdder V2 Pro's LampArray collection |
+| `msi-gpu` | MSI graphics card RGB at I2C 0x68 (SMBus plugin, NVIDIA through NvAPI): RTX 3060 Gaming X Trio LHR | none yet |
+| `crucial-ballistix` | Crucial Ballistix DDR4 RGB modules (SMBus plugin, chipset SMBus through the Lightloom I/O broker and PawnIO): BL8G32C16U4WL | none yet |
 
 ## A plugin directory
 
@@ -64,6 +66,45 @@ copy SignalRGB plugin code: it has no license. The full rules are in
 5. **Run it.** `lightloom bench --mock <vid:pid>` runs it in Lightloom's real host against
    a scripted device; `lightloom effect effects/rainbow-wave.html --device <vid:pid> --dry-run`
    then without `--dry-run` drives the real device (close other RGB software first).
+
+## SMBus plugins
+
+`Type()` `"SMBUS"` plugins (GPU and RAM lighting) find their devices with `Scan(bus)`
+instead of USB ids, and Lightloom runs them only when they declare where they may look:
+
+- `SmbusAddresses()` (required, Lightloom extension): the 7-bit addresses `Scan()` may touch
+  and the devices may live at. Nothing else on the bus is reachable.
+- `SmbusBuses()` (optional): bus kinds to be offered (`"nvidia"`, `"amd"`, `"intel"`, ...).
+- `SmbusDeniedRegisters()` (optional, Lightloom extension): registers the host never lets the
+  plugin write (save-to-flash and the like; MSI GPU: `0x3F`). The manifest lists them as
+  `smbus.deniedRegisters` (checked against the export).
+- GPU plugins export `BrandGPUList()`; a GPU bus is offered only to the plugins that list
+  that card's four PCI ids.
+- RAM plugins export `SpdManufacturers()` (Lightloom extension): the JEP106 module
+  manufacturers they drive, as `[{bank, id, name}]`. On chipset buses the host reads the
+  DIMMs' SPD first and runs `Scan(bus)` only when a module of one of them is there
+  (`bus.SpdSlots()` lists the matching slots); a RAM plugin without it is never offered a
+  chipset bus. DDR4 only for now. The manifest repeats it as `smbus.spdManufacturers`.
+- `SmbusBatchWrites()` (optional, Lightloom extension): `true` lets the host queue the
+  writes made inside `TransactionLock` and send them as one batch at the next read or at
+  `TransactionUnlock()`, which then returns `0` or the status of the first write that
+  failed. The manifest repeats it as `smbus.batchWrites`.
+- `bus.IsDryRun()` (Lightloom extension) is `true` under `--dry-run`: writes are recorded,
+  never sent, reads are real; a scan that needs a write to identify a device can say so
+  with `bus.log()` (shown with the scan's outcome).
+- `manifest.json` has an `smbus` claim with the same `addresses` (the manifest test
+  checks they match), `buses`, and for GPU plugins `pci` / `tested` card tuples.
+
+Writes to the SPD EEPROM (0x50-0x57) are refused on every bus, and on DIMM buses also
+0x30-0x37, 0x48-0x4F and 0x50-0x5F; nothing runs while SignalRGB, OpenRGB or a vendor
+lighting service is running. `TransactionLock()` returns `false` when the bus cannot be
+held: send nothing then. An SMBus session renders at most every 33 ms. On Windows the
+chipset SMBus (RAM) is reached through the Lightloom I/O broker, which needs the PawnIO
+driver installed by the user and `lightloom-setup --smbus` run once, and which writes only to
+the reviewed addresses of the first-party RAM plugins; GPU buses need neither. Test with
+`plugins/_testkit/mock-bus.mjs` (the `bus` objects, both shapes) next to `mock-device.mjs`,
+and in Lightloom's host with `lightloom bench --mock-smbus <plugin>`. Details:
+[docs/host-api/smbus.md](../docs/host-api/smbus.md), Lightloom section.
 
 ## Adapting a device from OpenRGB
 

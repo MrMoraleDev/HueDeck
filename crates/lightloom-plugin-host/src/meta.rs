@@ -30,6 +30,7 @@
 //! Numeric fields of `ControllableParameters` are frequently strings in the
 //! corpus (`"min": "0"`); the host coerces them (see [`coerce_number`]).
 
+use lightloom_hal::smbus::{SmbusBusDescriptor, SmbusBusKind};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -64,6 +65,11 @@ pub const METADATA_EXPORTS: &[&str] = &[
     "AllowConflictBypass",
     "BrandGPUList",
     "HidUsages",
+    "SmbusAddresses",
+    "SmbusBuses",
+    "SmbusDeniedRegisters",
+    "SpdManufacturers",
+    "SmbusBatchWrites",
 ];
 
 /// Exports the host calls during the device lifecycle (never at scan time).
@@ -516,6 +522,29 @@ pub struct PluginMeta {
     /// by VID:PID.
     #[serde(default)]
     pub hid_usages: Vec<[u16; 2]>,
+    /// `SmbusAddresses()` (Lightloom extension): the 7-bit addresses an SMBus
+    /// plugin's `Scan(bus)` may touch and its devices may live at. Lightloom
+    /// runs only SMBus plugins that declare it (docs/host-api/smbus.md).
+    #[serde(default)]
+    pub smbus_addresses: Vec<u8>,
+    /// `SmbusBuses()` (Lightloom extension): the bus kinds `Scan(bus)` is
+    /// offered (`"amd"`, `"intel"`, `"nvidia"`, ...); empty means any.
+    #[serde(default)]
+    pub smbus_buses: Vec<SmbusBusKind>,
+    /// `SmbusDeniedRegisters()` (Lightloom extension): registers the host never
+    /// lets the plugin write, at any address (save-to-flash and the like).
+    #[serde(default)]
+    pub smbus_denied_registers: Vec<u8>,
+    /// `SpdManufacturers()` (Lightloom extension): the JEP106 module
+    /// manufacturers a RAM plugin drives. On chipset buses a RAM plugin
+    /// scans only when the SPD shows one of them ([`crate::spd`]).
+    #[serde(default)]
+    pub spd_manufacturers: Vec<crate::spd::SpdManufacturer>,
+    /// `SmbusBatchWrites()` returned `true` (Lightloom extension): inside a
+    /// `TransactionLock` the host queues the plugin's writes and sends them
+    /// as one batch (crate::smbus); `TransactionUnlock()` reports a failure.
+    #[serde(default)]
+    pub smbus_batch_writes: bool,
     /// Lifecycle exports the module declares.
     #[serde(default)]
     pub lifecycle: LifecycleExports,
@@ -559,8 +588,44 @@ impl PluginMeta {
             supports_subdevices: false,
             brand_gpu_list: Vec::new(),
             hid_usages: Vec::new(),
+            smbus_addresses: Vec::new(),
+            smbus_buses: Vec::new(),
+            smbus_denied_registers: Vec::new(),
+            spd_manufacturers: Vec::new(),
+            smbus_batch_writes: false,
             lifecycle: LifecycleExports::default(),
         }
+    }
+
+    /// The PCI 4-tuples of `BrandGPUList()` (entries without the four ids are skipped).
+    pub fn gpu_ids(&self) -> Vec<GpuIdentifier> {
+        self.brand_gpu_list
+            .iter()
+            .filter_map(GpuIdentifier::from_json)
+            .collect()
+    }
+
+    /// Whether `Scan(bus)` is offered the bus `d`: a GPU bus to a plugin
+    /// whose `BrandGPUList()` names that exact card, a chipset (or SuperIO)
+    /// bus to a plugin without a GPU list; both only for kinds its
+    /// `SmbusBuses()` allows.
+    pub fn smbus_offered(&self, d: &SmbusBusDescriptor) -> bool {
+        if !self.smbus_buses.is_empty() && !self.smbus_buses.contains(&d.kind) {
+            return false;
+        }
+        let gpus = self.gpu_ids();
+        match d.kind {
+            SmbusBusKind::Nvidia | SmbusBusKind::AmdGpu => gpus.iter().any(|g| g.matches(d)),
+            SmbusBusKind::System | SmbusBusKind::Amd | SmbusBusKind::Intel | SmbusBusKind::Nuvoton => {
+                gpus.is_empty()
+            }
+        }
+    }
+
+    /// Whether the SPD check gates this plugin on chipset buses: a RAM
+    /// plugin (`DeviceType()` "ram"), or one that declares `SpdManufacturers()`.
+    pub fn spd_gated(&self) -> bool {
+        self.device_type == DeviceType::Ram || !self.spd_manufacturers.is_empty()
     }
 
     /// The dry-run "meta-complete" rule: `Name` + `VendorId` + `ProductId`, or a
@@ -605,6 +670,66 @@ impl PluginMeta {
         }
         Ok(())
     }
+}
+
+/// One `BrandGPUList()` entry (`{Vendor, SubVendor, Device, SubDevice, Address, Name}`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GpuIdentifier {
+    /// PCI vendor.
+    pub vendor: u16,
+    /// PCI device.
+    pub device: u16,
+    /// PCI subsystem vendor (board maker).
+    pub sub_vendor: u16,
+    /// PCI subsystem device (board).
+    pub sub_device: u16,
+    /// Controller address on the GPU's bus.
+    pub address: Option<u8>,
+    /// Card name.
+    pub name: String,
+}
+
+impl GpuIdentifier {
+    /// Read one `BrandGPUList()` entry.
+    pub fn from_json(v: &serde_json::Value) -> Option<Self> {
+        let o = v.as_object()?;
+        let id = |k: &str| o.get(k)?.as_u64().and_then(|n| u16::try_from(n).ok());
+        Some(Self {
+            vendor: id("Vendor")?,
+            device: id("Device")?,
+            sub_vendor: id("SubVendor")?,
+            sub_device: id("SubDevice")?,
+            address: o
+                .get("Address")
+                .and_then(|a| a.as_u64())
+                .and_then(|a| u8::try_from(a).ok()),
+            name: o
+                .get("Name")
+                .and_then(|n| n.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+
+    /// Whether the bus belongs to this card (all four PCI ids equal).
+    pub fn matches(&self, d: &SmbusBusDescriptor) -> bool {
+        let p = d.pci;
+        (p.vendor, p.device, p.sub_vendor, p.sub_device)
+            == (self.vendor, self.device, self.sub_vendor, self.sub_device)
+    }
+}
+
+/// `SmbusBuses()` spelling of a bus kind (`"any"`, no restriction, is `None` here).
+pub fn smbus_kind(name: &str) -> Option<SmbusBusKind> {
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "system" => SmbusBusKind::System,
+        "amd" => SmbusBusKind::Amd,
+        "intel" => SmbusBusKind::Intel,
+        "nvidia" => SmbusBusKind::Nvidia,
+        "amdgpu" => SmbusBusKind::AmdGpu,
+        "nuvoton" => SmbusBusKind::Nuvoton,
+        _ => return None,
+    })
 }
 
 /// Coerce the string-or-number fields of `ControllableParameters` (`"min": "0"`).
@@ -745,6 +870,81 @@ mod tests {
         m.default_scale = 0.1;
         assert_eq!(m.validate(), Err(MetaError::InvalidScale));
         assert_eq!(m.keys().collect::<Vec<_>>(), vec![(0x1462, 0x7C91)]);
+    }
+
+    fn bus(kind: SmbusBusKind, pci: [u16; 4]) -> SmbusBusDescriptor {
+        SmbusBusDescriptor {
+            name: "bus".into(),
+            kind,
+            pci: lightloom_hal::PciIds {
+                vendor: pci[0],
+                device: pci[1],
+                sub_vendor: pci[2],
+                sub_device: pci[3],
+            },
+            instance: String::new(),
+            max_block_len: 32,
+        }
+    }
+
+    fn msi_gpu() -> PluginMeta {
+        let mut m = PluginMeta::minimal("gpu.js", "MSI GPU", 0, vec![]);
+        m.plugin_type = PluginType::Smbus;
+        m.brand_gpu_list = vec![serde_json::json!({
+            "Vendor": 0x10DE, "Device": 0x2504, "SubVendor": 0x1462, "SubDevice": 0x3903,
+            "Address": 0x68, "Name": "MSI GeForce RTX 3060 Gaming X Trio LHR"
+        })];
+        m.smbus_addresses = vec![0x68];
+        m.smbus_buses = vec![SmbusBusKind::Nvidia];
+        m
+    }
+
+    #[test]
+    fn brand_gpu_list_parses_pci_tuples() {
+        let ids = msi_gpu().gpu_ids();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(
+            (
+                ids[0].vendor,
+                ids[0].device,
+                ids[0].sub_vendor,
+                ids[0].sub_device,
+                ids[0].address
+            ),
+            (0x10DE, 0x2504, 0x1462, 0x3903, Some(0x68))
+        );
+        let mut m = msi_gpu();
+        m.brand_gpu_list
+            .push(serde_json::json!({"Vendor": 1, "Name": "half"}));
+        assert_eq!(m.gpu_ids().len(), 1, "incomplete entries are skipped");
+        assert_eq!(smbus_kind("NVIDIA"), Some(SmbusBusKind::Nvidia));
+        assert_eq!(smbus_kind("any"), None);
+    }
+
+    #[test]
+    fn gpu_plugins_are_offered_only_their_cards() {
+        let m = msi_gpu();
+        assert!(m.smbus_offered(&bus(SmbusBusKind::Nvidia, [0x10DE, 0x2504, 0x1462, 0x3903])));
+        assert!(!m.smbus_offered(&bus(SmbusBusKind::Nvidia, [0x10DE, 0x2504, 0x1462, 0x3904])));
+        assert!(!m.smbus_offered(&bus(SmbusBusKind::Amd, [0x1022, 0x790B, 0x1022, 0x790B])));
+    }
+
+    #[test]
+    fn ram_plugins_are_offered_chipset_buses_only() {
+        let mut m = PluginMeta::minimal("ram.js", "RAM", 0, vec![]);
+        m.plugin_type = PluginType::Smbus;
+        m.smbus_addresses = vec![0x39];
+        m.smbus_buses = vec![SmbusBusKind::Amd, SmbusBusKind::Intel];
+        let piix4 = bus(SmbusBusKind::Amd, [0x1022, 0x790B, 0x1022, 0x790B]);
+        assert!(m.smbus_offered(&piix4));
+        assert!(!m.smbus_offered(&bus(SmbusBusKind::Nvidia, [0x10DE, 0x2504, 0x1462, 0x3903])));
+        assert!(!m.smbus_offered(&bus(SmbusBusKind::Nuvoton, [0; 4])));
+        m.smbus_buses.clear();
+        assert!(
+            m.smbus_offered(&bus(SmbusBusKind::Nuvoton, [0; 4])),
+            "no SmbusBuses(): any chipset kind"
+        );
+        assert!(!m.smbus_offered(&bus(SmbusBusKind::Nvidia, [0x10DE, 0x2504, 0x1462, 0x3903])));
     }
 
     #[test]

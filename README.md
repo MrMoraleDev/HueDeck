@@ -219,9 +219,10 @@ real host against a scripted device before it touches hardware.
 - `lightloom`: the command-line tool.
 - `lightloom-renderer`: effects in real Chromium (CEF), in a process of their own; a
   crashed effect is restarted in under 2 seconds, holding the last frame meanwhile.
-- `lightloom-iobroker` (planned, M5, opt-in): an optional Windows service for RAM,
-  GPU and other SMBus devices through the signed [PawnIO](https://pawnio.eu/)
-  driver. Not needed for USB, HID, serial or network devices.
+- `lightloom-iobroker` (M5, optional): a Windows service for RAM and other chipset
+  SMBus devices through the signed [PawnIO](https://pawnio.eu/) driver, used whenever
+  it is installed and healthy. Not needed for USB, HID, serial or network devices, nor
+  for NVIDIA GPU lighting (NvAPI, from the user's own process).
 
 Long form: [docs/architecture.md](docs/architecture.md). Decisions:
 [docs/adr/](docs/adr/).

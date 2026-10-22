@@ -153,17 +153,64 @@
               "type": "array",
               "minItems": 1,
               "items": { "type": "integer", "minimum": 0, "maximum": 127 },
-              "description": "7-bit addresses the plugin may probe/drive; the broker refuses all others. SPD ranges (0x50-0x57, 0x30-0x37) are write-denied regardless."
+              "description": "7-bit addresses the plugin may probe/drive (its SmbusAddresses()); the host refuses all others. The SPD EEPROM (0x50-0x57) is write-denied on every bus; on DIMM buses also 0x30-0x37, 0x48-0x4F and 0x50-0x5F. The I/O broker writes only to its own allowlist of first-party chipset addresses."
             },
             "buses": {
               "type": "array",
               "items": { "type": "string", "enum": ["amd", "intel", "nuvoton", "nvidia", "amdgpu", "any"] },
               "default": ["any"],
               "description": "Bus families Scan(bus) will be offered."
+            },
+            "pci": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/pciTuple" },
+              "description": "GPU plugins: the cards (PCI vendor, device, subsystem vendor, subsystem device) whose bus Scan(bus) is offered (the plugin's BrandGPUList())."
+            },
+            "tested": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/pciTuple" },
+              "description": "Cards, from pci, that someone has run the plugin on (GPU plugins); empty until then. RAM plugins list no pci and keep this empty until a run is recorded in their docs/hardware note."
+            },
+            "deniedRegisters": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+              "description": "Registers the host never lets the plugin write, at any address (save to flash/EEPROM and the like): its SmbusDeniedRegisters()."
+            },
+            "batchWrites": {
+              "type": "boolean",
+              "description": "Its SmbusBatchWrites() returns true: inside TransactionLock the host queues the plugin's writes and sends them as one batch (one I/O broker request) at the next read or TransactionUnlock(), which then answers 0 or the status of the first write that failed."
+            },
+            "spdManufacturers": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["bank", "id"],
+                "properties": {
+                  "bank": { "type": "integer", "minimum": 1, "maximum": 32, "description": "JEP106 bank, 1-based (1 = no continuation code)." },
+                  "id": { "type": "integer", "minimum": 1, "maximum": 255, "description": "JEP106 id byte within the bank, as SPD stores it (parity bit included, e.g. 44 = 0x2C Micron); compared on its low 7 bits." },
+                  "name": { "type": "string", "description": "Manufacturer name (informational)." }
+                },
+                "additionalProperties": false
+              },
+              "description": "RAM plugins (deviceType ram): the DIMM module manufacturers they drive, their SpdManufacturers(). On chipset buses the host reads the SPD of slots 0x50-0x57 first and offers Scan(bus) only when a module from one of these is present (bus.SpdSlots() lists the matching slots). A RAM plugin without it is never offered a chipset bus. DDR4 only for now."
             }
           },
           "additionalProperties": false
         }
+      },
+      "additionalProperties": false
+    },
+    "pciTuple": {
+      "type": "object",
+      "required": ["vendor", "device", "subVendor", "subDevice"],
+      "properties": {
+        "vendor": { "$ref": "#/$defs/usbId" },
+        "device": { "$ref": "#/$defs/usbId" },
+        "subVendor": { "$ref": "#/$defs/usbId" },
+        "subDevice": { "$ref": "#/$defs/usbId" }
       },
       "additionalProperties": false
     },

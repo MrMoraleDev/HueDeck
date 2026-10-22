@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "lightloom-nvapi"
-description = "Lightloom dynamic NvAPI loader for GPU I2C and thermal (stub until M5)"
+description = "Lightloom dynamic NvAPI binding: NVIDIA GPU I2C (RGB controllers) as a HAL SMBus bus, on one worker thread"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,9 @@ authors.workspace = true
 homepage.workspace = true
 
 [dependencies]
-# TODO(M5): libloading or windows (LoadLibrary) for nvapi64.dll; thiserror.
+lightloom-hal = { path = "../lightloom-hal" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }

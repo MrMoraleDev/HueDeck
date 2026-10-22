@@ -9,16 +9,19 @@ Windows Lightloom reaches that bus only through the Lightloom I/O broker
 (`crates/lightloom-iobroker`, a LocalSystem service) and the PawnIO driver; Lightloom's own
 processes never open PawnIO.
 
-**Status: partly tested.** On 2026-10-19 (build 9311108) one module lit red on the
-reference machine (`light red`, 10 s: 138 frames, 294 writes, no error), but its
-`Initialize()` took about 3 s, and with both modules and the GPU together the second
-module never lit. The follow-up (batched writes, turn-taking, the SPD check; ADR-0004,
-2026-10-22) is proven against mock buses and fakes only. `tested` in `manifest.json`
-stays empty until both modules run together.
+**Status: tested on the reference machine (2026-10-22, build ef2a473).** Both modules and
+the RTX 3060 together: `light red|green|blue|white` (2 s each) and `rainbow` (4 s), every
+colour seen by the user on both modules. `Initialize()` took 143-150 ms per module (was
+about 3 s on 2026-10-19 before batching); rainbow ran 111 frames per module in 4 s with
+0 errors and 0 frames skipped for a busy bus. The SPD check read both slots (0x52, 0x53)
+as DDR4, JEDEC bank 6 id 0x9B (Crucial Technology), part BL8G32C16U4WL.8FE. After a
+reboot the modules answer at 0x27 again and a live scan remaps them; `--dry-run` reports
+that without writing. (The schema keeps `tested` for PCI tuples, so RAM runs are recorded
+here.)
 
 | Module | Bus on the reference machine | Addresses seen | Status |
 |---|---|---|---|
-| 2 x Crucial Ballistix BL8G32C16U4WL | `AMD PIIX4 Bus - 0x0b00` (`1022:790B`, MSI MAG B550 Tomahawk) | `0x39`, `0x3A` (SignalRGB log, research §1.7); `0x3B`, `0x3C` after Lightloom's remap (2026-10-19) | one module lit; both together pending |
+| 2 x Crucial Ballistix BL8G32C16U4WL | `AMD PIIX4 Bus - 0x0b00` (`1022:790B`, MSI MAG B550 Tomahawk) | `0x39`, `0x3A` (SignalRGB log, research §1.7); `0x3B`, `0x3C` after Lightloom's remap (2026-10-19) | tested 2026-10-22, both modules |
 
 ## What the user needs
 

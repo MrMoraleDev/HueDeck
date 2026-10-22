@@ -62,7 +62,7 @@ export function LedNames() { return ["Headset"]; }
 export function LedPositions() { return [[0, 0]]; }
 export function ImageUrl() { return ""; }
 // Razer's own software drives the lights while it runs; HueDeck reports it, never closes it.
-export function ConflictingProcesses() { return ["RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"]; }
+export function ConflictingProcesses() { return ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"]; }
 
 let product = null;   // { pid, protocol, cells, cols }
 let lastColours = null;

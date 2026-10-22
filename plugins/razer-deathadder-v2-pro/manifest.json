@@ -13,6 +13,6 @@
     { "vid": "0x1532", "pids": ["0x007C", "0x007D"], "transport": "hid", "interfaces": [0], "tested": ["0x007C"] }
   ],
   "permissions": ["hid"],
-  "conflictingProcesses": ["RazerCentralService.exe", "Razer Synapse 3.exe"],
+  "conflictingProcesses": ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"],
   "keywords": ["razer", "deathadder", "mouse"]
 }

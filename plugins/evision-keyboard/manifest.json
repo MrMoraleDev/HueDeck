@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.evision-keyboard",
+  "name": "EVision V2 keyboards",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-key colours for EVision keyboards with the V2 firmware protocol, in the keyboard's direct mode, adapted from OpenRGB: the BYGG CSB ICL01 320F:5041 (plugin.js) and the Endorfy Omnis 3299:0012 (endorfy-omnis.js, its own module because of its vendor id). Untested. Nothing is written to the keyboards' profiles or stored colours. Older EVision keyboards (OpenRGB's first EVision controller, 0C45:5004 ... 320F:5084, including 320F:5064) are not driven: OpenRGB's only per-key path for them rewrites the keyboard's stored custom colours on every update. Protocol notes: docs/hardware/evision-keyboard.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    { "vid": "0x320F", "pids": ["0x5041"], "transport": "hid", "interfaces": [1], "tested": [] },
+    { "vid": "0x3299", "pids": ["0x0012"], "transport": "hid", "interfaces": [1], "tested": [] }
+  ],
+  "permissions": ["hid"],
+  "keywords": ["evision", "sonix", "endorfy", "omnis", "keyboard", "openrgb"]
+}

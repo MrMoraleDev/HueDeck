@@ -6,7 +6,17 @@ Source of every fact below: Lightloom's own recordings of the HID traffic of the
 reference machine's Kraken X3 (`lightloom ... --record`, 2026-10-18) while another
 plugin drove it, decoded with a coordinate-probe effect (each canvas pixel encodes
 its position, so every colour byte shows which LED it belongs to). No code of any
-other project was used. The plugin is `plugins/nzxt-kraken-x3/`.
+other project was used.
+
+> **Plugin retired (2026-10-22).** The single-device plugin `plugins/nzxt-kraken-x3/` was removed
+> in favour of the NZXT Hue 2 family plugin `plugins/nzxt-hue2/` (`docs/hardware/nzxt-hue2.md`),
+> which was tested on this cooler on 2026-10-22 (ring and logo). The family plugin sends the
+> header and ring `22 10` and apply reports below byte for byte (it leaves out the empty `22 11`
+> reports when a channel has 20 LEDs or fewer), but lights the logo the OpenRGB way (channel `04`
+> through `22 10` + apply) instead of the `2a 04` report below. This page stays as the protocol
+> notes of Lightloom's own recording; the recording is
+> `plugins/nzxt-hue2/fixtures/recorded-kraken-x3.json`. NZXT CAM (`NZXT CAM.exe`) is still
+> reported as a conflicting process.
 
 ## Transport
 

@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.steelseries-apex-m",
+  "name": "SteelSeries Apex M750",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-key lighting of the SteelSeries Apex M750 keyboard (USB 1038:0616). Adapted from OpenRGB's SteelSeriesApexMController and RGBController_SteelSeriesApex (GPL-2.0-or-later); untested on hardware. Only OpenRGB's enable-LED-control and colour reports are sent. The numeric-pad slots are fed from the keys their OpenRGB labels name (OpenRGB's own table is offset by five LEDs there; see the notes). Protocol notes: docs/hardware/steelseries-apex-m.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x0616"],
+      "transport": "hid",
+      "interfaces": [2],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "apex", "m750", "keyboard", "openrgb"]
+}

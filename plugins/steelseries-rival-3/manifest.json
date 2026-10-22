@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.steelseries-rival-3",
+  "name": "SteelSeries Rival 3",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "The front, middle, rear and logo lights of the wired SteelSeries Rival 3 (current and old firmware). Adapted from OpenRGB's SteelSeriesRival3Controller (GPL-2.0-or-later); untested on hardware. The save command, DPI and polling rate are never touched. Protocol notes: docs/hardware/steelseries-rival-3.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x1824", "0x184C"],
+      "transport": "hid",
+      "interfaces": [3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "rival", "rival-3", "mouse", "openrgb"]
+}

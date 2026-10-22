@@ -9,10 +9,10 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 | Plugin | Devices | Tested on |
 |---|---|---|
 | `msi-mystic-light-7c91` | MSI Mystic Light 185-byte boards, per-LED: onboard LEDs, JRGB and JRAINBOW headers | MAG B550 Tomahawk `1462:7C91` |
-| `razer-deathadder-v2-pro` | Razer DeathAdder V2 Pro | wired `1532:007C` |
-| `nzxt-kraken-x3` | NZXT Kraken X53 / X63 / X73 | `1E71:2007` |
+| `razer` | Razer devices with the 90-byte Razer report, Chroma ARGB controller, Kraken V4 (from OpenRGB) | DeathAdder V2 Pro `1532:007C` / `007D`, Mouse Dock Chroma `1532:007E` (close Razer Synapse 4 first) |
+| `nzxt-hue2` | NZXT Hue 2 family: controllers, Smart Device V2, Kraken X3 and Kraken 2024 Elite (from OpenRGB) | Kraken X3 `1E71:2007` (ring and logo) |
 | `steelseries-arctis-5` | SteelSeries Arctis 5 | `1038:12AA` |
-| `sony-dualsense` | Sony DualSense light bar, over USB | `054C:0CE6` |
+| `sony-gamepad` | Sony DualShock 4 light bar; DualSense / DualSense Edge light bar and player LEDs, over USB (from OpenRGB) | DualSense `054C:0CE6` (light bar) |
 | `hid-lamparray` | any HID LampArray (Windows Dynamic Lighting) device no other plugin claims | Razer DeathAdder V2 Pro's LampArray collection |
 
 ## A plugin directory

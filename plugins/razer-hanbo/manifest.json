@@ -1,0 +1,25 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.razer-hanbo",
+  "name": "Razer Hanbo Chroma (OpenRGB port)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Lights of the Razer Hanbo Chroma liquid cooler (pump cap and three fans); adapted from OpenRGB, untested on hardware. Pump and fan speeds are never touched. Protocol notes: docs/hardware/razer-hanbo.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "aio",
+  "devices": [
+    { "vid": "0x1532", "pids": ["0x0F35"], "transport": "hid", "interfaces": [0], "tested": [] }
+  ],
+  "permissions": [
+    "hid"
+  ],
+  "conflictingProcesses": ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"],
+  "keywords": [
+    "razer",
+    "hanbo",
+    "cooler",
+    "openrgb"
+  ]
+}

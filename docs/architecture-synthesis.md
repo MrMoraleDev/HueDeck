@@ -262,7 +262,7 @@ openlux/                      # placeholder name; see open decisions
     openlux-setup/            # one-shot elevated installer: PawnIO, broker service, WinUSB binding for approved VID:PIDs
   prelude/                    # plain-JS host shims: BinaryUtils.js, Errors.js, base64.js, createColorArray.js, @SignalRGB/* facades, engine.js (renderer side)
   ui/                         # dashboard (Svelte + TS, Vite); built assets embedded in openlux-daemon; optional tauri/ shell (tray, autostart)
-  plugins/                    # first-party MIT plugins in compat shape: msi-mystic-light-7c91/, razer-deathadder-v2-pro/, nzxt-kraken/, steelseries-arctis5/, crucial-ballistix-smbus/, sonix-320f/, generic-lamparray/ (each with manifest.json + LICENSE)
+  plugins/                    # first-party MIT plugins in compat shape: msi-mystic-light-7c91/, razer/, nzxt-kraken/, steelseries-arctis5/, crucial-ballistix-smbus/, sonix-320f/, generic-lamparray/ (each with manifest.json + LICENSE)
   effects/                    # first-party lightscripts (CC0): solid, rainbow-wave, audio-bars, screen-ambience, test-pattern
   components/                 # own component JSON library (fans, strips) in the SignalRGB-compatible schema
   schemas/                    # JSON Schemas: manifest, ControllableParameters, component, layout, effect meta; OpenAPI

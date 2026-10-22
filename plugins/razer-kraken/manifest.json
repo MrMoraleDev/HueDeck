@@ -1,0 +1,25 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.razer-kraken",
+  "name": "Razer Kraken (OpenRGB port)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Razer Kraken 7.1 family and Kraken V3 family headsets; adapted from OpenRGB, untested on hardware. Protocol notes: docs/hardware/razer-kraken.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "headphones",
+  "devices": [
+    { "vid": "0x1532", "pids": ["0x0501", "0x0504", "0x0506", "0x0510", "0x0527", "0x0533", "0x0537", "0x0549", "0x0554", "0x0560"], "transport": "hid", "interfaces": [3], "tested": [] }
+  ],
+  "permissions": [
+    "hid"
+  ],
+  "conflictingProcesses": ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"],
+  "keywords": [
+    "razer",
+    "kraken",
+    "headset",
+    "openrgb"
+  ]
+}

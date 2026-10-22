@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "lightloom-api"
-description = "Lightloom local API: native REST/WS on 16138 (and the dashboard), the SignalRGB-compatible surface on 16038/16034"
+description = "Lightloom local API: native REST/WS on 53000 by default (and the dashboard), the SignalRGB-compatible surface on 16038/16034"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,6 +16,7 @@ axum = { workspace = true, features = ["ws"] }
 tokio = { workspace = true, features = ["fs"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 lightloom-engine = { path = "../lightloom-engine" }
 
 [dev-dependencies]

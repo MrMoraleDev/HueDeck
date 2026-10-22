@@ -46,7 +46,7 @@ daemon/CLI wiring arrives with M1 and the graph above shows the intended shape.
 | `lightloom-plugin-host` | lib | M0 | `PluginMeta`/`PluginType`/`ProductIdExport` (call-if-function rule documented), `ModuleResolver` (`@SignalRGB/*`, `@lightloom/*`, relative-inside-root), `Loader` trait, `PluginIndex` (last scanned wins). No rquickjs yet |
 | `lightloom-effects` | lib | M0 | `parse_effect_meta(html) -> EffectMeta` (serde shape = `schemas/effect-meta.schema.json`: `properties[]`, `meters[]` with `region`/`match`/`hdrMatch`/`resolutions[]`, `uses`), `js_initializer` |
 | `lightloom-inputs` | lib | stub (M6) | `AudioSnapshot`, `ZoneSnapshot` shapes, `InputSource` trait |
-| `lightloom-api` | lib | stub (M4) | ports (16138 native, 16038/16034 compat, 6742 OpenRGB) and route tables |
+| `lightloom-api` | lib | stub (M4) | ports (53000 native by default, 16038/16034 compat, 6742 OpenRGB) and route tables |
 | `lightloom-daemon` | bin `lightloomd` | M0 | clap + tracing, `--config`, `LifecycleState` |
 | `lightloom-cli` | bin `lightloom` | M0 | `devices | light | rainbow | bench | compat dry-run`, each returning `NotImplemented` with its milestone |
 | `lightloom-iobroker` | lib + bin | M5 | LocalSystem service for the chipset SMBus (RAM): raw PawnIO IOCTLs (`pawnio`), SHA-256 pinned modules (`pins`), `SmbusPIIX4` transfers on ports 0x0B00/0x0B20 (`piix4`), `Global\Access_SMBUS.HTP.Method` (`mutex`), static policy and rate limit (`policy`), PawnIO detection (`detect`), the request handler with `BusLock` leases, `Batch` and `SpdRead` (`server`), the named pipe (`pipe`); fakes for tests |

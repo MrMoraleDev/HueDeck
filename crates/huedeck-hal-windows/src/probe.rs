@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Read-only Windows probing of HID endpoints.
 //!
 //! * [`usb_parent`]: walks `CM_Get_Parent` from the HID collection's device

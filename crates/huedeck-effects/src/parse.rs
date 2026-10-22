@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `<title>` / `<meta>` extraction with `scraper` (html5ever).
 
 use crate::model::{

@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.steelseries-aerox",
+  "name": "SteelSeries Aerox / Rival 3 Wireless",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Lighting of the SteelSeries Aerox 3, Aerox 5 and Aerox 9 mice (wired models, and the wireless models through the receiver or on the cable) and of the Rival 3 Wireless. Adapted from OpenRGB's SteelSeriesAerox3Controller, SteelSeriesAerox5Controller and SteelSeriesAeroxWirelessController (GPL-2.0-or-later); untested on hardware, and possibly not working at all: OpenRGB's start-up report 0x2D ('sets sensitivity and allows software mode??') writes the DPI table, so it is left out, and nobody knows yet whether the mice take colours without it (the first thing to check on hardware). The save command is left out too; DPI and polling rate are never touched. Protocol notes: docs/hardware/steelseries-aerox.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x1838", "0x183A", "0x1878", "0x187A", "0x1890", "0x1836", "0x1852", "0x1854", "0x185C", "0x185E", "0x1860", "0x1862", "0x1850", "0x1858", "0x185A", "0x1830"],
+      "transport": "hid",
+      "interfaces": [3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "aerox", "rival", "mouse", "wireless", "openrgb"]
+}

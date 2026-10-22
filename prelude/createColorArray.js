@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // device.createColorArray(color, count, layout[, colorOrder]) reference
 // implementation. The Rust host may bind this function directly onto the

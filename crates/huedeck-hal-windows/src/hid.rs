@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! hidapi-backed HID backend for Windows.
 //!
 //! hidapi's Windows backend already exposes one entry per top-level
@@ -53,6 +53,27 @@ fn descriptor_tlc(
     desc.find(info.usage_page, info.usage)
         .or_else(|| desc.collections.first())
         .cloned()
+}
+
+/// One hidapi context at a time may exist in a process.
+static DESCRIPTOR_API: Mutex<()> = Mutex::new(());
+
+/// The report descriptor of the collection at `path`, through a short-lived
+/// hidapi handle of its own (hidapi reconstructs it from the collection's
+/// preparsed data; no report I/O). For backends that do not hold a hidapi
+/// device.
+pub(crate) fn read_report_descriptor(path: &str) -> HalResult<Vec<u8>> {
+    let _one = DESCRIPTOR_API.lock().unwrap_or_else(|e| e.into_inner());
+    // `new()` would enumerate every HID device first (hundreds of ms); the
+    // global "disable discovery" switch would change the hidapi backend too.
+    #[allow(deprecated)]
+    let api = hidapi::HidApi::new_without_enumerate().map_err(map_err)?;
+    let cpath = CString::new(path).map_err(|e| HalError::InvalidArgument(e.to_string()))?;
+    let device = api.open_path(&cpath).map_err(map_err)?;
+    let mut buf = vec![0u8; MAX_REPORT_DESCRIPTOR];
+    let n = device.get_report_descriptor(&mut buf).map_err(map_err)?;
+    buf.truncate(n);
+    Ok(buf)
 }
 
 /// Feature reports a collection declares, ascending by id.
@@ -134,6 +155,27 @@ impl WindowsHidBackend {
     /// hidapi then reads strings and usages, and the probes run, only for
     /// matching collections. Falls back to a full enumeration when a path's
     /// VID/PID cannot be parsed.
+    pub fn enumerate_grouped_matching(
+        &self,
+        wanted: &BTreeSet<(u16, u16)>,
+        usages: &BTreeSet<(u16, u16)>,
+    ) -> HalResult<Vec<DeviceGroup>> {
+        if usages.is_empty() {
+            return self.enumerate_grouped_for(wanted);
+        }
+        // hidapi lists every collection's usage; keep the devices a plugin claims
+        // by VID:PID and those with a collection a generic plugin drives.
+        let mut groups = self.enumerate_grouped()?;
+        groups.retain(|g| {
+            wanted.contains(&(g.key.vid, g.key.pid))
+                || g.endpoints
+                    .iter()
+                    .any(|e| usages.contains(&(e.info.usage_page, e.info.usage)))
+        });
+        Ok(groups)
+    }
+
+    /// Only the devices whose `(vid, pid)` is in `wanted`.
     pub fn enumerate_grouped_for(&self, wanted: &BTreeSet<(u16, u16)>) -> HalResult<Vec<DeviceGroup>> {
         let started = std::time::Instant::now();
         let present = match probe::present_hid() {
@@ -259,6 +301,13 @@ pub struct WindowsHidHandle {
 impl HidHandle for WindowsHidHandle {
     fn info(&self) -> &HidEndpointInfo {
         &self.info
+    }
+
+    fn report_descriptor(&mut self) -> HalResult<Vec<u8>> {
+        let mut buf = vec![0u8; MAX_REPORT_DESCRIPTOR];
+        let n = self.device.get_report_descriptor(&mut buf).map_err(map_err)?;
+        buf.truncate(n);
+        Ok(buf)
     }
 
     fn write(&mut self, data: &[u8]) -> HalResult<usize> {

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Screen capture source feeding `engine.zone.*` (28x20 HSL grid + 160x100 RGBA).
 
 use crate::error::HalResult;

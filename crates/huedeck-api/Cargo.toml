@@ -1,8 +1,8 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 publish = false
 name = "huedeck-api"
-description = "HueDeck local API: native REST/WS on 16138 and the SignalRGB-compatible surface on 16038/16034 (route table only until M4)"
+description = "HueDeck local API: native REST/WS on 16138 (and the dashboard), the SignalRGB-compatible surface on 16038/16034"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,12 @@ authors.workspace = true
 homepage.workspace = true
 
 [dependencies]
-# TODO(M4): axum, tower-http, serde_json, tokio once the server lands.
+axum = { workspace = true, features = ["ws"] }
+tokio = { workspace = true, features = ["fs"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+huedeck-engine = { path = "../huedeck-engine" }
+
+[dev-dependencies]
+tower = { workspace = true }
+http-body-util = { workspace = true }

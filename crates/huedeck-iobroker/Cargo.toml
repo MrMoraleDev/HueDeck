@@ -1,8 +1,8 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 publish = false
 name = "huedeck-iobroker"
-description = "huedeck-iobroker: optional LocalSystem Windows service brokering SMBus/GPU-I2C/SuperIO through PawnIO (stub until M5)"
+description = "huedeck-iobroker: optional LocalSystem Windows service serving chipset SMBus (RAM lighting) through the PawnIO driver, with a closed op set, the global SMBus mutex, SPD write denial, a rate limit and an audit log"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,10 +11,20 @@ repository.workspace = true
 authors.workspace = true
 homepage.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "huedeck-iobroker"
 path = "src/main.rs"
 
 [dependencies]
 huedeck-protocol = { path = "../huedeck-protocol" }
-# TODO(M5): windows-service, windows (named pipe + Global\Access_SMBUS.HTP.Method mutex), sha2, tracing.
+sha2 = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# PawnIO IOCTLs (NtDeviceIoControlFile), the named pipe, Global\Access_SMBUS.HTP.Method.
+windows = { workspace = true }
+windows-service = { workspace = true }

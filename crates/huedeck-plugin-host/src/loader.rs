@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Loader trait and the VID:PID plugin index.
 
 use crate::meta::{MetaError, PluginMeta};

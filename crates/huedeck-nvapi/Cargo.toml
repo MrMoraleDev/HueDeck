@@ -1,8 +1,8 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 publish = false
 name = "huedeck-nvapi"
-description = "HueDeck dynamic NvAPI loader for GPU I2C and thermal (stub until M5)"
+description = "HueDeck dynamic NvAPI binding: NVIDIA GPU I2C (RGB controllers) as a HAL SMBus bus, on one worker thread"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,9 @@ authors.workspace = true
 homepage.workspace = true
 
 [dependencies]
-# TODO(M5): libloading or windows (LoadLibrary) for nvapi64.dll; thiserror.
+huedeck-hal = { path = "../huedeck-hal" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }

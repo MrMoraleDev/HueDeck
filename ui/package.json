@@ -1,0 +1,20 @@
+{
+  "name": "@huedeck/ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HueDeck dashboard, served by huedeckd on 127.0.0.1:16138. SPDX-License-Identifier: GPL-3.0-or-later",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "svelte": "5.57.2",
+    "svelte-check": "4.7.7",
+    "typescript": "5.9.3",
+    "vite": "8.3.4"
+  }
+}

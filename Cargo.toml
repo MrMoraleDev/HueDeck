@@ -6,12 +6,12 @@ default-members = ["crates/huedeck-cli", "crates/huedeck-daemon"]
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.85"
-license = "Apache-2.0 OR MIT"
+rust-version = "1.89"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/MrMoraleDev/HueDeck"
 authors = ["HueDeck contributors"]
 homepage = "https://github.com/MrMoraleDev/HueDeck"
-description = "HueDeck — open source RGB manager, compatible with the SignalRGB plugin and lightscript ecosystem"
+description = "HueDeck — standalone open source RGB lighting manager: no account, no telemetry, no ads; runs SignalRGB-format plugins and effects"
 keywords = ["rgb", "led", "hid", "signalrgb", "lighting"]
 categories = ["hardware-support"]
 
@@ -37,6 +37,9 @@ nusb = "0.2"
 serialport = "4.10"
 rquickjs = { version = "0.14", features = ["loader", "array-buffer", "futures", "parallel"] }
 axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+toml = "0.9"
 tower-http = { version = "0.7", features = ["cors", "fs", "trace"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 rusqlite_migration = "2"
@@ -46,7 +49,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 hex = "0.4"
 sha2 = "0.10"
 bytes = "1"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_Properties", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_ProcessStatus", "Win32_System_IO", "Win32_System_Console", "Win32_System_Registry", "Win32_System_SystemInformation"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_Properties", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_ProcessStatus", "Win32_System_IO", "Win32_System_Console", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_NetworkManagement_IpHelper", "Win32_System_LibraryLoader", "Wdk_System_IO", "Wdk_System_SystemInformation", "Win32_System_Pipes", "Win32_Security_Authorization", "Win32_System_Services"] }
 windows-service = "0.8"
 libc = "0.2"
 humantime = "2"

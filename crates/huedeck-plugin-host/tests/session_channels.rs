@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Channels, components and subdevices in a device session
 //! (docs/host-api/components-channels.md): a synthetic ARGB-controller plugin
 //! on the mock HAL, with one channel left to the placeholder strip and one
@@ -54,6 +54,7 @@ fn channels_components_and_subdevices_reach_the_plugin() {
 
     let handle = session::spawn(
         SessionDevice {
+            smbus: None,
             key: "1234:7777:C".into(),
             vid: 0x1234,
             pid: 0x7777,
@@ -164,6 +165,7 @@ fn controls_apply_before_the_next_render_and_call_the_hooks() {
     frames.publish(Frame::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     let handle = session::spawn(
         SessionDevice {
+            smbus: None,
             key: "1234:4444:P".into(),
             vid: 0x1234,
             pid: 0x4444,
@@ -200,4 +202,90 @@ fn controls_apply_before_the_next_render_and_call_the_hooks() {
     let report = handle.join().unwrap();
     assert!(report.is_clean(), "{report:#?}");
     assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0x02], vec![0x00, 0x15]]);
+}
+
+#[test]
+fn endpoints_are_published_and_child_placements_apply_live() {
+    use huedeck_engine::{Placement, Point};
+    use huedeck_plugin_host::session::{Control, EndpointKind};
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/device");
+    let plugin = Catalog::scan(&[dir], Duration::from_secs(10))
+        .lookup(0x1234, 0x7777)
+        .expect("channel probe")
+        .clone();
+    let info = MockHid::endpoint_info(0x1234, 0x7777, "C", 0, 0xFF00, 1, 0, ReportLengths::default());
+    let backend: Arc<dyn HidBackend> = Arc::new(MockHid::new().add_endpoint(info.clone()));
+    let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    frames.publish(Frame::solid(CANVAS_WIDTH, CANVAS_HEIGHT, Rgb::new(10, 20, 30)));
+    let mut opts = SessionOptions::default();
+    opts.channel_components.insert(
+        "ARGB 2".into(),
+        vec![ComponentInstance::with_id(
+            Component::strip("Probe Fan".into(), 3),
+            "comp-a".into(),
+        )],
+    );
+    // The probe's Initialize reads @SignalRGB/systeminfo.
+    opts.system_info = Some(Arc::new(SystemInfo::default()));
+    let handle = session::spawn(
+        SessionDevice {
+            smbus: None,
+            key: "1234:7777:C".into(),
+            vid: 0x1234,
+            pid: 0x7777,
+            endpoints: vec![info],
+        },
+        plugin,
+        backend,
+        Arc::clone(&frames),
+        opts,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    wait_until(deadline, || {
+        !handle.endpoints().is_empty() || handle.is_finished()
+    });
+    let views = handle.endpoints();
+    let kinds: Vec<_> = views.iter().map(|v| (v.uid.as_str(), v.kind)).collect();
+    assert_eq!(kinds[0], ("1234:7777:C", EndpointKind::Device));
+    assert!(
+        kinds.contains(&("1234:7777:C:Logo", EndpointKind::Subdevice)),
+        "{kinds:?}"
+    );
+    let fan = views
+        .iter()
+        .find(|v| v.uid == "comp-a")
+        .expect("component endpoint");
+    assert_eq!(
+        (fan.kind, fan.channel.as_deref(), fan.leds),
+        (EndpointKind::Component, Some("ARGB 2"), 3)
+    );
+
+    let channels = handle.channels();
+    let summary: Vec<_> = channels
+        .iter()
+        .map(|c| (c.name.as_str(), c.led_limit, c.led_count, c.components.len()))
+        .collect();
+    assert_eq!(summary, vec![("ARGB 1", 120, 60, 1), ("ARGB 2", 10, 3, 1)]);
+    assert_eq!(channels[1].components, vec!["comp-a".to_string()]);
+
+    let moved = Placement {
+        position: Point { x: 100.0, y: 50.0 },
+        ..Placement::default()
+    };
+    assert!(handle.control(Control::ChildPlacement {
+        uid: "comp-a".into(),
+        placement: moved.clone(),
+    }));
+    // Controls apply before the next Render: give it a frame.
+    frames.publish(Frame::solid(CANVAS_WIDTH, CANVAS_HEIGHT, Rgb::new(10, 20, 31)));
+    wait_until(deadline, || {
+        handle
+            .endpoints()
+            .iter()
+            .any(|v| v.uid == "comp-a" && v.placement == moved)
+    });
+    handle.stop();
+    let report = handle.join().unwrap();
+    assert!(report.is_clean(), "{report:#?}");
 }

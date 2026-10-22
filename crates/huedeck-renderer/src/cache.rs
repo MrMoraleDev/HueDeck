@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Chromium user-data dir ("root cache path") handling.
 //!
 //! Every run starts from an empty profile, so the previous run's files are wiped first. The path

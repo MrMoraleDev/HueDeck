@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Stable rustfmt options only; checked by `cargo fmt --all --check` in CI.
 edition = "2021"
 max_width = 110

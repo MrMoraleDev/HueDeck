@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `huedeck compat …` — SignalRGB-compatibility tooling.
 //!
 //! `huedeck compat dry-run <dir> [--initialize] [--json out.json] [--jobs N]`
@@ -108,7 +108,7 @@ pub fn run(command: CompatCommand) -> anyhow::Result<bool> {
             let progress = |n: usize, total: usize, r: &FileReport| {
                 if verbose {
                     eprintln!("[{n}/{total}] {}", file_line(r));
-                } else if n % 50 == 0 || n == total {
+                } else if n.is_multiple_of(50) || n == total {
                     eprint!("\r{n}/{total} files");
                     if n == total {
                         eprintln!();
@@ -247,20 +247,21 @@ fn replay(
                 d.sessions
             );
         }
+        let endpoints: Vec<_> = d
+            .paths
+            .iter()
+            .filter_map(|p| trace.endpoints.iter().find(|e| &e.path == p).cloned())
+            .collect();
         let plugin = catalog
-            .lookup(d.vid, d.pid)
+            .lookup_device(d.vid, d.pid, &endpoints)
             .with_context(|| format!("no plugin claims {} (use --plugins DIR or --signalrgb)", d.key))?
             .clone();
         eprintln!(
             "huedeck replay: {} -> {} ({} frames)",
             d.key, plugin.meta.name, d.frames
         );
-        let endpoints = d
-            .paths
-            .iter()
-            .filter_map(|p| trace.endpoints.iter().find(|e| &e.path == p).cloned())
-            .collect();
         let device = SessionDevice {
+            smbus: None,
             key: d.key.clone(),
             vid: d.vid,
             pid: d.pid,

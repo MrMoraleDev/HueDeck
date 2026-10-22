@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! rquickjs (QuickJS-NG) plugin runtime — M0 spike B.
 //!
 //! * One [`rquickjs::Runtime`] + [`rquickjs::Context`] per plugin, created and
@@ -15,11 +15,15 @@
 //! * The compat host (`js/host.js`) is evaluated before the plugin module:
 //!   recording stubs for the dry-run, or the natives of a
 //!   [`DeviceContext`](crate::device::DeviceContext) when
-//!   [`RuntimeOptions::device`] is set (a real device session).
+//!   [`RuntimeOptions::device`] is set (a real device session). With
+//!   [`RuntimeOptions::smbus`] the `bus` natives of a guarded SMBus bus are
+//!   added: to the device's (an SMBus device session) or alone (`"scan"`
+//!   mode, where only [`PluginRuntime::call_scan`] runs).
 //! * An interrupt that QuickJS swallows (a promise job cut off by the
 //!   deadline is drained by `execute_pending_job`) is still reported as a
 //!   `Timeout`: the deadline remembers that it fired ([`Deadline::fired`]).
 
+use crate::bus::SharedGuard;
 use crate::device::SharedDevice;
 use crate::exports::{read_exports, ExportsReading};
 use crate::resolve::{ModuleResolver, ResolveError, ResolvedModule};
@@ -165,6 +169,9 @@ pub struct RuntimeOptions {
     /// Real device session: back `device.*` with this context's natives (and
     /// make API gaps throw) instead of recording stubs.
     pub device: Option<SharedDevice>,
+    /// SMBus plugin: back `bus.*` (and the `Scan(bus)` argument) with this
+    /// guarded bus. Without [`RuntimeOptions::device`] the runtime is in scan mode.
+    pub smbus: Option<SharedGuard>,
 }
 
 impl Default for RuntimeOptions {
@@ -175,6 +182,7 @@ impl Default for RuntimeOptions {
             plugin_root: None,
             module_stubs: true,
             device: None,
+            smbus: None,
         }
     }
 }
@@ -722,6 +730,17 @@ impl PluginRuntime {
                 cfg.set("mode", "device").map_err(|e| failure(&ctx, e, d))?;
                 crate::device::install(&ctx, device, d).map_err(|e| failure(&ctx, e, d))?;
             }
+            if let Some(guard) = &opts.smbus {
+                let install = || -> rquickjs::Result<()> {
+                    if opts.device.is_none() {
+                        cfg.set("mode", "scan")?;
+                        ctx.globals().set("__huedeckNative", Object::new(ctx.clone())?)?;
+                    }
+                    let natives: Object = ctx.globals().get("__huedeckNative")?;
+                    crate::bus::install_bus(&ctx, &natives, guard, d, opts.device.as_ref())
+                };
+                install().map_err(|e| failure(&ctx, e, d))?;
+            }
             ctx.globals()
                 .set("__huedeckConfig", cfg)
                 .map_err(|e| failure(&ctx, e, d))?;
@@ -911,6 +930,58 @@ impl PluginRuntime {
         r
     }
 
+    /// `Scan(bus)` with the free-address bus under `budget`: the addresses it
+    /// returned that lie in `window`, without duplicates, at most
+    /// [`MAX_SCAN_RESULTS`]. A plugin without `Scan`, or one returning anything
+    /// but an array, fails.
+    pub fn call_scan(&self, window: &BTreeSet<u8>, budget: impl Into<Budget>) -> Result<Vec<u8>, JsFailure> {
+        let deadline = &self.deadline;
+        deadline.arm(budget);
+        let r = self.context.with(|ctx| {
+            let not_array = || JsFailure {
+                class: "TypeError".into(),
+                message: "Scan() must return an array.".into(),
+            };
+            let run = || -> rquickjs::Result<Result<Vec<u8>, JsFailure>> {
+                let ns = plugin_namespace(&ctx)?;
+                let Some(f) = ns.get::<_, Value>("Scan")?.into_function() else {
+                    return Ok(Err(JsFailure {
+                        class: "HostError".into(),
+                        message: "the plugin exports no Scan(bus)".into(),
+                    }));
+                };
+                let bus: Value = host_object(&ctx)?.get::<_, Function>("freeBus")?.call(())?;
+                let mut ret: Value = f.call((bus,))?;
+                if let Some(p) = ret.as_promise() {
+                    ret = p.finish::<Value>()?;
+                }
+                while ctx.execute_pending_job() {}
+                let Some(list) = ret.as_array() else {
+                    return Ok(Err(not_array()));
+                };
+                let mut found = Vec::new();
+                for v in list.iter::<Value>() {
+                    let Some(n) = v?.as_number() else { continue };
+                    if n.fract() != 0.0 || !(0.0..=127.0).contains(&n) {
+                        continue;
+                    }
+                    let a = n as u8;
+                    if window.contains(&a) && !found.contains(&a) && found.len() < MAX_SCAN_RESULTS {
+                        found.push(a);
+                    }
+                }
+                Ok(Ok(found))
+            };
+            match run().map_err(|e| failure(&ctx, e, deadline)) {
+                Ok(_) if deadline.fired() => Err(JsFailure::timeout("Scan")),
+                Ok(r) => r,
+                Err(e) => Err(e),
+            }
+        });
+        deadline.clear();
+        r
+    }
+
     /// `Validate(endpoint)` under `budget`: the truthiness of its return value.
     /// A plugin without `Validate` accepts every endpoint.
     pub fn validate(
@@ -988,6 +1059,9 @@ impl PluginRuntime {
         rec
     }
 }
+
+/// Most devices one `Scan(bus)` may report on one bus.
+pub const MAX_SCAN_RESULTS: usize = 8;
 
 /// Arguments for [`PluginRuntime::call_export`].
 #[derive(Clone, Copy, Debug)]

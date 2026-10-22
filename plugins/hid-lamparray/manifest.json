@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.hid-lamparray",
+  "name": "HID LampArray",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Any device with a HID LampArray collection (usage page 0x59, the standard behind Windows Dynamic Lighting) that no other plugin claims: lamp count, positions and colour levels come from the device, report layouts from its report descriptor. Protocol notes: docs/hardware/hid-lamparray.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    { "hidUsage": { "usagePage": "0x59", "usage": "0x01" }, "transport": "hid" }
+  ],
+  "permissions": ["hid"],
+  "keywords": ["lamparray", "dynamic-lighting", "hid", "generic", "keyboard", "mouse"]
+}

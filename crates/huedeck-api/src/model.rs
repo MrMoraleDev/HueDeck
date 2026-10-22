@@ -1,0 +1,487 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! What the API exchanges with the daemon and with clients: the read model
+//! ([`Snapshot`]), the state-changing requests ([`Request`]), push events
+//! ([`Event`]) and errors ([`ApiError`]). JSON field names are camelCase.
+
+use huedeck_engine::Placement;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+/// Everything a client shows, as of one moment.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    /// HueDeck version.
+    pub version: String,
+    /// Lifecycle state of the daemon (`Running`, `ScanningHardware`, ...).
+    pub state: String,
+    /// What is on the canvas.
+    pub lighting: Lighting,
+    /// Devices: running sessions first by key, then known devices that are disabled or absent.
+    pub devices: Vec<DeviceView>,
+    /// The effect library, by id.
+    pub effects: Vec<EffectView>,
+    /// Saved layouts, by name.
+    pub layouts: Vec<String>,
+    /// User settings.
+    pub settings: Settings,
+    /// Running software that holds the same devices (reported, never terminated).
+    pub conflicts: Vec<String>,
+    /// Problems worth showing (renderer missing, plugin directories empty, ...).
+    pub warnings: Vec<String>,
+}
+
+/// The canvas: effect, brightness, layout, renderer.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Lighting {
+    /// Current effect id.
+    pub effect: Option<String>,
+    /// Its title.
+    pub effect_name: Option<String>,
+    /// Global brightness `0..=100`.
+    pub brightness: u8,
+    /// `false`: the canvas is paused and every device shows black.
+    pub enabled: bool,
+    /// Current layout name.
+    pub layout: String,
+    /// Its brightness `0..=100`.
+    pub layout_brightness: u8,
+    /// Who paints the canvas.
+    pub renderer: RendererView,
+}
+
+/// The canvas renderer.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererView {
+    /// `cef` (effects) or `null` (solid colour / test patterns without the renderer).
+    pub kind: String,
+    /// A renderer process is up (always true for `null`).
+    pub running: bool,
+    /// Frames per second.
+    pub fps: u32,
+    /// Starts, frames, restarts (CEF client status line).
+    pub status: Option<String>,
+}
+
+/// One device.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceView {
+    /// `vid:pid:serial`.
+    pub key: String,
+    /// USB vendor id.
+    pub vid: u16,
+    /// USB product id.
+    pub pid: u16,
+    /// Name (plugin-given).
+    pub name: String,
+    /// Plugin name.
+    pub plugin: String,
+    /// Plugin file.
+    pub plugin_path: String,
+    /// `running`, `starting`, `stopping`, `done`, `disabled` or `absent`.
+    pub state: String,
+    /// Driven at all.
+    pub enabled: bool,
+    /// Plugged in now.
+    pub connected: bool,
+    /// `Render()` calls.
+    pub frames: u64,
+    /// Failed `Render()` calls.
+    pub render_errors: u64,
+    /// Failed I/O operations: HID operations, or for SMBus devices failed or
+    /// refused bus operations.
+    pub io_errors: u64,
+    /// SMBus devices: `<bus name> · 0x<address>`; `None` for HID devices.
+    pub bus: Option<String>,
+    /// `DefaultScale()`.
+    pub default_scale: f32,
+    /// `ImageUrl()` or a `data:` URL of `Image()`.
+    pub image: Option<String>,
+    /// `ControllableParameters()` entries, each with its current `value`.
+    pub parameters: Vec<Value>,
+    /// The device and its children as canvas endpoints.
+    pub endpoints: Vec<Endpoint>,
+    /// Channel names (component editor).
+    pub channels: Vec<ChannelView>,
+}
+
+/// A canvas endpoint (device, subdevice or component instance).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Endpoint {
+    /// Placement key.
+    pub uid: String,
+    /// `device`, `subdevice` or `component`.
+    pub kind: String,
+    /// Display name.
+    pub name: String,
+    /// The channel of a component.
+    pub channel: Option<String>,
+    /// LED grid in cells.
+    pub size: [u32; 2],
+    /// Number of LEDs.
+    pub leds: usize,
+    /// Where it sits.
+    pub placement: Placement,
+}
+
+/// A channel and the component instances assigned to it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelView {
+    /// Channel name.
+    pub name: String,
+    /// LED limit (0 = none).
+    pub led_limit: u32,
+    /// Component instances in chain order (SignalRGB's JSON shape).
+    pub components: Vec<Value>,
+}
+
+/// One effect of the library.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectView {
+    /// Stable id (`huedeck:plasma`, `signalrgb:Rainbow`, ...).
+    pub id: String,
+    /// `<title>`.
+    pub title: String,
+    /// `<meta description>`.
+    pub description: String,
+    /// `<meta publisher>`.
+    pub publisher: String,
+    /// `huedeck`, `user` or `signalrgb`.
+    pub source: String,
+    /// `<meta property>` controls (effect-meta schema shape).
+    pub controls: Vec<Value>,
+    /// Stored control values (defaults apply to the others).
+    pub values: Map<String, Value>,
+    /// Preset names.
+    pub presets: Vec<String>,
+}
+
+/// User settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    /// Use the local SignalRGB installation's plugins, effects, components and
+    /// channel setup, read in place (opt-in).
+    pub signalrgb: bool,
+    /// A SignalRGB installation exists on this machine.
+    pub signalrgb_available: bool,
+    /// Composite effects on the GPU instead of in software.
+    pub gpu_compositing: bool,
+    /// Drive SMBus devices (GPU RGB through NvAPI; RAM RGB through the I/O
+    /// broker when it is installed and healthy); on unless turned off.
+    pub smbus: bool,
+    /// Effect frame rate.
+    pub fps: u32,
+    /// Never write to devices.
+    pub dry_run: bool,
+}
+
+/// A state change asked of the daemon.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase")]
+pub enum Request {
+    /// Show an effect (optionally with control values, which are stored).
+    #[serde(rename_all = "camelCase")]
+    ApplyEffect {
+        /// Effect id.
+        id: String,
+        /// Control values.
+        #[serde(default)]
+        values: Map<String, Value>,
+    },
+    /// Store control values of an effect; the current effect gets them live.
+    #[serde(rename_all = "camelCase")]
+    SetEffectValues {
+        /// Effect id.
+        id: String,
+        /// Control values.
+        values: Map<String, Value>,
+    },
+    /// Save the effect's stored values as a preset.
+    SavePreset {
+        /// Effect id.
+        effect: String,
+        /// Preset name.
+        name: String,
+    },
+    /// Load a preset into the effect's values (and show the effect).
+    ApplyPreset {
+        /// Effect id.
+        effect: String,
+        /// Preset name.
+        name: String,
+    },
+    /// Delete a preset.
+    DeletePreset {
+        /// Effect id.
+        effect: String,
+        /// Preset name.
+        name: String,
+    },
+    /// Show the next effect of the library (`previous` goes back).
+    StepEffect {
+        /// `true`: the previous one.
+        #[serde(default)]
+        previous: bool,
+    },
+    /// Global brightness and the canvas pause.
+    SetLighting {
+        /// `0..=100`.
+        brightness: Option<u8>,
+        /// `false` pauses the canvas (every device black).
+        enabled: Option<bool>,
+    },
+    /// Enable/disable a device or set its plugin parameters.
+    SetDevice {
+        /// Device key.
+        key: String,
+        /// Drive it or not.
+        enabled: Option<bool>,
+        /// `ControllableParameters` values (applied live, stored).
+        parameters: Option<Map<String, Value>>,
+    },
+    /// Assign component instances to a channel (the device session restarts).
+    SetChannel {
+        /// Device key.
+        device: String,
+        /// Channel name.
+        channel: String,
+        /// Component instances in chain order (SignalRGB's JSON shape;
+        /// `{"ProductName": ...}` from the library gets a new `ComponentId`).
+        components: Vec<Value>,
+    },
+    /// Move an endpoint in the current layout.
+    SetPlacement {
+        /// Endpoint uid.
+        uid: String,
+        /// Its placement.
+        placement: Placement,
+    },
+    /// Switch to a saved layout.
+    ApplyLayout {
+        /// Layout name.
+        name: String,
+    },
+    /// Save the current layout under a new name (and switch to it).
+    SaveLayoutAs {
+        /// Layout name.
+        name: String,
+    },
+    /// Delete a layout (not the current one).
+    DeleteLayout {
+        /// Layout name.
+        name: String,
+    },
+    /// The current layout's brightness.
+    SetLayoutBrightness {
+        /// `0..=100`.
+        brightness: u8,
+    },
+    /// `onCanvasApiEvent({sender, event})` in the current effect.
+    CanvasEvent {
+        /// Who sent it.
+        sender: String,
+        /// What happened.
+        event: String,
+    },
+    /// `onCanvasTapped(x, y)` in the current effect.
+    CanvasTap {
+        /// X in canvas pixels.
+        x: f64,
+        /// Y in canvas pixels.
+        y: f64,
+    },
+    /// User settings.
+    #[serde(rename_all = "camelCase")]
+    SetSettings {
+        /// Use the local SignalRGB installation (plugins, effects, components, channels).
+        signalrgb: Option<bool>,
+        /// GPU compositing for effects.
+        gpu_compositing: Option<bool>,
+        /// Drive SMBus devices (scans the buses when turned on).
+        #[serde(default)]
+        smbus: Option<bool>,
+    },
+    /// Import the local SignalRGB setup (read in place): its canvas placements
+    /// as a layout, and the component arrays of its channels.
+    ImportSignalRgb {
+        /// Layout name (default `SignalRGB`).
+        name: Option<String>,
+    },
+    /// A saved layout with its placements (read-only).
+    GetLayout {
+        /// Layout name.
+        name: String,
+    },
+    /// The component library for the channel editor (read-only).
+    ListComponents,
+    /// Everything persisted, as one JSON document.
+    Export,
+    /// Replace everything persisted with an export document.
+    Import {
+        /// The document.
+        state: Value,
+    },
+    /// Enumerate devices again now.
+    Rescan,
+    /// Stop the daemon (every plugin restores its device first).
+    Shutdown,
+}
+
+impl Request {
+    /// Short name for logs.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Request::ApplyEffect { .. } => "applyEffect",
+            Request::SetEffectValues { .. } => "setEffectValues",
+            Request::SavePreset { .. } => "savePreset",
+            Request::ApplyPreset { .. } => "applyPreset",
+            Request::DeletePreset { .. } => "deletePreset",
+            Request::StepEffect { .. } => "stepEffect",
+            Request::SetLighting { .. } => "setLighting",
+            Request::SetDevice { .. } => "setDevice",
+            Request::SetChannel { .. } => "setChannel",
+            Request::SetPlacement { .. } => "setPlacement",
+            Request::ApplyLayout { .. } => "applyLayout",
+            Request::SaveLayoutAs { .. } => "saveLayoutAs",
+            Request::DeleteLayout { .. } => "deleteLayout",
+            Request::SetLayoutBrightness { .. } => "setLayoutBrightness",
+            Request::CanvasEvent { .. } => "canvasEvent",
+            Request::CanvasTap { .. } => "canvasTap",
+            Request::SetSettings { .. } => "setSettings",
+            Request::ImportSignalRgb { .. } => "importSignalRgb",
+            Request::GetLayout { .. } => "getLayout",
+            Request::ListComponents => "listComponents",
+            Request::Export => "export",
+            Request::Import { .. } => "import",
+            Request::Rescan => "rescan",
+            Request::Shutdown => "shutdown",
+        }
+    }
+}
+
+/// Something changed; clients refetch what they show (`GET /v1/state`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Event {
+    /// `state` (the snapshot changed), `stats` (counters only) or `log`.
+    pub kind: String,
+    /// Event payload (`log`: the line).
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub data: Value,
+}
+
+impl Event {
+    /// The snapshot changed.
+    pub fn state() -> Self {
+        Self {
+            kind: "state".into(),
+            data: Value::Null,
+        }
+    }
+
+    /// A log line.
+    pub fn log(line: impl Into<String>) -> Self {
+        Self {
+            kind: "log".into(),
+            data: Value::String(line.into()),
+        }
+    }
+}
+
+/// A failed request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiError {
+    /// HTTP status.
+    pub status: u16,
+    /// Machine-readable code (`not_found`, `bad_request`, `unavailable`, ...).
+    pub code: String,
+    /// What went wrong.
+    pub message: String,
+}
+
+impl ApiError {
+    /// 400.
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: 400,
+            code: "bad_request".into(),
+            message: message.into(),
+        }
+    }
+
+    /// 404.
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: 404,
+            code: "not_found".into(),
+            message: message.into(),
+        }
+    }
+
+    /// 409.
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: 409,
+            code: "conflict".into(),
+            message: message.into(),
+        }
+    }
+
+    /// 500.
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: 500,
+            code: "internal".into(),
+            message: message.into(),
+        }
+    }
+
+    /// 503: the daemon is shutting down or not ready.
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: 503,
+            code: "unavailable".into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.message, self.code)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requests_are_tagged_by_op() {
+        let r: Request = serde_json::from_str(r#"{"op":"applyEffect","id":"huedeck:plasma"}"#).unwrap();
+        assert_eq!(
+            r,
+            Request::ApplyEffect {
+                id: "huedeck:plasma".into(),
+                values: Map::new()
+            }
+        );
+        let r: Request =
+            serde_json::from_str(r#"{"op":"setSettings","gpuCompositing":true,"signalrgb":null}"#).unwrap();
+        assert_eq!(r.name(), "setSettings");
+        assert_eq!(
+            serde_json::to_value(Request::StepEffect { previous: true }).unwrap(),
+            serde_json::json!({"op": "stepEffect", "previous": true})
+        );
+    }
+}

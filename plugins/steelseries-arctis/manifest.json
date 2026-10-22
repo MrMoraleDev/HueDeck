@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.steelseries-arctis",
+  "name": "SteelSeries Arctis 5 (OpenRGB protocol)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "The two ear-cup lights of the first SteelSeries Arctis 5 headset (USB 1038:1250), following OpenRGB's SteelSeriesArctis5Controller (GPL-2.0-or-later); untested on hardware. Only lighting reports are sent: volume, sidetone, microphone and the other headset settings are never touched. The second Arctis 5 (1038:12AA) is driven by HueDeck's own plugins/steelseries-arctis-5, not by this plugin. Protocol notes: docs/hardware/steelseries-arctis.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "headphones",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x1250"],
+      "transport": "hid",
+      "interfaces": [5],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "arctis", "headset", "headphones", "openrgb"]
+}

@@ -1,0 +1,743 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Expected HID traffic for the MSI Mystic Light plugin, produced by OpenRGB's own code, not by plugin.js: Controllers/MSIMotherboardController/MSIMotherboard{185,162,112}Controller/*.cpp and RGBController_MSIMotherboard{185,162,112}.cpp at commit d4798c120659ec5ba2e664a9e87bedff8d36f880 were compiled unchanged against a scratch fake hidapi that answers GET_FEATURE 0x52 with `image` and the two firmware queries with 01 B0 <aprom> CC.. / 01 B6 <ldrom> CC.. (MinGW g++ 6.3), then driven like OpenRGB's detector and profile manager: DetectMSIMotherboardControllers() (GET 0x52, 200 bytes, pick the variant by length), the controller and RGBController constructors, ResizeZone() for each entry of `sizes`, the Direct mode selected with its own defaults (per-LED colours, brightness 10, no speed; unless `keepDeviceConfig`, which keeps what GetDeviceConfig() copied from the board) and DeviceUpdateMode(), then `frames` x DeviceUpdateLEDs() (and, with `resize`, ResizeZone() again and `framesAfter` more frames). Every LED's colour is a pattern of the frame f, the MSI_ZONE value z of its zone (JRGB1 1, JRGB2 2, PIPE1 3, PIPE2 4, JRAINBOW1 8, JRAINBOW2 9, JRAINBOW3 10, JCORSAIR 11, onboard 13) and its index i in the zone: R = (16 z + f) & 255, G = i & 255, B = (5 i + 9 z + 50 f + 1) & 255. `events` lists each hidapi call in order (hex upper case, report id first): get_feature (id, requested length, returned length), write and send_feature (bytes), read (the answer), pause (std::this_thread::sleep_for), and `mark` lines between the steps above. `openrgbZones` and `openrgbModes` are the RGBController's zones and modes right after construction. `status` is ok, firmware-invalid (no controller), no-mode (the board has no Direct mode) or unsupported-length.",
+ "scenarios": [
+  {
+   "id": "common-7e12",
+   "note": "Vendor 0x0DB0, product 0x0076, serial 7E12...: MAG X670E TOMAHAWK WIFI row (zones_set13: JRGB1, JRGB2, JRAINBOW1, JRAINBOW2; 0 onboard, 2 JRGB)",
+   "pid": "0x0076",
+   "serial": "7E12A1B2C3D4",
+   "aprom": 16,
+   "ldrom": 17,
+   "image": "52011122332811223380000111223328112233800001112233281122338000011122332811223380001E011122332811223380001E010000002800000080040001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800000",
+   "sizes": {
+    "JRAINBOW1": 8,
+    "JRAINBOW2": 9
+   },
+   "resize": {},
+   "frames": 1,
+   "framesAfter": 0,
+   "keepDeviceConfig": false,
+   "variant": "185",
+   "status": "ok",
+   "openrgbZones": [
+    {
+     "name": "JRGB1",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "JRGB1, LED 1",
+       "value": 1
+      }
+     ]
+    },
+    {
+     "name": "JRGB2",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "JRGB2, LED 1",
+       "value": 2
+      }
+     ]
+    },
+    {
+     "name": "JRAINBOW1",
+     "type": 1,
+     "count": 0,
+     "min": 0,
+     "max": 200,
+     "flags": 62,
+     "leds": []
+    },
+    {
+     "name": "JRAINBOW2",
+     "type": 1,
+     "count": 0,
+     "min": 0,
+     "max": 240,
+     "flags": 62,
+     "leds": []
+    }
+   ],
+   "openrgbModes": [
+    "Direct",
+    "Static",
+    "Breathing",
+    "Flashing",
+    "Double flashing",
+    "Lightning",
+    "Meteor",
+    "Color ring",
+    "Planetary",
+    "Double meteor",
+    "Energy",
+    "Blink",
+    "Clock",
+    "Color pulse",
+    "Color shift",
+    "Color wave",
+    "Marquee",
+    "Rainbow wave",
+    "Visor",
+    "Rainbow flashing",
+    "Color ring double flashing",
+    "Stack",
+    "Fire"
+   ],
+   "events": [
+    {
+     "op": "get_feature",
+     "id": 82,
+     "len": 200,
+     "ret": 185
+    },
+    {
+     "op": "mark",
+     "what": "detected"
+    },
+    {
+     "op": "write",
+     "len": 64,
+     "data": "01B0CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "ret": 64,
+     "data": "01B010CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "write",
+     "len": 64,
+     "data": "01B6CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "ret": 64,
+     "data": "01B611CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "get_feature",
+     "id": 82,
+     "len": 185,
+     "ret": 185
+    },
+    {
+     "op": "mark",
+     "what": "constructed"
+    },
+    {
+     "op": "mark",
+     "what": "sized"
+    },
+    {
+     "op": "send_feature",
+     "len": 185,
+     "data": "5201000000080000008000010000002A0000008000010000002A00000080000100000029000000800028010000002900000080002801000000290000008200780100000028000000800025000000A9000000BF00010000002800000080000100000028000000800001000000280000008000010000002800000080000100000028000000800001000000280000008000010000002800000080000100000028000000800001000000280000008000010000002A000000800000"
+    },
+    {
+     "op": "mark",
+     "what": "mode"
+    },
+    {
+     "op": "send_feature",
+     "len": 725,
+     "data": "532506000010000A20001380004980014E80025380035880045D80056280066780076C00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000090005290015790025C90036190046690056B90067090077590087A000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "mark",
+     "what": "frame"
+    }
+   ]
+  },
+  {
+   "id": "common-7e28-zone",
+   "note": "Vendor 0x0DB0, serial 7E28...: PRO A620M-B row (zone-based, mixed mode)",
+   "pid": "0x0076",
+   "serial": "7E28000000AB",
+   "aprom": 16,
+   "ldrom": 17,
+   "image": "52011122332811223380000111223328112233800001112233281122338000011122332811223380001E011122332811223380001E010000002800000080040001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800000",
+   "sizes": {
+    "JRAINBOW1": 1,
+    "JRAINBOW2": 1,
+    "JCORSAIR": 1
+   },
+   "resize": {},
+   "frames": 1,
+   "framesAfter": 0,
+   "keepDeviceConfig": false,
+   "variant": "185",
+   "status": "ok",
+   "openrgbZones": [
+    {
+     "name": "JRGB1",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "JRGB1, LED 1",
+       "value": 1
+      }
+     ]
+    },
+    {
+     "name": "JRGB2",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "JRGB2, LED 1",
+       "value": 2
+      }
+     ]
+    },
+    {
+     "name": "JRAINBOW1",
+     "type": 0,
+     "count": 0,
+     "min": 0,
+     "max": 30,
+     "flags": 1,
+     "leds": []
+    },
+    {
+     "name": "JRAINBOW2",
+     "type": 0,
+     "count": 0,
+     "min": 0,
+     "max": 30,
+     "flags": 1,
+     "leds": []
+    },
+    {
+     "name": "JCORSAIR",
+     "type": 0,
+     "count": 0,
+     "min": 0,
+     "max": 30,
+     "flags": 1,
+     "leds": []
+    },
+    {
+     "name": "PIPE1",
+     "type": 0,
+     "count": 0,
+     "min": 0,
+     "max": 0,
+     "flags": 0,
+     "leds": []
+    },
+    {
+     "name": "PIPE2",
+     "type": 0,
+     "count": 0,
+     "min": 0,
+     "max": 0,
+     "flags": 0,
+     "leds": []
+    },
+    {
+     "name": "ONBOARD",
+     "type": 0,
+     "count": 6,
+     "min": 6,
+     "max": 6,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "ONBOARD, LED 1",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 2",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 3",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 4",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 5",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 6",
+       "value": 13
+      }
+     ]
+    }
+   ],
+   "openrgbModes": [
+    "Direct",
+    "Static",
+    "Breathing",
+    "Flashing",
+    "Double flashing",
+    "Lightning",
+    "Meteor",
+    "Color ring",
+    "Planetary",
+    "Double meteor",
+    "Energy",
+    "Blink",
+    "Clock",
+    "Color pulse",
+    "Color shift",
+    "Color wave",
+    "Marquee",
+    "Rainbow wave",
+    "Visor",
+    "Rainbow flashing",
+    "Color ring double flashing",
+    "Stack",
+    "Fire"
+   ],
+   "events": [
+    {
+     "op": "get_feature",
+     "id": 82,
+     "len": 200,
+     "ret": 185
+    },
+    {
+     "op": "mark",
+     "what": "detected"
+    },
+    {
+     "op": "write",
+     "len": 64,
+     "data": "01B0CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "ret": 64,
+     "data": "01B010CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "write",
+     "len": 64,
+     "data": "01B6CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "ret": 64,
+     "data": "01B611CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "get_feature",
+     "id": 82,
+     "len": 185,
+     "ret": 185
+    },
+    {
+     "op": "mark",
+     "what": "constructed"
+    },
+    {
+     "op": "mark",
+     "what": "sized"
+    },
+    {
+     "op": "mark",
+     "what": "mode"
+    },
+    {
+     "op": "send_feature",
+     "len": 185,
+     "data": "520110000A2810000A800001000000280000008000010000002800000080000180004928800049800064019000522890005280006401B0006428B0006400000001D0058F00D0058F00000100000028000000800001D0007628D00076800001D0017B28D0017B800001D0028028D00280800001D0038528D00385800001D0048A28D0048A8000012000132820001380000100000028000000800001000000280000008000010000002800000080000100000028000000800000"
+    },
+    {
+     "op": "mark",
+     "what": "frame"
+    }
+   ]
+  },
+  {
+   "id": "common-0076",
+   "note": "Vendor 0x0DB0, serial starting 0076: the (Common PID) row of the table",
+   "pid": "0x0076",
+   "serial": "0076FFFF0000",
+   "aprom": 16,
+   "ldrom": 17,
+   "image": "52011122332811223380000111223328112233800001112233281122338000011122332811223380001E011122332811223380001E010000002800000080040001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800000",
+   "sizes": {
+    "JRAINBOW1": 2,
+    "JRAINBOW2": 3
+   },
+   "resize": {},
+   "frames": 1,
+   "framesAfter": 0,
+   "keepDeviceConfig": false,
+   "variant": "185",
+   "status": "ok",
+   "openrgbZones": [
+    {
+     "name": "JRGB1",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "JRGB1, LED 1",
+       "value": 1
+      }
+     ]
+    },
+    {
+     "name": "JRGB2",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "JRGB2, LED 1",
+       "value": 2
+      }
+     ]
+    },
+    {
+     "name": "JRAINBOW1",
+     "type": 1,
+     "count": 0,
+     "min": 0,
+     "max": 200,
+     "flags": 62,
+     "leds": []
+    },
+    {
+     "name": "JRAINBOW2",
+     "type": 1,
+     "count": 0,
+     "min": 0,
+     "max": 240,
+     "flags": 62,
+     "leds": []
+    }
+   ],
+   "openrgbModes": [
+    "Direct",
+    "Static",
+    "Breathing",
+    "Flashing",
+    "Double flashing",
+    "Lightning",
+    "Meteor",
+    "Color ring",
+    "Planetary",
+    "Double meteor",
+    "Energy",
+    "Blink",
+    "Clock",
+    "Color pulse",
+    "Color shift",
+    "Color wave",
+    "Marquee",
+    "Rainbow wave",
+    "Visor",
+    "Rainbow flashing",
+    "Color ring double flashing",
+    "Stack",
+    "Fire"
+   ],
+   "events": [
+    {
+     "op": "get_feature",
+     "id": 82,
+     "len": 200,
+     "ret": 185
+    },
+    {
+     "op": "mark",
+     "what": "detected"
+    },
+    {
+     "op": "write",
+     "len": 64,
+     "data": "01B0CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "ret": 64,
+     "data": "01B010CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "write",
+     "len": 64,
+     "data": "01B6CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "ret": 64,
+     "data": "01B611CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "get_feature",
+     "id": 82,
+     "len": 185,
+     "ret": 185
+    },
+    {
+     "op": "mark",
+     "what": "constructed"
+    },
+    {
+     "op": "mark",
+     "what": "sized"
+    },
+    {
+     "op": "send_feature",
+     "len": 185,
+     "data": "5201000000080000008000010000002A0000008000010000002A00000080000100000029000000800028010000002900000080002801000000290000008200780100000028000000800025000000A9000000BF00010000002800000080000100000028000000800001000000280000008000010000002800000080000100000028000000800001000000280000008000010000002800000080000100000028000000800001000000280000008000010000002A000000800000"
+    },
+    {
+     "op": "mark",
+     "what": "mode"
+    },
+    {
+     "op": "send_feature",
+     "len": 725,
+     "data": "532506000010000A20001380004980014E00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000090005290015790025C000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "mark",
+     "what": "frame"
+    }
+   ]
+  },
+  {
+   "id": "common-unknown",
+   "note": "Vendor 0x0DB0, serial 7FFF...: no table row, no direct mode",
+   "pid": "0x0076",
+   "serial": "7FFF00000000",
+   "aprom": 16,
+   "ldrom": 17,
+   "image": "52011122332811223380000111223328112233800001112233281122338000011122332811223380001E011122332811223380001E010000002800000080040001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800001112233281122338000011122332811223380000111223328112233800000",
+   "sizes": {},
+   "resize": {},
+   "frames": 1,
+   "framesAfter": 0,
+   "keepDeviceConfig": false,
+   "variant": "185",
+   "status": "no-mode",
+   "openrgbZones": [
+    {
+     "name": "JRGB1",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "JRGB1, LED 1",
+       "value": 1
+      }
+     ]
+    },
+    {
+     "name": "JRGB2",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "JRGB2, LED 1",
+       "value": 2
+      }
+     ]
+    },
+    {
+     "name": "JRAINBOW1",
+     "type": 1,
+     "count": 0,
+     "min": 0,
+     "max": 1,
+     "flags": 62,
+     "leds": []
+    },
+    {
+     "name": "JRAINBOW2",
+     "type": 1,
+     "count": 0,
+     "min": 0,
+     "max": 1,
+     "flags": 62,
+     "leds": []
+    },
+    {
+     "name": "JCORSAIR",
+     "type": 1,
+     "count": 0,
+     "min": 0,
+     "max": 1,
+     "flags": 62,
+     "leds": []
+    },
+    {
+     "name": "PIPE1",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "PIPE1, LED 1",
+       "value": 3
+      }
+     ]
+    },
+    {
+     "name": "PIPE2",
+     "type": 0,
+     "count": 1,
+     "min": 1,
+     "max": 1,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "PIPE2, LED 1",
+       "value": 4
+      }
+     ]
+    },
+    {
+     "name": "ONBOARD",
+     "type": 0,
+     "count": 6,
+     "min": 6,
+     "max": 6,
+     "flags": 0,
+     "leds": [
+      {
+       "name": "ONBOARD, LED 1",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 2",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 3",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 4",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 5",
+       "value": 13
+      },
+      {
+       "name": "ONBOARD, LED 6",
+       "value": 13
+      }
+     ]
+    }
+   ],
+   "openrgbModes": [
+    "Static",
+    "Breathing",
+    "Flashing",
+    "Double flashing",
+    "Lightning",
+    "Meteor",
+    "Color ring",
+    "Planetary",
+    "Double meteor",
+    "Energy",
+    "Blink",
+    "Clock",
+    "Color pulse",
+    "Color shift",
+    "Color wave",
+    "Marquee",
+    "Rainbow wave",
+    "Visor",
+    "Rainbow flashing",
+    "Color ring double flashing",
+    "Stack",
+    "Fire"
+   ],
+   "events": [
+    {
+     "op": "get_feature",
+     "id": 82,
+     "len": 200,
+     "ret": 185
+    },
+    {
+     "op": "mark",
+     "what": "detected"
+    },
+    {
+     "op": "write",
+     "len": 64,
+     "data": "01B0CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "ret": 64,
+     "data": "01B010CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "write",
+     "len": 64,
+     "data": "01B6CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "ret": 64,
+     "data": "01B611CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+     "op": "get_feature",
+     "id": 82,
+     "len": 185,
+     "ret": 185
+    },
+    {
+     "op": "mark",
+     "what": "constructed"
+    },
+    {
+     "op": "mark",
+     "what": "sized"
+    }
+   ]
+  }
+ ]
+}

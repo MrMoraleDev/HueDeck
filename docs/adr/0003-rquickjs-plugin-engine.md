@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # ADR-0003: Device plugins run on rquickjs (QuickJS-NG), one runtime per plugin thread
 
 - Status: Accepted (2026-10-17); risk retired by SPIKE B in M0; revisit if the M2

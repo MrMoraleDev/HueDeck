@@ -206,11 +206,7 @@
   "permissions": [
     "hid"
   ],
-  "conflictingProcesses": [
-    "RazerCentralService.exe",
-    "Razer Synapse 3.exe",
-    "Razer Synapse.exe"
-  ],
+  "conflictingProcesses": ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"],
   "keywords": [
     "razer",
     "chroma",

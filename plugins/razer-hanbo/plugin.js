@@ -43,7 +43,7 @@ export function LedNames() { return geometry().names; }
 export function LedPositions() { return geometry().cells.map((c) => c.slice()); }
 export function ImageUrl() { return ""; }
 // Razer's own software drives the lights while it runs; Lightloom reports it, never closes it.
-export function ConflictingProcesses() { return ["RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"]; }
+export function ConflictingProcesses() { return ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"]; }
 
 let zones = null;     // [{ name, cells: [[x, y], ...] }] in PUMP, FAN1, FAN2, FAN3 order
 let lastColours = null;

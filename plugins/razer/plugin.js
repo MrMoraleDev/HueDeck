@@ -80,7 +80,7 @@ export function LedNames() { return ["LED 1"]; }
 export function LedPositions() { return [[0, 0]]; }
 export function ImageUrl() { return ""; }
 // Razer's own software drives the lights while it runs; Lightloom reports it, never closes it.
-export function ConflictingProcesses() { return ["RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"]; }
+export function ConflictingProcesses() { return ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"]; }
 
 let main = null;          // the opened device (a "target", see makeTarget())
 let paired = [];          // devices paired to a receiver, each a target with a subdevice

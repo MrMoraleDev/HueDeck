@@ -112,7 +112,10 @@ fn msi_gpu_session_writes_static_mode_then_rgb() {
         .map(|p| p[1])
         .collect();
     let expected_reads: Vec<u8> = fx["init_reads"].as_array().unwrap().iter().map(byte).collect();
-    assert_eq!(reads, expected_reads);
+    // Initialize() reads the startup registers; Shutdown() reads each restored one back.
+    assert_eq!(reads[..expected_reads.len()], expected_reads[..]);
+    let restored: Vec<u8> = writes(&fx, "shutdown_restore").iter().map(|w| w[1]).collect();
+    assert_eq!(reads[expected_reads.len()..], restored[..]);
     let mut expected = writes(&fx, "init_writes");
     expected.extend(writes(&fx, "frame_123456"));
     expected.extend(writes(&fx, "shutdown_restore"));
@@ -156,8 +159,8 @@ fn dry_run_sends_nothing() {
     assert!(rec.payloads(TransactionKind::SmbusWrite).is_empty());
     assert_eq!(
         rec.payloads(TransactionKind::SmbusRead).len(),
-        12,
-        "reads still happen"
+        26,
+        "reads still happen: 13 startup registers, 13 read back on restore"
     );
     let log = report.smbus.unwrap().dry_run_log;
     assert_eq!(log[0], vec![0x68, 0x36, 0x64]);

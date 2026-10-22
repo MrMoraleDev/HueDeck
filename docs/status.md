@@ -245,6 +245,11 @@ packages that touch the same one in parallel, and merge the smaller one first:
 
 ### Priority 1: unblock device coverage on Windows
 
+0. **WP-CRT: static C runtime. Size S. Do this first.**
+   - Every shipped exe imports `VCRUNTIME140.dll`, which a clean Windows does not have and the portable build does not ship (see `docs/research/drivers.md`). Without it the daemon does not start, and neither does the broker service.
+   - Add a repo `.cargo/config.toml` with `-C target-feature=+crt-static` for `x86_64-pc-windows-msvc`. Add a packaging check that fails on any PE import outside an allow-list.
+   - Touches: `.cargo/config.toml`, `tools/package/`, `release.yml`. Coordinate with `feature/installer`.
+
 1. **WP-USB: raw USB sessions (`rawusb`, `hybrid`, `bulk_transfer`, `control_transfer`, `setProtocol`). Size L.**
    - Touches: `lightloom-hal/src/usb.rs` (trait as needed) and `mock.rs`; new `lightloom-hal-windows/src/usb.rs` on `nusb` (WinUSB); `lightloom-plugin-host/src/{device,catalog,session}.rs`; `js/host.js` (remove the three names from `unimplemented`); `lightloom-runtime/src/hardware.rs` (enumeration); tests in `crates/lightloom-plugin-host/tests/`.
    - Prerequisite reading: `docs/research/drivers.md` (which devices get WinUSB without an INF).
@@ -370,7 +375,7 @@ These can start in parallel with Windows work: they touch `lightloom-hal-linux` 
 
 ### Suggested order of parallel batches
 
-- **Next batch:** WP-USB, WP-AUDIO, WP-SDK-SERVER, WP-L1, WP-DOCS-SDK, WP-FUZZ. No two of these share a hot file, except that WP-SDK-SERVER and WP-AUDIO both make small additions to `engine.rs`.
+- **Next batch:** WP-CRT (first, small), WP-USB, WP-AUDIO, WP-SDK-SERVER, WP-L1, WP-DOCS-SDK, WP-FUZZ. No two of these share a hot file, except that WP-SDK-SERVER and WP-AUDIO both make small additions to `engine.rs`.
 - **Then:** WP-SERIAL, WP-SCREEN, WP-PARAMS, WP-COMPAT-REST, WP-I801, WP-L2, WP-L4.
 - **Then:** WP-LAMPARRAY, WP-MACROS (a), WP-IMPORT, WP-PLAYLISTS, WP-AMDGPU, WP-L5.
 - **Last:** WP-LCD, WP-MACROS (b), WP-SENSORS-FANS, WP-L3, WP-L6, WP-L7, WP-SIGN, WP-TRAY.

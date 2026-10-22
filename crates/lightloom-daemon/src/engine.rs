@@ -69,7 +69,12 @@ mod keys {
     pub const SIGNALRGB: &str = "settings.signalrgb";
     pub const GPU: &str = "settings.gpuCompositing";
     pub const SMBUS: &str = "settings.smbus";
+    /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
+    pub const PORT: &str = "settings.port";
 }
+
+/// The database key of the port saved from the dashboard.
+pub const PORT_KEY: &str = keys::PORT;
 
 /// The layout every installation starts with.
 pub const DEFAULT_LAYOUT: &str = "Default";
@@ -121,6 +126,10 @@ pub struct EngineOptions {
     pub renderer: Option<PathBuf>,
     /// Plugin index cache file (`None`: load every plugin file each time).
     pub plugin_cache: Option<PathBuf>,
+    /// Port the native API and dashboard listen on (shown in the settings).
+    pub api_port: u16,
+    /// Why that is not the configured port (busy at startup), for the settings.
+    pub api_port_notice: Option<String>,
 }
 
 struct Envelope {
@@ -1053,6 +1062,8 @@ impl Engine {
                 signalrgb_available: lightloom_plugin_host::catalog::signalrgb_app_dir().is_some(),
                 gpu_compositing: self.gpu,
                 smbus: self.smbus,
+                port: self.opts.api_port,
+                port_notice: self.opts.api_port_notice.clone(),
                 fps: self.fps(),
                 dry_run: self.opts.dry_run,
             },
@@ -1421,7 +1432,24 @@ impl Engine {
                 signalrgb,
                 gpu_compositing,
                 smbus,
+                port,
             } => {
+                // The API side validated and bound the port; it moves the
+                // listener once this is saved.
+                if let Some(port) = port {
+                    let port =
+                        lightloom_api::check_native_port(u32::from(port)).map_err(ApiError::bad_request)?;
+                    self.store.set(keys::PORT, &port).map_err(internal)?;
+                    if port != self.opts.api_port || self.opts.api_port_notice.is_some() {
+                        self.log(format!(
+                            "the dashboard and the API move to {}",
+                            lightloom_api::native_url(port)
+                        ));
+                    }
+                    self.opts.api_port = port;
+                    self.opts.api_port_notice = None;
+                    self.dirty = true;
+                }
                 if let Some(on) = smbus {
                     if on != self.smbus {
                         self.smbus = on;
@@ -1445,7 +1473,12 @@ impl Engine {
                         self.reload_libraries();
                     }
                 }
-                Ok(json!({ "signalrgb": self.signalrgb, "gpuCompositing": self.gpu, "smbus": self.smbus }))
+                Ok(json!({
+                    "signalrgb": self.signalrgb,
+                    "gpuCompositing": self.gpu,
+                    "smbus": self.smbus,
+                    "port": self.opts.api_port,
+                }))
             }
             Request::ImportSignalRgb { name } => {
                 self.import_signalrgb(name.unwrap_or_else(|| "SignalRGB".into()))
@@ -1708,5 +1741,7 @@ pub fn locate(paths: Paths, config: Config, dry_run: bool, hardware: HardwareMod
         dry_run,
         hardware,
         ephemeral: false,
+        api_port: lightloom_api::NATIVE_PORT,
+        api_port_notice: None,
     }
 }

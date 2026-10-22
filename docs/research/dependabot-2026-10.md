@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Dependabot PRs, October 2026
 
 Status on 2026-10-22. All three branches are based on develop `bfc3190`, so each one merges cleanly.

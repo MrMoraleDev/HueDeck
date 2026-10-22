@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "huedeck-hal-windows"
-description = "HueDeck HAL backends for Windows: hidapi (hid.dll) HID enumeration/I/O with &MI_xx / &ColNN endpoint parsing"
+description = "HueDeck HAL backends for Windows: hidapi (hid.dll) HID enumeration/I/O with &MI_xx / &ColNN endpoint parsing, the I/O broker client (chipset SMBus) and PawnIO presence"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,7 @@ homepage.workspace = true
 [dependencies]
 huedeck-hal = { path = "../huedeck-hal" }
 huedeck-hid-desc = { path = "../huedeck-hid-desc" }
+huedeck-protocol = { path = "../huedeck-protocol" }
 tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

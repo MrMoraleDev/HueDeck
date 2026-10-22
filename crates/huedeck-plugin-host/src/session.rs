@@ -22,7 +22,14 @@
 //!    placement (then `onBrightnessChanged()` for a new device brightness);
 //! 6. on stop calls `Shutdown(false)` (unless told not to), repeats the
 //!    feature-report reads and returns a [`SessionReport`].
+//!
+//! An SMBus device ([`SessionDevice::smbus`]) has no HID collections: steps 3
+//! and 4 are skipped, `bus` is the fixed-address bus of its address (through a
+//! [`GuardedBus`]), a `TransactionLock` still held when `Render()` returns is
+//! released by the host, and `Render()` runs at most once per
+//! [`SMBUS_FRAME_INTERVAL`] whatever the canvas rate.
 
+use crate::bus::{lock_guard, SharedGuard};
 use crate::catalog::CatalogEntry;
 use crate::children::ChildSetup;
 pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
@@ -30,9 +37,10 @@ use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
+use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
 use crate::stats::LatencyHistogram;
 use huedeck_engine::{ComponentInstance, FrameStore, Placement, SamplerConfig};
-use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple};
+use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, NoHid};
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -42,17 +50,61 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-/// One physical device: every HID collection that belongs to it.
+/// Shortest time between two `Render()` calls of an SMBus session (about
+/// 30 fps): the pace OpenRGB drives these controllers at
+/// (`RGBController_MSIGPU::TimeToSend`, 33 ms). The latest frame is rendered
+/// when the time comes, so nothing is lost but the frames in between.
+pub const SMBUS_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+
+/// One physical device: every HID collection that belongs to it, or the
+/// SMBus address it answers at.
 #[derive(Clone, Debug)]
 pub struct SessionDevice {
-    /// SignalRGB-shaped key (`vid:pid:serial`).
+    /// SignalRGB-shaped key (`vid:pid:serial`), or `smbus:<bus key>:<addr>`.
     pub key: String,
-    /// USB vendor id.
+    /// USB vendor id (SMBus: the bus controller's PCI vendor).
     pub vid: u16,
-    /// USB product id.
+    /// USB product id (SMBus: the bus controller's PCI device).
     pub pid: u16,
-    /// Collections in enumeration order.
+    /// Collections in enumeration order (none for SMBus devices).
     pub endpoints: Vec<HidEndpointInfo>,
+    /// An SMBus device: its bus and address.
+    pub smbus: Option<SmbusTarget>,
+}
+
+/// Where an SMBus device lives.
+#[derive(Clone, Debug)]
+pub struct SmbusTarget {
+    /// The bus (shared with discovery and the other devices on it).
+    pub bus: BusHandle,
+    /// The device's 7-bit address.
+    pub addr: u8,
+}
+
+impl SessionDevice {
+    /// A HID device.
+    pub fn hid(key: impl Into<String>, vid: u16, pid: u16, endpoints: Vec<HidEndpointInfo>) -> Self {
+        Self {
+            key: key.into(),
+            vid,
+            pid,
+            endpoints,
+            smbus: None,
+        }
+    }
+
+    /// The SMBus device at `addr` on `bus`: key `smbus:<bus key>:<addr>`,
+    /// VID:PID the bus controller's PCI vendor and device.
+    pub fn smbus(bus: BusHandle, addr: u8) -> Self {
+        let d = bus.descriptor();
+        Self {
+            key: format!("smbus:{}:{addr:02x}", d.key()),
+            vid: d.pci.vendor,
+            pid: d.pci.device,
+            endpoints: Vec::new(),
+            smbus: Some(SmbusTarget { bus, addr }),
+        }
+    }
 }
 
 /// Time budgets of the lifecycle calls: JavaScript time, time blocked in
@@ -311,6 +363,12 @@ pub struct SessionReport {
     pub canvas_to_wire: LatencySummary,
     /// Session start to the first successful (or dry-run) write.
     pub first_write_ms: Option<f64>,
+    /// Wall time of `Initialize()` (`None` when it was not called).
+    pub initialize_ms: Option<f64>,
+    /// Failed I/O operations: HID operations, or for SMBus devices failed or
+    /// refused bus operations (operations skipped while other sessions kept
+    /// the bus are not failures: [`SmbusStats::contended`]).
+    pub io_errors: u64,
     /// HID counters.
     pub io: IoStats,
     /// Dry-run writes and the first reads.
@@ -336,6 +394,8 @@ pub struct SessionReport {
     /// The session was stopped because its device went away (set by
     /// [`crate::manager::DeviceManager`]); I/O errors are then expected.
     pub device_removed: bool,
+    /// SMBus counters (SMBus devices only).
+    pub smbus: Option<SmbusStats>,
     /// Session wall time.
     pub elapsed_ms: f64,
 }
@@ -359,6 +419,8 @@ impl SessionReport {
             write: LatencySummary::default(),
             canvas_to_wire: LatencySummary::default(),
             first_write_ms: None,
+            initialize_ms: None,
+            io_errors: 0,
             io: IoStats::default(),
             io_log: Vec::new(),
             restore_checks: Vec::new(),
@@ -371,6 +433,7 @@ impl SessionReport {
             log_lines: 0,
             memory_bytes: 0,
             device_removed: false,
+            smbus: None,
             elapsed_ms: 0.0,
         }
     }
@@ -397,6 +460,7 @@ impl SessionReport {
         self.failures.is_empty()
             && self.faulted.is_none()
             && self.io.errors() == 0
+            && self.smbus.as_ref().is_none_or(|s| s.errors == 0 && s.denied == 0)
             && self.render_errors == 0
             && self.restore_checks.iter().all(|c| c.identical)
     }
@@ -421,7 +485,7 @@ struct LiveStats {
     state: AtomicU8,
     frames: AtomicU64,
     render_errors: AtomicU64,
-    hid_errors: AtomicU64,
+    io_errors: AtomicU64,
     hid_disconnects: AtomicU64,
     hid_disconnected: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
@@ -441,8 +505,9 @@ pub struct LiveSnapshot {
     pub frames: u64,
     /// Failed `Render()` calls so far.
     pub render_errors: u64,
-    /// Failed HID operations so far.
-    pub hid_errors: u64,
+    /// Failed I/O operations so far: HID operations, or for SMBus devices
+    /// failed or refused bus operations.
+    pub io_errors: u64,
     /// Failed HID operations whose device is gone (see [`IoStats::disconnects`]).
     pub disconnects: u64,
     /// The latest HID operation failed because the device is gone.
@@ -484,7 +549,7 @@ impl LiveStats {
             state,
             frames: self.frames.load(Ordering::Relaxed),
             render_errors: self.render_errors.load(Ordering::Relaxed),
-            hid_errors: self.hid_errors.load(Ordering::Relaxed),
+            io_errors: self.io_errors.load(Ordering::Relaxed),
             disconnects: self.hid_disconnects.load(Ordering::Relaxed),
             disconnected: self.hid_disconnected.load(Ordering::Relaxed),
             first_write_ms: match self.first_write_us.load(Ordering::Relaxed) {
@@ -594,7 +659,7 @@ pub fn spawn(
         state: AtomicU8::new(SessionState::Starting as u8),
         frames: AtomicU64::new(0),
         render_errors: AtomicU64::new(0),
-        hid_errors: AtomicU64::new(0),
+        io_errors: AtomicU64::new(0),
         hid_disconnects: AtomicU64::new(0),
         hid_disconnected: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
@@ -640,6 +705,12 @@ fn run(
     let meta = &plugin.meta;
     let mut report = SessionReport::new(&device, &plugin);
 
+    // SMBus devices never open a HID collection.
+    let backend: Arc<dyn HidBackend> = if device.smbus.is_some() {
+        Arc::new(NoHid)
+    } else {
+        backend
+    };
     let mut ctx = DeviceContext::new(backend, device.endpoints.clone(), opts.write_mode);
     ctx.set_name(meta.name.clone());
     ctx.set_log_sink(opts.log_sink.clone());
@@ -661,7 +732,22 @@ fn run(
     });
     ctx.set_subdevice_controller(meta.subdevice_controller || meta.supports_subdevices);
     ctx.set_system_info(opts.system_info.as_deref());
+    if let Some(t) = &device.smbus {
+        ctx.set_device_info([
+            t.bus.descriptor().name.clone(),
+            meta.name.clone(),
+            format!("0x{:02x}", t.addr),
+        ]);
+    }
     let shared = ctx.shared();
+    let guard: Option<SharedGuard> = device.smbus.as_ref().map(|t| {
+        let mut g = GuardedBus::new(t.bus.clone(), Phase::Run { addr: t.addr }, opts.write_mode);
+        g.deny_registers(meta.smbus_denied_registers.iter().copied());
+        g.set_batch_writes(meta.smbus_batch_writes);
+        let dev = Arc::clone(&shared);
+        g.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
+        g.shared()
+    });
     if let Err(e) = geometry {
         report.faulted = Some(format!("Size() export rejected: {e}"));
         return finish(report, &shared, None, started);
@@ -672,6 +758,7 @@ fn run(
     let ropts = RuntimeOptions {
         plugin_root: Some(plugin.root.clone()),
         device: Some(Arc::clone(&shared)),
+        smbus: guard.clone(),
         module_stubs: false,
         ..RuntimeOptions::default()
     };
@@ -691,6 +778,7 @@ fn run(
             &rt,
             &device,
             &shared,
+            guard.as_ref(),
             &frames,
             &opts,
             stop,
@@ -739,6 +827,11 @@ fn run(
             );
         }
     }
+    if let Some(g) = &guard {
+        let mut g = lock_guard(g);
+        g.force_unlock();
+        report.smbus = Some(g.stats().clone());
+    }
     for (probe, bytes) in lifecycle.before {
         let after = lock_device(&shared)
             .probe_feature(probe.report_id, probe.len)
@@ -772,6 +865,7 @@ fn drive(
     rt: &PluginRuntime,
     device: &SessionDevice,
     shared: &SharedDevice,
+    guard: Option<&SharedGuard>,
     frames: &FrameStore,
     opts: &SessionOptions,
     stop: &Arc<AtomicBool>,
@@ -798,63 +892,69 @@ fn drive(
         }
     }
 
-    // Validate every collection; the first accepted one becomes the active endpoint,
-    // and set_endpoint may later switch among the accepted ones only.
-    let mut validated = Vec::new();
-    for (i, ep) in device.endpoints.iter().enumerate() {
-        if stop.load(Ordering::Acquire) {
-            report.notes.push("stopped while validating endpoints".into());
-            return;
-        }
-        match rt.validate(&ep.endpoint_tuple(), budgets.call(budgets.validate)) {
-            Ok(true) => validated.push(i),
-            Ok(false) => {}
-            Err(e) => report.fail(format!("Validate #{i}"), e),
-        }
-    }
-    report.validated = validated.len();
-    let Some(&index) = validated.first() else {
-        report.faulted = Some("no collection passed Validate(endpoint)".into());
-        return;
-    };
-    {
-        let mut dev = lock_device(shared);
-        dev.set_validated(validated.clone());
-        if let Err(e) = dev.open(index) {
-            drop(dev);
-            report.faulted = Some(format!("cannot open {}: {e}", device.endpoints[index].path));
-            return;
-        }
-    }
-    report.endpoint = Some(device.endpoints[index].endpoint_tuple());
-    report.endpoint_path = Some(device.endpoints[index].path.clone());
-
-    let probes: Vec<RestoreProbe> = match &opts.restore_check {
-        RestoreCheckMode::Off => Vec::new(),
-        RestoreCheckMode::Reports(list) => list.clone(),
-        RestoreCheckMode::DeclaredFeatureReports => {
-            let declared = lock_device(shared).feature_reports();
-            if declared.is_empty() {
-                report
-                    .restore_notes
-                    .push("the report descriptor declares no feature reports (or could not be read)".into());
+    if let Some(target) = &device.smbus {
+        // An SMBus device has no collections to validate or reports to probe:
+        // the scan found it, the guard binds the session to its address.
+        report.endpoint_path = Some(format!("{} @0x{:02x}", target.bus.descriptor().name, target.addr));
+    } else {
+        // Validate every collection; the first accepted one becomes the active endpoint,
+        // and set_endpoint may later switch among the accepted ones only.
+        let mut validated = Vec::new();
+        for (i, ep) in device.endpoints.iter().enumerate() {
+            if stop.load(Ordering::Acquire) {
+                report.notes.push("stopped while validating endpoints".into());
+                return;
             }
-            declared
-                .iter()
-                .map(|r| RestoreProbe {
-                    report_id: r.id,
-                    len: r.len,
-                })
-                .collect()
+            match rt.validate(&ep.endpoint_tuple(), budgets.call(budgets.validate)) {
+                Ok(true) => validated.push(i),
+                Ok(false) => {}
+                Err(e) => report.fail(format!("Validate #{i}"), e),
+            }
         }
-    };
-    for p in probes {
-        match lock_device(shared).probe_feature(p.report_id, p.len) {
-            Some(bytes) => lifecycle.before.push((p, bytes)),
-            None => report.restore_notes.push(format!(
-                "feature report 0x{:02X} ({} bytes) could not be read before Initialize",
-                p.report_id, p.len
-            )),
+        report.validated = validated.len();
+        let Some(&index) = validated.first() else {
+            report.faulted = Some("no collection passed Validate(endpoint)".into());
+            return;
+        };
+        {
+            let mut dev = lock_device(shared);
+            dev.set_validated(validated.clone());
+            if let Err(e) = dev.open(index) {
+                drop(dev);
+                report.faulted = Some(format!("cannot open {}: {e}", device.endpoints[index].path));
+                return;
+            }
+        }
+        report.endpoint = Some(device.endpoints[index].endpoint_tuple());
+        report.endpoint_path = Some(device.endpoints[index].path.clone());
+
+        let probes: Vec<RestoreProbe> = match &opts.restore_check {
+            RestoreCheckMode::Off => Vec::new(),
+            RestoreCheckMode::Reports(list) => list.clone(),
+            RestoreCheckMode::DeclaredFeatureReports => {
+                let declared = lock_device(shared).feature_reports();
+                if declared.is_empty() {
+                    report.restore_notes.push(
+                        "the report descriptor declares no feature reports (or could not be read)".into(),
+                    );
+                }
+                declared
+                    .iter()
+                    .map(|r| RestoreProbe {
+                        report_id: r.id,
+                        len: r.len,
+                    })
+                    .collect()
+            }
+        };
+        for p in probes {
+            match lock_device(shared).probe_feature(p.report_id, p.len) {
+                Some(bytes) => lifecycle.before.push((p, bytes)),
+                None => report.restore_notes.push(format!(
+                    "feature report 0x{:02X} ({} bytes) could not be read before Initialize",
+                    p.report_id, p.len
+                )),
+            }
         }
     }
 
@@ -864,12 +964,15 @@ fn drive(
     }
     lifecycle.initialize_called = true;
     // A stop request cuts Initialize short (Shutdown still runs).
-    match rt.call_export_until(
+    let initialize_started = Instant::now();
+    let initialized = rt.call_export_until(
         "Initialize",
         CallArgs::None,
         budgets.call(budgets.initialize),
         stop,
-    ) {
+    );
+    report.initialize_ms = Some(initialize_started.elapsed().as_secs_f64() * 1000.0);
+    match initialized {
         Ok(_) => report.initialized = true,
         Err(e) if e.is_stop() => report
             .notes
@@ -891,7 +994,18 @@ fn drive(
     }
     let mut last_seq = 0;
     let mut consecutive_timeouts = 0u32;
+    let mut lock_warned = false;
+    let mut last_render: Option<Instant> = None;
     while !stop.load(Ordering::Acquire) {
+        if device.smbus.is_some() {
+            let left = last_render.map_or(Duration::ZERO, |t| {
+                SMBUS_FRAME_INTERVAL.saturating_sub(t.elapsed())
+            });
+            if !left.is_zero() {
+                std::thread::sleep(left);
+                continue;
+            }
+        }
         let Some(seq) = frames.wait_for_newer(last_seq, Duration::from_millis(100)) else {
             continue;
         };
@@ -912,6 +1026,7 @@ fn drive(
         let (_, frame, captured) = frames.latest_stamped();
         lock_device(shared).set_frame_at(frame, captured);
         let t = Instant::now();
+        last_render = Some(t);
         let result = rt.call_export_until("Render", CallArgs::None, budgets.render_budget(), stop);
         // Cut short by a stop request (it outlived STOP_GRACE): not the plugin's
         // fault, and not a whole frame.
@@ -946,8 +1061,22 @@ fn drive(
                 }
             }
         }
+        let mut bus_errors = None;
+        if let Some(g) = guard {
+            let mut g = lock_guard(g);
+            let left_locked = g.force_unlock();
+            bus_errors = Some(g.stats().errors + g.stats().denied);
+            drop(g);
+            if left_locked && !lock_warned {
+                lock_warned = true;
+                lock_device(shared).log("bus: Transaction Lock wasn't unlocked before Render() returned!");
+            }
+        }
         let dev = lock_device(shared);
-        live.hid_errors.store(dev.stats().errors(), Ordering::Relaxed);
+        live.io_errors.store(
+            bus_errors.unwrap_or_else(|| dev.stats().errors()),
+            Ordering::Relaxed,
+        );
         live.hid_disconnects
             .store(dev.stats().disconnects, Ordering::Relaxed);
         live.hid_disconnected
@@ -1030,6 +1159,10 @@ fn finish(
     report.canvas_to_wire = dev.canvas_to_wire();
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
+    report.io_errors = match &report.smbus {
+        Some(s) => s.errors + s.denied,
+        None => report.io.errors(),
+    };
     let (tail, lines) = dev.log_tail();
     report.log_tail = tail;
     report.log_lines = lines;

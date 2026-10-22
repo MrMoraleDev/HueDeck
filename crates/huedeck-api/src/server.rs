@@ -408,6 +408,7 @@ async fn settings(State(ctx): State<ApiContext>) -> Response {
 struct SettingsPatch {
     signalrgb: Option<bool>,
     gpu_compositing: Option<bool>,
+    smbus: Option<bool>,
 }
 
 async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPatch>) -> Response {
@@ -415,6 +416,7 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
         ctx.call(Request::SetSettings {
             signalrgb: p.signalrgb,
             gpu_compositing: p.gpu_compositing,
+            smbus: p.smbus,
         })
         .await,
     )

@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "huedeck-runtime"
-description = "HueDeck device runtime shared by huedeck and huedeckd: HID enumeration for the plugin catalog, hotplug, conflicting software, SignalRGB setup read in place"
+description = "HueDeck device runtime shared by huedeck and huedeckd: HID enumeration for the plugin catalog, SMBus/GPU I2C buses, hotplug, conflicting software, SignalRGB setup read in place"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,11 +12,16 @@ authors.workspace = true
 homepage.workspace = true
 
 [dependencies]
+tracing = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 huedeck-hal = { path = "../huedeck-hal" }
 huedeck-hal-windows = { path = "../huedeck-hal-windows" }
+huedeck-nvapi = { path = "../huedeck-nvapi" }
 huedeck-plugin-host = { path = "../huedeck-plugin-host" }
 huedeck-engine = { path = "../huedeck-engine" }
 huedeck-effects = { path = "../huedeck-effects" }
+
+[dev-dependencies]
+huedeck-hal = { path = "../huedeck-hal", features = ["mock"] }

@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "huedeck-setup"
-description = "huedeck-setup: one-shot elevated installer for PawnIO, the io-broker service and WinUSB bindings (stub until M5)"
+description = "huedeck-setup: one-shot elevated registration of the HueDeck I/O broker service (RAM lighting over SMBus) with its hash-pinned PawnIO modules; does not install PawnIO itself"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,4 +16,9 @@ name = "huedeck-setup"
 path = "src/main.rs"
 
 [dependencies]
-# TODO(M5): clap, windows-service, sha2 (PawnIO module hash pins), windows.
+huedeck-iobroker = { path = "../huedeck-iobroker" }
+
+[target.'cfg(windows)'.dependencies]
+windows-service = { workspace = true }
+# The client SID from the process token.
+windows = { workspace = true }

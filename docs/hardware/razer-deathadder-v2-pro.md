@@ -4,8 +4,15 @@
 
 Source of every fact below: HueDeck's own recordings of the mouse's HID traffic on
 the reference machine (`huedeck ... --record`, 2026-10-18), decoded with a
-coordinate-probe effect. No code of any other project was used. The plugin is
-`plugins/razer-deathadder-v2-pro/`.
+coordinate-probe effect. No code of any other project was used.
+
+> **Plugin retired (2026-10-22).** The single-device plugin `plugins/razer-deathadder-v2-pro/`
+> was removed in favour of the Razer family plugin `plugins/razer/` (`docs/hardware/razer.md`),
+> which drives `007C` and `007D` with exactly the packets below (its `RECORDED_PROFILE` path) and
+> was tested on this mouse on 2026-10-22. This page stays as the protocol notes of HueDeck's own
+> recording; the recording is `plugins/razer/fixtures/deathadder-v2-pro-recorded.json` (serial
+> number replaced by a placeholder). Close Razer Synapse 4 (`RazerAppEngine.exe`) before driving
+> the mouse: with it running the light flickers, and HueDeck reports it as a conflict.
 
 ## Transport
 

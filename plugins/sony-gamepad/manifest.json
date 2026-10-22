@@ -1,0 +1,42 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.sony-gamepad",
+  "name": "Sony DualShock 4 / DualSense",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Adapted from OpenRGB's SonyGamepadController: the light bar of the Sony DualShock 4 (054C:05C4, 054C:09CC) and of its USB wireless adapter (054C:0BA0), and the light bar and five player LEDs of the DualSense (054C:0CE6) and DualSense Edge (054C:0DF2), over USB only. Rumble, haptics, adaptive triggers, volume, audio routing and the microphone LED are never touched. Tested on hardware: DualSense (054C:0CE6), light bar; the DualShock 4 ids and the DualSense Edge are untested. Protocol notes: docs/hardware/sony-gamepad.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    {
+      "vid": "0x054C",
+      "pids": [
+        "0x05C4",
+        "0x09CC",
+        "0x0BA0",
+        "0x0CE6",
+        "0x0DF2"
+      ],
+      "transport": "hid",
+      "tested": ["0x0CE6"]
+    }
+  ],
+  "permissions": [
+    "hid"
+  ],
+  "keywords": [
+    "sony",
+    "playstation",
+    "dualshock",
+    "dualshock4",
+    "ds4",
+    "dualsense",
+    "dualsense-edge",
+    "controller",
+    "gamepad",
+    "lightbar",
+    "openrgb"
+  ]
+}

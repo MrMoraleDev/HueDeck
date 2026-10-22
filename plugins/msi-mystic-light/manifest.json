@@ -1,0 +1,34 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.msi-mystic-light",
+  "name": "MSI Mystic Light",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Direct mode of MSI Mystic Light motherboard RGB controllers (vendor id 0x1462), adapted from OpenRGB's MSIMotherboardController: the 185-byte boards (per-LED colour streams with the JRAINBOW/JCORSAIR ARGB headers as channels, or one colour per zone on zone-based boards), the 162-byte boards (static colours) and the 112-byte boards (one colour per zone). The configuration read at start is written back on exit and the save-to-flash byte is never set. The MAG B550 TOMAHAWK (0x7C91) keeps its own plugin (msi-mystic-light-7c91); boards behind vendor id 0x0DB0 are in msi-mystic-light-common. Protocol notes: docs/hardware/msi-mystic-light.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "motherboard",
+  "devices": [
+    {
+      "vid": "0x1462",
+      "pids": [
+        "0x1720", "0x7B12", "0x7B16", "0x7B17", "0x7B18", "0x7B50", "0x7B85", "0x7B92", "0x7B93", "0x7C02",
+        "0x7C34", "0x7C35", "0x7C36", "0x7C37", "0x7C56", "0x7C59", "0x7C60", "0x7C67", "0x7C71", "0x7C73",
+        "0x7C75", "0x7C76", "0x7C77", "0x7C79", "0x7C80", "0x7C81", "0x7C82", "0x7C83", "0x7C84", "0x7C86",
+        "0x7C87", "0x7C90", "0x7C92", "0x7C94", "0x7C95", "0x7C98", "0x7D03", "0x7D04", "0x7D06", "0x7D07",
+        "0x7D08", "0x7D09", "0x7D13", "0x7D14", "0x7D15", "0x7D17", "0x7D18", "0x7D19", "0x7D20", "0x7D25",
+        "0x7D27", "0x7D28", "0x7D29", "0x7D30", "0x7D31", "0x7D32", "0x7D33", "0x7D36", "0x7D37", "0x7D38",
+        "0x7D40", "0x7D41", "0x7D42", "0x7D43", "0x7D46", "0x7D50", "0x7D51", "0x7D52", "0x7D53", "0x7D54",
+        "0x7D59", "0x7D67", "0x7D69", "0x7D70", "0x7D73", "0x7D74", "0x7D75", "0x7D76", "0x7D77", "0x7D78",
+        "0x7D86", "0x7D88", "0x7D89", "0x7D90", "0x7D91", "0x7D93", "0x7D96", "0x7D97", "0x7D98", "0x7D99",
+        "0x7E01", "0x7E03", "0x7E06", "0x7E07", "0x7E09", "0x7E10", "0x7E20", "0x7E30", "0x7E32", "0x7E34",
+        "0x7E59", "0x7E66", "0x7E70", "0x7E76", "0x7E80", "0x7E81", "0x7E86", "0xB926"
+      ],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "keywords": ["msi", "mystic-light", "motherboard", "argb", "jrainbow", "jrgb", "jcorsair", "openrgb"]
+}

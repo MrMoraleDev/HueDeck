@@ -1,0 +1,70 @@
+{
+ "$comment": "Expected output reports worked out from OpenRGB's C++ code at commit d4798c120659ec5ba2e664a9e87bedff8d36f880 (RazerKrakenController.cpp razer_kraken_create_report / razer_set_mode_custom / razer_set_mode_spectrum_cycle; RazerKrakenV3Controller.cpp SetModeDirect / SetBrightness / SetDirect / SetModeWave) by a scratch Python transcription, not by running plugin.js. Canvas colour of cell (x, y): [(x*10+1)&255, (y*20+2)&255, (x*3+y*7+5)&255]. 'shutdown' is HueDeck's choice (spectrum cycle / wave), built with OpenRGB's functions.",
+ "cases": [
+  {
+   "pid": "0x0501",
+   "name": "Razer Kraken 7.1",
+   "initialize": [],
+   "frame": [
+    "04400110080100000000000000000000000000000000000000000000000000000000000000"
+   ],
+   "shutdown": [
+    "04400110080500000000000000000000000000000000000000000000000000000000000000"
+   ]
+  },
+  {
+   "pid": "0x0504",
+   "name": "Razer Kraken 7.1 Chroma",
+   "initialize": [],
+   "frame": [
+    "04400311890102050000000000000000000000000000000000000000000000000000000000",
+    "04400110080100000000000000000000000000000000000000000000000000000000000000"
+   ],
+   "shutdown": [
+    "04400110080500000000000000000000000000000000000000000000000000000000000000"
+   ]
+  },
+  {
+   "pid": "0x0510",
+   "name": "Razer Kraken 7.1 V2",
+   "initialize": [],
+   "frame": [
+    "04400311890102050000000000000000000000000000000000000000000000000000000000",
+    "044001172D0100000000000000000000000000000000000000000000000000000000000000"
+   ],
+   "shutdown": [
+    "044001172D0500000000000000000000000000000000000000000000000000000000000000"
+   ]
+  },
+  {
+   "pid": "0x0549",
+   "name": "Razer Kraken V3",
+   "initialize": [
+    "4001000F0800000000000000000000",
+    "40020000FF00000000000000000000"
+   ],
+   "frame": [
+    "400300010205000000000000000000"
+   ],
+   "shutdown": [
+    "4001000F0300000000000000000000",
+    "40020000FF00000000000000000000"
+   ]
+  },
+  {
+   "pid": "0x0554",
+   "name": "Razer Kraken Kitty V2 Pro",
+   "initialize": [
+    "4001000F0800000000000000000000",
+    "40020000FF00000000000000000000"
+   ],
+   "frame": [
+    "40030001020501160C012A13013E1A"
+   ],
+   "shutdown": [
+    "4001000F0300000000000000000000",
+    "40020000FF00000000000000000000"
+   ]
+  }
+ ]
+}

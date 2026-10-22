@@ -988,6 +988,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+ "tracing",
 ]
 
 [[package]]
@@ -997,6 +998,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ctrlc",
+ "huedeck-api",
  "huedeck-effects",
  "huedeck-engine",
  "huedeck-hal",

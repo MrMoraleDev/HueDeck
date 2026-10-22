@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Synthetic device plugin for the device-session tests: the change hooks
 // write an output report, so a test sees when and with what they ran.

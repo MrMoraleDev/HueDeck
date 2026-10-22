@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Validate Lightloom JSON Schemas and the user's local SignalRGB component corpus.
 
 Run with an isolated interpreter (stdlib only, no third-party validator):
@@ -46,7 +46,7 @@ SCHEMAS_DIR = os.path.join(REPO, "schemas")
 COMPONENT_SCHEMA = os.path.join(SCHEMAS_DIR, "component.schema.json")
 
 DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
-SPDX_COMMENT = "SPDX-License-Identifier: Apache-2.0 OR MIT"
+SPDX_COMMENT = "SPDX-License-Identifier: GPL-3.0-or-later"
 
 LOCALAPPDATA = os.environ.get("LOCALAPPDATA") or os.path.join(
     os.path.expanduser("~"), "AppData", "Local"

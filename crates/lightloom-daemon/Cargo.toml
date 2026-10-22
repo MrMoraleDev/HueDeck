@@ -1,8 +1,8 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 publish = false
 name = "lightloom-daemon"
-description = "lightloomd: the Lightloom per-user daemon"
+description = "lightloomd: the Lightloom per-user daemon (devices, effects, local API, dashboard)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 homepage.workspace = true
+
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "lightloomd"
@@ -20,3 +23,22 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+humantime = { workspace = true }
+rusqlite = { workspace = true }
+rusqlite_migration = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+arc-swap = { workspace = true }
+uuid = { workspace = true }
+toml = { workspace = true }
+lightloom-api = { path = "../lightloom-api" }
+lightloom-engine = { path = "../lightloom-engine" }
+lightloom-hal = { path = "../lightloom-hal" }
+lightloom-plugin-host = { path = "../lightloom-plugin-host" }
+lightloom-render = { path = "../lightloom-render" }
+lightloom-runtime = { path = "../lightloom-runtime" }
+
+[dev-dependencies]
+lightloom-hal = { path = "../lightloom-hal", features = ["mock"] }

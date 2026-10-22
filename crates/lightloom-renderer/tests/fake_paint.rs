@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SPIKE A plumbing without CEF: a fake `OnPaint` source drives the [`FrameSink`], and the shm
 //! ring is checked through a second (read-only) mapping of the same file, the way `lightloomd`
 //! will read it. Runs on any host (no Chromium, no GPU, no hardware).

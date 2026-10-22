@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Facade for "@SignalRGB/tcp" (Rust-backed). Zero corpus uses; the docs give
 // createSocket() -> socket {connect, send, bind, close, on("connected"|"disconnected"|"message"|"error")}

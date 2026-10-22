@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Lightloom hardware abstraction layer.
 //!
 //! This crate is the design centre of the Lightloom device stack: every OS
@@ -39,5 +39,5 @@ pub use hotplug::{DeviceClass, DeviceEvent, HotplugSource};
 pub use key::{DeviceKey, EndpointUid};
 pub use serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};
 pub use smbios::SystemInfo;
-pub use smbus::{PciIds, SmbusBus, SmbusBusDescriptor, SmbusBusKind};
+pub use smbus::{PciIds, SmbusBatch, SmbusBus, SmbusBusDescriptor, SmbusBusKind, SmbusOp, SmbusReply};
 pub use usb::{UsbBackend, UsbDeviceInfo, UsbHandle};

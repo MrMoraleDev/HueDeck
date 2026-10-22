@@ -1,12 +1,12 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `lightloom` — command-line client.
 //!
 //! Headless commands (no daemon yet): `devices` (read-only HID enumeration),
 //! `light` / `rainbow` / `bench` (null renderer → plugin sessions → hardware,
 //! see [`run`]) and `compat dry-run` (corpus harness).
 //!
-//! Exit codes: `0` success; `1` a device session failed, faulted or saw HID
-//! errors; `2` a setup error (no plugin or device, conflicting software, bad
+//! Exit codes: `0` success; `1` a device session failed, faulted or saw I/O
+//! errors (HID or SMBus); `2` a setup error (no plugin or device, conflicting software, bad
 //! arguments).
 
 #![forbid(unsafe_code)]
@@ -85,15 +85,29 @@ enum Command {
         #[arg(long, default_value_t = 30.0, value_parser = run::parse_fps)]
         fps: f64,
         /// Use a scripted in-memory device with this VID:PID instead of hardware (CI, no device needed).
-        #[arg(long, value_name = "VID:PID", value_parser = run::parse_vid_pid)]
+        #[arg(long, value_name = "VID:PID", value_parser = run::parse_vid_pid, conflicts_with = "mock_smbus")]
         mock: Option<(u16, u16)>,
+        /// Run this SMBus plugin (its name or directory, e.g. msi-gpu or crucial-ballistix)
+        /// on a scripted in-memory bus instead of hardware (CI, no device needed).
+        #[arg(long, value_name = "PLUGIN")]
+        mock_smbus: Option<String>,
         #[command(flatten)]
         run: run::RunArgs,
     },
-    /// List the plugins found and which one would drive each connected device (read-only).
+    /// List the plugins found and which one would drive each connected device (HID: read-only).
+    /// The SMBus buses are listed and scanned with the SMBus plugins too (a plugin's Scan()
+    /// may write, e.g. to give a RAM module its address), unless --no-smbus; never while
+    /// SignalRGB, OpenRGB or lightloomd runs.
     Plugins {
         #[command(flatten)]
         catalog: run::CatalogArgs,
+        /// Leave the SMBus buses alone (no NvAPI, no I/O broker, no Scan()).
+        #[arg(long)]
+        no_smbus: bool,
+        /// Scan the SMBus buses without writing: the scans' writes are recorded, never sent
+        /// (reads still reach the devices; a RAM module that needs a new address is reported).
+        #[arg(long, conflicts_with = "no_smbus")]
+        dry_run: bool,
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
@@ -126,9 +140,23 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
             seconds,
             fps,
             mock,
+            mock_smbus,
             run,
-        } => run::run(run::Mode::Bench { fps, seconds, mock }, &run),
-        Command::Plugins { catalog, json } => run::list_plugins(&catalog, json).map(|_| run::Outcome::Clean),
+        } => run::run(
+            run::Mode::Bench {
+                fps,
+                seconds,
+                mock,
+                mock_smbus,
+            },
+            &run,
+        ),
+        Command::Plugins {
+            catalog,
+            no_smbus,
+            dry_run,
+            json,
+        } => run::list_plugins(&catalog, !no_smbus, dry_run, json).map(|_| run::Outcome::Clean),
         Command::Compat { command } => compat::run(command).map(|clean| {
             if clean {
                 run::Outcome::Clean
@@ -222,7 +250,7 @@ mod tests {
         let cli =
             Cli::try_parse_from(["lightloom", "plugins", "--signalrgb", "--plugins", "x", "--json"]).unwrap();
         assert!(
-            matches!(cli.command, Command::Plugins { ref catalog, json: true } if catalog.signalrgb && catalog.plugin_dirs.len() == 1)
+            matches!(cli.command, Command::Plugins { ref catalog, no_smbus: false, dry_run: false, json: true } if catalog.signalrgb && catalog.plugin_dirs.len() == 1)
         );
         // Out-of-range times and rates are rejected before anything starts.
         assert!(Cli::try_parse_from(["lightloom", "light", "red", "--duration", "1e30"]).is_err());
@@ -232,6 +260,38 @@ mod tests {
         assert!(Cli::try_parse_from(["lightloom", "rainbow", "--fps", "0"]).is_err());
         assert!(Cli::try_parse_from(["lightloom", "rainbow", "--fps", "1000"]).is_err());
         assert!(Cli::try_parse_from(["lightloom", "light", "red", "--brightness", "101"]).is_err());
+    }
+
+    #[test]
+    fn smbus_is_on_unless_no_smbus() {
+        let cli = Cli::try_parse_from(["lightloom", "light", "red", "--dry-run"]).unwrap();
+        assert!(matches!(cli.command, Command::Light { ref run, .. } if !run.no_smbus && run.dry_run));
+        let cli = Cli::try_parse_from(["lightloom", "rainbow", "--no-smbus"]).unwrap();
+        assert!(matches!(cli.command, Command::Rainbow { ref run, .. } if run.no_smbus));
+        assert!(
+            Cli::try_parse_from(["lightloom", "light", "red", "--smbus"]).is_err(),
+            "the old opt-in flag is gone"
+        );
+        let cli = Cli::try_parse_from(["lightloom", "plugins"]).unwrap();
+        assert!(matches!(cli.command, Command::Plugins { no_smbus: false, .. }));
+        let cli = Cli::try_parse_from(["lightloom", "plugins", "--no-smbus"]).unwrap();
+        assert!(matches!(cli.command, Command::Plugins { no_smbus: true, .. }));
+        let cli = Cli::try_parse_from(["lightloom", "plugins", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Plugins {
+                no_smbus: false,
+                dry_run: true,
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from(["lightloom", "plugins", "--dry-run", "--no-smbus"]).is_err());
+        let cli = Cli::try_parse_from(["lightloom", "bench", "--mock-smbus", "msi-gpu"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Bench { mock_smbus: Some(ref p), mock: None, .. } if p == "msi-gpu"
+        ));
+        assert!(Cli::try_parse_from(["lightloom", "bench", "--mock-smbus", "x", "--mock", "1:2"]).is_err());
     }
 
     #[test]

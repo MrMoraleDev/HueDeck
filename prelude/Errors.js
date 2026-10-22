@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // "@SignalRGB/Errors.js" (also resolvable as "@SignalRGB/Errors" and
 // "@lightloom/Errors"): Assert helpers, ContextError and globalContext.

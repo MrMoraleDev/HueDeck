@@ -1,0 +1,459 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Expected packets worked out from OpenRGB's C++ (commit d4798c120659ec5ba2e664a9e87bedff8d36f880, Controllers/SteelSeriesController) by a separate reference model that mirrors each C++ function buffer by buffer (openrgb-work/steelseries/gen_fixtures.py in the porting session's scratch space, not part of the repository); plugin.js was never run to make them. 'products' comes from SteelSeriesControllerDetect.cpp (first registration wins for a pid, as in OpenRGB). Each variant lists the LED names and grid cells (zones in OpenRGB order; a zone with several LEDs gets its own row, consecutive one-LED zones share a row), two colour sets in LED order, and the I/O for Initialize (switch to Direct), a frame with each colour set and Shutdown. ops: write = output report (hid_write), send_report = feature report (hid_send_feature_report), read = input report read (hid_read_timeout), pause = sleep; hex is the whole buffer at the length the C++ passes, report id first. A product with 'held_back' is one OpenRGB lists that the Lightloom plugin deliberately does not claim (the reason is given). Deliberate Lightloom deviations from the C++ that the hardware notes describe are modelled the same way here (Apex M750 numeric-pad slots, Aerox receiver read timeout).",
+ "products": [
+  {
+   "pid": "0x161A",
+   "name": "SteelSeries Apex 3",
+   "variant": "APEX_TZONE",
+   "validate": {
+    "interface": 3
+   },
+   "openrgb_line": 543
+  },
+  {
+   "pid": "0x1622",
+   "name": "SteelSeries Apex 3 TKL",
+   "variant": "APEX_8ZONE",
+   "validate": {
+    "interface": 1,
+    "usage_page": 65472,
+    "usage": 1
+   },
+   "openrgb_line": 544
+  }
+ ],
+ "variants": {
+  "APEX_TZONE": {
+   "variant": "APEX_TZONE",
+   "size": [
+    10,
+    1
+   ],
+   "leds": [
+    {
+     "name": "LED 0",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "LED 1",
+     "pos": [
+      1,
+      0
+     ]
+    },
+    {
+     "name": "LED 2",
+     "pos": [
+      2,
+      0
+     ]
+    },
+    {
+     "name": "LED 3",
+     "pos": [
+      3,
+      0
+     ]
+    },
+    {
+     "name": "LED 4",
+     "pos": [
+      4,
+      0
+     ]
+    },
+    {
+     "name": "LED 5",
+     "pos": [
+      5,
+      0
+     ]
+    },
+    {
+     "name": "LED 6",
+     "pos": [
+      6,
+      0
+     ]
+    },
+    {
+     "name": "LED 7",
+     "pos": [
+      7,
+      0
+     ]
+    },
+    {
+     "name": "LED 8",
+     "pos": [
+      8,
+      0
+     ]
+    },
+    {
+     "name": "LED 9",
+     "pos": [
+      9,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     17,
+     64,
+     240
+    ],
+    [
+     34,
+     71,
+     231
+    ],
+    [
+     51,
+     78,
+     222
+    ],
+    [
+     68,
+     85,
+     213
+    ],
+    [
+     85,
+     92,
+     204
+    ],
+    [
+     102,
+     99,
+     195
+    ],
+    [
+     119,
+     106,
+     186
+    ],
+    [
+     136,
+     113,
+     177
+    ],
+    [
+     153,
+     120,
+     168
+    ],
+    [
+     170,
+     127,
+     159
+    ]
+   ],
+   "colours_b": [
+    [
+     128,
+     5,
+     119
+    ],
+    [
+     141,
+     36,
+     116
+    ],
+    [
+     154,
+     67,
+     113
+    ],
+    [
+     167,
+     98,
+     126
+    ],
+    [
+     180,
+     129,
+     123
+    ],
+    [
+     193,
+     160,
+     120
+    ],
+    [
+     206,
+     191,
+     101
+    ],
+    [
+     219,
+     222,
+     98
+    ],
+    [
+     232,
+     253,
+     111
+    ],
+    [
+     245,
+     28,
+     108
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000A00640000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000B00640000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000A00640000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000B001140F02247E7334EDE4455D5555CCC6663C3776ABA8871B19978A8AA7F9F"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000A00640000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000B008005778D24749A4371A7627EB4817BC1A078CEBF65DBDE62E8FD6FF51C6C"
+    }
+   ],
+   "shutdown_suspend": [
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000A00640000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000B00000000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000A00640000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 33,
+     "hex": "000B00000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  "APEX_8ZONE": {
+   "variant": "APEX_8ZONE",
+   "size": [
+    8,
+    1
+   ],
+   "leds": [
+    {
+     "name": "LED 0",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "LED 1",
+     "pos": [
+      1,
+      0
+     ]
+    },
+    {
+     "name": "LED 2",
+     "pos": [
+      2,
+      0
+     ]
+    },
+    {
+     "name": "LED 3",
+     "pos": [
+      3,
+      0
+     ]
+    },
+    {
+     "name": "LED 4",
+     "pos": [
+      4,
+      0
+     ]
+    },
+    {
+     "name": "LED 5",
+     "pos": [
+      5,
+      0
+     ]
+    },
+    {
+     "name": "LED 6",
+     "pos": [
+      6,
+      0
+     ]
+    },
+    {
+     "name": "LED 7",
+     "pos": [
+      7,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     17,
+     64,
+     240
+    ],
+    [
+     34,
+     71,
+     231
+    ],
+    [
+     51,
+     78,
+     222
+    ],
+    [
+     68,
+     85,
+     213
+    ],
+    [
+     85,
+     92,
+     204
+    ],
+    [
+     102,
+     99,
+     195
+    ],
+    [
+     119,
+     106,
+     186
+    ],
+    [
+     136,
+     113,
+     177
+    ]
+   ],
+   "colours_b": [
+    [
+     128,
+     5,
+     119
+    ],
+    [
+     141,
+     36,
+     116
+    ],
+    [
+     154,
+     67,
+     113
+    ],
+    [
+     167,
+     98,
+     126
+    ],
+    [
+     180,
+     129,
+     123
+    ],
+    [
+     193,
+     160,
+     120
+    ],
+    [
+     206,
+     191,
+     101
+    ],
+    [
+     219,
+     222,
+     98
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0021FF0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0023100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0021FF1140F02247E7334EDE4455D5555CCC6663C3776ABA8871B10000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0021FF8005778D24749A4371A7627EB4817BC1A078CEBF65DBDE620000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "shutdown_suspend": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0021FF0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0022FF0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  }
+ }
+}

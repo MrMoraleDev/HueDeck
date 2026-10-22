@@ -1,15 +1,26 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
-//! Local API surface of `lightloomd`.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Local API of `lightloomd`: the native REST + WebSocket API and the dashboard
+//! on [`NATIVE_PORT`], the SignalRGB-compatible REST API on
+//! [`COMPAT_REST_PORT`] and its canvas-event listener on
+//! [`COMPAT_CANVAS_EVENT_PORT`]. Loopback only; see [`server`] for the
+//! security model.
 //!
-//! Stub for M0: ports and the route table as constants. The axum server,
-//! token auth, WebSocket event stream and the compat listeners (which refuse
-//! to bind while SignalRGB owns 16038/16034) arrive with M4.
+//! [`model`] holds what the daemon and clients exchange; [`server`] the axum
+//! routers over a [`server::Backend`] (implemented by the daemon). The route
+//! tables below document the surface and are checked against the routers by
+//! the tests.
 
 #![forbid(unsafe_code)]
 
+pub mod model;
+pub mod server;
+
+pub use model::{ApiError, Event, Request, Snapshot};
+pub use server::{canvas_event_router, compat_router, native_router, ApiContext, Backend};
+
 /// Native REST + WS (dashboard, CLI).
 pub const NATIVE_PORT: u16 = 16138;
-/// SignalRGB-compatible REST `/api/v1/*` (shape-copied, Pro gates removed).
+/// SignalRGB-compatible REST `/api/v1/*`.
 pub const COMPAT_REST_PORT: u16 = 16038;
 /// SignalRGB-compatible `POST /canvas/event?sender&event`.
 pub const COMPAT_CANVAS_EVENT_PORT: u16 = 16034;
@@ -31,105 +42,81 @@ pub struct Route {
     pub method: &'static str,
     /// Path (may contain `{id}` placeholders).
     pub path: &'static str,
-    /// Whether the call changes state (needs the token by default on compat).
+    /// Whether the call changes state (needs the token).
     pub mutating: bool,
-    /// Milestone that implements it.
-    pub milestone: &'static str,
 }
 
-const fn r(method: &'static str, path: &'static str, mutating: bool, milestone: &'static str) -> Route {
+const fn r(method: &'static str, path: &'static str, mutating: bool) -> Route {
     Route {
         method,
         path,
         mutating,
-        milestone,
     }
 }
 
 /// SignalRGB-compatible routes on [`COMPAT_REST_PORT`] (relative to [`COMPAT_PREFIX`]).
 pub const COMPAT_ROUTES: &[Route] = &[
-    r("GET", "/app", false, "M4"),
-    r("GET", "/lighting", false, "M4"),
-    r("PATCH", "/lighting/global_brightness", true, "M4"),
-    r("PATCH", "/lighting/enabled", true, "M4"),
-    r("GET", "/lighting/effects", false, "M4"),
-    r("GET", "/lighting/effects/{id}", false, "M4"),
-    r("GET", "/lighting/effects/{id}/image", false, "M4"),
-    r("POST", "/lighting/effects/{id}/apply", true, "M4"),
-    r("GET", "/lighting/effects/{id}/presets", false, "M4"),
-    r("PATCH", "/lighting/effects/{id}/presets", true, "M4"),
-    r("GET", "/lighting/next", true, "M4"),
-    r("POST", "/lighting/next", true, "M4"),
-    r("GET", "/lighting/previous", true, "M4"),
-    r("POST", "/lighting/previous", true, "M4"),
-    r("POST", "/lighting/shuffle", true, "M4"),
-    r("POST", "/lighting/loadEffect", true, "M4"),
-    r("GET", "/lighting/playlists", false, "M4"),
-    r("GET", "/lighting/playlists/{id}", false, "M4"),
-    r("POST", "/lighting/playlists/{id}/play", true, "M4"),
-    r("GET", "/scenes/current_layout", false, "M4"),
-    r("PATCH", "/scenes/current_layout", true, "M4"),
-    r("GET", "/scenes/layouts", false, "M4"),
+    r("GET", "/app", false),
+    r("GET", "/lighting", false),
+    r("PATCH", "/lighting/global_brightness", true),
+    r("PATCH", "/lighting/enabled", true),
+    r("GET", "/lighting/effects", false),
+    r("GET", "/lighting/effects/{id}", false),
+    r("POST", "/lighting/effects/{id}/apply", true),
+    r("GET", "/lighting/effects/{id}/presets", false),
+    r("PATCH", "/lighting/effects/{id}/presets", true),
+    r("GET", "/lighting/next", false),
+    r("POST", "/lighting/next", true),
+    r("GET", "/lighting/previous", false),
+    r("POST", "/lighting/previous", true),
+    r("GET", "/lighting/playlists", false),
+    r("GET", "/scenes/current_layout", false),
+    r("PATCH", "/scenes/current_layout", true),
+    r("GET", "/scenes/layouts", false),
 ];
 
 /// Compat canvas-event route on [`COMPAT_CANVAS_EVENT_PORT`].
-pub const COMPAT_CANVAS_EVENT_ROUTE: Route = r("POST", "/canvas/event", true, "M3");
+pub const COMPAT_CANVAS_EVENT_ROUTE: Route = r("POST", "/canvas/event", true);
 
 /// Native routes on [`NATIVE_PORT`] (relative to [`NATIVE_PREFIX`]).
 pub const NATIVE_ROUTES: &[Route] = &[
-    r("GET", "/health", false, "M1"),
-    r("GET", "/devices", false, "M1"),
-    r("GET", "/devices/{uid}", false, "M2"),
-    r("PATCH", "/devices/{uid}", true, "M2"),
-    r("POST", "/devices/{uid}/identify", true, "M4"),
-    r("GET", "/layouts", false, "M4"),
-    r("GET", "/layouts/{name}", false, "M4"),
-    r("PUT", "/layouts/{name}", true, "M4"),
-    r("POST", "/layouts/{name}/apply", true, "M4"),
-    r("GET", "/effects", false, "M3"),
-    r("GET", "/effects/{id}", false, "M3"),
-    r("POST", "/effects/{id}/apply", true, "M3"),
-    r("PATCH", "/effects/{id}/properties", true, "M3"),
-    r("GET", "/channels/{uid}", false, "M4"),
-    r("PUT", "/channels/{uid}/{name}", true, "M4"),
-    r("GET", "/components", false, "M4"),
-    r("GET", "/sources", false, "M4"),
-    r("POST", "/sources/{id}/update", true, "M4"),
-    r("GET", "/logs", false, "M4"),
-    r("GET", "/events", false, "M4"), // WebSocket upgrade
+    r("GET", "/health", false),
+    r("GET", "/state", false),
+    r("GET", "/devices", false),
+    r("GET", "/devices/{key}", false),
+    r("PATCH", "/devices/{key}", true),
+    r("PUT", "/devices/{key}/channels/{channel}", true),
+    r("GET", "/effects", false),
+    r("POST", "/effects/next", true),
+    r("POST", "/effects/previous", true),
+    r("GET", "/effects/{id}", false),
+    r("POST", "/effects/{id}/apply", true),
+    r("PATCH", "/effects/{id}/values", true),
+    r("PUT", "/effects/{id}/presets/{name}", true),
+    r("DELETE", "/effects/{id}/presets/{name}", true),
+    r("POST", "/effects/{id}/presets/{name}/apply", true),
+    r("GET", "/lighting", false),
+    r("PATCH", "/lighting", true),
+    r("GET", "/layouts", false),
+    r("GET", "/layouts/{name}", false),
+    r("PUT", "/layouts/{name}", true),
+    r("DELETE", "/layouts/{name}", true),
+    r("POST", "/layouts/{name}/apply", true),
+    r("PATCH", "/layout", true),
+    r("PUT", "/placements/{uid}", true),
+    r("GET", "/components", false),
+    r("GET", "/settings", false),
+    r("PATCH", "/settings", true),
+    r("POST", "/import/signalrgb", true),
+    r("GET", "/export", false),
+    r("POST", "/import", true),
+    r("POST", "/rescan", true),
+    r("POST", "/shutdown", true),
+    r("POST", "/canvas/event", true),
+    r("POST", "/canvas/tap", true),
+    r("GET", "/events", false),  // WebSocket: JSON events
+    r("GET", "/preview", false), // WebSocket: canvas frames
 ];
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
-
-    #[test]
-    fn no_duplicate_routes() {
-        for table in [COMPAT_ROUTES, NATIVE_ROUTES] {
-            let mut seen = HashSet::new();
-            for route in table {
-                assert!(
-                    seen.insert((route.method, route.path)),
-                    "duplicate {} {}",
-                    route.method,
-                    route.path
-                );
-                assert!(route.path.starts_with('/'));
-            }
-        }
-    }
-
-    #[test]
-    fn compat_mutations_use_non_get_except_next_previous() {
-        for route in COMPAT_ROUTES {
-            if route.method == "GET" && route.mutating {
-                assert!(
-                    route.path.ends_with("/next") || route.path.ends_with("/previous"),
-                    "{}",
-                    route.path
-                );
-            }
-        }
-    }
-}
+mod tests;

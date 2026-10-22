@@ -1,15 +1,48 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
-//! Dynamic NvAPI binding (M5).
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Dynamic NvAPI binding: NVIDIA GPU I2C as a HAL SMBus bus (M5).
 //!
-//! `nvapi64.dll` is loaded at runtime through `nvapi_QueryInterface`; Lightloom
-//! declares the handful of function ids it needs itself (GPU enumeration, PCI
-//! identifiers, I2C read/write with and without register, thermal). Nothing is
+//! `nvapi64.dll` is loaded at runtime from System32 and every function is
+//! resolved through `nvapi_QueryInterface` with the ids in [`ids`]; nothing is
 //! linked at build time, so machines without an NVIDIA driver run unaffected.
+//! GPU I2C runs in the user's own process (research m5-privileged-buses.md
+//! §0.5, §4): a non-elevated process can reach the RGB controllers on port 1.
+//!
+//! * [`info`]: the `NV_I2C_INFO_V3` layout and how each SMBus operation maps
+//!   onto an NvAPI transfer (OpenRGB's mapping), pure and tested.
+//! * `ffi` / `api` (Windows): the loader and the thin calls; the only unsafe code.
+//! * [`hub`]: one worker thread `lightloom-nvapi` owns NvAPI (its handles must
+//!   not cross threads); [`hub::NvapiHub`] hands out one [`bus::NvapiBus`] per GPU.
+//! * [`bus`]: [`lightloom_hal::SmbusBus`] over the hub. NvAPI status codes pass
+//!   through as negative bus statuses, the way SignalRGB plugins see them.
 //!
 //! Capability notes for the `bus.*` mapping: NvAPI buses have **no
-//! `WriteQuick`**, and `ReadByteWithoutRegister` exists **only** here.
+//! `WriteQuick`**; register-addressed reads are limited to 16 bytes
+//! (`NVAPI_ARGUMENT_EXCEED_MAX_SIZE` otherwise). DDC/display ports are never
+//! used: every transfer goes to port 1 with `bIsDDCPort = 0`.
+//!
+//! No cross-process mutex is taken: NvAPI I2C is the GPU's own controller,
+//! not the chipset SMBus `Global\Access_SMBUS.HTP.Method` guards, and neither
+//! OpenRGB nor SignalRGB takes that mutex here (§4). Lightloom did until the
+//! M5 hardware test showed its GPU frames failing with `NVAPI_DEVICE_BUSY`
+//! while its own RAM sessions held the mutex (ADR-0004). One worker thread
+//! per process serialises the transfers to every GPU.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn, clippy::undocumented_unsafe_blocks)]
+
+#[cfg(windows)]
+mod api;
+pub mod bus;
+#[cfg(windows)]
+mod ffi;
+pub mod hub;
+pub mod ids;
+pub mod info;
+pub mod status;
+
+pub use bus::NvapiBus;
+pub use hub::{FakeNvI2c, GpuInfo, I2cTransport, NvapiHub};
+pub use info::{I2cOp, I2cPlan};
+pub use status::NvStatus;
 
 /// DLL name on 64-bit Windows.
 pub const NVAPI_DLL: &str = "nvapi64.dll";
@@ -17,53 +50,41 @@ pub const NVAPI_DLL: &str = "nvapi64.dll";
 /// Exported entry point used to look up every other function.
 pub const QUERY_INTERFACE_SYMBOL: &str = "nvapi_QueryInterface";
 
-/// NvAPI status codes Lightloom interprets (others are passed through as negative statuses).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(i32)]
-pub enum NvStatus {
-    /// Success.
-    Ok = 0,
-    /// Generic error.
-    Error = -1,
-    /// Library not found.
-    LibraryNotFound = -2,
-    /// Function not found.
-    NoImplementation = -3,
-    /// NvAPI not initialised.
-    ApiNotInitialized = -4,
-    /// Invalid argument.
-    InvalidArgument = -5,
-    /// GPU handle invalid.
-    InvalidHandle = -8,
-    /// Port id not found (`NVAPI_PORTID_NOT_FOUND`). NvAPI has no dedicated I2C NACK
-    /// status: a missing device surfaces as [`NvapiStatus::Error`] or as this code.
-    PortIdNotFound = -105,
-}
-
-/// Error type of the (future) loader.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Errors of the NvAPI binding.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NvapiError {
-    /// `nvapi64.dll` could not be loaded (no NVIDIA driver).
+    /// `nvapi64.dll` could not be loaded (no NVIDIA driver, or not Windows).
+    #[error("NvAPI is not available (no NVIDIA driver)")]
     NotAvailable,
     /// A function id returned null from `nvapi_QueryInterface`.
+    #[error("NvAPI function {0:#010x} is missing")]
     MissingFunction(u32),
     /// NvAPI returned a non-zero status.
+    #[error("NvAPI status {0} ({name})", name = status::name(*.0))]
     Status(i32),
+    /// The operation does not exist on NvAPI buses.
+    #[error("unsupported on NvAPI buses: {0}")]
+    Unsupported(&'static str),
+    /// A transfer length outside what the operation allows.
+    #[error("transfer length {0} outside the allowed range")]
+    Length(usize),
+    /// The worker thread did not answer in time.
+    #[error("NvAPI worker did not answer within {0} ms")]
+    Timeout(u32),
+    /// The worker thread is gone.
+    #[error("NvAPI worker thread has stopped")]
+    WorkerGone,
 }
 
-impl std::fmt::Display for NvapiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NvapiError::NotAvailable => f.write_str("NvAPI not available"),
-            NvapiError::MissingFunction(id) => write!(f, "NvAPI function {id:#010x} missing"),
-            NvapiError::Status(s) => write!(f, "NvAPI status {s}"),
-        }
-    }
+/// Whether `nvapi64.dll` can be loaded from System32. No NvAPI function is
+/// called (the library is loaded and freed again).
+#[cfg(windows)]
+pub fn is_available() -> bool {
+    ffi::Library::load().is_ok()
 }
 
-impl std::error::Error for NvapiError {}
-
-/// Whether NvAPI can be loaded on this machine. Always `false` in the M0 stub.
+/// NvAPI exists on Windows only.
+#[cfg(not(windows))]
 pub fn is_available() -> bool {
     false
 }

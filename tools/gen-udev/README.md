@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # tools/gen-udev
 
 Generates `70-lightloom.rules` for Linux from the device plugins Lightloom knows about.
@@ -25,7 +25,7 @@ documented requirement). `network` plugins are skipped.
 Example output fragment:
 
 ```
-# Razer DeathAdder V2 Pro (razer-deathadder-v2-pro)
+# Razer (OpenRGB port) (razer)
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="007c", TAG+="uaccess"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="007c", TAG+="uaccess"
 ```

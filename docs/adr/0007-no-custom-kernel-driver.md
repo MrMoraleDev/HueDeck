@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # ADR-0007: Lightloom never ships a custom kernel driver
 
 - Status: Accepted (2026-10-17); permanent

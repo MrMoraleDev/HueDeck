@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! HID backend traits.
 //!
 //! One [`HidEndpointInfo`] per HID *top-level collection* (TLC). On Windows a
@@ -6,7 +6,7 @@
 //! hidraw node covers the whole interface and `lightloom-hid-desc` splits it
 //! into TLCs so plugins observe identical tuples on both OSes.
 
-use crate::error::HalResult;
+use crate::error::{HalError, HalResult};
 use crate::key::DeviceKey;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -166,6 +166,13 @@ pub trait HidHandle: Send {
         while self.read_timeout(&mut scratch, 0)? > 0 {}
         Ok(())
     }
+
+    /// The report descriptor of this collection, as the OS reports it (on
+    /// Windows: reconstructed from the collection's preparsed data). No report
+    /// I/O. Default: unsupported.
+    fn report_descriptor(&mut self) -> HalResult<Vec<u8>> {
+        Err(HalError::Unsupported("report descriptor"))
+    }
 }
 
 /// Enumerates and opens HID top-level collections.
@@ -177,9 +184,30 @@ pub trait HidBackend: Send + Sync {
     fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>>;
 }
 
+/// A backend without devices: enumerates nothing and opens nothing. Device
+/// sessions that drive an SMBus device instead of HID use it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoHid;
+
+impl HidBackend for NoHid {
+    fn enumerate(&self) -> HalResult<Vec<HidEndpointInfo>> {
+        Ok(Vec::new())
+    }
+
+    fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>> {
+        Err(HalError::NotFound(path.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_hid_has_nothing() {
+        assert!(NoHid.enumerate().unwrap().is_empty());
+        assert!(matches!(NoHid.open("x"), Err(HalError::NotFound(_))));
+    }
 
     #[test]
     fn tuple_matching_follows_set_endpoint_rules() {

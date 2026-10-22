@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Canvas endpoints a device plugin creates besides the device itself
 //! (docs/host-api/components-channels.md §1, §2 and §4):
 //!
@@ -84,6 +84,15 @@ impl Surface {
 
     fn set_brightness(&mut self, b: Brightness) {
         self.factor = effective_brightness(b.global, b.layout, self.placement.brightness);
+    }
+
+    /// A placement chosen from outside (layout editor): no longer refitted.
+    fn set_placement(&mut self, placement: Placement, cfg: &SamplerConfig, b: Brightness) {
+        self.fitted = false;
+        self.forced = placement.forced();
+        self.factor = effective_brightness(b.global, b.layout, placement.brightness);
+        self.placement = placement;
+        self.table = compute_offsets(&self.geometry, &self.placement, cfg);
     }
 
     /// Colour of entry `i` of the table (black when off-canvas or absent), or the forced colour.
@@ -199,6 +208,55 @@ impl Channel {
     }
 }
 
+/// What a canvas endpoint is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EndpointKind {
+    /// The device itself.
+    Device,
+    /// A subdevice (`device.createSubdevice`).
+    Subdevice,
+    /// A component instance on a channel.
+    Component,
+}
+
+/// A canvas endpoint of a running session, as the outside (layout editor) sees it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct EndpointView {
+    /// Placement key: the device key, `<device key>:<subdevice id>`, or the component's id.
+    pub uid: String,
+    /// What it is.
+    pub kind: EndpointKind,
+    /// Display name.
+    pub name: String,
+    /// The channel of a component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// The component's `ProductName` (library key).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    /// LED grid size in cells.
+    pub size: [u32; 2],
+    /// Number of LEDs.
+    pub leds: usize,
+    /// Where it sits now.
+    pub placement: Placement,
+}
+
+/// A channel of a running session (component editor).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelInfo {
+    /// The plugin's name; the persistence key of its components.
+    pub name: String,
+    /// LED budget (0 = none).
+    pub led_limit: u32,
+    /// LEDs the plugin is told about (components, capped at the limit).
+    pub led_count: usize,
+    /// Component instance ids in chain order.
+    pub components: Vec<String>,
+}
+
 /// What the caller decides for a device's subdevices and channels.
 #[derive(Clone, Debug, Default)]
 pub struct ChildSetup {
@@ -250,6 +308,77 @@ impl Children {
         for c in self.channels.iter_mut().flat_map(|ch| ch.components.iter_mut()) {
             c.surface.set_brightness(brightness);
         }
+    }
+
+    /// A new placement for the child endpoint `uid` (`<device key>:<subdevice id>` or a
+    /// component instance's id), kept for later refits too. `false` when no child has it.
+    pub fn set_placement(&mut self, uid: &str, placement: Placement) -> bool {
+        self.setup.placements.insert(uid.to_string(), placement.clone());
+        let (cfg, b) = (self.sampler, self.brightness);
+        let prefix = format!("{}:", self.setup.device_key);
+        if let Some(id) = uid.strip_prefix(&prefix) {
+            if let Some(s) = self.subdevices.iter_mut().find(|s| s.id == id) {
+                s.surface.set_placement(placement, &cfg, b);
+                return true;
+            }
+        }
+        if let Some(c) = self
+            .channels
+            .iter_mut()
+            .flat_map(|ch| ch.components.iter_mut())
+            .find(|c| c.instance.id == uid)
+        {
+            c.surface.set_placement(placement, &cfg, b);
+            return true;
+        }
+        false
+    }
+
+    /// The channels in creation order.
+    pub fn channel_infos(&self) -> Vec<ChannelInfo> {
+        self.channels
+            .iter()
+            .zip(self.led_counts())
+            .map(|(ch, led_count)| ChannelInfo {
+                name: ch.name.clone(),
+                led_limit: ch.led_limit,
+                led_count,
+                components: ch.components.iter().map(|c| c.instance.id.clone()).collect(),
+            })
+            .collect()
+    }
+
+    /// The subdevices and component instances as endpoints, in creation and chain order.
+    pub fn views(&self) -> Vec<EndpointView> {
+        let mut out: Vec<EndpointView> = self
+            .subdevices
+            .iter()
+            .map(|s| EndpointView {
+                uid: self.uid(&s.id),
+                kind: EndpointKind::Subdevice,
+                name: s.name.clone(),
+                channel: None,
+                product: None,
+                size: s.surface.geometry.size,
+                leds: s.surface.geometry.led_positions.len(),
+                placement: s.surface.placement.clone(),
+            })
+            .collect();
+        for ch in &self.channels {
+            for c in &ch.components {
+                out.push(EndpointView {
+                    uid: c.instance.id.clone(),
+                    kind: EndpointKind::Component,
+                    name: c.instance.component.display_name.clone(),
+                    channel: Some(ch.name.clone()),
+                    product: Some(c.instance.component.product_name.clone()),
+                    size: c.surface.geometry.size,
+                    leds: c.instance.component.led_count as usize,
+                    placement: c.surface.placement.clone(),
+                });
+            }
+        }
+        out
     }
 
     /// Subdevices in creation order.
@@ -371,7 +500,9 @@ impl Children {
             .map(|n| crate::device::capped(n, MAX_LED_NAME_CHARS))
             .collect();
         let positions: Vec<[u32; 2]> = flat
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| {
                 [
                     u32::try_from(p[0]).unwrap_or(u32::MAX),

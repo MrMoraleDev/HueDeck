@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The CC0 starter effects in `effects/` parse cleanly: title, description,
 //! publisher, the CC0 licence header, and controls whose defaults are valid for
 //! their type (in range, one of the listed values, a `#rrggbb` colour).

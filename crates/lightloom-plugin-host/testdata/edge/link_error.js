@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Parses, but imports a name its dependency does not export (Lightloom test fixture).
 import { missing } from "./lib/dep.js";
 export function Name() { return "Edge Link Error"; }

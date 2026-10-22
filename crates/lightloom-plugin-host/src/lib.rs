@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SignalRGB-compatible plugin host (`compat-v1` profile).
 //!
 //! Engine-independent pieces:
@@ -28,13 +28,19 @@
 //! * [`stats`]: fixed-memory latency histograms for long-running sessions.
 //! * [`exports`]: namespace JSON → [`PluginMeta`].
 //! * [`dryrun`]: the `lightloom compat dry-run` corpus harness.
-// `bus.*` (SMBus) arrives with the privileged broker (M5).
+//! * [`smbus`]: the SMBus policy (scan window, allowlist, SPD write deny,
+//!   transaction lock, dry-run) every `bus.*` call goes through; [`bus`]: the
+//!   natives behind `bus.*`; [`discover`]: `Scan(bus)` of the SMBus plugins
+//!   offered each bus, which yields the SMBus devices; [`spd`]: the SPD
+//!   check that gates RAM plugins on chipset buses.
 
 #![forbid(unsafe_code)]
 
+pub mod bus;
 pub mod catalog;
 pub mod children;
 pub mod device;
+pub mod discover;
 pub mod dryrun;
 pub mod exports;
 pub mod loader;
@@ -43,8 +49,10 @@ pub mod meta;
 pub mod resolve;
 pub mod runtime;
 pub mod session;
+pub mod smbus;
+pub mod spd;
 pub mod stats;
 
 pub use loader::{Loader, LoaderError, PluginIndex};
-pub use meta::{ControllableParameter, DeviceType, PluginMeta, PluginType, ProductIdExport};
+pub use meta::{ControllableParameter, DeviceType, GpuIdentifier, PluginMeta, PluginType, ProductIdExport};
 pub use resolve::{ModuleResolver, ResolveError, ResolvedModule};

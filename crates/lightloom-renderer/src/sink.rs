@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What happens to every painted frame, independent of where it comes from (CEF `OnPaint` in
 //! the binary, a fake source in tests): publish into the shm ring, record the paint timestamp
 //! and the publish cost, keep snapshot copies of selected frames.

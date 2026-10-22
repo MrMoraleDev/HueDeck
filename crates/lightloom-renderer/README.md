@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # lightloom-renderer
 
 Offscreen Chromium (CEF, via the [`cef`](https://crates.io/crates/cef) crate 154.5.0+154.0.34,

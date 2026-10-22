@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 publish = false
 name = "lightloom-plugin-host"
@@ -18,6 +18,7 @@ rquickjs = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 lightloom-hal = { path = "../lightloom-hal" }
+lightloom-hid-desc = { path = "../lightloom-hid-desc" }
 lightloom-engine = { path = "../lightloom-engine" }
 
 [dev-dependencies]

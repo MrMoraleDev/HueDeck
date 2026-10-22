@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lightloom.dev/schemas/controllable-parameters.schema.json",
-  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "$comment": "SPDX-License-Identifier: GPL-3.0-or-later",
   "title": "Lightloom controllable parameters (plugin user-control descriptors)",
   "description": "The array returned by a device plugin's ControllableParameters() export, and the object shape accepted by device.addProperty()/getProperty(). Each entry becomes a module-level global named <property> inside the plugin and an on<property>Changed() hook is invoked before the next Render() when the user changes it. Plugins frequently write numeric and boolean fields as strings (\"min\":\"100\", \"default\":\"false\"); the engine coerces them, so every numeric field here accepts number|string. Corpus facts (SignalRGB 2.5.80, ~4000 descriptors): device plugins only use color, combobox, number, boolean and keycode; values are string[] or mixed number/string arrays; min/max/step are almost always quoted; live is only ever false. Macro scripts (this.Options) use the same descriptor shape, add mousecode and {key,label} values, and additionally use the macro-only types effectname, layoutname, effectpreset, device, playlist and sensor, which are deliberately NOT in this enum (they are validated by the macros subsystem).",
   "type": "array",

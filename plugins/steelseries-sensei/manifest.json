@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.steelseries-sensei",
+  "name": "SteelSeries Rival 310 / Sensei",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Logo and scroll-wheel lighting of the SteelSeries Rival 310 (and its CS:GO Howl and PUBG editions), Sensei TEN (and its CS:GO Neon Rider edition) and Sensei 310. Adapted from OpenRGB's SteelSeriesSenseiController (GPL-2.0-or-later); untested on hardware. The save command and DPI are never touched. Protocol notes: docs/hardware/steelseries-sensei.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x1038",
+      "pids": ["0x1720", "0x171E", "0x1736", "0x1832", "0x1834", "0x1722"],
+      "transport": "hid",
+      "interfaces": [0],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "keywords": ["steelseries", "rival", "sensei", "mouse", "openrgb"]
+}

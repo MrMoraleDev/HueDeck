@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! [`CefRenderer`]: effects rendered by the `lightloom-renderer` process (CEF).
 //!
 //! The client starts `lightloom-renderer --serve` on an effect and publishes every
@@ -165,6 +165,18 @@ impl CefRenderer {
     pub fn set_properties(&self, values: Map<String, Value>) -> bool {
         lock(&self.shared.properties).extend(values.clone());
         let line = serde_json::json!({ "cmd": "set", "values": values }).to_string() + "\n";
+        self.shared.send(&line)
+    }
+
+    /// `onCanvasApiEvent({sender, event})` in the page; `false` when no renderer is running.
+    pub fn send_event(&self, sender: &str, event: &str) -> bool {
+        let line = serde_json::json!({ "cmd": "event", "sender": sender, "event": event }).to_string() + "\n";
+        self.shared.send(&line)
+    }
+
+    /// `onCanvasTapped(x, y)` in the page; `false` when no renderer is running.
+    pub fn tap(&self, x: f64, y: f64) -> bool {
+        let line = serde_json::json!({ "cmd": "tap", "x": x, "y": y }).to_string() + "\n";
         self.shared.send(&line)
     }
 }

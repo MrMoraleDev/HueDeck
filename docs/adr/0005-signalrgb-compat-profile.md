@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # ADR-0005: SignalRGB-compatible runtime profile (`compat-v1`) over a native plugin format
 
 - Status: Accepted (2026-10-17)
@@ -37,7 +37,7 @@ Constraints:
 - The `@SignalRGB/*` import specifiers are accepted verbatim for interoperability and
   aliased as `@lightloom/*` for native plugins.
 - Host API facts are frozen in a **Host API v1 (2.5.80-era) spec** in
-  `docs/host-api/` (Apache-2.0 OR MIT, see ADR-0006), derived in a clean room (plugin corpus usage, logs, public docs,
+  `docs/host-api/` (GPL-3.0-or-later since ADR-0010; Apache-2.0 OR MIT under ADR-0006), derived in a clean room (plugin corpus usage, logs, public docs,
   own captures; no decompiled code). Unknowns are marked and resolved in M2/M3 with
   measurements, never guessed silently.
 - **No WhirlwindFX file is ever in the repo**. An import wizard points at the
@@ -47,7 +47,7 @@ Constraints:
 - Community repositories are pre-listed as **plugin sources** in a sources manager:
   per-repo license text must be acknowledged (`license_text_acknowledged_at`),
   content is hash-pinned and updated only on user action with a diff summary.
-- First-party plugins (MIT) are written in the compat shape and loaded by exactly the
+- First-party plugins (MIT; GPL-3.0-or-later since ADR-0010) are written in the compat shape and loaded by exactly the
   same loader as imported ones, so M1 exercises the M2 code path.
 - Unknown host members: log `API_GAP` once, then throw a typed error; a corpus
   dry-run harness (`lightloom compat dry-run <dir>`) produces the gap backlog and
@@ -86,7 +86,10 @@ Negative / accepted costs:
   no community gravity.
 - **Link to or vendor OpenRGB**: GPL-2-only, incompatible with ADR-0006; the OpenRGB
   SDK **wire protocol** is still implemented (server on `:6742`, M6) because a
-  protocol is not code.
+  protocol is not code. (Amended 2026-10-18 by ADR-0010: OpenRGB is
+  GPL-2.0-or-later and Lightloom is now GPL-3.0-or-later, so OpenRGB device code
+  may be adapted into Lightloom plugins with attribution. Linking or vendoring
+  OpenRGB as a whole is still not the plan.)
 - **Fork or redistribute the reference plugins**: proprietary, not permitted.
 - **A translation layer** that rewrites upstream plugins into native-v2 at import
   time: fragile, obscures diffs, and still needs the full compat semantics.

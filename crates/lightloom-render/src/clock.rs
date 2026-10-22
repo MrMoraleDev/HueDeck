@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Fixed-rate frame clock.
 //!
 //! `std::thread::sleep` plus a short spin window keeps jitter well under a

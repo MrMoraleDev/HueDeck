@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Console control events: Ctrl-C, Ctrl-Break, window close, log-off, shutdown.
 //!
 //! Every event requests a stop ([`ConsoleStop::requested`]). Ctrl-C and

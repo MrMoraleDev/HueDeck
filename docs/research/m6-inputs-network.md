@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Research brief for M6. Produced 2026-10-18 by a research pass and an independent fact-check pass; facts carry inline provenance tags. -->
 
 # Lightloom M6: inputs (audio, screen) and network (mDNS, UDP, XHR, DTLS-PSK, ARP). Design brief, independently verified

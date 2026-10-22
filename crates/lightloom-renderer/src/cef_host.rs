@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CEF integration (feature `cef`): browser process + Chromium subprocesses.
 //!
 //! Process model: this executable is both the browser process and, via

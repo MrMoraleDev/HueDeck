@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<html>
+<head>
+  <title>Coordinate probe</title>
+  <meta description="Every pixel encodes its own position: R = x, G = y; the blue channel changes every 4 s." />
+  <meta publisher="Lightloom tests" />
+</head>
+<body style="margin:0;background:#000;overflow:hidden">
+  <canvas id="c" width="320" height="200"></canvas>
+  <script>
+    // R = round(x * 255 / 319), G = round(y * 255 / 199): a device's packets show which
+    // canvas pixel each LED sampled. B steps 0x40 -> 0x80 -> 0xC0 every 4 s so plugins that
+    // only send on change send again.
+    var ctx = document.getElementById("c").getContext("2d", { alpha: false });
+    var img = ctx.createImageData(320, 200);
+    var phase = -1;
+    function draw(now) {
+      var p = Math.floor(now / 4000) % 3;
+      if (p !== phase) {
+        phase = p;
+        var b = [0x40, 0x80, 0xc0][p];
+        for (var y = 0; y < 200; y++) {
+          for (var x = 0; x < 320; x++) {
+            var o = (y * 320 + x) * 4;
+            img.data[o] = Math.round((x * 255) / 319);
+            img.data[o + 1] = Math.round((y * 255) / 199);
+            img.data[o + 2] = b;
+            img.data[o + 3] = 255;
+          }
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+      requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

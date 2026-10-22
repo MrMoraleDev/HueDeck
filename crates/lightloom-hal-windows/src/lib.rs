@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Windows HAL backends.
 //!
 //! * [`path`]: pure parser for Windows HID device-interface paths
@@ -21,17 +21,27 @@
 //! * [`console`] (Windows only): console control events, with close/log-off/
 //!   shutdown held until devices are restored.
 //! * [`registry`] (Windows only): read-only `HKEY_CURRENT_USER` string values
-//!   (importing SignalRGB's component assignments).
+//!   (importing SignalRGB's component assignments) and `HKEY_LOCAL_MACHINE`
+//!   ones (whether PawnIO is installed).
+//! * [`broker`]: client of the privileged `lightloom-iobroker` (chipset SMBus,
+//!   RAM lighting) as `lightloom_hal::SmbusBus` objects; the named-pipe
+//!   transport is Windows only.
+//! * [`pawnio`]: whether the PawnIO driver is installed (its uninstall entry,
+//!   never the device) and what to tell the user.
+//! * [`owner`] (Windows only): the named mutex that lets one Lightloom process
+//!   at a time drive SMBus / GPU I2C.
 //!
 //! * [`hotplug`] (Windows only): HID arrival/removal notifications
 //!   (`CM_Register_Notification`).
 //!
-//! Raw USB (`nusb`), serial, LampArray and the broker client follow in later milestones.
+//! Raw USB (`nusb`), serial and LampArray follow in later milestones.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
+pub mod broker;
 pub mod group;
 pub mod path;
+pub mod pawnio;
 
 #[cfg(windows)]
 pub mod console;
@@ -41,6 +51,8 @@ pub mod hid;
 pub mod hotplug;
 #[cfg(windows)]
 pub mod native;
+#[cfg(windows)]
+pub mod owner;
 #[cfg(windows)]
 pub mod probe;
 #[cfg(windows)]

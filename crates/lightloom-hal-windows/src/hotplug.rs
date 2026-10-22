@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! HID arrival and removal notifications: `CM_Register_Notification` on the
 //! HID device-interface class, the Windows [`HotplugSource`].
 //!

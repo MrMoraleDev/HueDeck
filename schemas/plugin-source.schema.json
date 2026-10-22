@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lightloom.dev/schemas/plugin-source.schema.json",
-  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "$comment": "SPDX-License-Identifier: GPL-3.0-or-later",
   "title": "Lightloom plugin source",
   "description": "One entry of the plugin sources manager: a git repository or a local directory that contributes plugins, components or effects. Sources are hash-pinned (pinned_sha256 of the checked-out tree listing) and updated only on explicit user action. A source is not loaded until the user has read and acknowledged its license text (license_text_acknowledged_at). WhirlwindFX-authored files are never a source; the import wizard handles the user's own copies separately.",
   "type": "object",

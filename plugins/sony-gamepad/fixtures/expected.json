@@ -1,0 +1,100 @@
+{
+  "$comment": [
+    "SPDX-License-Identifier: GPL-3.0-or-later.",
+    "Expected reports of plugins/sony-gamepad, upper-case hex, report id first. Worked out from the OpenRGB C++ at commit d4798c120659ec5ba2e664a9e87bedff8d36f880 (GPL-2.0-or-later), not by running plugin.js:",
+    "'openrgb' is what OpenRGB writes for the same colours: SonyDS4Controller::sendReportUSB() (11 bytes) and the USB branch of SonyDualSenseController::SetColors() (48 bytes) in its Direct mode (mode value 0x01, brightness 'Medium' = OpenRGB brightness 1, 'High' = 2, 'Low' = 0), transcribed line by line into a throw-away script.",
+    "'lightloom' is that report with the bits Lightloom removes cleared (docs/hardware/sony-gamepad.md): DS4 byte 1 &= 0x06 (rumble flag 0x01 removed); DualSense byte 1 &= 0x00 (vibration, haptics, adaptive triggers), byte 2 &= 0x14 (microphone LED 0x01 and 0x40 removed), byte 9 = 0x00 (microphone LED value), byte 39 &= 0x03 (0x04..0x80 removed). Every other byte is OpenRGB's.",
+    "DualSense colours: 'lightbar' is OpenRGB's colors[0], 'players' its colors[1..5] (Player 1..5); a player LED is on when its colour is not black."
+  ],
+  "ds4": {
+    "initialize": {
+      "get_report": {
+        "id": 2,
+        "length": 64
+      },
+      "reads": 5,
+      "read_length": 64,
+      "bluetooth_report_id": 17
+    },
+    "frames": [
+      {
+        "color": [18, 52, 86],
+        "openrgb": "0507000000001234560000",
+        "lightloom": "0506000000001234560000"
+      },
+      {
+        "color": [255, 0, 0],
+        "openrgb": "050700000000FF00000000",
+        "lightloom": "050600000000FF00000000"
+      },
+      {
+        "color": [0, 255, 128],
+        "openrgb": "05070000000000FF800000",
+        "lightloom": "05060000000000FF800000"
+      },
+      {
+        "color": [1, 2, 3],
+        "openrgb": "0507000000000102030000",
+        "lightloom": "0506000000000102030000"
+      }
+    ],
+    "shutdown": {
+      "color": [0, 0, 0],
+      "openrgb": "0507000000000000000000",
+      "lightloom": "0506000000000000000000"
+    }
+  },
+  "dualsense": {
+    "frames": [
+      {
+        "lightbar": [18, 52, 86],
+        "players": [[18, 52, 86], [18, 52, 86], [18, 52, 86], [18, 52, 86], [18, 52, 86]],
+        "brightness": "Medium",
+        "openrgb": "020F55000000000000010000000000000000000000000000000000000000000000000000000000FF000000013F123456",
+        "lightloom": "02001400000000000000000000000000000000000000000000000000000000000000000000000003000000013F123456"
+      },
+      {
+        "lightbar": [255, 0, 0],
+        "players": [[1, 0, 0], [0, 0, 128], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        "brightness": "High",
+        "openrgb": "020F55000000000000010000000000000000000000000000000000000000000000000000000000FF0000000023FF0000",
+        "lightloom": "020014000000000000000000000000000000000000000000000000000000000000000000000000030000000023FF0000"
+      },
+      {
+        "lightbar": [0, 0, 0],
+        "players": [[0, 0, 0], [0, 0, 0], [9, 9, 9], [0, 1, 0], [255, 255, 255]],
+        "brightness": "Low",
+        "openrgb": "020F55000000000000010000000000000000000000000000000000000000000000000000000000FF000000023C000000",
+        "lightloom": "02001400000000000000000000000000000000000000000000000000000000000000000000000003000000023C000000"
+      },
+      {
+        "lightbar": [171, 205, 239],
+        "players": [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        "brightness": "Medium",
+        "openrgb": "020F55000000000000010000000000000000000000000000000000000000000000000000000000FF0000000120ABCDEF",
+        "lightloom": "020014000000000000000000000000000000000000000000000000000000000000000000000000030000000120ABCDEF"
+      },
+      {
+        "lightbar": [16, 32, 48],
+        "players": [[0, 0, 0], [64, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+        "brightness": "Medium",
+        "openrgb": "020F55000000000000010000000000000000000000000000000000000000000000000000000000FF0000000122102030",
+        "lightloom": "020014000000000000000000000000000000000000000000000000000000000000000000000000030000000122102030"
+      },
+      {
+        "lightbar": [0, 0, 1],
+        "players": [[0, 0, 0], [0, 2, 0], [0, 0, 0], [3, 0, 0], [0, 0, 0]],
+        "brightness": "High",
+        "openrgb": "020F55000000000000010000000000000000000000000000000000000000000000000000000000FF000000002A000001",
+        "lightloom": "02001400000000000000000000000000000000000000000000000000000000000000000000000003000000002A000001"
+      }
+    ],
+    "shutdown": {
+      "lightbar": [0, 0, 0],
+      "players": [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+      "brightness": "Medium",
+      "openrgb": "020F55000000000000010000000000000000000000000000000000000000000000000000000000FF0000000120000000",
+      "lightloom": "020014000000000000000000000000000000000000000000000000000000000000000000000000030000000120000000"
+    }
+  }
+}

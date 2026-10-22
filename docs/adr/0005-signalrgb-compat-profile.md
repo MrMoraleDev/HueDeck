@@ -55,7 +55,8 @@ Constraints:
 - Local API compatibility: listeners on `:16038` (`/api/v1/*`) and `:16034`
   (`/canvas/event`) with shape-copied responses, **refusing to bind when the
   reference app owns the ports**; mutating compat calls require the HueDeck token by
-  default. The native API lives on `:16138`.
+  default. The native API lives on `:53000` by default (`:16138` until 2026-10-22;
+  changeable from the dashboard).
 - `ConflictingProcesses` are reported with a "close" button, never killed.
 
 ## Consequences

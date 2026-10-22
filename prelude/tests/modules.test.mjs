@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Every @SignalRGB/* facade in prelude/modules: import succeeds, declared
 // members match the corpus-derived list, each throws HostApiMissing naming
 // module and member, and each gap is logged once.

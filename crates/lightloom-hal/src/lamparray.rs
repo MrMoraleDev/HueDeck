@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! LampArray backend (Windows Dynamic Lighting via WinRT, HID LampArray on Linux).
 //!
 //! Lightloom consumes LampArray devices as a generic backend so DL-certified

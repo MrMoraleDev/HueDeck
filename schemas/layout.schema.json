@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lightloom.dev/schemas/layout.schema.json",
-  "$comment": "SPDX-License-Identifier: Apache-2.0 OR MIT",
+  "$comment": "SPDX-License-Identifier: GPL-3.0-or-later",
   "title": "Lightloom named layout",
   "description": "A named arrangement of canvas endpoints on the 320x200 effect canvas (origin top-left, x right, y down). Each endpoint (device, subdevice, channel or component instance) is keyed by its uid: USB devices \"vid:pid:serial\", subdevices \"<deviceUid>:<subdeviceId>\", channels \"<deviceUid>:<Channel name>\", component instances their bare ComponentId UUID, SMBus devices \"I2CBUS:<addr>\", GPUs their GPU name. Per-LED sampling: canvas = position + rotate(scale * ledPosition) (rotation about the endpoint's top-left corner, applied before translation), then flipX/flipY mirror the footprint. Effective LED brightness = global x layout.brightness x endpoint.brightness (each 0-100).",
   "type": "object",

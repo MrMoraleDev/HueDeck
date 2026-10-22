@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Synthetic device plugin for the device-session tests: Initialize() calls the
 // member named by the `probe` parameter, then writes one output report. In a

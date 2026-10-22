@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Dynamic NvAPI binding (M5).
 //!
 //! `nvapi64.dll` is loaded at runtime through `nvapi_QueryInterface`; Lightloom

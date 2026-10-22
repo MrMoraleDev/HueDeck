@@ -1,51 +1,67 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Contributing to Lightloom
 
 Thank you for helping. Lightloom is pre-alpha; the most useful contributions right
 now are protocol facts for the Host API spec, first-party plugins, conformance
 fixtures and reviews of the architecture decisions in `docs/adr/`.
 
-Everything below is a rule, not a suggestion, because the project's ability to
-stay permissively licensed depends on it.
+Everything below is a rule, not a suggestion: Lightloom can only be distributed
+under its license if the origin of every fact and every line is clean.
 
-## 1. Clean-room rule
+## 1. Where code and protocol facts may come from
 
-Lightloom is compatible with a proprietary application and coexists with a GPL-2
-one. To keep the code base Apache-2.0 OR MIT, provenance of every fact and every
-line matters.
+Lightloom is licensed GPL-3.0-or-later ([LICENSE](LICENSE), ADR-0010) with an add-on
+exception for plugins and effects ([LICENSE-EXCEPTION.md](LICENSE-EXCEPTION.md)).
+It interoperates with a proprietary application (SignalRGB) and reuses code of a
+GPL one (OpenRGB), so where every fact and every line comes from matters.
 
-**Allowed sources of protocol and API facts**
+**Allowed**
 
-- Readable plugin, effect, component and macro files that you legitimately have on
-  disk (the reference application ships them as plain JavaScript / HTML / JSON).
-  You may read them to learn *facts*: which host calls exist, their argument
-  shapes, packet layouts, report ids, endpoint tuples. You must **re-express** what
-  you learned in your own words and your own code.
-- Public documentation (vendor docs, the reference application's public developer
-  docs, USB-IF / HID specs, datasheets).
-- Your own captures: USB/HID traces (Wireshark + USBPcap, Frida on a process you own)
-  of hardware you own, logs of applications you run, registry keys on your machine.
-- Open-source projects under licenses on the `deny.toml` allowlist, with attribution.
+- **Your own captures**: USB/HID traces of hardware you own (`lightloom ... --record`,
+  Wireshark + USBPcap, Frida on a process you own), logs of applications you run,
+  registry keys on your machine. Most first-party plugins were written this way
+  (`plugins/README.md`, `tools/device-probe/`).
+- **Public documentation**: vendor documentation and APIs, USB-IF / HID
+  specifications, datasheets, the reference application's public developer docs.
+- **Readable files you legitimately have on disk** (the reference application
+  ships plugins, effects and components as plain JavaScript / HTML / JSON), for
+  *facts* only: which host calls exist, their argument shapes, packet layouts,
+  report ids, endpoint tuples. Re-express what you learned in your own words and
+  your own code.
+- **Code from open-source projects under a GPLv3-compatible license, with
+  attribution.** This includes **OpenRGB**, whose source files are
+  GPL-2.0-or-later and may be distributed as part of Lightloom under
+  GPL-3.0-or-later.
+  - Check the header of every file you adapt. `GPL-2.0-or-later`,
+    `GPL-3.0-or-later`, `LGPL-2.1-or-later`, `LGPL-3.0-or-later` and the permissive
+    licenses on the `deny.toml` allowlist are fine; `GPL-2.0-only` (no "or later")
+    is **not**.
+  - Keep the original copyright lines, and name the source file, its commit and its
+    license in the header of the new file (see "Adapting a device from OpenRGB" in
+    [plugins/README.md](plugins/README.md)).
+  - List the source in the "Sources" section of `docs/hardware/<device>.md` and in
+    the commit message (`Adapted from OpenRGB <path> @ <commit>`).
 
 **Forbidden**
 
+- **No SignalRGB / WhirlwindFX code** in any form: no pasted functions, no
+  "translated" functions, no copied tables of constants with their comments, and no
+  WhirlwindFX-authored files in the repository, not even as test fixtures. Their
+  plugin repository is public but has **no license**, so nothing in it may be
+  copied. Facts observed on the wire or learned as described above are fine. Tests
+  that need the reference corpus read it from a user-supplied directory
+  (`tests/conformance/corpus/` is git-ignored).
 - **No decompiled or disassembled code** from the reference application or any
   other proprietary binary, and no pseudo-code derived from it. String tables and
   log messages are facts; control flow recovered from a decompiler is not.
-- **No code from OpenRGB** (GPL-2-only) in any form: no pasted functions, no
-  "translated" functions, no copied tables of magic constants with their comments.
-  You may read OpenRGB's *documentation* (e.g. its SMBus access notes) to cross-check
-  a fact you established independently, and you must say so in the commit message.
-- **No WhirlwindFX-authored files in the repository**, not even as test fixtures.
-  Tests that need a corpus read it from a user-supplied directory
-  (`tests/conformance/corpus/` is git-ignored).
-- No copying of plugin code from community repositories whose license you have not
-  checked; add them as *sources* in the sources manager instead.
+- **No code without a license, or under a license that is not compatible with
+  GPLv3** (GPL-2.0-only, CDDL, EPL, proprietary vendor SDKs). Community plugin
+  repositories are added as *sources* in the sources manager instead.
 
 **How to record provenance.** Protocol notes go to `docs/hardware/<device>.md`
-with a "Sources" section listing exactly what kind of source each fact came from
-(corpus usage, public doc, own capture). Commits that introduce protocol constants
-reference that note.
+with a "Sources" section listing exactly what each fact came from (own capture,
+public doc, corpus usage, adapted project file). Commits that introduce protocol
+constants reference that note.
 
 If you are unsure whether something is allowed, open an issue before writing code.
 
@@ -86,8 +102,8 @@ One logical change per commit; keep formatting-only changes separate.
   `// SAFETY:` comment; new dependencies are added to `[workspace.dependencies]`
   and must pass `cargo deny check`.
 - Every file starts with an SPDX header where the format allows:
-  `SPDX-License-Identifier: Apache-2.0 OR MIT` (plugins under `plugins/`: `MIT`;
-  effects under `effects/`: `CC0-1.0`).
+  `SPDX-License-Identifier: GPL-3.0-or-later` (effects under `effects/`: `CC0-1.0`).
+  Files adapted from another project keep that project's copyright lines below it.
 - UTF-8, LF line endings, no BOM, final newline (`.editorconfig` and
   `.gitattributes` enforce this; `.cmd`/`.bat`/`.ps1` are the only CRLF files).
 - Prelude shims (`prelude/`) and first-party plugins are plain JavaScript with

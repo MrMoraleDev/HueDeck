@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Synthetic network plugin in the SignalRGB compat shape (Lightloom test fixture).
 import udp from "@SignalRGB/udp";
 

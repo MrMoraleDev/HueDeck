@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `lightloom-setup` — one-shot elevated installer (M5).
 //!
 //! Runs with UAC exactly once, only when the user opts into SMBus / GPU-I2C /

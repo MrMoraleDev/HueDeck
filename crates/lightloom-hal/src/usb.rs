@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Raw USB (libusb/WinUSB-class) backend traits, used by `Type() === "rawusb"`
 //! and `"hybrid"` plugins through `device.bulk_transfer` / `device.control_transfer`.
 

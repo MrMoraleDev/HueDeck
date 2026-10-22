@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Device-session robustness (M1 review): a panic in a native or a driver
 //! must not skip `Shutdown(false)`, and members a device session does not
 //! implement must throw `HostApiMissing` instead of answering with stub data.
@@ -19,8 +19,7 @@ fn repo() -> PathBuf {
 
 fn fixture() -> serde_json::Value {
     let text =
-        std::fs::read_to_string(repo().join("plugins/msi-mystic-light-7c91/fixtures/expected-packet.json"))
-            .unwrap();
+        std::fs::read_to_string(repo().join("plugins/msi-mystic-light-7c91/fixtures/per-led.json")).unwrap();
     serde_json::from_str(&text).unwrap()
 }
 
@@ -31,14 +30,14 @@ fn hex(s: &str) -> Vec<u8> {
         .collect()
 }
 
-fn red_packet(fx: &serde_json::Value) -> Vec<u8> {
-    let c = fx["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["name"] == "solid red via device.color")
-        .unwrap();
-    hex(c["expectedPacket"].as_str().unwrap())
+/// The MSI plugin's 0x53 stream with its first `lit` slots in `rgb`.
+fn stream(rgb: [u8; 3], lit: usize) -> Vec<u8> {
+    let mut s = vec![0u8; 725];
+    s[..5].copy_from_slice(&[0x53, 0x25, 0x06, 0x00, 0x00]);
+    for slot in 0..lit {
+        s[5 + 3 * slot..8 + 3 * slot].copy_from_slice(&rgb);
+    }
+    s
 }
 
 fn msi_plugin() -> CatalogEntry {
@@ -172,8 +171,8 @@ fn a_panic_before_the_first_write_faults_without_touching_the_device() {
     );
     assert!(report.shutdown_called, "{:#?}", report.failures);
     assert!(!report.is_clean());
-    // The Render packet panicked before reaching the device, so the plugin never wrote
-    // and its Shutdown(false) has nothing to restore.
+    // The first packet of Initialize panicked before reaching the device, so the plugin
+    // never wrote and its Shutdown(false) has nothing to restore.
     assert!(rig.mock.recorder().feature_sends().is_empty());
 }
 
@@ -208,9 +207,15 @@ fn a_panic_after_a_write_still_restores_the_device() {
     assert!(report.faulted.as_deref().unwrap_or("").contains("panic"));
     assert!(report.shutdown_called);
     let sends = rig.mock.recorder().feature_sends();
-    assert_eq!(sends.len(), 2, "red packet, then the restore image");
-    assert_eq!(sends[0], red_packet(&fx));
-    assert_eq!(sends[1], hex(fx["expectedRestorePacket"].as_str().unwrap()));
+    let hex_of = |name: &str| hex(fx[name].as_str().unwrap());
+    // Reset, configuration and the red stream; the blue stream panicked; then
+    // Shutdown(false): a black stream and the restore image.
+    assert_eq!(sends.len(), 5, "{} sends", sends.len());
+    assert_eq!(sends[0], hex_of("reset"));
+    assert_eq!(sends[1], hex_of("config_60_60"));
+    assert_eq!(sends[2], stream([255, 0, 0], 6 + 2 + 60 + 60));
+    assert_eq!(sends[3], stream([0, 0, 0], 0));
+    assert_eq!(sends[4], hex_of("expectedRestorePacket"));
 }
 
 fn gap_probe_plugin() -> CatalogEntry {

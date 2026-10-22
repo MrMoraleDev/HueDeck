@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Async Initialize() awaiting a promise nothing can settle (Lightloom test fixture).
 export function Name() { return "Edge Async Never"; }
 export function VendorId() { return 0x1111; }

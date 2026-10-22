@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Grouping of HID top-level collections into physical devices.
 //!
 //! Pure logic (no OS calls) so it is unit-tested on every platform. The

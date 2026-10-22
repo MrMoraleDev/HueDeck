@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Layouts: where each canvas endpoint sits on the 320x200 canvas.
 //!
 //! The JSON form is pinned by `schemas/layout.schema.json`: camelCase keys

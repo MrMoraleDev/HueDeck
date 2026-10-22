@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Plugin export model.
 //!
 //! # The call-if-function rule
@@ -13,7 +13,9 @@
 //! 3. a missing export takes its documented default (`Type` → `"Hid"`,
 //!    `DefaultScale` → `1.0`, …).
 //!
-//! `VendorId` and `ProductId` are required; `ProductId()` must yield an int,
+//! `VendorId` and `ProductId` are required (unless the plugin exports
+//! `HidUsages`, a Lightloom extension, see [`PluginMeta::hid_usages`]);
+//! `ProductId()` must yield an int,
 //! an int array, or an array of decimal numeric strings (what
 //! `Object.keys(library)` produces for hex-literal keys), otherwise the module
 //! is rejected with the exe's message *"ProductId() must be of type int, or
@@ -61,6 +63,7 @@ pub const METADATA_EXPORTS: &[&str] = &[
     "UsesUSBSensorMutex",
     "AllowConflictBypass",
     "BrandGPUList",
+    "HidUsages",
 ];
 
 /// Exports the host calls during the device lifecycle (never at scan time).
@@ -507,6 +510,12 @@ pub struct PluginMeta {
     /// `BrandGPUList()` entries, kept verbatim (plugin-defined identifier objects).
     #[serde(default)]
     pub brand_gpu_list: Vec<serde_json::Value>,
+    /// `HidUsages()` (Lightloom extension): `[usage page, usage]` of HID
+    /// top-level collections the plugin drives on any device, e.g.
+    /// `[[0x59, 0x01]]` for HID LampArray. Used for devices no plugin claims
+    /// by VID:PID.
+    #[serde(default)]
+    pub hid_usages: Vec<[u16; 2]>,
     /// Lifecycle exports the module declares.
     #[serde(default)]
     pub lifecycle: LifecycleExports,
@@ -549,6 +558,7 @@ impl PluginMeta {
             allow_conflict_bypass: false,
             supports_subdevices: false,
             brand_gpu_list: Vec::new(),
+            hid_usages: Vec::new(),
             lifecycle: LifecycleExports::default(),
         }
     }
@@ -561,7 +571,7 @@ impl PluginMeta {
         }
         match self.plugin_type {
             PluginType::Smbus | PluginType::Network => true,
-            _ => self.vendor_id != 0 && !self.product_ids.is_empty(),
+            _ => (self.vendor_id != 0 && !self.product_ids.is_empty()) || !self.hid_usages.is_empty(),
         }
     }
 

@@ -1,7 +1,7 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # ADR-0006: Licensing — Apache-2.0 OR MIT for code, MIT for first-party plugins, CC0 for starter effects
 
-- Status: Accepted (2026-10-17, user decision)
+- Status: **Superseded** by [ADR-0010](0010-license-gpl-3.md) (2026-10-18); accepted 2026-10-17 (user decision)
 - Deciders: project owner, architecture panel (synthesis D11)
 - Related: [ADR-0004](0004-localsystem-iobroker-pawnio.md), [ADR-0005](0005-signalrgb-compat-profile.md), [CONTRIBUTING.md](../../CONTRIBUTING.md), `deny.toml`
 
@@ -12,7 +12,8 @@ its plugin SDK, including by closed-source vendor tools and by other open-source
 managers. At the same time:
 
 - OpenRGB (the other large open RGB project) is GPL-2-only; copying its code would
-  force the whole core to GPL-2 and block permissive reuse.
+  force the whole core to GPL-2 and block permissive reuse. (Correction,
+  2026-10-18: OpenRGB's source files are GPL-2.0-or-later; see ADR-0010.)
 - PawnIO modules are Pawn source run by a GPL-2 driver whose exception covers only
   the IOCTL interface; official PawnIO builds load only modules that are LGPL-2.1,
   merged into PawnIO.Modules and signed by its maintainer.
@@ -44,7 +45,7 @@ managers. At the same time:
 - Contributions are accepted under the same terms via the **Developer Certificate of
   Origin** (`Signed-off-by`), not a CLA.
 - Every file carries an SPDX header where the format allows
-  (`SPDX-License-Identifier: Apache-2.0 OR MIT`; plugins `MIT`; effects `CC0-1.0`;
+  (`SPDX-License-Identifier: GPL-3.0-or-later`; plugins `MIT`; effects `CC0-1.0`;
   the Code of Conduct is `CC-BY-4.0` as published by its authors).
 - Imported third-party files (reference-app plugins, community repos) are stored in
   the user's data directory, marked `imported` / `unsigned`, and never relicensed.

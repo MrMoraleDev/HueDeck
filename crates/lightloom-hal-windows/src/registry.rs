@@ -1,18 +1,40 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
-//! Read-only access to string values under `HKEY_CURRENT_USER`: importing
-//! another application's per-user settings (SignalRGB keeps its component
-//! assignments there). Lightloom never writes the registry.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Read-only access to values under `HKEY_CURRENT_USER`: importing another
+//! application's per-user settings (SignalRGB keeps its component assignments
+//! and canvas placements there). Lightloom never writes the registry.
 
 use std::io;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, HKEY, HKEY_CURRENT_USER, KEY_READ,
-    REG_EXPAND_SZ, REG_SZ,
+    RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, HKEY, HKEY_CURRENT_USER,
+    KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_QWORD, REG_SZ,
 };
 
 /// Values larger than this are skipped (a channel array is a few KB).
 const MAX_VALUE_BYTES: u32 = 4 << 20;
+
+/// A registry value Lightloom can import.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RegValue {
+    /// `REG_SZ` / `REG_EXPAND_SZ` (unexpanded).
+    Text(String),
+    /// `REG_DWORD`.
+    Dword(u32),
+    /// `REG_QWORD`.
+    Qword(u64),
+}
+
+impl RegValue {
+    /// The value as text (numbers in decimal).
+    pub fn as_text(&self) -> String {
+        match self {
+            RegValue::Text(s) => s.clone(),
+            RegValue::Dword(v) => v.to_string(),
+            RegValue::Qword(v) => v.to_string(),
+        }
+    }
+}
 
 struct Key(HKEY);
 
@@ -33,10 +55,8 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// The string (`REG_SZ` / `REG_EXPAND_SZ`, unexpanded) values directly under
-/// `HKCU\<subkey>`, as `(name, value)` in enumeration order. A missing key is
-/// an empty list; other value types and oversized values are skipped.
-pub fn current_user_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {
+/// `HKCU\<subkey>` opened for reading; `None` when it does not exist.
+fn open(subkey: &str) -> io::Result<Option<Key>> {
     let wkey = wide(subkey);
     let mut hkey = HKEY::default();
     // SAFETY: NUL-terminated key name that outlives the call; valid out pointer.
@@ -50,12 +70,17 @@ pub fn current_user_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {
         )
     };
     if err == ERROR_FILE_NOT_FOUND {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     if err != ERROR_SUCCESS {
         return Err(os_error(err));
     }
-    let key = Key(hkey);
+    Ok(Some(Key(hkey)))
+}
+
+/// Subkey count, longest subkey name, value count, longest value name, largest value.
+fn info(key: &Key) -> io::Result<(u32, u32, u32, u32, u32)> {
+    let (mut subkeys, mut max_subkey) = (0u32, 0u32);
     let (mut count, mut max_name, mut max_data) = (0u32, 0u32, 0u32);
     // SAFETY: the key is open; every out pointer is valid for the call.
     let err = unsafe {
@@ -64,8 +89,8 @@ pub fn current_user_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {
             None,
             None,
             None,
-            None,
-            None,
+            Some(&mut subkeys),
+            Some(&mut max_subkey),
             None,
             Some(&mut count),
             Some(&mut max_name),
@@ -77,6 +102,17 @@ pub fn current_user_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {
     if err != ERROR_SUCCESS {
         return Err(os_error(err));
     }
+    Ok((subkeys, max_subkey, count, max_name, max_data))
+}
+
+/// The values directly under `HKCU\<subkey>` that Lightloom can import (strings,
+/// DWORDs, QWORDs), as `(name, value)` in enumeration order. A missing key is
+/// an empty list; other value types and oversized values are skipped.
+pub fn current_user_values(subkey: &str) -> io::Result<Vec<(String, RegValue)>> {
+    let Some(key) = open(subkey)? else {
+        return Ok(Vec::new());
+    };
+    let (_, _, count, max_name, max_data) = info(&key)?;
     let mut name = vec![0u16; max_name as usize + 1];
     let mut data = vec![0u8; max_data.min(MAX_VALUE_BYTES) as usize + 2];
     let mut out = Vec::new();
@@ -102,17 +138,84 @@ pub fn current_user_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {
             break;
         }
         // ERROR_MORE_DATA (a value grew or is oversized) and friends: skip the value.
-        if err != ERROR_SUCCESS || (kind != REG_SZ.0 && kind != REG_EXPAND_SZ.0) {
+        if err != ERROR_SUCCESS {
             continue;
         }
-        let units: Vec<u16> = data[..(data_len as usize).min(data.len())]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        let text = String::from_utf16_lossy(&units);
+        let bytes = &data[..(data_len as usize).min(data.len())];
+        let value = if kind == REG_SZ.0 || kind == REG_EXPAND_SZ.0 {
+            let units: Vec<u16> = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            RegValue::Text(
+                String::from_utf16_lossy(&units)
+                    .trim_end_matches('\0')
+                    .to_string(),
+            )
+        } else if kind == REG_DWORD.0 && bytes.len() >= 4 {
+            RegValue::Dword(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        } else if kind == REG_QWORD.0 && bytes.len() >= 8 {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&bytes[..8]);
+            RegValue::Qword(u64::from_le_bytes(b))
+        } else {
+            continue;
+        };
         out.push((
             String::from_utf16_lossy(&name[..(name_len as usize).min(name.len())]),
-            text.trim_end_matches('\0').to_string(),
+            value,
+        ));
+    }
+    Ok(out)
+}
+
+/// The string (`REG_SZ` / `REG_EXPAND_SZ`, unexpanded) values directly under
+/// `HKCU\<subkey>`, as `(name, value)` in enumeration order. A missing key is
+/// an empty list; other value types and oversized values are skipped.
+pub fn current_user_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {
+    Ok(current_user_values(subkey)?
+        .into_iter()
+        .filter_map(|(name, value)| match value {
+            RegValue::Text(text) => Some((name, text)),
+            _ => None,
+        })
+        .collect())
+}
+
+/// The names of the keys directly under `HKCU\<subkey>`, in enumeration order.
+/// A missing key is an empty list.
+pub fn current_user_subkeys(subkey: &str) -> io::Result<Vec<String>> {
+    let Some(key) = open(subkey)? else {
+        return Ok(Vec::new());
+    };
+    let (count, max_subkey, ..) = info(&key)?;
+    let mut name = vec![0u16; max_subkey as usize + 1];
+    let mut out = Vec::new();
+    for index in 0..count {
+        let mut name_len = name.len() as u32;
+        // SAFETY: `name` holds `name_len` characters; the other out pointers are unused.
+        let err = unsafe {
+            RegEnumKeyExW(
+                key.0,
+                index,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut name_len,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        if err == ERROR_NO_MORE_ITEMS {
+            break;
+        }
+        if err != ERROR_SUCCESS {
+            continue;
+        }
+        out.push(String::from_utf16_lossy(
+            &name[..(name_len as usize).min(name.len())],
         ));
     }
     Ok(out)
@@ -127,8 +230,13 @@ mod tests {
         assert!(current_user_strings(r"Software\Lightloom\definitely-not-here")
             .unwrap()
             .is_empty());
-        // Every interactive user profile has the console settings key.
-        let values = current_user_strings("Console").unwrap();
+        assert!(current_user_subkeys(r"Software\Lightloom\definitely-not-here")
+            .unwrap()
+            .is_empty());
+        // Every interactive user profile has the console settings key, with DWORD values.
+        let values = current_user_values("Console").unwrap();
         assert!(values.iter().all(|(n, _)| !n.contains('\0')));
+        assert!(values.iter().any(|(_, v)| matches!(v, RegValue::Dword(_))));
+        assert!(!current_user_subkeys("Software").unwrap().is_empty());
     }
 }

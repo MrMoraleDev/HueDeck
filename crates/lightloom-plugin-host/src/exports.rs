@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Conversion of the JSON image of a plugin namespace into [`PluginMeta`].
 //!
 //! The runtime applies the call-if-function rule inside the engine and hands
@@ -201,6 +201,19 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
     meta.allow_conflict_bypass = get("AllowConflictBypass").map(truthy).unwrap_or(true);
     if let Some(a) = get("BrandGPUList").and_then(J::as_array) {
         meta.brand_gpu_list = a.clone();
+    }
+    if let Some(a) = get("HidUsages").and_then(J::as_array) {
+        for v in a {
+            let pair = v.as_array().and_then(|p| {
+                let page = u16::try_from(p.first()?.as_u64()?).ok()?;
+                let usage = u16::try_from(p.get(1)?.as_u64()?).ok()?;
+                (p.len() == 2).then_some([page, usage])
+            });
+            match pair {
+                Some(pair) => meta.hid_usages.push(pair),
+                None => warnings.push(format!("HidUsages() entries must be [usage page, usage]: {v}")),
+            }
+        }
     }
 
     let flag = |k: &str| {

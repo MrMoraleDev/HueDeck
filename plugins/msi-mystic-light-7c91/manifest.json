@@ -2,17 +2,17 @@
   "manifestVersion": 2,
   "id": "lightloom.msi-mystic-light-7c91",
   "name": "MSI Mystic Light 185 (MAG B550 Tomahawk)",
-  "version": "0.1.0",
-  "license": "MIT",
+  "version": "0.2.0",
+  "license": "GPL-3.0-or-later",
   "publisher": "Lightloom",
-  "description": "Direct zone mode for the 6 onboard LEDs of the MSI MAG B550 TOMAHAWK (MS-7C91) / MPG B550 GAMING EDGE WIFI via HID feature report 0x52 (185 bytes). JRGB/JRAINBOW headers are read and preserved but not driven until M2. Hardware notes: docs/hardware/msi-mystic-light-185.md (milestone M1).",
+  "description": "Per-LED mode for the MSI MAG B550 TOMAHAWK (MS-7C91) / MPG B550 GAMING EDGE WIFI: the 6 onboard LEDs, the two 12 V RGB headers (JRGB1/2) and the strips on the two 5 V ARGB headers (JRAINBOW1/2, up to 120 LEDs each, 232 together), through HID feature reports 0x52 (configuration, 185 bytes) and 0x53 (colour stream, 725 bytes). The state read at start is restored on exit; nothing is saved to the controller's flash. Hardware notes: docs/hardware/msi-mystic-light-185.md.",
   "entry": "plugin.js",
   "compat": "signalrgb-2.5",
   "deviceType": "motherboard",
   "devices": [
-    { "vid": "0x1462", "pids": ["0x7C91"], "transport": "hid", "interfaces": [0, -1] }
+    { "vid": "0x1462", "pids": ["0x7C91"], "transport": "hid", "interfaces": [0, -1], "tested": ["0x7C91"] }
   ],
   "permissions": ["hid"],
   "conflictingProcesses": ["LEDKeeper.exe", "LEDKeeper2.exe", "LightKeeperService.exe", "LightKeeperService2.exe"],
-  "keywords": ["msi", "mystic-light", "motherboard", "b550", "ms-7c91"]
+  "keywords": ["msi", "mystic-light", "motherboard", "b550", "ms-7c91", "argb", "jrainbow", "jrgb"]
 }

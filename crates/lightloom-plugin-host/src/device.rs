@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Native backing of the compat `device` object in a real device session.
 //!
 //! [`DeviceContext`] owns the open HID endpoint of one physical device, the
@@ -460,6 +460,32 @@ impl DeviceContext {
         self.update_factor();
     }
 
+    /// Where the device sits on the canvas.
+    pub fn placement(&self) -> &Placement {
+        &self.placement
+    }
+
+    /// A child endpoint's new placement (see [`Children::set_placement`]).
+    pub fn set_child_placement(&mut self, uid: &str, placement: Placement) -> bool {
+        self.children.set_placement(uid, placement)
+    }
+
+    /// The device and its children as canvas endpoints; `key` is the device's uid.
+    pub fn endpoint_views(&self, key: &str) -> Vec<crate::children::EndpointView> {
+        let mut out = vec![crate::children::EndpointView {
+            uid: key.to_string(),
+            kind: crate::children::EndpointKind::Device,
+            name: self.name().to_string(),
+            channel: None,
+            product: None,
+            size: self.size(),
+            leds: self.led_positions().len(),
+            placement: self.placement.clone(),
+        }];
+        out.extend(self.children.views());
+        out
+    }
+
     /// The device brightness slider (`device.getBrightness()`), `0..=100`.
     pub fn device_brightness(&self) -> u8 {
         self.placement.brightness.min(100)
@@ -484,7 +510,9 @@ impl DeviceContext {
 
     fn set_leds(&mut self, flat: &[i32]) {
         self.led_positions = flat
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| [u32::try_from(p[0]).unwrap_or(0), u32::try_from(p[1]).unwrap_or(0)])
             .collect();
     }
@@ -1022,12 +1050,94 @@ impl DeviceContext {
         vec![lengths.input as i32, lengths.output as i32]
     }
 
+    /// `device.getHidReportFields()` (Lightloom extension): the reports and
+    /// report fields of the open collection, from its report descriptor, as
+    /// JSON; `null` when the backend cannot read the descriptor.
+    pub fn report_fields(&mut self) -> String {
+        let Some(info) = self.active_endpoint().cloned() else {
+            return "null".into();
+        };
+        let Some(handle) = self.handle.as_mut() else {
+            return "null".into();
+        };
+        let descriptor = match handle.report_descriptor() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                self.log_once(format!("getHidReportFields(): no report descriptor ({e})"));
+                return "null".into();
+            }
+        };
+        let parsed = match lightloom_hid_desc::parse(&descriptor) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                self.log_once(format!(
+                    "getHidReportFields(): report descriptor not parsed ({e})"
+                ));
+                return "null".into();
+            }
+        };
+        let Some(tlc) = parsed
+            .find(info.usage_page, info.usage)
+            .or_else(|| parsed.collections.first())
+        else {
+            return "null".into();
+        };
+        report_fields_json(tlc).to_string()
+    }
+
     /// `device.getDeviceInfo()` strings: `[manufacturer, product, serial]`.
     pub fn device_info(&self) -> Vec<String> {
         let info = self.active_endpoint().or_else(|| self.endpoints.first());
         info.map(|e| vec![e.manufacturer.clone(), e.product.clone(), e.serial.clone()])
             .unwrap_or_else(|| vec![String::new(), String::new(), String::new()])
     }
+}
+
+fn report_kind(kind: lightloom_hid_desc::ReportKind) -> &'static str {
+    match kind {
+        lightloom_hid_desc::ReportKind::Input => "input",
+        lightloom_hid_desc::ReportKind::Output => "output",
+        lightloom_hid_desc::ReportKind::Feature => "feature",
+    }
+}
+
+/// What `device.getHidReportFields()` returns for one top-level collection.
+fn report_fields_json(tlc: &lightloom_hid_desc::TopLevelCollection) -> serde_json::Value {
+    let reports: Vec<serde_json::Value> = tlc
+        .reports
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "kind": report_kind(r.kind),
+                "reportId": r.id,
+                "bytes": r.byte_length(),
+            })
+        })
+        .collect();
+    let fields: Vec<serde_json::Value> = tlc
+        .fields
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "kind": report_kind(f.kind),
+                "reportId": f.report_id,
+                "bitOffset": f.bit_offset,
+                "bitSize": f.bit_size,
+                "count": f.count,
+                "flags": f.flags,
+                "logicalMin": f.logical_min,
+                "logicalMax": f.logical_max,
+                "collection": [f.collection.0, f.collection.1],
+                "usages": f.usages.iter().map(|u| [u.page, u.min, u.max]).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "usagePage": tlc.usage_page,
+        "usage": tlc.usage,
+        "reports": reports,
+        "fields": fields,
+    })
 }
 
 /// Install `globalThis.__lightloomNative`, backed by `device`. Natives that
@@ -1095,6 +1205,7 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
     });
     native!("endpoints", |d| d.endpoint_tuples());
     native!("hidInfo", |d| d.hid_info());
+    native!(blocking "hidReportFields" else "null".to_string(), |d| d.report_fields());
     native!("deviceInfo", |d| d.device_info());
     native!("color", |d, x: i32, y: i32| d.color(x, y).to_vec());
     native!("brightness", |d| d.device_brightness() as i32);
@@ -1195,6 +1306,30 @@ mod tests {
     use lightloom_engine::{Rgb, Scale};
     use lightloom_hal::mock::MockHid;
     use lightloom_hal::ReportLengths;
+
+    /// The LampArray fixture the plugin's JavaScript tests use is what
+    /// `getHidReportFields()` returns for the fixture descriptor.
+    #[test]
+    fn report_fields_match_the_lamparray_fixture() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/hid-lamparray/fixtures");
+        let text = std::fs::read_to_string(dir.join("descriptor.hex")).unwrap();
+        let hex: String = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .collect();
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let parsed = lightloom_hid_desc::parse(&bytes).unwrap();
+        let tlc = parsed.find(0x59, 0x01).unwrap();
+        let mut expected: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("layout.json")).unwrap()).unwrap();
+        expected.as_object_mut().unwrap().remove("$comment");
+        assert_eq!(report_fields_json(tlc), expected);
+    }
 
     fn msi_like() -> (Arc<MockHid>, HidEndpointInfo) {
         let info = MockHid::endpoint_info(

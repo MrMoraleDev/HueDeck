@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Lightloom crates
 
 Workspace members (`Cargo.toml` → `members = ["crates/*"]`). Shared versions are pinned once in the
@@ -56,7 +56,7 @@ daemon/CLI wiring arrives with M1 and the graph above shows the intended shape.
 
 ## Conventions
 
-* Every file starts with `SPDX-License-Identifier: Apache-2.0 OR MIT`.
+* Every file starts with `SPDX-License-Identifier: GPL-3.0-or-later`.
 * `#![forbid(unsafe_code)]` everywhere except OS backends, where each `unsafe` block carries a `// SAFETY:` comment.
 * Keep each crate's dependency list to what it actually uses; add workspace pins in the root `Cargo.toml` first.
 * `// TODO(compile-check)` marks spots written without a compiler at hand (dependency API details to confirm on the first `cargo build`).

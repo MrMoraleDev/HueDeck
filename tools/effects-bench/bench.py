@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Effects bench: every effect through lightloom-renderer, GPU and software compositing.
 
 Each effect paints 300 frames at 30 fps in each mode; the table has the paint-interval

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Helper module (no ProductId) imported by class_keyboard.js (Lightloom test fixture).
 export const PIDLibrary = {
 	0x0DA0: { name: "Synthetic Keyboard A", size: [21, 6] },

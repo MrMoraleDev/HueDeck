@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SMBIOS structure-table parsing (DMTF DSP0134): the motherboard, BIOS and
 //! memory modules that `@SignalRGB/systeminfo` reports (SignalRGB reads them
 //! through WMI, which reads SMBIOS). Pure; each platform supplies the raw

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Synthetic device plugin for the device-session tests: Render() blocks in
 // host calls for a long time, the way plugins set devices up lazily from

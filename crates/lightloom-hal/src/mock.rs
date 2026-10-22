@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Scripted in-memory backends and the transaction recorder used by golden
 //! tests, the plugin simulator and the conformance record/replay harness.
 //!
@@ -157,6 +157,8 @@ pub struct MockEndpointState {
     /// `read_timeout` without a scripted report waits out its timeout (up to
     /// 5 s), as a real device that sends nothing does; otherwise it returns at once.
     pub block_reads: bool,
+    /// What `report_descriptor()` returns; unsupported when `None`.
+    pub report_descriptor: Option<Vec<u8>>,
 }
 
 type SharedEndpoint = Arc<Mutex<MockEndpointState>>;
@@ -412,6 +414,13 @@ impl HidHandle for MockHidHandle {
         self.recorder
             .record(TransactionKind::GetInputReport, &*self.info.path, &buf[..n]);
         Ok(n)
+    }
+
+    fn report_descriptor(&mut self) -> HalResult<Vec<u8>> {
+        self.connected()?
+            .report_descriptor
+            .clone()
+            .ok_or(HalError::Unsupported("report descriptor"))
     }
 }
 

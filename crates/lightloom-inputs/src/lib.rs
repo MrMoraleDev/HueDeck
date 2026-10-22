@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Input sources for lightscripts: audio spectrum (`engine.audio`), screen
 //! zones (`engine.zone`), vision meters (`engine.vision`) and sensors.
 //!

@@ -79,14 +79,14 @@ pub struct SmbusClaim {
 }
 
 /// Become the one HueDeck process that drives SMBus and GPU I2C on this
-/// machine: `huedeckd` and `huedeck … --smbus` never drive the buses side by
+/// machine: `huedeckd` and a `huedeck` run never drive the buses side by
 /// side. Fails while another HueDeck process holds the claim.
 #[cfg(windows)]
 pub fn claim_smbus() -> anyhow::Result<SmbusClaim> {
     match huedeck_hal_windows::owner::SmbusOwner::try_acquire().map_err(anyhow::Error::msg)? {
         Some(owner) => Ok(SmbusClaim { _owner: owner }),
         None => anyhow::bail!(
-            "another HueDeck process (huedeckd with SMBus on, or a `huedeck --smbus` run) drives SMBus and GPU I2C:              stop it first"
+            "another HueDeck process (huedeckd with SMBus on, or another `huedeck` run) drives SMBus and GPU I2C"
         ),
     }
 }

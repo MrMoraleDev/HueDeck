@@ -9,23 +9,32 @@ Windows HueDeck reaches that bus only through the HueDeck I/O broker
 (`crates/huedeck-iobroker`, a LocalSystem service) and the PawnIO driver; HueDeck's own
 processes never open PawnIO.
 
-**Status: untested on hardware.** The plugin, the broker and the client are proven
-against mock buses and fakes only. `tested` in `manifest.json` stays empty until someone
-runs it.
+**Status: partly tested.** On 2026-10-19 (build 9311108) one module lit red on the
+reference machine (`light red`, 10 s: 138 frames, 294 writes, no error), but its
+`Initialize()` took about 3 s, and with both modules and the GPU together the second
+module never lit. The follow-up (batched writes, turn-taking, the SPD check; ADR-0004,
+2026-10-22) is proven against mock buses and fakes only. `tested` in `manifest.json`
+stays empty until both modules run together.
 
 | Module | Bus on the reference machine | Addresses seen | Status |
 |---|---|---|---|
-| 2 x Crucial Ballistix BL8G32C16U4WL | `AMD PIIX4 Bus - 0x0b00` (`1022:790B`, MSI MAG B550 Tomahawk) | `0x39`, `0x3A` (SignalRGB log, research §1.7) | untested |
+| 2 x Crucial Ballistix BL8G32C16U4WL | `AMD PIIX4 Bus - 0x0b00` (`1022:790B`, MSI MAG B550 Tomahawk) | `0x39`, `0x3A` (SignalRGB log, research §1.7); `0x3B`, `0x3C` after HueDeck's remap (2026-10-19) | one module lit; both together pending |
 
 ## What the user needs
 
-1. The PawnIO driver, official edition, 2.2.0 or later (https://pawnio.eu), installed by
-   the user. **HueDeck never installs it.** Without it `huedeck --smbus` and the daemon
-   say so (from PawnIO's uninstall entry) and GPU lighting keeps working.
+1. The PawnIO driver, official edition, 2.2.0 or later (https://pawnio.eu). Installing it
+   is the user's step for now (an option of the HueDeck installer and an install / remove
+   button in Settings are planned). Without it `huedeck` and the daemon say that RAM
+   lighting is off (from PawnIO's uninstall entry) and GPU lighting keeps working.
 2. Once, from an elevated prompt: `huedeck-setup --smbus --pawnio-modules <dir>`, with
    `<dir>` the PawnIO.Modules 0.2.11 release as downloaded (`SmbusPIIX4.bin`, `Echo.bin`,
-   `COPYING`; SHA-256 pinned). It registers the `HueDeckIoBroker` service.
+   `COPYING`; SHA-256 pinned). It registers the `HueDeckIoBroker` service. A broker of an
+   older protocol (before v3) is reported as such and not used: run it again to update.
 3. SignalRGB and OpenRGB closed: HueDeck never touches the SMBus alongside them.
+
+Then RAM lighting is on by default (`huedeck light red`, `huedeck plugins`, the daemon);
+`--no-smbus` or `[smbus] enabled = false` turns SMBus off. A `huedeck` run while `huedeckd`
+runs leaves the SMBus devices to the daemon.
 
 ## Sources
 
@@ -73,6 +82,53 @@ There is no save/EEPROM register: nothing persists past a power cycle, and HueDe
 nothing else. The SPD EEPROM (0x50-0x57) and its write-protect addresses (0x30-0x37) are
 never addressed; the plugin host and the broker both refuse writes there anyway.
 
+## SPD check (which modules are there)
+
+Before the plugin's `Scan(bus)` runs, the host reads the SPD of the DIMM slots
+(0x50-0x57) and offers the scan only when a module's manufacturer is one of the plugin's
+`SpdManufacturers()` (docs/host-api/smbus.md). The plugin declares both JEP106 ids a
+Ballistix module may carry in SPD bytes 320-321:
+
+| JEP106 | Bytes 320-321 as stored | Why |
+|---|---|---|
+| Crucial Technology, bank 6, id 0x9B | `0x85 0x9B` | Crucial's own module id |
+| Micron Technology, bank 1, id 0x2C | `0x80 0x2C` | Micron (Crucial's parent) module id, also seen on Crucial-branded modules |
+
+The SPD of the reference modules has not been read yet: SignalRGB's log shows "Manufacturer:
+Unknown, Part Number: BL8G32C16U4WL.8FE" (from WMI). `huedeck plugins --dry-run` prints the
+SPD of each slot it matched (`SPD check passed: 0x50 DDR4 bank 6 id 0x9b ...`) or, when
+none matched, every module found; that settles which id these modules carry. Only DDR4 is
+handled; on a DDR5 system RAM plugins do not scan.
+
+## Timing
+
+On 2026-10-19 one module's `Initialize()` took about 3 s: about 190 broker requests (168
+transfers, each its own request, plus 20 lock / unlock requests), and each request waited
+at least one Windows timer tick (15.6 ms): the PIIX4 module polled in ShortBusy mode, which
+sleeps with `KeDelayExecutionThread`, and the broker slept 1 ms between requests under a
+lease. Runs of 2 s therefore never reached `Render()`. Now:
+
+- the broker polls the PIIX4 in AlwaysBusy mode (`KeStallExecutionProcessor`, no timer
+  tick) and only yields, never sleeps, for the first 2 ms between requests under a lease;
+- the plugin declares `SmbusBatchWrites()`: inside a `TransactionLock` its writes are
+  queued and sent as one broker `Batch` (one round trip, one hold of the global mutex) at
+  the next read or at `TransactionUnlock()`.
+
+`Initialize()` becomes 45 requests for 168 transfers, at most about 240 ms even with
+0.5 ms per round trip and 1.3 ms per transfer, and nearer 90 ms at the real bus speed; a
+frame is 3 requests (lock, one batch of 6 transfers, unlock), a few milliseconds
+(`crates/huedeck-plugin-host/tests/session_smbus.rs`,
+`crucial_initialize_and_frame_fit_the_time_budget`). The session report prints
+`Initialize took ... ms`, to be confirmed on the reference machine.
+
+## Two modules
+
+Each module is its own session on the same bus. The sessions take turns (one
+first-come-first-served queue per bus): a session waits at most 100 ms for the other's
+locked sequence, then skips that frame (`contended`, not an error) and sends the next one.
+On 2026-10-19 the second module's `TransactionLock` was refused because the GPU's NvAPI
+transfers held the global SMBus mutex too; they no longer take it (ADR-0004, 2026-10-22).
+
 ## Sequences
 
 All of them are in `plugins/crucial-ballistix/fixtures/expected.json`, worked out from S2-S4.
@@ -89,6 +145,12 @@ All of them are in `plugins/crucial-ballistix/fixtures/expected.json`, worked ou
   2. Detection at each of the 8 addresses: Receive Byte answers, registers `0xA0..0xAF`
      (plain Read Byte) read `0x00..0x0F`, and 16 registers from `0x1025` (else `0x1030`)
      read "Micron" and a NUL; 1 ms pause between addresses.
+  3. **Dry run** (`--dry-run`, `bus.IsDryRun()`): writes are recorded, never sent, and
+     reads are real. A module still at `0x27` is reported ("needs an address: a live scan
+     moves it ... to 0x39") and not remapped; a module already given an address (after a
+     live scan, until the next power cycle) is found on the identification registers
+     alone, since the "Micron" check needs a pointer write. The scan's log lines are
+     printed with its outcome.
 - **Initialize** ("Direct", `DeviceUpdateMode()`): version string read; mode
   `0x820F ← 0xCF`, `0x82EE ← 0x00`, `0x82EF ← 0x10`, `0x82F0 ← 0x84`; then each LED's
   current colour as an effect colour (`0x82E9 ← 1 << led`, `0x82EA..EC ← 0`,
@@ -99,7 +161,9 @@ All of them are in `plugins/crucial-ballistix/fixtures/expected.json`, worked ou
   (S2's fallback). HueDeck holds `TransactionLock` for the whole frame: through the broker
   that keeps the global SMBus mutex (a 100 ms `BusLock` lease) so no other program's
   transfer lands between a pointer write and its data. When the bus cannot be held the
-  frame is not sent and goes out with the next one.
+  frame is not sent and goes out with the next one. The six writes go out as one batch;
+  when it fails (`TransactionUnlock()` answers a negative status) the planes go out again
+  byte by byte under a new lock.
 - **Every register access** (pointer write plus its data transfer), in Scan, Initialize and
   Shutdown too, runs under `TransactionLock` (sequences such as a mode change or one LED's
   effect colour under one hold), so neither another session's scan nor another program
@@ -116,10 +180,13 @@ All of them are in `plugins/crucial-ballistix/fixtures/expected.json`, worked ou
   (`crates/huedeck-plugin-host/src/smbus.rs`).
 - The broker serves chipset kinds only, writes only to `0x20-0x23, 0x27, 0x39-0x3C` (its
   own allowlist), refuses writes to the SPD, PMIC and EEPROM ranges, block reads and
-  register-less block transfers, limits blocks to 32 bytes and 2000 operations per second, takes
-  `Global\Access_SMBUS.HTP.Method` around every transfer (50 ms bounded wait), and
-  re-selects PIIX4 port 0 at each batch (putting back a mux another program left on
-  port 2-4).
+  register-less block transfers, limits blocks to 32 bytes and 2000 operations per
+  second, takes `Global\Access_SMBUS.HTP.Method` around every transfer, batch or lease
+  (50 ms bounded wait), checks every op of a batch as if it came alone, and re-selects
+  PIIX4 port 0 at each hold (putting back a mux another program left on port 2-4).
+- The SPD is only read: the host's SPD check goes through the broker's `SpdRead`, whose
+  EE1004 page select (0x36 / 0x37) is the broker's own step under the mutex, with page 0
+  put back; no plugin can reach it.
 - Failures reach the plugin as `-1` (SignalRGB's chipset convention).
 - HueDeck refuses to touch the SMBus while SignalRGB, OpenRGB or a vendor lighting service
   runs, with no override, and stops the RAM sessions when one starts (checked every second).

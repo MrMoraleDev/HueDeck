@@ -363,6 +363,12 @@ pub struct SessionReport {
     pub canvas_to_wire: LatencySummary,
     /// Session start to the first successful (or dry-run) write.
     pub first_write_ms: Option<f64>,
+    /// Wall time of `Initialize()` (`None` when it was not called).
+    pub initialize_ms: Option<f64>,
+    /// Failed I/O operations: HID operations, or for SMBus devices failed or
+    /// refused bus operations (operations skipped while other sessions kept
+    /// the bus are not failures: [`SmbusStats::contended`]).
+    pub io_errors: u64,
     /// HID counters.
     pub io: IoStats,
     /// Dry-run writes and the first reads.
@@ -413,6 +419,8 @@ impl SessionReport {
             write: LatencySummary::default(),
             canvas_to_wire: LatencySummary::default(),
             first_write_ms: None,
+            initialize_ms: None,
+            io_errors: 0,
             io: IoStats::default(),
             io_log: Vec::new(),
             restore_checks: Vec::new(),
@@ -956,12 +964,15 @@ fn drive(
     }
     lifecycle.initialize_called = true;
     // A stop request cuts Initialize short (Shutdown still runs).
-    match rt.call_export_until(
+    let initialize_started = Instant::now();
+    let initialized = rt.call_export_until(
         "Initialize",
         CallArgs::None,
         budgets.call(budgets.initialize),
         stop,
-    ) {
+    );
+    report.initialize_ms = Some(initialize_started.elapsed().as_secs_f64() * 1000.0);
+    match initialized {
         Ok(_) => report.initialized = true,
         Err(e) if e.is_stop() => report
             .notes
@@ -1148,6 +1159,10 @@ fn finish(
     report.canvas_to_wire = dev.canvas_to_wire();
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
+    report.io_errors = match &report.smbus {
+        Some(s) => s.errors + s.denied,
+        None => report.io.errors(),
+    };
     let (tail, lines) = dev.log_tail();
     report.log_tail = tail;
     report.log_lines = lines;

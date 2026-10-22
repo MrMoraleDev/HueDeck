@@ -104,6 +104,10 @@ enum Command {
         /// Leave the SMBus buses alone (no NvAPI, no I/O broker, no Scan()).
         #[arg(long)]
         no_smbus: bool,
+        /// Scan the SMBus buses without writing: the scans' writes are recorded, never sent
+        /// (reads still reach the devices; a RAM module that needs a new address is reported).
+        #[arg(long, conflicts_with = "no_smbus")]
+        dry_run: bool,
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
@@ -150,8 +154,9 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
         Command::Plugins {
             catalog,
             no_smbus,
+            dry_run,
             json,
-        } => run::list_plugins(&catalog, !no_smbus, json).map(|_| run::Outcome::Clean),
+        } => run::list_plugins(&catalog, !no_smbus, dry_run, json).map(|_| run::Outcome::Clean),
         Command::Compat { command } => compat::run(command).map(|clean| {
             if clean {
                 run::Outcome::Clean
@@ -245,7 +250,7 @@ mod tests {
         let cli =
             Cli::try_parse_from(["huedeck", "plugins", "--signalrgb", "--plugins", "x", "--json"]).unwrap();
         assert!(
-            matches!(cli.command, Command::Plugins { ref catalog, no_smbus: false, json: true } if catalog.signalrgb && catalog.plugin_dirs.len() == 1)
+            matches!(cli.command, Command::Plugins { ref catalog, no_smbus: false, dry_run: false, json: true } if catalog.signalrgb && catalog.plugin_dirs.len() == 1)
         );
         // Out-of-range times and rates are rejected before anything starts.
         assert!(Cli::try_parse_from(["huedeck", "light", "red", "--duration", "1e30"]).is_err());
@@ -271,6 +276,16 @@ mod tests {
         assert!(matches!(cli.command, Command::Plugins { no_smbus: false, .. }));
         let cli = Cli::try_parse_from(["huedeck", "plugins", "--no-smbus"]).unwrap();
         assert!(matches!(cli.command, Command::Plugins { no_smbus: true, .. }));
+        let cli = Cli::try_parse_from(["huedeck", "plugins", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Plugins {
+                no_smbus: false,
+                dry_run: true,
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from(["huedeck", "plugins", "--dry-run", "--no-smbus"]).is_err());
         let cli = Cli::try_parse_from(["huedeck", "bench", "--mock-smbus", "msi-gpu"]).unwrap();
         assert!(matches!(
             cli.command,

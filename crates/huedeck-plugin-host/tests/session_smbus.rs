@@ -866,3 +866,95 @@ fn plugins_cannot_select_spd_pages_or_write_the_spd() {
     assert!(rec.payloads(TransactionKind::SmbusWriteQuick).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Where the time of a RAM module's `Initialize()` goes, counted on the
+/// wire of a mock bus: I/O broker requests (each `TransactionLock` /
+/// `TransactionUnlock`, each batch, each lone transfer) and bus transfers.
+///
+/// On the test machine (2026-10-19, before batching) one module's
+/// `Initialize()` took about 3 s: every transfer was its own broker request,
+/// and each request waited at least one Windows timer tick (15.6 ms) in the
+/// PIIX4 module's ShortBusy polling and in the broker's 1 ms sleep under a
+/// lease, so about 190 requests x 15.6 ms. With AlwaysBusy polling, the
+/// broker spinning under a lease and the writes batched, a request costs its
+/// pipe round trip and the bus time of its transfers. The bounds below are
+/// generous: 0.5 ms per round trip and 1.3 ms per transfer (an 8-byte block
+/// write at 93.75 kHz; a byte or word transfer is about 0.4 ms).
+#[test]
+fn crucial_initialize_and_frame_fit_the_time_budget() {
+    const ROUND_TRIP_MS: f64 = 0.5;
+    const TRANSFER_MS: f64 = 1.3;
+    const TIMER_TICK_MS: f64 = 15.6;
+    let rec = TransactionRecorder::new();
+    let (bus, batches) = ram_bus_with_log(&[0x39], &rec, false);
+    let (present, outcomes) = scan_buses(&catalog(), std::slice::from_ref(&bus), &ScanBudget::default());
+    assert_eq!(present.len(), 1, "{outcomes:?}");
+    rec.clear();
+    batches.lock().unwrap().clear();
+    let report = run_present(
+        present.into_iter().next().unwrap(),
+        SessionOptions::default(),
+        Rgb::new(9, 8, 7),
+        2,
+    );
+    assert!(report.is_clean(), "{report:#?}");
+    let snapshot = rec.snapshot();
+    // Initialize ends with the lock before the frame's first pointer write.
+    let frame_at = snapshot
+        .iter()
+        .position(|t| t.kind == TransactionKind::SmbusWrite && t.bytes == pointer(0x8300))
+        .expect("the frame");
+    let frame_lock = snapshot[..frame_at]
+        .iter()
+        .rposition(|t| t.kind == TransactionKind::SmbusLock)
+        .unwrap();
+    let frame_end = frame_at
+        + snapshot[frame_at..]
+            .iter()
+            .position(|t| t.kind == TransactionKind::SmbusLock)
+            .unwrap();
+    let count = |ts: &[huedeck_hal::mock::Transaction]| {
+        let locks = ts.iter().filter(|t| t.kind == TransactionKind::SmbusLock).count();
+        let transfers = ts
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.kind,
+                    TransactionKind::SmbusWrite
+                        | TransactionKind::SmbusRead
+                        | TransactionKind::SmbusWriteQuick
+                )
+            })
+            .count();
+        (locks, transfers)
+    };
+    let (init_locks, init_transfers) = count(&snapshot[..frame_lock]);
+    let (frame_locks, frame_transfers) = count(&snapshot[frame_lock..=frame_end]);
+    // Every transfer of Initialize and of the frame is batched: the batches
+    // cover them in order.
+    let sizes = batches.lock().unwrap().clone();
+    let mut covered = 0;
+    let init_batches = sizes
+        .iter()
+        .take_while(|&&n| {
+            covered += n;
+            covered <= init_transfers
+        })
+        .count();
+    assert_eq!(sizes[..init_batches].iter().sum::<usize>(), init_transfers);
+    assert_eq!(sizes[init_batches], frame_transfers, "the frame is one batch");
+    let init_requests = init_locks + init_batches;
+    let frame_requests = frame_locks + 1;
+    assert_eq!(
+        (init_transfers, init_locks, init_batches),
+        (168, 20, 25),
+        "16 version reads, the effect mode, 8 LED colours"
+    );
+    assert_eq!((frame_transfers, frame_requests), (6, 3));
+    let before_ms = (init_transfers + init_locks) as f64 * TIMER_TICK_MS;
+    let init_ms = init_requests as f64 * ROUND_TRIP_MS + init_transfers as f64 * TRANSFER_MS;
+    let frame_ms = frame_requests as f64 * ROUND_TRIP_MS + frame_transfers as f64 * TRANSFER_MS;
+    assert!(before_ms > 2500.0, "the 3 s seen on hardware: {before_ms} ms");
+    assert!(init_ms < 300.0, "Initialize: {init_ms} ms");
+    assert!(frame_ms < 33.0 / 2.0, "one frame: {frame_ms} ms");
+}

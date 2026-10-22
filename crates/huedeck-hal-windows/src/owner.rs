@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! One HueDeck process at a time drives SMBus and GPU I2C.
 //!
-//! `huedeckd` (with SMBus on) and `huedeck … --smbus` both take
+//! `huedeckd` (with SMBus on) and a `huedeck` run on the buses (SMBus is on
+//! unless `--no-smbus`) both take
 //! [`SmbusOwner`] before they touch a bus: the named mutex
 //! `Global\HueDeck.SmbusOwner`, held for as long as they drive SMBus devices.
-//! The second process finds it taken and refuses, whichever started first.
+//! The second process finds it taken and leaves the buses alone, whichever
+//! started first.
 //! A process that dies without letting go leaves the mutex abandoned, which
 //! the next one takes as free.
 //!

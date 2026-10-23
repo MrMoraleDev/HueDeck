@@ -417,7 +417,8 @@ pub fn parse_vid_pid(s: &str) -> Result<(u16, u16), String> {
     Ok((hex(v)?, hex(p)?))
 }
 
-fn default_plugin_dirs() -> Vec<PathBuf> {
+/// `LIGHTLOOM_PLUGINS` (a path list), else `./plugins`.
+pub(crate) fn default_plugin_dirs() -> Vec<PathBuf> {
     if let Some(dirs) = std::env::var_os("LIGHTLOOM_PLUGINS") {
         return std::env::split_paths(&dirs).collect();
     }

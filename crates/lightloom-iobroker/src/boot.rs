@@ -7,7 +7,9 @@
 //! board has it, and its two ports are `AMD PIIX4 Bus - 0x0b00` (the DIMMs)
 //! and `0x0b20` (AUX). Intel (`SmbusI801`) can join the same way.
 
-use crate::pins::{MODULES_RELEASE, SMBUS_PIIX4};
+use crate::pins::MODULES_RELEASE;
+#[cfg(windows)]
+use crate::pins::SMBUS_PIIX4;
 use std::path::PathBuf;
 
 /// Where `lightloom-setup --smbus` installs the pinned modules.

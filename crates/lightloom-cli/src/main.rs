@@ -5,7 +5,8 @@
 //! `light` / `rainbow` / `bench` (null renderer → plugin sessions → hardware,
 //! see [`run`]) and `compat dry-run` (corpus harness). `url` prints where the
 //! daemon serves (`--addr`, else the `api-port` file lightloomd writes, else
-//! 127.0.0.1:53000).
+//! 127.0.0.1:53000). `udev generate` writes the Linux udev rules for the
+//! devices the plugins claim.
 //!
 //! Exit codes: `0` success; `1` a device session failed, faulted or saw I/O
 //! errors (HID or SMBus); `2` a setup error (no plugin or device, conflicting software, bad
@@ -19,6 +20,7 @@ use std::process::ExitCode;
 mod compat;
 mod devices;
 mod run;
+mod udev;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -123,6 +125,28 @@ enum Command {
         #[command(subcommand)]
         command: compat::CompatCommand,
     },
+    /// Linux udev rules for the devices the plugins claim.
+    Udev {
+        #[command(subcommand)]
+        command: UdevCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum UdevCommand {
+    /// Print (or write) 70-lightloom.rules from the plugin manifests.
+    Generate {
+        /// Plugin directories (a plugin's own directory or one holding plugins; repeatable).
+        /// Default: LIGHTLOOM_PLUGINS, else ./plugins.
+        #[arg(long = "plugins", value_name = "DIR")]
+        plugins: Vec<std::path::PathBuf>,
+        /// Write the rules to this file instead of standard output.
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+        /// Write nothing; exit 1 when --out differs from what would be written.
+        #[arg(long, requires = "out")]
+        check: bool,
+    },
 }
 
 fn run_devices(json: bool, filters: &[devices::Filter]) -> anyhow::Result<()> {
@@ -178,6 +202,22 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
             dry_run,
             json,
         } => run::list_plugins(&catalog, !no_smbus, dry_run, json).map(|_| run::Outcome::Clean),
+        Command::Udev {
+            command: UdevCommand::Generate { plugins, out, check },
+        } => {
+            let dirs = if plugins.is_empty() {
+                run::default_plugin_dirs()
+            } else {
+                plugins
+            };
+            udev::generate(&dirs, out.as_deref(), check).map(|clean| {
+                if clean {
+                    run::Outcome::Clean
+                } else {
+                    run::Outcome::Failed
+                }
+            })
+        }
         Command::Compat { command } => compat::run(command).map(|clean| {
             if clean {
                 run::Outcome::Clean
@@ -331,6 +371,28 @@ mod tests {
         let cli = Cli::try_parse_from(["lightloom", "--addr", "127.0.0.1:1234", "url"]).unwrap();
         assert_eq!(cli.addr.as_deref(), Some("127.0.0.1:1234"));
         assert!(matches!(cli.command, Command::Url));
+    }
+
+    #[test]
+    fn udev_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "lightloom",
+            "udev",
+            "generate",
+            "--plugins",
+            "p",
+            "--out",
+            "r",
+            "--check",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Udev {
+                command: UdevCommand::Generate { ref plugins, out: Some(_), check: true }
+            } if plugins.len() == 1
+        ));
+        assert!(Cli::try_parse_from(["lightloom", "udev", "generate", "--check"]).is_err());
     }
 
     #[test]

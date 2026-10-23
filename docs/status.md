@@ -42,7 +42,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | M4 Dashboard, persistence, API, packaging | **Partial** | the MSI, winget and Authenticode signing; autostart and tray; the plugin sources manager; the logs page; compat API parts; the fresh-machine acceptance run |
 | M5 Privileged bus | **Partial** | only PIIX4 (no I801, no LpcIO); no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
 | M6 Inputs, network, extras | **Missing** (network in progress) | audio, screen, meters, LCD faces, macros, actions, LampArray HAL backend, OpenRGB SDK server, runtime parameters UI |
-| M7 Linux + 1.0 | **Missing** | `lightloom-hal-linux` is a 33-line stub; Linux packaging is placeholders; there is no cargo-dist |
+| M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; nusb/serial/i2c/hwmon, CEF, packaging and cargo-dist missing |
 
 ## M0 Bootstrap and risk retirement: Done
 
@@ -81,7 +81,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `bus.*` (SMBus), Free/Fixed wrappers | Done (M5) | `src/smbus.rs`, `tests/session_smbus.rs` |
 | `bulk_transfer`, `control_transfer`, `setProtocol` (rawusb, hybrid) | **Missing** | `host.js` lists them under `unimplemented("device", …)`; `catalog.rs` `accept()` refuses `rawusb`/`hybrid`/`serial`; no `UsbBackend` impl anywhere (`nusb` is pinned but unused, `hal-windows/Cargo.toml` `TODO(M2)`) |
 | `@SignalRGB/serial` | **Missing** | stub only in dry-run (`host.js` `modules.serial`); no `SerialBackend` impl |
-| `@SignalRGB/udp`, `tcp`, `XMLHttpRequest`, `addFeature("udp"/"dtls")` | In progress (`feature/network-lights`) | today: recording stubs in dry-run, `unimplementedMember` in device sessions |
+| `@SignalRGB/udp`, `tcp`, `XMLHttpRequest`, `addFeature("udp")` | Done (network plugins) | LAN-only (docs/host-api/network-lightloom.md); `addFeature("dtls")` and `https` missing (no TLS stack) |
 | `addFeature("battery")` | In progress (`feature/battery`) | today: recording stub |
 | `addFeature("keyboard"/"mouse")` (`sendEvent`, `sendHid`) | Missing | recording stubs; needs the M6 macro/input bus |
 | Fan API (`createFanControl`, `setRPM`, …) | Missing | throws in device sessions; `fanControlDisabled()` answers `true` |
@@ -167,7 +167,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Audio FFT (`engine.audio`) | Missing | `crates/lightloom-inputs/src/lib.rs` defines `AudioSnapshot` only; renderer side ready (`inject.rs` fills typed arrays in place) |
 | Screen zones (`engine.zone`) | Missing | `ZoneSnapshot` shape only; renderer side ready |
 | Area/linear meters (`engine.vision`) | Missing | `lightloom-effects` parses `<meta meter>` (`model.rs`), nothing computes them |
-| Network plugins (udp/tcp, DiscoveryService, mDNS, `service`/`controller`/`discovery`, XHR, DTLS, settings panel) | In progress (`feature/network-lights`) | today: `catalog.rs` refuses `Type() == "network"` |
+| Network plugins (udp/tcp, DiscoveryService, mDNS, `service`/`controller`/`discovery`, XHR, settings, dashboard section) | Done, DTLS missing | first-party WLED, DDP, E1.31, Philips Hue (CLIP v1), Nanoleaf, Govee, LIFX, Yeelight; all untested on hardware |
 | LCD faces (`@SignalRGB/lcd`, second browser per device) | Missing | dry-run stub only |
 | Macros (Inputs/Actions), key/mouse hooks, `system.*`, `signalrgb.*`, `keys` | Missing | spec in `docs/host-api/macros-system.md`; no code |
 | Action router (`lightloom://`, `signalrgb://`) | Missing | no URL handler |
@@ -175,7 +175,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | OpenRGB SDK server :6742 | Missing | `OPENRGB_SDK_PORT` constant in `crates/lightloom-api/src/lib.rs` only |
 | Dynamic ControllableParameters UI | Partial | static `ControllableParameters` render in `Devices.svelte` and persist (`device_parameters` table); runtime `device.addProperty/removeProperty` changes stay inside the plugin (`host.js`) and never reach the API or UI; `DeviceMessages`/`addMessage` are not shown |
 | Accept: audio-reactive + screen effects track input < 100 ms | Missing | |
-| Accept: Govee/Yeelight/WLED-class plugin drives a LAN device | In progress (`feature/network-lights`) | |
+| Accept: Govee/Yeelight/WLED-class plugin drives a LAN device | Mock and loopback tests only | needs a real device |
 | Accept: OpenRGB SDK client sets a colour on the MSI board | Missing | |
 | Accept: a DL-certified keyboard lights with no plugin | Partial | the generic `hid-lamparray` plugin is that path for HID LampArray devices; not tested on a keyboard |
 
@@ -183,16 +183,17 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| hal-linux hidraw + hid-desc | Missing | `crates/lightloom-hal-linux/src/lib.rs`: `LinuxHidBackend` returns `Unsupported` |
-| nusb, serialport, udev hotplug, i2cdev SMBus, hwmon/pwm | Missing | none |
-| `tools/gen-udev` | Missing | `tools/gen-udev/README.md` only; template `packaging/udev/70-lightloom.rules.template` |
+| hal-linux hidraw + hid-desc | Done, untested on Linux | `crates/lightloom-hal-linux/src/{sysfs,tlc,hidraw,sys}.rs`: sysfs enumeration, TLC split, raw hidraw ioctls; `lightloom devices` and hardware runs wired through `lightloom-runtime`. Checked with `cargo clippy --target x86_64-unknown-linux-gnu` only |
+| udev hotplug | Done, untested on Linux | `crates/lightloom-hal-linux/src/{hotplug,uevent}.rs`: netlink udev monitor, pure Rust |
+| nusb, serialport, i2cdev SMBus, hwmon/pwm | Missing | WP-L3, WP-L4 |
+| `tools/gen-udev` | Done | `lightloom udev generate` (`crates/lightloom-cli/src/udev.rs`); generated `packaging/udev/70-lightloom.rules` with a drift test; `packaging/sysusers.d/lightloom.conf` |
 | CEF on Linux (X11/Wayland, headless CI) | Missing | `lightloom-renderer` builds with `cef` on Windows only (`ci.yml` `renderer-cef`) |
 | PipeWire audio + screen capture | Missing | |
 | `systemd --user` unit | Partial | `packaging/systemd/lightloomd.service` exists, untested |
 | AppImage, Flatpak | Missing | placeholders in `packaging/README.md` |
 | `docs/linux-porting.md` | Missing | design input in `docs/research/m7-linux-backend.md` |
 | Accept: same plugins light the same hardware on Ubuntu LTS | Missing | |
-| Accept: identical `Validate` tuples on both OSes (fixture) | Missing | |
+| Accept: identical `Validate` tuples on both OSes (fixture) | Partial | `crates/lightloom-hal-linux/src/fixtures.rs`: one descriptor through the Windows path logic and the Linux split; descriptors are synthetic, a captured Linux `report_descriptor` per reference device is still to record |
 | Accept: RAM via `/dev/i2c-*` without a helper | Missing | |
 | Accept: conformance suite on both OSes | Missing | there is no conformance suite yet (see M2) |
 | Accept: reproducible release via cargo-dist | Missing | `release.yml` is a hand-written placeholder (cargo-auditable + CycloneDX SBOM, unsigned) |
@@ -201,23 +202,23 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 
 | Component | Status | Evidence / gap |
 |---|---|---|
-| Crates (17 planned) | 16 real, 1 stub | all exist; `lightloom-hal-linux` is a stub, `lightloom-inputs` is shapes only; `lightloom-runtime` was added (shared CLI/daemon plumbing). `crates/README.md` still describes M0 and is stale |
+| Crates (17 planned) | 16 real, 1 stub | all exist; `lightloom-hal-linux` is a stub, `lightloom-inputs` is shapes only; `lightloom-runtime` was added (shared CLI/daemon plumbing). `crates/README.md` refreshed (processes, graph, status per crate) |
 | First-party plugins | Done for the plan's list, except Sonix | `msi-mystic-light-7c91`, `razer` (DeathAdder V2 Pro), `nzxt-hue2` (Kraken X3), `steelseries-arctis-5`, `crucial-ballistix`, `hid-lamparray`, plus `msi-gpu`, `sony-gamepad` and the OpenRGB batch 1 families (`razer*`, `steelseries-*`, `msi-mystic-light*`, `evision-keyboard` V2). Batch 2: in progress (`feature/openrgb-batch-2`) |
 | Starter effects (solid, rainbow-wave, audio-bars, screen-ambience, test-pattern) | Done | `effects/` has 13 CC0 effects |
 | `components/` own component library | Missing | no `components/` directory; the daemon looks for one (`engine.rs` `components_dir`), and today only the SignalRGB and user component dirs fill the library |
 | `schemas/` (manifest, ControllableParameters, component, layout, effect meta) | Done | `schemas/*.schema.json`, `tests/schemas/validate_corpus.py`, `ci.yml` job `schemas` |
-| OpenAPI for the native API | Missing | no OpenAPI file |
-| `sdk/lightloom.d.ts` | Missing | no `sdk/` directory |
-| `sdk/` Node simulator (mock HAL recorder) | Partial | `plugins/_testkit/{mock-device,mock-bus}.mjs` serve the first-party tests; `lightloom bench --mock` runs the real host against a scripted device. No standalone simulator package |
-| `sdk/` plugin lint | Partial | `plugins/_testkit/manifests.test.mjs` checks manifests; no lint tool for third-party authors |
+| OpenAPI for the native API | Done | `docs/api/openapi.yaml` (OpenAPI 3.1); `crates/lightloom-api/tests/openapi.rs` checks it against the router and `NATIVE_ROUTES`. The compat API is not described |
+| `sdk/lightloom.d.ts` | Done | `sdk/lightloom.d.ts`, members tagged `@signalrgb` / `@lightloom` / `@unimplemented` / `@stub`; `tsc -p sdk` in CI |
+| `sdk/` Node simulator (mock HAL recorder) | Done | `sdk/simulator` (over `plugins/_testkit`): HID and SMBus lifecycles with a solid colour, prints the traffic; `lightloom bench --mock` runs the real host against a scripted device |
+| `sdk/` plugin lint | Done | `sdk/lint` (manifest schema, exports, exports against the manifest, forbidden globals); `plugins/_testkit/manifests.test.mjs` runs it over the first-party plugins |
 | `tests/conformance/` (corpus runner, HID fixtures, PSNR harness) | Partial | dry-run harness lives in the CLI; HID fixtures live per plugin; PSNR harness is `tools/effects-bench/psnr.py`. No `tests/conformance/` and no self-hosted workflow |
 | `tests/integration/` | Partial | crate integration tests (`crates/*/tests/`); no top-level directory |
-| `tools/gen-udev` | Missing | README only |
+| `tools/gen-udev` | Done | `lightloom udev generate` |
 | `tools/pawnio-hash-pin` | Missing (covered) | pins are compiled into `crates/lightloom-iobroker/src/pins.rs`; no tool to recompute them |
 | `tools/shm-dump` | Missing | |
 | `tools/effects-bench`, `tools/device-probe`, `tools/package` | Done | `tools/README.md` |
 | `prelude/` | Done | `prelude/*.js`, `prelude/modules/*.js`, 7 test files |
-| `docs/security.md`, `docs/linux-porting.md` | Missing | |
+| `docs/security.md`, `docs/linux-porting.md` | Partial | `docs/security.md` done (threat model, in place vs planned); `docs/linux-porting.md` missing |
 | Packaging: `wix/`, `winget/` | In progress (`feature/installer`) | |
 | Packaging: `systemd/`, `udev/` | Partial | files present, untested |
 | Packaging: `appimage/`, `flatpak/` | Missing | |

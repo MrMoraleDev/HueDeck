@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 2,
+  "id": "Bad_Id",
+  "name": "Bad Manifest",
+  "version": "1.0",
+  "license": "(MIT",
+  "publisher": "tests",
+  "entry": "missing.js",
+  "devices": [
+    { "vid": "0x1209", "pids": ["0x0002", "0xZZ"], "tested": ["0x0003"] },
+    { "smbus": { "addresses": [2, 64] } }
+  ],
+  "permissions": ["hid", "teleport"],
+  "colour": "red"
+}

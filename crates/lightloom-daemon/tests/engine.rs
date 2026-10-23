@@ -9,7 +9,7 @@ use lightloom_daemon::config::Config;
 use lightloom_daemon::engine::{self, EngineOptions, HardwareMode};
 use lightloom_daemon::paths::{self, Paths};
 use lightloom_engine::{Placement, Point};
-use lightloom_hal::mock::MockHid;
+use lightloom_hal::mock::{MockHid, MockNotifier};
 use lightloom_hal::{HidBackend, ReportLengths};
 use lightloom_plugin_host::session::SessionDevice;
 use serde_json::{json, Value};
@@ -93,6 +93,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
         components_dir: None,
         renderer: None,
         plugin_cache: None,
+        notifier: Arc::new(MockNotifier::default()),
         api_port: lightloom_api::NATIVE_PORT,
         api_port_notice: None,
     })
@@ -125,6 +126,9 @@ fn the_engine_drives_a_device_and_follows_requests() {
         signalrgb: None,
         gpu_compositing: None,
         smbus: None,
+        battery_low: None,
+        battery_critical: None,
+        battery_notifications: None,
         port: Some(p),
     };
     assert_eq!(call(b, port(17000)).unwrap()["port"], 17000);
@@ -257,6 +261,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: None,
             parameters: Some(json!({"mode": "Forced"}).as_object().unwrap().clone()),
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -269,6 +274,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: Some(false),
             parameters: None,
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -281,6 +287,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: Some(true),
             parameters: None,
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -399,6 +406,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
         components_dir: None,
         renderer: None,
         plugin_cache: None,
+        notifier: Arc::new(MockNotifier::default()),
         api_port: lightloom_api::NATIVE_PORT,
         api_port_notice: None,
     })
@@ -443,6 +451,9 @@ fn fixed_smbus_device_runs_and_is_listed() {
             signalrgb: None,
             gpu_compositing: None,
             smbus: Some(false),
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
             port: None,
         },
     )

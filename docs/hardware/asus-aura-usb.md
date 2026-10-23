@@ -44,6 +44,16 @@ The other ids of OpenRGB's `AsusAuraUSBControllerDetect.cpp` (keyboards, mice, m
 monitors, headset stands, Ryuo / Ryujin AIO, Strix LC, ROG Ally) use other protocols; see the
 other `asus-aura-*` notes for the ones ported.
 
+Not ported in this batch:
+
+- The ROG Strix XG27AQ / XG27AQM / XG279Q / XG27W / XG32VC and PG32UQ monitors
+  (`AsusAuraMonitorController`): every update writes the monitor's lighting registers
+  (`03 02 A1 80 <register> <value>`) and then an apply (`03 02 A1 80 A0 01`). Whether the
+  monitor keeps those registers in non-volatile memory, which would be a memory write up to 30
+  times a second, is not known, so the ids are held back until that is checked on hardware.
+- Strix Evolve and Spatha (`185B`, `181C`, `1824`), Ryuo / Ryujin AIO (`1887`, `18AE`), Strix
+  LC 120 (`879E`), ROG Ally / Ally X (`1ABE`, `1B4C`): not done (time).
+
 ## Protocol
 
 Every report is a 65-byte output report (`hid_write`), report id `0xEC` first, zero-padded.

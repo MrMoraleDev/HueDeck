@@ -50,6 +50,7 @@ export interface DeviceView {
   pid: number;
   name: string;
   plugin: string;
+  deviceType?: string;
   pluginPath: string;
   state: string;
   enabled: boolean;
@@ -119,6 +120,8 @@ export interface Settings {
   gpuCompositing: boolean;
   smbus: boolean;
   network: boolean;
+  /** OpenRGB SDK server on 127.0.0.1:6742 (opt-in). */
+  openrgbSdk: boolean;
   /** Port of the dashboard and the API (127.0.0.1 only). */
   port: number;
   /** Set when the configured port was busy at startup and the default one is used. */

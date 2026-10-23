@@ -230,6 +230,12 @@ pub struct Settings {
     /// Drive SMBus devices (GPU RGB through NvAPI; RAM RGB through the I/O
     /// broker when it is installed and healthy); on unless turned off.
     pub smbus: bool,
+    /// Port of the native API and the dashboard now (loopback only).
+    pub port: u16,
+    /// Why the daemon does not serve on the configured port (it was busy at
+    /// startup and the default port was used instead); `None` normally.
+    #[serde(default)]
+    pub port_notice: Option<String>,
     /// Effect frame rate.
     pub fps: u32,
     /// Never write to devices.
@@ -361,6 +367,10 @@ pub enum Request {
         /// Drive SMBus devices (scans the buses when turned on).
         #[serde(default)]
         smbus: Option<bool>,
+        /// Port of the native API and the dashboard (saved; the API side has
+        /// already bound it and moves the listener).
+        #[serde(default)]
+        port: Option<u16>,
     },
     /// Import the local SignalRGB setup (read in place): its canvas placements
     /// as a layout, and the component arrays of its channels.

@@ -65,12 +65,14 @@ fn daemon_exe() -> Option<PathBuf> {
 fn main() {
     let (open, args) = split_args(std::env::args_os().skip(1));
     let paths = Paths::from_env();
-    let port = Config::load(&paths.config_file())
-        .map(|c| c.api.port)
+    // A running daemon writes its port to `api-port`; else the port it would choose.
+    let port = lightloom_runtime::dirs::read_api_port(&paths.data)
+        .or_else(|| lightloom_daemon::port::saved_port(&paths.state_db()))
+        .or_else(|| Config::load(&paths.config_file()).ok().and_then(|c| c.api.port))
         .unwrap_or(lightloom_api::NATIVE_PORT);
     if daemon_listens(port) {
         if open {
-            lightloom_daemon::open_in_browser(&format!("http://127.0.0.1:{port}/"));
+            lightloom_daemon::open_in_browser(&lightloom_api::native_url(port));
         }
         return;
     }

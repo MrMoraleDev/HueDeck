@@ -72,9 +72,9 @@ engine.vision = engine.vision || {}; engine.vision.%1 = %2;  engine.vision.%1 = 
 | `engine.zone.saturation` | Int8Array(560) | 0-100 | 1 | `:160` |
 | `engine.zone.lightness` | Int8Array(560) | 0-100 | 1 | `:159` |
 | `engine.zone.imagedata` | Uint8ClampedArray(64000) | 160×100 RGBA downscaled screen (`nSmpIdx < 16000` assert in `ExEngineBindings::BuildZones`) | 1 | `:138` |
-| `engine.audio.freq` | Array(200) numbers (may be negative) | per-band spectrum | 0 (17 catalog "Audio" effects) | docs |
+| `engine.audio.freq` | Array(200) numbers (may be negative) | per-band spectrum; Lightloom: integers 0..127, log 20 Hz-20 kHz by default (`docs/audio.md`) | 0 (17 catalog "Audio" effects) | docs |
 | `engine.audio.level` | number −100..0 dB | loudness | 0 | docs |
-| `engine.audio.rawlevel` | number | UNKNOWN scale | 0 | exe only |
+| `engine.audio.rawlevel` | number | UNKNOWN scale; Lightloom: unsmoothed RMS 0..1 | 0 | exe only |
 | `engine.audio.width` | 0..1 | stereo width | 0 | docs meter-tags |
 | `engine.audio.density` | 0..1 | 0=pure tone,1=noise | 0 | docs |
 | `engine.vision.<meter>` | float 0..1 (linear/area), int (ocr_numeric), 1/0/−1 (ocr_textmatch), `[a,b,c]` form exists | screen meters | 0 (62 Game Integration effects) | exe/docs |

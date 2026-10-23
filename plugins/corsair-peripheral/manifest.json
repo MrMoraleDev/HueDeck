@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.corsair-peripheral",
+  "name": "Corsair peripherals (CUE protocol, K55 RGB PRO XT, K65 Mini)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-LED lighting of the older Corsair peripherals: K55 / K65 / K68 / K70 / K95 / Strafe RGB keyboards, Glaive, Harpoon, Ironclaw, M65, Nightsword, Scimitar and Sabre mice, the MM800 RGB Polaris mousemat and the ST100 RGB headset stand (CUE protocol), plus the K55 RGB PRO XT and the K65 Mini. Adapted from OpenRGB's CorsairPeripheralController (GPL-2.0-or-later); untested on hardware. OpenRGB's hardware-effect write (stored in the device) is never sent; no DPI, polling-rate, macro or profile command. Protocol notes: docs/hardware/corsair-peripheral.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    {
+      "vid": "0x1B1C",
+      "pids": ["0x1B3D", "0x1B17", "0x1B37", "0x1B39", "0x1B4F", "0x1B3F", "0x1BA5", "0x1B13", "0x1B36", "0x1B33", "0x1B38", "0x1B49", "0x1B6B", "0x1B55", "0x1BC6", "0x1B11", "0x1B2D", "0x1B82", "0x1B20", "0x1B44", "0x1B48", "0x1B34", "0x1B74", "0x1B3C", "0x1B75", "0x1B5D", "0x1B12", "0x1B2E", "0x1B5A", "0x1B5C", "0x1B1E", "0x1B3E", "0x1B8B", "0x1B2F", "0x1B32", "0x1BAF", "0x1BA1"],
+      "transport": "hid",
+      "interfaces": [1],
+      "tested": []
+    },
+    {
+      "vid": "0x1B1C",
+      "pids": ["0x1B3B", "0x0A34"],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["iCUE.exe", "Corsair.Service.exe", "CUE.exe"],
+  "keywords": ["corsair", "keyboard", "mouse", "mousemat", "headset stand", "openrgb"]
+}

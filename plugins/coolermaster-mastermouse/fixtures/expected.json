@@ -1,0 +1,410 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Expected I/O worked out from OpenRGB's C++ (commit d4798c120659ec5ba2e664a9e87bedff8d36f880, Controllers/CoolerMasterController/CMMMController and CMMM711Controller) by a separate Python model that mirrors SendInitPacket, SendUsingZonesPacket, SendUpdate, SendApplyPacket and SetLedsDirect buffer by buffer (openrgb-work/batch2/coolermaster/gen_mice.py in the porting session's scratch space, not part of the repository); plugin.js was never run to make them. 'products' comes from CoolerMasterControllerDetect.cpp (the MM531 line is commented out there). Initialize = the constructor's init packet plus OpenRGB's switch to Direct (DeviceUpdateMode with the Direct mode: value 0xB0, speed 0, brightness 0xFF; nothing for the MM711); frames = SetLedsDirect with brightness 0xFF (colours unchanged); shutdown = black through SetLedsDirect. ops: write = 65-byte output report (report id 0x00 first), read = input report read (hid_read_timeout, 250 ms).",
+ "products": [
+  {
+   "pid": "0x0065",
+   "name": "Cooler Master MM530",
+   "variant": "MM530",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": 1
+   },
+   "line": 421
+  },
+  {
+   "pid": "0x0101",
+   "name": "Cooler Master MM711",
+   "variant": "MM711",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": 1
+   },
+   "line": 423
+  },
+  {
+   "pid": "0x0141",
+   "name": "Cooler Master MM720",
+   "variant": "MM7XX",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": 1
+   },
+   "line": 425
+  },
+  {
+   "pid": "0x0165",
+   "name": "Cooler Master MM730",
+   "variant": "MM7XX",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": 1
+   },
+   "line": 426
+  }
+ ],
+ "variants": {
+  "MM530": {
+   "size": [
+    3,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Scroll Wheel",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Buttons",
+     "pos": [
+      1,
+      0
+     ]
+    },
+    {
+     "name": "Logo",
+     "pos": [
+      2,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     18,
+     52,
+     86
+    ],
+    [
+     255,
+     128,
+     1
+    ],
+    [
+     154,
+     188,
+     222
+    ]
+   ],
+   "colours_b": [
+    [
+     0,
+     255,
+     0
+    ],
+    [
+     16,
+     32,
+     48
+    ],
+    [
+     254,
+     1,
+     127
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0041800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    },
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    },
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "00512C0000B00020FFFFFF000000000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    },
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051280000B00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A80000FF80019ABCDE123456000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A80000102030FE017F00FF00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ]
+  },
+  "MM7XX": {
+   "size": [
+    2,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Scroll Wheel",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Logo",
+     "pos": [
+      1,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     18,
+     52,
+     86
+    ],
+    [
+     255,
+     128,
+     1
+    ]
+   ],
+   "colours_b": [
+    [
+     0,
+     255,
+     0
+    ],
+    [
+     16,
+     32,
+     48
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0041800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    },
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    },
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "00512B0000B00020FFFFFF000000000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    },
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051280000B00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A80000123456FF8001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A8000000FF00102030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ]
+  },
+  "MM711": {
+   "size": [
+    2,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Scroll Wheel LED",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Logo LED",
+     "pos": [
+      1,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     18,
+     52,
+     86
+    ],
+    [
+     255,
+     128,
+     1
+    ]
+   ],
+   "colours_b": [
+    [
+     0,
+     255,
+     0
+    ],
+    [
+     16,
+     32,
+     48
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0041800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A80000123456FF8001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A8000000FF00102030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 65,
+     "hex": "0051A80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 65,
+     "timeout": 250
+    }
+   ]
+  }
+ }
+}

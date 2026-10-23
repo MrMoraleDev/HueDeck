@@ -1,0 +1,40 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.hyperx-mousemat-hp",
+  "name": "HyperX Pulsefire Mat (HP id)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-LED lighting of the HyperX Pulsefire Mat with the HP product id. Same code as plugins/hyperx-mousemat (a plugin has one vendor id). Adapted from OpenRGB's HyperXMousematController (GPL-2.0-or-later); untested on hardware. Only Direct reports are sent. Protocol notes: docs/hardware/hyperx-mousemat.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mousepad",
+  "devices": [
+    {
+      "vid": "0x03F0",
+      "pids": [
+        "0x0F8D"
+      ],
+      "transport": "hid",
+      "interfaces": [
+        1
+      ],
+      "tested": []
+    }
+  ],
+  "permissions": [
+    "hid"
+  ],
+  "conflictingProcesses": [
+    "NGenuity2.exe",
+    "HyperX NGENUITY.exe"
+  ],
+  "keywords": [
+    "hyperx",
+    "hp",
+    "pulsefire",
+    "mousemat",
+    "mousepad",
+    "openrgb"
+  ]
+}

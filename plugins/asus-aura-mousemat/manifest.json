@@ -1,0 +1,35 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.asus-aura-mousemat",
+  "name": "ASUS Aura mousemats (ROG Balteus)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-LED lighting (15 LEDs) of the ASUS ROG Balteus and Balteus Qi mousemats. Adapted from OpenRGB's AsusAuraMousematController (GPL-2.0-or-later); untested on hardware. The save command and hardware effects are never sent. Protocol notes: docs/hardware/asus-aura-mousemat.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mousepad",
+  "devices": [
+    {
+      "vid": "0x0B05",
+      "pids": ["0x1891", "0x1890"],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": [
+    "hid"
+  ],
+  "conflictingProcesses": [
+    "ArmouryCrate.exe",
+    "ArmouryCrate.Service.exe",
+    "LightingService.exe"
+  ],
+  "keywords": [
+    "asus",
+    "rog",
+    "balteus",
+    "mousepad",
+    "openrgb"
+  ]
+}

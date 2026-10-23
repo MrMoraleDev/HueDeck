@@ -1,0 +1,36 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.asus-aura-headset-stand",
+  "name": "ASUS Aura headset stands (ROG Throne)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-LED lighting (17 underglow LEDs and the logo) of the ASUS ROG Throne, Throne Qi and Throne Qi Gundam headset stands. Adapted from OpenRGB's AsusAuraHeadsetStandController (GPL-2.0-or-later); untested on hardware. The save command and hardware effects are never sent. Protocol notes: docs/hardware/asus-aura-headset-stand.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    {
+      "vid": "0x0B05",
+      "pids": ["0x18D9", "0x18C5", "0x1994"],
+      "transport": "hid",
+      "interfaces": [0],
+      "tested": []
+    }
+  ],
+  "permissions": [
+    "hid"
+  ],
+  "conflictingProcesses": [
+    "ArmouryCrate.exe",
+    "ArmouryCrate.Service.exe",
+    "LightingService.exe"
+  ],
+  "keywords": [
+    "asus",
+    "rog",
+    "throne",
+    "headset stand",
+    "openrgb"
+  ]
+}

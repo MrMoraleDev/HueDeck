@@ -37,7 +37,7 @@ daemon/CLI wiring arrives with M1 and the graph above shows the intended shape.
 | crate | kind | status | contents |
 |---|---|---|---|
 | `huedeck-hal` | lib | M0 | `HidBackend/HidHandle`, `UsbBackend/UsbHandle`, `SerialBackend/SerialHandle`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend`, `HalError`, `DeviceKey` (`vid:pid:serial`), `EndpointUid`; feature `mock`: `MockHid`, `MockSmbus`, `TransactionRecorder` |
-| `huedeck-hal-windows` | lib | M0/M1/M5 | `path::parse_hid_path` (`&MI_xx` hex → interface, `&ColNN` decimal → 0-based collection), `WindowsHidBackend` on hidapi `windows-native`; `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), `pawnio::pawnio_presence` (uninstall entry only) |
+| `huedeck-hal-windows` | lib | M0/M1/M5 | `path::parse_hid_path` (`&MI_xx` hex → interface, `&ColNN` decimal → 0-based collection), `WindowsHidBackend` on hidapi `windows-native`; `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), `pawnio::pawnio_presence` (uninstall entry only) and the `huedeck-setup` contract (arguments, exit codes, quoting), `elevate::run_elevated` (UAC `runas`, on a user action only), `service::service_state` (read-only) |
 | `huedeck-hal-linux` | lib | stub (M7) | `LinuxHidBackend` placeholder |
 | `huedeck-hid-desc` | lib | M0 | HID report-descriptor items, top-level collections, report ids, max in/out/feature sizes (incl. report-id byte) |
 | `huedeck-protocol` | lib | M0/M5 | `shm::FrameHeader` (`"HDFR"`, 3 slots, seqlock generations), `broker::{BrokerOp, BrokerRequest, BrokerResponse, BrokerError}` (v2: `BusLock`/`BusUnlock`, kind-aware SPD and block rules), frames, postcard helpers |
@@ -47,12 +47,13 @@ daemon/CLI wiring arrives with M1 and the graph above shows the intended shape.
 | `huedeck-effects` | lib | M0 | `parse_effect_meta(html) -> EffectMeta` (serde shape = `schemas/effect-meta.schema.json`: `properties[]`, `meters[]` with `region`/`match`/`hdrMatch`/`resolutions[]`, `uses`), `js_initializer` |
 | `huedeck-inputs` | lib | stub (M6) | `AudioSnapshot`, `ZoneSnapshot` shapes, `InputSource` trait |
 | `huedeck-api` | lib | stub (M4) | ports (53000 native by default, 16038/16034 compat, 6742 OpenRGB) and route tables |
-| `huedeck-daemon` | bin `huedeckd` | M0 | clap + tracing, `--config`, `LifecycleState` |
+| `huedeck-daemon` | bin `huedeckd`, `huedeckw` | M0/M4 | clap + tracing, `--config`, `LifecycleState`; `pawnio` (Settings → PawnIO / RAM lighting: status, Install / Remove runs of `huedeck-setup`); `huedeckw` starts the daemon without a window (Start menu, sign-in) and `--stop`s it (installer) |
 | `huedeck-cli` | bin `huedeck` | M0 | `devices | light | rainbow | bench | compat dry-run`, each returning `NotImplemented` with its milestone |
 | `huedeck-iobroker` | lib + bin | M5 | LocalSystem service for the chipset SMBus (RAM): raw PawnIO IOCTLs (`pawnio`), SHA-256 pinned modules (`pins`), `SmbusPIIX4` transfers on ports 0x0B00/0x0B20 (`piix4`), `Global\Access_SMBUS.HTP.Method` (`mutex`), static policy and rate limit (`policy`), PawnIO detection (`detect`), the request handler with `BusLock` leases, `Batch` and `SpdRead` (`server`), the named pipe (`pipe`); fakes for tests |
 | `huedeck-nvapi` | lib | M5 | dynamic `nvapi64.dll` binding (System32 only): `NV_I2C_INFO_V3` and the SMBus → NvAPI transfer mapping, `NvapiHub` (one `huedeck-nvapi` worker thread owns NvAPI), `NvapiBus: SmbusBus` per GPU (port 1, never DDC), `FakeNvI2c` for tests |
 | `huedeck-renderer` | bin | stub (M3) | prints shm geometry |
-| `huedeck-setup` | bin | M5 | `--smbus`: checks PawnIO (does not install it), copies the pinned modules and the broker under `%ProgramFiles%\HueDeck`, registers and starts `HueDeckIoBroker`; `--uninstall`, `--plan` |
+| `huedeck-setup` | bin | M5/M4 | the elevated helper of RAM lighting: `--pawnio-install` (verified WinHTTP download of the official `PawnIO_setup.exe` 2.2.0: size, SHA-256, Authenticode signer `namazso.eu`; `-install -silent`; skipped when PawnIO >= 2.2.0), `--smbus` (pinned modules, default `pawnio-modules` next to it, and the broker under `%ProgramFiles%\HueDeck`, registers and starts `HueDeckIoBroker`, replacing an older one), `--uninstall` (PawnIO stays), `--elevate` (relaunch through UAC), `--pause`, `--plan` |
+| `huedeck-winres` | lib (build) | M4 | build-script helper: icon (`packaging/wix/huedeck.ico`) and version resource of the Windows executables (`winresource`, Windows hosts only) |
 
 ## Conventions
 

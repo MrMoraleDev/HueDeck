@@ -128,12 +128,12 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Import wizard | Partial | SignalRGB layout + channel arrays (`crates/huedeck-runtime/src/signalrgb.rs`, `/v1/import/signalrgb`); plugins, effects and components read in place behind one setting. Not imported: effect parameters and presets (`HKCU …\effects\<id>`), the selected effect, global/layout brightness, per-device enable and brightness; imports are not marked "unsigned" |
 | Own export/import of the whole setup | Done | `/v1/export`, `/v1/import`, `store.rs` test `export_import_round_trips_byte_for_byte` |
 | Plugin sources manager (pre-listed community repos, licence acknowledgement, hash pinning) | Missing | `schemas/plugin-source.schema.json` exists; no code. Lower priority under the standalone direction |
-| Tray shell, autostart | Missing | no Tauri crate, no Run-key entry |
+| Tray shell, autostart | Partial | autostart: the MSI's sign-in option (`HKCU\...\Run` → `huedeckw.exe`, hidden daemon, logs in `%LOCALAPPDATA%\HueDeck\logs`); no tray |
 | Effect playlists / auto-next timer | Missing | compat `playlists` answers an empty list |
 | Suspend/resume (`Shutdown(true)` and re-`Initialize`) | Missing | `LifecycleState::Suspending/Resuming` exist in `crates/huedeck-daemon/src/lifecycle.rs`, nothing listens for power events |
 | On-exit behaviour, bake to device | In progress (`feature/bake`) | today: `Shutdown(false)` restore on exit |
 | Portable build | Done | `tools/package/stage-windows.ps1`, `release.yml` |
-| WiX MSI, winget | In progress (`feature/installer`) | `packaging/wix/` holds only `huedeck.ico`; `packaging/winget/` absent |
+| WiX MSI, winget | Done, unverified | `packaging/wix/` (per-user WiX v5 MSI, options page, `build.ps1`), `packaging/winget/` templates + `render.ps1`; built in `release.yml`, WiX check in `ci.yml`; never installed on a clean VM yet |
 | Authenticode (SignPath) | Missing | `release.yml` "SIGNING" placeholder |
 | Accept: fresh Win11 → MSI → lit devices with no terminal | Missing | needs the MSI |
 | Accept: component JSON on JRAINBOW1 lights an ARGB strip | Done | `imported-plugins-m2.md` (Default Strip on JRainbow 1/2), `daemon-m4.md` |
@@ -148,7 +148,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | PawnIO SmbusPIIX4, pinned | Done | `crates/huedeck-iobroker/src/{piix4,pins}.rs` (PawnIO.Modules 0.2.11 SHA-256) |
 | PawnIO SmbusI801 (Intel) | Missing | only mentioned in `boot.rs` comments; no pin, no transfer code |
 | PawnIO LpcIO (SuperIO, NCT6687D) | Missing | no code |
-| `huedeck-setup` one-shot elevated installer | Partial | `crates/huedeck-setup/src/main.rs`: copies pinned modules + broker, registers the service; does not install PawnIO (only checks it) and does no WinUSB binding. PawnIO option: in progress (`feature/installer`) |
+| `huedeck-setup` one-shot elevated installer | Partial | `crates/huedeck-setup/src/`: `--pawnio-install` (verified download and silent install of PawnIO 2.2.0), pinned modules + broker, registers the service; the installer option and Settings → PawnIO / RAM lighting run it behind one UAC prompt. No WinUSB binding |
 | `bus.*` mapping, capability matrix | Done | `crates/huedeck-plugin-host/src/smbus.rs`, `plugins/README.md` "SMBus plugins" |
 | `huedeck-nvapi` GPU I2C | Done | `crates/huedeck-nvapi/`, 19 tests; `plugins/msi-gpu`, `docs/hardware/msi-gpu.md` |
 | AMD GPU I2C (ADLX/ADL) | Missing | see `docs/research/drivers.md` |
@@ -218,7 +218,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `tools/effects-bench`, `tools/device-probe`, `tools/package` | Done | `tools/README.md` |
 | `prelude/` | Done | `prelude/*.js`, `prelude/modules/*.js`, 7 test files |
 | `docs/security.md`, `docs/linux-porting.md` | Missing | |
-| Packaging: `wix/`, `winget/` | In progress (`feature/installer`) | |
+| Packaging: `wix/`, `winget/` | Done, unverified | see packaging/README.md |
 | Packaging: `systemd/`, `udev/` | Partial | files present, untested |
 | Packaging: `appimage/`, `flatpak/` | Missing | |
 | CI `rust` (win + ubuntu), `renderer-cef`, `deny`, `node`, `schemas` | Done | `ci.yml` |

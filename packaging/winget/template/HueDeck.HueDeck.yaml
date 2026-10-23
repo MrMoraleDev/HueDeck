@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Template: packaging/winget/render.ps1 fills ${...} and writes manifests/h/HueDeck/HueDeck/<version>/.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+PackageIdentifier: HueDeck.HueDeck
+PackageVersion: ${VERSION}
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

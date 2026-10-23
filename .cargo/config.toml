@@ -1,0 +1,13 @@
+# Repository-wide cargo settings (committed). Machine-specific settings (target-dir, CEF_PATH)
+# do not belong here: put them in a .cargo/config.toml in a parent directory of the checkout,
+# or in CARGO_TARGET_DIR / CEF_PATH environment variables. Cargo merges every config.toml from
+# the current directory up to the root, so both apply.
+
+# Link the C runtime statically on Windows. Without it every exe imports VCRUNTIME140.dll,
+# which a clean Windows does not have (docs/research/drivers.md §7), and nothing starts.
+# The cc and cmake crates see `crt-static` and build bundled C code with /MT to match;
+# cef-dll-sys builds libcef_dll_wrapper with /MT (MultiThreaded) unconditionally.
+# tools/package/check-imports.ps1 verifies the result on the staged binaries.
+# Note: a RUSTFLAGS / CARGO_ENCODED_RUSTFLAGS environment variable replaces this setting.
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

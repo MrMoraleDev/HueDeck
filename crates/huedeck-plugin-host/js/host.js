@@ -80,6 +80,8 @@ const state = {
   channels: new Map(),
   subdevices: [],
   notifyId: 0,
+  // The `battery` feature: undefined until added; level -1 until set.
+  battery: undefined,
   namespace: undefined,
   gapsLogged: new Set(),
 };
@@ -324,23 +326,84 @@ const featureFactories = {
     }),
   keyboard: () => recording("keyboard", { sendHid: noop, sendKey: noop, sendEvent: noop }),
   mouse: () => recording("mouse", { sendHid: noop, sendEvent: noop }),
-  battery: () =>
-    recording("battery", {
-      disabled: 0,
-      unknown: 0,
-      draining: 1,
-      charging: 2,
-      fullCharging: 3,
-      full: 4,
-      wirelessCharging: 5,
-      batteryLevel: 0,
-      batteryState: 0,
-      stateString: "Unknown",
-      lowBatteryWarningLevel: 15,
-      setBatteryLevel: noop,
-      setBatteryState: noop,
-    }),
+  battery: () => batteryFeature(),
 };
+
+// ---------------------------------------------------------------- battery
+// hid-usb.md §addFeature (battery gap): numeric states 0 unknown, 1 draining,
+// 2 charging, 3 full (charging), 4 full, 5 wireless charging; the named
+// constants carry the same numbers (`disabled` has none in the corpus: 0).
+const BATTERY_STATES = ["Unknown", "Draining", "Charging", "Full (charging)", "Full", "Wireless charging"];
+const DEFAULT_BATTERY_WARNING_LEVEL = 15;
+
+/** A `setBatteryLevel` argument as 0..100 (rounded), or undefined when not a finite number. */
+function batteryLevelArg(level) {
+  const n = Number(level);
+  return isFiniteNumber(n) ? Math.min(100, Math.max(0, Math.round(n))) : undefined;
+}
+
+/** A `setBatteryState` argument: 0..5, anything else is 0 (unknown). */
+function batteryStateArg(value) {
+  const n = Math.trunc(Number(value));
+  return n >= 0 && n < BATTERY_STATES.length ? n : 0;
+}
+
+/**
+ * The `battery` global. Device mode: the natives keep the level and state
+ * (the daemon reads them) and report the user's low-battery warning level.
+ * Stub mode: kept here and listed in the dry-run report.
+ */
+function batteryFeature() {
+  let read;
+  let setLevel;
+  let setState;
+  if (deviceMode) {
+    native.batteryEnable();
+    read = () => {
+      const [level, st, warn] = native.batteryGet();
+      return { level, state: st, warn };
+    };
+    setLevel = (n) => native.batterySetLevel(n);
+    setState = (n) => native.batterySetState(n);
+  } else {
+    state.battery ??= { level: -1, state: 0 };
+    read = () => ({ ...state.battery, warn: DEFAULT_BATTERY_WARNING_LEVEL });
+    setLevel = (n) => {
+      state.battery.level = n;
+    };
+    setState = (n) => {
+      state.battery.state = n;
+    };
+  }
+  return recording("battery", {
+    disabled: 0,
+    unknown: 0,
+    draining: 1,
+    charging: 2,
+    fullCharging: 3,
+    full: 4,
+    wirelessCharging: 5,
+    get batteryLevel() {
+      return Math.max(0, read().level);
+    },
+    get batteryState() {
+      return read().state;
+    },
+    get stateString() {
+      return BATTERY_STATES[read().state] ?? "Unknown";
+    },
+    get lowBatteryWarningLevel() {
+      return read().warn;
+    },
+    setBatteryLevel: (level) => {
+      const n = batteryLevelArg(level);
+      if (n !== undefined) {
+        setLevel(n);
+      }
+    },
+    setBatteryState: (value) => setState(batteryStateArg(value)),
+  });
+}
 
 // ---------------------------------------------------------------- device
 const deviceTarget = {
@@ -1872,6 +1935,9 @@ function report() {
     calls: fromEntries(state.calls),
     consoleLines: state.consoleLines,
     logTail: state.logTail,
+    ...(state.battery === undefined
+      ? {}
+      : { battery: { level: state.battery.level < 0 ? null : state.battery.level, state: state.battery.state } }),
   });
 }
 

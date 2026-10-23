@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [api]
-//! port = 16138                  # native API and dashboard
+//! port = 53000                  # native API and dashboard (1024-65535; the Port setting saved from the dashboard wins)
 //! compat = true                 # SignalRGB-compatible listeners on 16038 / 16034
 //! compat_open_mutations = false # let 16038 change state without the token
 //! canvas_events_need_token = false
@@ -90,8 +90,9 @@ impl Default for SmbusConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ApiConfig {
-    /// Native API and dashboard port.
-    pub port: u16,
+    /// Native API and dashboard port (`None`: [`huedeck_api::NATIVE_PORT`]).
+    /// A port saved from the dashboard (Settings → Port) wins over this one.
+    pub port: Option<u16>,
     /// Start the SignalRGB-compatible listeners (16038, 16034).
     pub compat: bool,
     /// Let the compatible REST API change state without the token.
@@ -103,7 +104,7 @@ pub struct ApiConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
-            port: huedeck_api::NATIVE_PORT,
+            port: None,
             compat: true,
             compat_open_mutations: false,
             canvas_events_need_token: false,
@@ -182,9 +183,12 @@ mod tests {
     fn defaults_and_partial_files() {
         let c: Config = toml::from_str("").unwrap();
         assert_eq!(c, Config::default());
-        assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (16138, true, 30));
+        assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (None, true, 30));
         let c: Config = toml::from_str("[api]\nport = 17000\n[lighting]\nfps = 60\n").unwrap();
-        assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (17000, true, 60));
+        assert_eq!(
+            (c.api.port, c.api.compat, c.lighting.fps),
+            (Some(17000), true, 60)
+        );
         assert!(c.smbus.enabled, "SMBus is on unless turned off");
         let c: Config = toml::from_str("[smbus]\nenabled = false\n").unwrap();
         assert!(!c.smbus.enabled);

@@ -7,6 +7,37 @@
   let { snapshot }: { snapshot: Snapshot } = $props();
   let message = $state<string | null>(null);
   let file: HTMLInputElement;
+  let low = $state(15);
+  let critical = $state(5);
+  // Follow the daemon's values only when they change (a refresh must not undo typing).
+  let seen = "";
+  $effect(() => {
+    const now = `${snapshot.settings.batteryLow}/${snapshot.settings.batteryCritical}`;
+    if (now !== seen) {
+      seen = now;
+      low = snapshot.settings.batteryLow;
+      critical = snapshot.settings.batteryCritical;
+    }
+  });
+  const thresholdsValid = $derived(low >= 1 && low <= 95 && critical >= 0 && critical < low);
+
+  function saveThresholds() {
+    if (thresholdsValid) void daemon.run(() => api.setSettings({ batteryLow: low, batteryCritical: critical }));
+  }
+
+  let port = $state<number | null>(null);
+  let moving = $state<string | null>(null);
+  const portValue = $derived(port ?? snapshot.settings.port);
+  const portValid = $derived(Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535);
+
+  async function changePort() {
+    if (!portValid || portValue === snapshot.settings.port) return;
+    const r = await daemon.run(() => api.setPort(portValue));
+    if (!r) return;
+    moving = r.url;
+    // huedeckd serves the page (with its token) on the new port; the old one closes in a few seconds.
+    setTimeout(() => location.assign(r.url), 300);
+  }
 
   async function exportState() {
     const state = await daemon.run(() => api.exportState());
@@ -96,6 +127,40 @@
   </section>
 
   <section class="panel">
+    <h2>Battery</h2>
+    <div class="row">
+      <label class="row"
+        >Low below <input type="number" min="1" max="95" style="width:70px" bind:value={low} onchange={saveThresholds} />
+        %</label
+      >
+      <label class="row"
+        >Critical below
+        <input type="number" min="0" max="94" style="width:70px" bind:value={critical} onchange={saveThresholds} /> %</label
+      >
+    </div>
+    {#if !thresholdsValid}
+      <p class="bad">The low level must be 1 to 95 %, and the critical level below it.</p>
+    {/if}
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.batteryNotifications}
+        disabled={!snapshot.settings.notificationsAvailable}
+        onchange={(e) =>
+          daemon.run(() => api.setSettings({ batteryNotifications: (e.target as HTMLInputElement).checked }))}
+      /> Show a system notification when a battery runs low or critical</label
+    >
+    <p class="muted">
+      For wireless devices whose plugin reports a battery. The dashboard warns while a device on battery is at or under
+      the low level. Notifications come once per discharge, at the low and at the critical level, and again after the
+      device was charged or climbed 5 points above the level.{snapshot.settings.notificationsAvailable
+        ? ""
+        : " System notifications are not available on this system yet."} Each device can also pulse red while its battery
+      is low (Devices).
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>Backup</h2>
     <div class="row">
       <button onclick={exportState}>Export settings</button>
@@ -103,6 +168,39 @@
       <input type="file" accept="application/json,.json" bind:this={file} onchange={importState} hidden />
     </div>
     <p class="muted">Settings are kept in HueDeck's database; the export is one JSON file you can import again.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Port</h2>
+    <div class="row">
+      <input
+        type="number"
+        min="1024"
+        max="65535"
+        step="1"
+        aria-label="Port of the dashboard and the API"
+        value={portValue}
+        oninput={(e) => (port = (e.target as HTMLInputElement).valueAsNumber)}
+        onkeydown={(e) => e.key === "Enter" && changePort()}
+      />
+      <button disabled={!portValid || portValue === snapshot.settings.port || moving !== null} onclick={changePort}
+        >Change port</button
+      >
+    </div>
+    {#if moving}
+      <p class="message">Moving to {moving}…</p>
+    {:else if !portValid}
+      <p class="warn">Choose a port from 1024 to 65535.</p>
+    {/if}
+    {#if snapshot.settings.portNotice}
+      <p class="warn">{snapshot.settings.portNotice}</p>
+    {/if}
+    <p class="muted">
+      The dashboard and the API listen on http://127.0.0.1:{snapshot.settings.port} (default 53000). Only this
+      computer can connect: HueDeck listens on the loopback address, never on the network. A new port is used right
+      away and this page moves there; bookmarks need the new address. The port saved here wins over
+      <code>[api] port</code> in config.toml. The SignalRGB-compatible ports 16038 and 16034 do not change.
+    </p>
   </section>
 
   <section class="panel">
@@ -132,6 +230,15 @@
   }
   .message {
     color: var(--good);
+  }
+  .bad {
+    color: var(--bad);
+  }
+  .warn {
+    color: var(--warn);
+  }
+  input[type="number"] {
+    width: 9em;
   }
   .logs {
     margin-top: 16px;

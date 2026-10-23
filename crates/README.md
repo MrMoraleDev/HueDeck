@@ -46,7 +46,7 @@ daemon/CLI wiring arrives with M1 and the graph above shows the intended shape.
 | `huedeck-plugin-host` | lib | M0 | `PluginMeta`/`PluginType`/`ProductIdExport` (call-if-function rule documented), `ModuleResolver` (`@SignalRGB/*`, `@huedeck/*`, relative-inside-root), `Loader` trait, `PluginIndex` (last scanned wins). rquickjs runtime, device sessions, catalog; M6: `net` (LAN-only UDP/TCP sockets, HTTP client, one-shot mDNS), `service` (network plugin discovery services) and network device sessions |
 | `huedeck-effects` | lib | M0 | `parse_effect_meta(html) -> EffectMeta` (serde shape = `schemas/effect-meta.schema.json`: `properties[]`, `meters[]` with `region`/`match`/`hdrMatch`/`resolutions[]`, `uses`), `js_initializer` |
 | `huedeck-inputs` | lib | stub (M6) | `AudioSnapshot`, `ZoneSnapshot` shapes, `InputSource` trait |
-| `huedeck-api` | lib | stub (M4) | ports (16138 native, 16038/16034 compat, 6742 OpenRGB) and route tables |
+| `huedeck-api` | lib | stub (M4) | ports (53000 native by default, 16038/16034 compat, 6742 OpenRGB) and route tables |
 | `huedeck-daemon` | bin `huedeckd` | M0 | clap + tracing, `--config`, `LifecycleState` |
 | `huedeck-cli` | bin `huedeck` | M0 | `devices | light | rainbow | bench | compat dry-run`, each returning `NotImplemented` with its milestone |
 | `huedeck-iobroker` | lib + bin | M5 | LocalSystem service for the chipset SMBus (RAM): raw PawnIO IOCTLs (`pawnio`), SHA-256 pinned modules (`pins`), `SmbusPIIX4` transfers on ports 0x0B00/0x0B20 (`piix4`), `Global\Access_SMBUS.HTP.Method` (`mutex`), static policy and rate limit (`policy`), PawnIO detection (`detect`), the request handler with `BusLock` leases, `Batch` and `SpdRead` (`server`), the named pipe (`pipe`); fakes for tests |

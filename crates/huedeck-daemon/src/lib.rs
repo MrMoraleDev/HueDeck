@@ -2,22 +2,24 @@
 //! `huedeckd`, the per-user HueDeck daemon, as a library: the binary in
 //! `main.rs` parses arguments and calls [`run`]; tests drive the parts.
 //!
-//! [`run`] takes the single-instance lock, loads the API token, starts the
-//! [`engine`] thread (devices, renderer, database) and serves the local API
-//! on the loopback interface until Ctrl-C (or console close / log-off /
+//! [`run`] takes the single-instance lock, loads the API token, picks the
+//! native port ([`port`]), starts the [`engine`] thread (devices, renderer,
+//! database) and serves the local API on the loopback interface (writing the
+//! port to `api-port` in the data directory for `huedeck`) until Ctrl-C (or console close / log-off /
 //! shutdown on Windows), then stops every device session so plugins restore
 //! their devices.
 
 #![forbid(unsafe_code)]
 
+pub mod battery;
 pub mod config;
 pub mod engine;
 pub mod instance;
 pub mod lifecycle;
 pub mod paths;
+pub mod port;
 pub mod store;
 
-use anyhow::Context;
 use huedeck_api::ApiContext;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -40,6 +42,10 @@ pub struct RunOptions {
     pub ephemeral: bool,
     /// Open the dashboard in the default browser once listening.
     pub open_dashboard: bool,
+    /// `config.toml` (for messages about `[api] port`).
+    pub config_file: PathBuf,
+    /// `--port`: the native port for this run only (wins over every setting).
+    pub port: Option<u16>,
 }
 
 /// How often a compatible listener whose port is taken (SignalRGB running) is tried again.
@@ -76,36 +82,51 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
         .enable_all()
         .thread_name("huedeck-api")
         .build()?;
-    // Bind before starting the engine: a second daemon on another data
-    // directory must not drive the devices if the port is taken.
-    let native = rt
-        .block_on(TcpListener::bind(SocketAddr::from((
-            Ipv4Addr::LOCALHOST,
-            api.port,
-        ))))
-        .with_context(|| {
-            format!(
-                "listening on 127.0.0.1:{} (is another HueDeck running?)",
-                api.port
-            )
-        })?;
+    // The native port: --port, else the one saved from the dashboard, else
+    // config.toml, else the default (see `port`). Bind before starting the
+    // engine: a second daemon must not drive the devices when it cannot serve.
+    let saved = if opts.ephemeral {
+        None
+    } else {
+        port::saved_port(&opts.paths.state_db())
+    };
+    let choice = port::choose(opts.port, saved, api.port, &opts.config_file)?;
+    for w in &choice.warnings {
+        tracing::warn!("{w}");
+    }
+    let (native_listener, native_port, notice) = rt.block_on(port::bind_at_startup(
+        &choice,
+        huedeck_api::NATIVE_PORT,
+        &opts.config_file,
+    ))?;
+    engine_opts.api_port = native_port;
+    engine_opts.api_port_notice = notice;
 
     let engine = engine::start(engine_opts)?;
     let shared = engine.shared();
+    let data_dir = opts.paths.data.clone();
+    let native = Arc::new(
+        huedeck_api::NativeListener::new(huedeck_api::listener::DEFAULT_GRACE)
+            .on_serve(move |port| {
+                tracing::info!("dashboard and API on {}", huedeck_api::native_url(port));
+                if let Err(e) = huedeck_runtime::dirs::write_api_port(&data_dir, port) {
+                    tracing::warn!("cannot write the api-port file in {}: {e}", data_dir.display());
+                }
+            })
+            .taken_elsewhere(port_taken_elsewhere),
+    );
     let ctx = ApiContext {
         backend: shared.clone(),
         token,
         ui_dir,
         open_compat_mutations: api.compat_open_mutations,
+        native: Some(Arc::clone(&native)),
     };
-    let url = format!("http://127.0.0.1:{}/", api.port);
     let (stop_tx, stop_rx) = watch::channel(false);
 
     let result: anyhow::Result<()> = rt.block_on(async {
         let mut tasks = Vec::new();
-        let router = huedeck_api::native_router(ctx.clone(), api.port);
-        tasks.push(tokio::spawn(serve(native, router, stop_rx.clone())));
-        tracing::info!("dashboard and API on {url}");
+        native.serve(native_listener, ctx.clone());
         if api.compat {
             let r = huedeck_api::compat_router(ctx.clone(), huedeck_api::COMPAT_REST_PORT);
             tasks.push(tokio::spawn(serve_when_free(
@@ -125,7 +146,7 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
             )));
         }
         if opts.open_dashboard {
-            open_in_browser(&url);
+            open_in_browser(&huedeck_api::native_url(native.port()));
         }
         tokio::select! {
             _ = wait_for_stop() => {}
@@ -133,26 +154,21 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
         }
         tracing::info!("stopping");
         let _ = stop_tx.send(true);
+        native.shutdown().await;
         for t in tasks {
             let _ = t.await;
         }
         Ok(())
     });
+    // `huedeck` stops looking for this daemon.
+    huedeck_runtime::dirs::remove_api_port(&opts.paths.data, native.port());
     // Plugins restore their devices before the process ends.
     engine.shutdown();
     result
 }
 
-async fn serve(listener: TcpListener, router: axum::Router, mut stop: watch::Receiver<bool>) {
-    let shutdown = async move {
-        let _ = stop.wait_for(|s| *s).await;
-    };
-    if let Err(e) = axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
-        .await
-    {
-        tracing::warn!("listener ended: {e}");
-    }
+async fn serve(listener: TcpListener, router: axum::Router, stop: watch::Receiver<bool>) {
+    huedeck_api::listener::serve_until(listener, router, stop).await;
 }
 
 /// Whether another application listens on `port` on any address. SignalRGB

@@ -130,6 +130,9 @@ pub struct FileReport {
     pub console_lines: u64,
     /// First log lines (debugging aid).
     pub log_tail: Vec<String>,
+    /// What the plugin reported through the `battery` feature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery: Option<crate::runtime::StubBattery>,
     /// Engine heap after the run.
     pub memory_bytes: i64,
     /// Wall time.
@@ -190,6 +193,7 @@ fn empty_report(file: String, kind: FileKind) -> FileReport {
         host_calls: BTreeMap::new(),
         console_lines: 0,
         log_tail: Vec::new(),
+        battery: None,
         memory_bytes: 0,
         ms: 0,
     }
@@ -269,6 +273,7 @@ fn run_file_inner(root: &Path, path: &Path, opts: &DryRunOptions) -> FileReport 
     report.host_calls = rec.calls;
     report.console_lines = rec.console_lines;
     report.log_tail = rec.log_tail;
+    report.battery = rec.battery;
     report.memory_bytes = rt.memory_used();
     report.ms = ms(started);
     report

@@ -2,8 +2,9 @@
 //! Read-only access to registry values: under `HKEY_CURRENT_USER`, importing
 //! another application's per-user settings (SignalRGB keeps its component
 //! assignments and canvas placements there); under `HKEY_LOCAL_MACHINE`,
-//! whether a driver is installed (PawnIO's uninstall entry). Lightloom never
-//! writes the registry.
+//! whether a driver is installed (PawnIO's uninstall entry). Nothing here
+//! writes the registry (the one key Lightloom writes, its notification sender,
+//! is in [`crate::toast`]).
 
 use std::io;
 use windows::core::{PCWSTR, PWSTR};

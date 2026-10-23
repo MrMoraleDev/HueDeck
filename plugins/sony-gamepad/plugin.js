@@ -24,13 +24,17 @@
 //   * OpenRGB's "Mic Off (Direct)" and "Mic Pulse (Direct)" modes only change the microphone LED;
 //     they are left out. Its Direct mode brightness (player LEDs) is the "Player LED Brightness"
 //     parameter.
+//   * Battery (not in OpenRGB): the level and charging state the controller reports in its USB
+//     input report 0x01 (offsets from Linux hid-sony / hid-playstation behaviour, no code copied)
+//     are read with non-blocking reads every few seconds and handed to the host's battery feature.
+//     Nothing is sent for it.
 //   * OpenRGB sends nothing when it exits; Shutdown() turns the LEDs it drove off (black), since
 //     the protocol as OpenRGB uses it has no command that hands the lighting back.
 //
 // Tested on hardware (2026-10-22): DualSense (054C:0CE6) over USB, light bar. The DualShock 4 ids
 // and the DualSense Edge (0x0DF2) are untested.
 
-/* global device */
+/* global device, battery */
 
 // ---------------------------------------------------------------------------------------------
 // Products (SonyGamepadControllerDetect.cpp)
@@ -121,6 +125,64 @@ const DS4_BT_INPUT_REPORT_ID = 0x11;
 // OpenRGB's hid_read() blocks; the controller sends an input report every few milliseconds.
 const INPUT_TIMEOUT_MS = 100;
 
+// ---------------------------------------------------------------------------------------------
+// Battery: USB input report 0x01 (read only; docs/hardware/sony-gamepad.md, "Battery")
+// ---------------------------------------------------------------------------------------------
+// Offsets with the report id at byte 0. DualShock 4: byte 30 = status[0], bits 0-3 level, bit 4
+// cable connected; on the USB wireless adapter byte 31 = status[1], bit 2 set while no
+// controller is connected. DualSense / Edge: byte 53 = status, bits 0-3 level, bits 4-7 charging
+// state.
+const USB_INPUT_REPORT_ID = 0x01;
+const INPUT_LENGTH = 64;
+const DS4_BATTERY_OFFSET = 30;
+const DS4_DONGLE_STATE_OFFSET = 31;
+const DS4_DONGLE_DISCONNECTED = 0x04;
+const DS_BATTERY_OFFSET = 53;
+const BATTERY_POLL_MS = 5000;
+// Input reports arrive every few milliseconds; at most this many are drained per poll (the last
+// one counts). Every read is non-blocking (timeout 0).
+const BATTERY_MAX_READS = 64;
+// SignalRGB battery states (docs/host-api/hid-usb.md section 7).
+const BATTERY_UNKNOWN = 0;
+const BATTERY_DRAINING = 1;
+const BATTERY_CHARGING = 2;
+const BATTERY_FULL = 4;
+
+/** Level nibble 0..10 to percent, as the Linux drivers do (n * 10 + 5, at most 100). */
+function batteryPercent(nibble) {
+  return Math.min(100, nibble * 10 + 5);
+}
+
+/** DualShock 4 status byte: { level (percent or null), state }. */
+function parseDs4Battery(status) {
+  const nibble = status & 0x0F;
+  if ((status & 0x10) === 0) {
+    return { level: batteryPercent(Math.min(nibble, 10)), state: BATTERY_DRAINING };
+  }
+  if (nibble <= 10) {
+    return { level: batteryPercent(nibble), state: BATTERY_CHARGING };   // 10: 100 %, still charging
+  }
+  if (nibble === 11) {
+    return { level: 100, state: BATTERY_FULL };
+  }
+  return { level: null, state: BATTERY_UNKNOWN };       // 14, 15, others: charging error
+}
+
+/** DualSense status byte: { level (percent or null), state }. */
+function parseDualSenseBattery(status) {
+  const nibble = status & 0x0F;
+  switch ((status >> 4) & 0x0F) {
+    case 0x0:
+      return { level: batteryPercent(nibble), state: BATTERY_DRAINING };
+    case 0x1:
+      return { level: batteryPercent(nibble), state: BATTERY_CHARGING };
+    case 0x2:
+      return { level: 100, state: BATTERY_FULL };
+    default:                                            // 0xA, 0xB: out of range / error
+      return { level: null, state: BATTERY_UNKNOWN };
+  }
+}
+
 function ds4Report(rgb) {
   return [DS4_REPORT_ID, DS4_VALID_FLAGS, 0x00, 0x00, 0x00, 0x00,
     rgb[0] & 0xFF, rgb[1] & 0xFF, rgb[2] & 0xFF, 0x00, 0x00];
@@ -174,6 +236,10 @@ function dualSenseReport(lightbar, players, brightness) {
 // ---------------------------------------------------------------------------------------------
 let product = null;
 let enabled = false;
+let batteryOn = false;
+let batteryNextAt = 0;
+let batteryLevel = null;
+let batteryState = null;
 
 // OpenRGB's REGISTER_HID_DETECTOR takes any collection of these product ids. Over USB the
 // controllers have one HID collection, the game pad (usage page 0x0001, usage 0x0005; interface 3
@@ -184,6 +250,10 @@ export function Validate(endpoint) {
 
 export function Initialize() {
   enabled = false;
+  batteryOn = false;
+  batteryNextAt = 0;
+  batteryLevel = null;
+  batteryState = null;
   product = PRODUCTS.get(Number(device.productId())) || null;
   if (product === null) {
     device.log(`Sony gamepad: unknown product id 0x${hex4(device.productId())}; nothing is sent.`);
@@ -200,6 +270,10 @@ export function Initialize() {
     return;
   }
   enabled = true;
+  batteryOn = true;
+  if (typeof device.addFeature === "function") {
+    device.addFeature("battery");
+  }
 }
 
 export function Render() {
@@ -212,6 +286,7 @@ export function Render() {
     const [lightbar, ...players] = DUALSENSE_GEOMETRY.positions.map(sample);
     device.write(dualSenseReport(lightbar, players, playerBrightness()), DS_REPORT_LENGTH);
   }
+  batteryPoll();
 }
 
 // Light bar black, player LEDs off; the same on system suspend (SystemSuspending is not needed).
@@ -241,6 +316,57 @@ function ds4SendsBluetoothReports() {
     }
   }
   return false;
+}
+
+// Every BATTERY_POLL_MS: drain the waiting input reports without blocking, parse the newest USB
+// report 0x01 and hand level and state to the host when they changed. No report: nothing changes.
+function batteryPoll() {
+  if (!batteryOn) {
+    return;
+  }
+  const now = Date.now();
+  if (now < batteryNextAt) {
+    return;
+  }
+  batteryNextAt = now + BATTERY_POLL_MS;
+  const offset = product.protocol === DS4 ? DS4_BATTERY_OFFSET : DS_BATTERY_OFFSET;
+  const dongle = Number(device.productId()) === SONY_DS4_RECEIVER_PID;
+  let latest = null;
+  for (let i = 0; i < BATTERY_MAX_READS; i++) {
+    const input = device.read([0x00], INPUT_LENGTH, 0);
+    if (device.getLastReadSize() <= 0 || !input || input.length === 0) {
+      break;
+    }
+    if (input[0] === USB_INPUT_REPORT_ID && input.length > DS4_DONGLE_STATE_OFFSET && input.length > offset) {
+      latest = input;
+    }
+  }
+  if (latest === null) {
+    return;
+  }
+  if (dongle && (latest[DS4_DONGLE_STATE_OFFSET] & DS4_DONGLE_DISCONNECTED) !== 0) {
+    batteryReport(batteryLevel, BATTERY_UNKNOWN);     // no controller on the adapter
+    return;
+  }
+  const status = latest[offset] & 0xFF;
+  const parsed = product.protocol === DS4 ? parseDs4Battery(status) : parseDualSenseBattery(status);
+  batteryReport(parsed.level === null ? batteryLevel : parsed.level, parsed.state);
+}
+
+function batteryReport(level, state) {
+  const api = globalThis.battery;
+  if (level !== null && level !== batteryLevel) {
+    batteryLevel = level;
+    if (api && typeof api.setBatteryLevel === "function") {
+      api.setBatteryLevel(level);
+    }
+  }
+  if (state !== batteryState) {
+    batteryState = state;
+    if (api && typeof api.setBatteryState === "function") {
+      api.setBatteryState(state);
+    }
+  }
 }
 
 function sample(position) {

@@ -201,15 +201,15 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 
 | Component | Status | Evidence / gap |
 |---|---|---|
-| Crates (17 planned) | 16 real, 1 stub | all exist; `huedeck-hal-linux` is a stub, `huedeck-inputs` is shapes only; `huedeck-runtime` was added (shared CLI/daemon plumbing). `crates/README.md` still describes M0 and is stale |
+| Crates (17 planned) | 16 real, 1 stub | all exist; `huedeck-hal-linux` is a stub, `huedeck-inputs` is shapes only; `huedeck-runtime` was added (shared CLI/daemon plumbing). `crates/README.md` refreshed (processes, graph, status per crate) |
 | First-party plugins | Done for the plan's list, except Sonix | `msi-mystic-light-7c91`, `razer` (DeathAdder V2 Pro), `nzxt-hue2` (Kraken X3), `steelseries-arctis-5`, `crucial-ballistix`, `hid-lamparray`, plus `msi-gpu`, `sony-gamepad` and the OpenRGB batch 1 families (`razer*`, `steelseries-*`, `msi-mystic-light*`, `evision-keyboard` V2). Batch 2: in progress (`feature/openrgb-batch-2`) |
 | Starter effects (solid, rainbow-wave, audio-bars, screen-ambience, test-pattern) | Done | `effects/` has 13 CC0 effects |
 | `components/` own component library | Missing | no `components/` directory; the daemon looks for one (`engine.rs` `components_dir`), and today only the SignalRGB and user component dirs fill the library |
 | `schemas/` (manifest, ControllableParameters, component, layout, effect meta) | Done | `schemas/*.schema.json`, `tests/schemas/validate_corpus.py`, `ci.yml` job `schemas` |
-| OpenAPI for the native API | Missing | no OpenAPI file |
-| `sdk/huedeck.d.ts` | Missing | no `sdk/` directory |
-| `sdk/` Node simulator (mock HAL recorder) | Partial | `plugins/_testkit/{mock-device,mock-bus}.mjs` serve the first-party tests; `huedeck bench --mock` runs the real host against a scripted device. No standalone simulator package |
-| `sdk/` plugin lint | Partial | `plugins/_testkit/manifests.test.mjs` checks manifests; no lint tool for third-party authors |
+| OpenAPI for the native API | Done | `docs/api/openapi.yaml` (OpenAPI 3.1); `crates/huedeck-api/tests/openapi.rs` checks it against the router and `NATIVE_ROUTES`. The compat API is not described |
+| `sdk/huedeck.d.ts` | Done | `sdk/huedeck.d.ts`, members tagged `@signalrgb` / `@huedeck` / `@unimplemented` / `@stub`; `tsc -p sdk` in CI |
+| `sdk/` Node simulator (mock HAL recorder) | Done | `sdk/simulator` (over `plugins/_testkit`): HID and SMBus lifecycles with a solid colour, prints the traffic; `huedeck bench --mock` runs the real host against a scripted device |
+| `sdk/` plugin lint | Done | `sdk/lint` (manifest schema, exports, exports against the manifest, forbidden globals); `plugins/_testkit/manifests.test.mjs` runs it over the first-party plugins |
 | `tests/conformance/` (corpus runner, HID fixtures, PSNR harness) | Partial | dry-run harness lives in the CLI; HID fixtures live per plugin; PSNR harness is `tools/effects-bench/psnr.py`. No `tests/conformance/` and no self-hosted workflow |
 | `tests/integration/` | Partial | crate integration tests (`crates/*/tests/`); no top-level directory |
 | `tools/gen-udev` | Missing | README only |
@@ -217,7 +217,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `tools/shm-dump` | Missing | |
 | `tools/effects-bench`, `tools/device-probe`, `tools/package` | Done | `tools/README.md` |
 | `prelude/` | Done | `prelude/*.js`, `prelude/modules/*.js`, 7 test files |
-| `docs/security.md`, `docs/linux-porting.md` | Missing | |
+| `docs/security.md`, `docs/linux-porting.md` | Partial | `docs/security.md` done (threat model, in place vs planned); `docs/linux-porting.md` missing |
 | Packaging: `wix/`, `winget/` | In progress (`feature/installer`) | |
 | Packaging: `systemd/`, `udev/` | Partial | files present, untested |
 | Packaging: `appimage/`, `flatpak/` | Missing | |

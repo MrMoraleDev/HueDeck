@@ -2,7 +2,7 @@
 // The daemon's native API (crates/huedeck-api/src/server.rs). Requests that change
 // state carry the token huedeckd embeds in the page it serves.
 
-import type { LibraryComponent, Placement, Snapshot } from "./types";
+import type { LibraryComponent, PawnIoView, Placement, Snapshot } from "./types";
 
 function token(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="huedeck-token"]')?.content ?? "";
@@ -73,6 +73,9 @@ export const api = {
   ),
   exportState: () => request<unknown>("GET", "/v1/export"),
   importState: (state: unknown) => request("POST", "/v1/import", state),
+  pawnio: () => request<PawnIoView>("GET", "/v1/pawnio"),
+  pawnioInstall: () => request<PawnIoView>("POST", "/v1/pawnio/install"),
+  pawnioRemove: () => request<PawnIoView>("POST", "/v1/pawnio/remove"),
   rescan: () => request("POST", "/v1/rescan"),
   shutdown: () => request("POST", "/v1/shutdown"),
   tap: (x: number, y: number) => request("POST", "/v1/canvas/tap", { x, y }),

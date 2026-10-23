@@ -25,3 +25,6 @@ windows-service = { workspace = true }
 # The client SID from the process token.
 # WinHTTP download, WinVerifyTrust.
 windows = { workspace = true }
+
+[build-dependencies]
+huedeck-winres = { path = "../huedeck-winres" }

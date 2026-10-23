@@ -3,11 +3,12 @@
 //! into `huedeck-renderer.exe`. Chromium reads the compatibility section to detect the OS
 //! version; without it some features silently degrade. The CEF runtime files themselves
 //! (libcef.dll, *.pak, locales/ ...) are copied next to the exe by `cef-dll-sys`'s own build
-//! script, see README.md.
+//! script, see README.md. The icon and version resource come from huedeck-winres.
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=huedeck-renderer.exe.manifest");
+    huedeck_winres::embed("HueDeck effect renderer");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     if target_os == "windows" && target_env == "msvc" {

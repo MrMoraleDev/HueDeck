@@ -419,8 +419,13 @@ software 34.67 / 34.67) is within these ranges.
   resolve features differently, so each gets its own cef-dll-sys hash and, without `CEF_PATH`,
   its own ~722 MB download + extraction under `target/<profile>/build/`. During the spike this
   piled up a dozen copies. Set `CEF_PATH` once, persistently: as a user environment variable,
-  or in an uncommitted `.cargo/config.toml` (`[env] CEF_PATH = "..."`, which cargo also hands
-  to build scripts). Keep the cargo target dir outside folders synced by cloud clients.
+  or in an uncommitted `.cargo/config.toml` in a directory *above* the checkout
+  (`[env] CEF_PATH = "..."`, which cargo also hands to build scripts; the repo's own
+  `.cargo/config.toml` is committed). Keep the cargo target dir outside folders synced by cloud
+  clients.
+- **Static CRT.** The repo's `.cargo/config.toml` builds Windows MSVC targets with
+  `+crt-static`. cef-dll-sys builds libcef_dll_wrapper with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`
+  (`/MT`) regardless, so the two match; `libcef.dll` is a separate DLL with its own static CRT.
 - **CI** (`.github/workflows/ci.yml`): the `rust` jobs build the workspace without `cef`. The
   Windows-only `renderer-cef` job runs `cargo clippy|build -p huedeck-renderer --features cef`
   with CMake + Ninja from `tools/cef-env.sh` and `CEF_PATH` cached by CEF version.

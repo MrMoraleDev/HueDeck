@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.coolermaster-mm712",
+  "name": "Cooler Master MM712",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "The logo light of the Cooler Master MM712 mouse, through its direct mode. Adapted from OpenRGB's CMMM712Controller (GPL-2.0-or-later); untested on hardware. The save command, mode / profile writes, DPI and polling rate are never touched; shutdown turns direct mode off, back to the mouse's own mode. Protocol notes: docs/hardware/coolermaster-mm712.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x2516",
+      "pids": ["0x0169"],
+      "transport": "hid",
+      "interfaces": [3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["MasterPlus.exe", "MasterPlusApp.exe"],
+  "keywords": ["cooler master", "mm712", "mouse", "openrgb"]
+}

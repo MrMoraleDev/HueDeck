@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.coolermaster-monitor-desk",
+  "name": "Cooler Master ARGB monitors and GD160 desk",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-LED lighting of the Cooler Master GM27-FQS and GM34-CWQ ARGB monitors (47 LEDs) and the GD160 ARGB gaming desk (96 LEDs front, 96 back), in their software mode. Adapted from OpenRGB's CMMonitorController and CMGD160Controller (GPL-2.0-or-later); untested on hardware. Hardware-effect and stored custom-colour writes are never sent; shutdown turns software mode off, back to the device's own effect. Protocol notes: docs/hardware/coolermaster-monitor-desk.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    {
+      "vid": "0x2516",
+      "pids": ["0x01BB", "0x01BF", "0x01A9"],
+      "transport": "hid",
+      "interfaces": [0],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["MasterPlus.exe", "MasterPlusApp.exe"],
+  "keywords": ["cooler master", "monitor", "desk", "argb", "openrgb"]
+}

@@ -67,6 +67,10 @@ foreach ($f in $cefFiles) {
   Copy-Required (Join-Path $Release $f) $Out
 }
 
+# Every staged exe must start on a clean Windows: system DLLs and the shipped CEF runtime only,
+# no VC++ runtime (the build links the CRT statically, see .cargo/config.toml).
+& (Join-Path $PSScriptRoot "check-imports.ps1") $Out
+
 # Dashboard.
 if (-not (Test-Path (Join-Path $Ui "index.html"))) { throw "no dashboard build in $Ui" }
 Copy-Required $Ui (Join-Path $Out "ui")

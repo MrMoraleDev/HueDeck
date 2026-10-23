@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.roccat-horde-aimo",
+  "name": "Roccat Horde Aimo",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "The six lighting zones of the Roccat Horde Aimo keyboard. Adapted from OpenRGB's RoccatHordeAimoController (GPL-2.0-or-later); untested on hardware. Lighting reports only. Protocol notes: docs/hardware/roccat-horde-aimo.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x1E7D",
+      "pids": ["0x303E"],
+      "transport": "hid",
+      "interfaces": [1],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["ROCCAT_Swarm.exe", "ROCCAT_Swarm_Monitor.exe", "Turtle Beach Swarm II.exe"],
+  "keywords": ["roccat", "horde", "aimo", "keyboard", "openrgb"]
+}

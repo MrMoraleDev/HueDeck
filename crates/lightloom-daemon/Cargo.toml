@@ -41,6 +41,7 @@ toml = { workspace = true }
 lightloom-api = { path = "../lightloom-api" }
 lightloom-engine = { path = "../lightloom-engine" }
 lightloom-hal = { path = "../lightloom-hal" }
+lightloom-inputs = { path = "../lightloom-inputs" }
 lightloom-plugin-host = { path = "../lightloom-plugin-host" }
 lightloom-render = { path = "../lightloom-render" }
 lightloom-runtime = { path = "../lightloom-runtime" }

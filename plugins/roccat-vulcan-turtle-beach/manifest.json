@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.roccat-vulcan-turtle-beach",
+  "name": "Turtle Beach Vulcan keyboards",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-key lighting of the Turtle Beach branded Roccat Vulcan keyboards (vendor 10F5) in direct mode: Vulcan II, Vulcan II TKL and Vulcan II TKL Pro. Same protocol as lightloom.roccat-vulcan. Adapted from OpenRGB's RoccatVulcanKeyboardController (GPL-2.0-or-later); untested on hardware. OpenRGB's mode report (SendMode, kept by the keyboard) is never sent. Protocol notes: docs/hardware/roccat-vulcan-turtle-beach.md and docs/hardware/roccat-vulcan.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x10F5",
+      "pids": ["0x501B", "0x5023", "0x5001"],
+      "transport": "hid",
+      "interfaces": [1, 3, 4],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["ROCCAT_Swarm.exe", "ROCCAT_Swarm_Monitor.exe", "Turtle Beach Swarm II.exe"],
+  "keywords": ["turtle beach", "roccat", "vulcan", "keyboard", "openrgb"]
+}

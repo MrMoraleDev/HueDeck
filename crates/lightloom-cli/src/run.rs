@@ -417,7 +417,8 @@ pub fn parse_vid_pid(s: &str) -> Result<(u16, u16), String> {
     Ok((hex(v)?, hex(p)?))
 }
 
-fn default_plugin_dirs() -> Vec<PathBuf> {
+/// `LIGHTLOOM_PLUGINS` (a path list), else `./plugins`.
+pub(crate) fn default_plugin_dirs() -> Vec<PathBuf> {
     if let Some(dirs) = std::env::var_os("LIGHTLOOM_PLUGINS") {
         return std::env::split_paths(&dirs).collect();
     }
@@ -1705,7 +1706,8 @@ mod tests {
         let out = std::env::temp_dir().join(format!("lightloom-bench-smbus-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
-            seconds: 1.0,
+            // Long enough for Initialize on a loaded CI or dev machine.
+            seconds: 3.0,
             mock: None,
             mock_smbus: Some("msi-gpu".into()),
         };
@@ -1733,7 +1735,8 @@ mod tests {
         let out = std::env::temp_dir().join(format!("lightloom-bench-ram-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
-            seconds: 1.0,
+            // Long enough for Initialize on a loaded CI or dev machine.
+            seconds: 3.0,
             mock: None,
             mock_smbus: Some("crucial-ballistix".into()),
         };

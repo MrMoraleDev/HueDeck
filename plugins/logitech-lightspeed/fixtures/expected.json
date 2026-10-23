@@ -1,0 +1,1271 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Expected I/O worked out from OpenRGB's C++ (commit d4798c120659ec5ba2e664a9e87bedff8d36f880, Controllers/LogitechController/LogitechProtocolCommon.cpp, LogitechControllerDetect.cpp, LogitechLightspeedController) by a separate reference model that mirrors logitech_device's queries and setDirectMode / setMode buffer by buffer, run against a simulated HID++ device ('devices': feature indices, name, type, zones with LED location and effect list; it answers each long request once, the effect queries with speed 0x01F4) (openrgb-work/batch2/logitech/gen_ls_fixtures.py in the porting session's scratch space, not part of the repository); plugin.js was never run to make them. ops: write = output report, read = input report read (len, timeout), pause = sleep. Deliberate Lightloom deviations modelled here, as docs/hardware/logitech-lightspeed.md describes: the debug-only feature-list dump is not sent; the name loop stops on an empty chunk; a device with only the 0x8071 feature is held back after the queries; zone names past logitech_led_locations[] are 'LED <n>'. Shutdown sets every zone black.",
+ "devices": {
+  "MOUSE": {
+   "features": {
+    "0x0005": 5,
+    "0x8070": 14
+   },
+   "name": "G502 HERO Gaming Mouse",
+   "type": 3,
+   "leds": [
+    {
+     "location": 1,
+     "fx": [
+      0,
+      1,
+      3,
+      10
+     ]
+    },
+    {
+     "location": 2,
+     "fx": [
+      0,
+      1,
+      3,
+      10
+     ]
+    }
+   ]
+  },
+  "HEADSET": {
+   "features": {
+    "0x0005": 3,
+    "0x8070": 4
+   },
+   "name": "G935 Gaming Headset",
+   "type": 8,
+   "leds": [
+    {
+     "location": 2,
+     "fx": [
+      1,
+      3
+     ]
+    },
+    {
+     "location": 32,
+     "fx": [
+      1
+     ]
+    }
+   ]
+  },
+  "ONLY_8071": {
+   "features": {
+    "0x0005": 5,
+    "0x8071": 11
+   },
+   "name": "PRO Wireless",
+   "type": 3,
+   "leds": []
+  },
+  "SILENT": null
+ },
+ "scenarios": {
+  "MOUSE": {
+   "driven": true,
+   "name": "G502 HERO Gaming Mouse",
+   "size": [
+    2,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Primary LED",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Logo LED",
+     "pos": [
+      1,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     255,
+     16,
+     0
+    ],
+    [
+     0,
+     32,
+     255
+    ]
+   ],
+   "colours_b": [
+    [
+     1,
+     2,
+     3
+    ],
+    [
+     254,
+     253,
+     252
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF050100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF051100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF051110000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF052100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E0000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E1000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E2000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E2000010000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E2000020000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E2000030000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E1001000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E2001000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E2001010000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E2001020000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E2001030000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E8001010000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E300001FF10000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E3001010020FF0000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E3000010102030000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E300101FEFDFC0000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E3000010000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF0E3001010000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ]
+  },
+  "HEADSET": {
+   "driven": true,
+   "name": "G935 Gaming Headset",
+   "size": [
+    2,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Logo LED",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "LED 1",
+     "pos": [
+      1,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     255,
+     16,
+     0
+    ],
+    [
+     0,
+     32,
+     255
+    ]
+   ],
+   "colours_b": [
+    [
+     1,
+     2,
+     3
+    ],
+    [
+     254,
+     253,
+     252
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF030100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF031100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF031110000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF032100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF040000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF041000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF042000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF042000010000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF041001000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF042001000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF048001010000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF04300000FF10000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF043001000020FF0000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF043000000102030000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF04300100FEFDFC0000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF043000000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF043001000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ]
+  },
+  "ONLY_8071": {
+   "initialize": [
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF050100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF051100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF052100000000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ],
+   "driven": false,
+   "reason": "8071"
+  },
+  "SILENT": {
+   "initialize": [
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "pause",
+     "ms": 50
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000100050000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180700000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    },
+    {
+     "op": "write",
+     "len": 20,
+     "hex": "11FF000180710000000000000000000000000000"
+    },
+    {
+     "op": "read",
+     "len": 64,
+     "timeout": 300
+    }
+   ],
+   "driven": false,
+   "reason": "silent"
+  }
+ },
+ "products": [
+  {
+   "pid": "0xC08D",
+   "name": "Logitech G502 Wireless Gaming Mouse (wired)",
+   "validate": {
+    "interface": null,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC332",
+   "name": "Logitech G502 Proteus Spectrum Gaming Mouse",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC08B",
+   "name": "Logitech G502 HERO Gaming Mouse",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC083",
+   "name": "Logitech G403 Prodigy Gaming Mouse",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC082",
+   "name": "Logitech G403 Wireless Gaming Mouse (wired)",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC087",
+   "name": "Logitech G703 Wireless Gaming Mouse (wired)",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC090",
+   "name": "Logitech G703 HERO Wireless Gaming Mouse (wired)",
+   "validate": {
+    "interface": null,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC081",
+   "name": "Logitech G900 Wireless Gaming Mouse (wired)",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC086",
+   "name": "Logitech G903 Wireless Gaming Mouse (wired)",
+   "validate": {
+    "interface": 1,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC091",
+   "name": "Logitech G903 HERO Wireless Gaming Mouse (wired)",
+   "validate": {
+    "interface": 2,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0xC088",
+   "name": "Logitech G Pro Wireless Gaming Mouse (wired)",
+   "validate": {
+    "interface": 2,
+    "usage_page": "0xFF00",
+    "usage": "0x0002"
+   },
+   "scenario": "MOUSE"
+  },
+  {
+   "pid": "0x0A5C",
+   "name": "Logitech G633 Gaming Headset",
+   "validate": {
+    "interface": 3,
+    "usage_page": "0xFF43",
+    "usage": "0x0202"
+   },
+   "scenario": "HEADSET"
+  },
+  {
+   "pid": "0x0A89",
+   "name": "Logitech G635 Gaming Headset",
+   "validate": {
+    "interface": 3,
+    "usage_page": "0xFF43",
+    "usage": "0x0202"
+   },
+   "scenario": "HEADSET"
+  },
+  {
+   "pid": "0x0AB5",
+   "name": "Logitech G733 Gaming Headset",
+   "validate": {
+    "interface": 3,
+    "usage_page": "0xFF43",
+    "usage": "0x0202"
+   },
+   "scenario": "HEADSET"
+  },
+  {
+   "pid": "0x0AFE",
+   "name": "Logitech G733 Gaming Headset",
+   "validate": {
+    "interface": 3,
+    "usage_page": "0xFF43",
+    "usage": "0x0202"
+   },
+   "scenario": "HEADSET"
+  },
+  {
+   "pid": "0x0B1F",
+   "name": "Logitech G733 Gaming Headset",
+   "validate": {
+    "interface": 3,
+    "usage_page": "0xFF43",
+    "usage": "0x0202"
+   },
+   "scenario": "HEADSET"
+  },
+  {
+   "pid": "0x0A87",
+   "name": "Logitech G935 Gaming Headset",
+   "validate": {
+    "interface": 3,
+    "usage_page": "0xFF43",
+    "usage": "0x0202"
+   },
+   "scenario": "HEADSET"
+  }
+ ]
+}

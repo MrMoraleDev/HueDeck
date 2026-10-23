@@ -18,6 +18,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 lightloom-hal = { path = "../lightloom-hal" }
 lightloom-hal-windows = { path = "../lightloom-hal-windows" }
+# hidraw backend and udev hotplug (its pure parts build everywhere).
+lightloom-hal-linux = { path = "../lightloom-hal-linux" }
 lightloom-nvapi = { path = "../lightloom-nvapi" }
 lightloom-protocol = { path = "../lightloom-protocol" }
 lightloom-plugin-host = { path = "../lightloom-plugin-host" }

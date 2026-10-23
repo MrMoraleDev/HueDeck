@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.logitech-x56",
+  "name": "Logitech X56 HOTAS",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "The light of the Logitech (Saitek) X56 Rhino HOTAS joystick and throttle (vendor 0x0738), one colour each. Adapted from OpenRGB's LogitechX56Controller (GPL-2.0-or-later); untested on hardware. OpenRGB's manual save command is never sent. Protocol notes: docs/hardware/logitech-x56.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    {
+      "vid": "0x0738",
+      "pids": ["0x2221", "0xA221"],
+      "transport": "hid",
+      "interfaces": [2],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["lghub.exe", "lghub_agent.exe", "lghub_updater.exe", "LCore.exe"],
+  "keywords": ["logitech", "saitek", "x56", "hotas", "joystick", "openrgb"]
+}

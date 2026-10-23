@@ -42,7 +42,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | M4 Dashboard, persistence, API, packaging | **Partial** | the MSI, winget and Authenticode signing; autostart and tray; the plugin sources manager; the logs page; compat API parts; the fresh-machine acceptance run |
 | M5 Privileged bus | **Partial** | only PIIX4 (no I801, no LpcIO); no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
 | M6 Inputs, network, extras | **Missing** (network in progress) | audio, screen, meters, LCD faces, macros, actions, LampArray HAL backend, OpenRGB SDK server, runtime parameters UI |
-| M7 Linux + 1.0 | **Missing** | `lightloom-hal-linux` is a 33-line stub; Linux packaging is placeholders; there is no cargo-dist |
+| M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; nusb/serial/i2c/hwmon, CEF, packaging and cargo-dist missing |
 
 ## M0 Bootstrap and risk retirement: Done
 
@@ -183,16 +183,17 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| hal-linux hidraw + hid-desc | Missing | `crates/lightloom-hal-linux/src/lib.rs`: `LinuxHidBackend` returns `Unsupported` |
-| nusb, serialport, udev hotplug, i2cdev SMBus, hwmon/pwm | Missing | none |
-| `tools/gen-udev` | Missing | `tools/gen-udev/README.md` only; template `packaging/udev/70-lightloom.rules.template` |
+| hal-linux hidraw + hid-desc | Done, untested on Linux | `crates/lightloom-hal-linux/src/{sysfs,tlc,hidraw,sys}.rs`: sysfs enumeration, TLC split, raw hidraw ioctls; `lightloom devices` and hardware runs wired through `lightloom-runtime`. Checked with `cargo clippy --target x86_64-unknown-linux-gnu` only |
+| udev hotplug | Done, untested on Linux | `crates/lightloom-hal-linux/src/{hotplug,uevent}.rs`: netlink udev monitor, pure Rust |
+| nusb, serialport, i2cdev SMBus, hwmon/pwm | Missing | WP-L3, WP-L4 |
+| `tools/gen-udev` | Done | `lightloom udev generate` (`crates/lightloom-cli/src/udev.rs`); generated `packaging/udev/70-lightloom.rules` with a drift test; `packaging/sysusers.d/lightloom.conf` |
 | CEF on Linux (X11/Wayland, headless CI) | Missing | `lightloom-renderer` builds with `cef` on Windows only (`ci.yml` `renderer-cef`) |
 | PipeWire audio + screen capture | Missing | |
 | `systemd --user` unit | Partial | `packaging/systemd/lightloomd.service` exists, untested |
 | AppImage, Flatpak | Missing | placeholders in `packaging/README.md` |
 | `docs/linux-porting.md` | Missing | design input in `docs/research/m7-linux-backend.md` |
 | Accept: same plugins light the same hardware on Ubuntu LTS | Missing | |
-| Accept: identical `Validate` tuples on both OSes (fixture) | Missing | |
+| Accept: identical `Validate` tuples on both OSes (fixture) | Partial | `crates/lightloom-hal-linux/src/fixtures.rs`: one descriptor through the Windows path logic and the Linux split; descriptors are synthetic, a captured Linux `report_descriptor` per reference device is still to record |
 | Accept: RAM via `/dev/i2c-*` without a helper | Missing | |
 | Accept: conformance suite on both OSes | Missing | there is no conformance suite yet (see M2) |
 | Accept: reproducible release via cargo-dist | Missing | `release.yml` is a hand-written placeholder (cargo-auditable + CycloneDX SBOM, unsigned) |
@@ -201,23 +202,23 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 
 | Component | Status | Evidence / gap |
 |---|---|---|
-| Crates (17 planned) | 16 real, 1 stub | all exist; `lightloom-hal-linux` is a stub, `lightloom-inputs` is shapes only; `lightloom-runtime` was added (shared CLI/daemon plumbing). `crates/README.md` still describes M0 and is stale |
+| Crates (17 planned) | 16 real, 1 stub | all exist; `lightloom-hal-linux` is a stub, `lightloom-inputs` is shapes only; `lightloom-runtime` was added (shared CLI/daemon plumbing). `crates/README.md` refreshed (processes, graph, status per crate) |
 | First-party plugins | Done for the plan's list, except Sonix | `msi-mystic-light-7c91`, `razer` (DeathAdder V2 Pro), `nzxt-hue2` (Kraken X3), `steelseries-arctis-5`, `crucial-ballistix`, `hid-lamparray`, plus `msi-gpu`, `sony-gamepad` and the OpenRGB batch 1 families (`razer*`, `steelseries-*`, `msi-mystic-light*`, `evision-keyboard` V2). Batch 2: in progress (`feature/openrgb-batch-2`) |
 | Starter effects (solid, rainbow-wave, audio-bars, screen-ambience, test-pattern) | Done | `effects/` has 13 CC0 effects |
 | `components/` own component library | Missing | no `components/` directory; the daemon looks for one (`engine.rs` `components_dir`), and today only the SignalRGB and user component dirs fill the library |
 | `schemas/` (manifest, ControllableParameters, component, layout, effect meta) | Done | `schemas/*.schema.json`, `tests/schemas/validate_corpus.py`, `ci.yml` job `schemas` |
-| OpenAPI for the native API | Missing | no OpenAPI file |
-| `sdk/lightloom.d.ts` | Missing | no `sdk/` directory |
-| `sdk/` Node simulator (mock HAL recorder) | Partial | `plugins/_testkit/{mock-device,mock-bus}.mjs` serve the first-party tests; `lightloom bench --mock` runs the real host against a scripted device. No standalone simulator package |
-| `sdk/` plugin lint | Partial | `plugins/_testkit/manifests.test.mjs` checks manifests; no lint tool for third-party authors |
+| OpenAPI for the native API | Done | `docs/api/openapi.yaml` (OpenAPI 3.1); `crates/lightloom-api/tests/openapi.rs` checks it against the router and `NATIVE_ROUTES`. The compat API is not described |
+| `sdk/lightloom.d.ts` | Done | `sdk/lightloom.d.ts`, members tagged `@signalrgb` / `@lightloom` / `@unimplemented` / `@stub`; `tsc -p sdk` in CI |
+| `sdk/` Node simulator (mock HAL recorder) | Done | `sdk/simulator` (over `plugins/_testkit`): HID and SMBus lifecycles with a solid colour, prints the traffic; `lightloom bench --mock` runs the real host against a scripted device |
+| `sdk/` plugin lint | Done | `sdk/lint` (manifest schema, exports, exports against the manifest, forbidden globals); `plugins/_testkit/manifests.test.mjs` runs it over the first-party plugins |
 | `tests/conformance/` (corpus runner, HID fixtures, PSNR harness) | Partial | dry-run harness lives in the CLI; HID fixtures live per plugin; PSNR harness is `tools/effects-bench/psnr.py`. No `tests/conformance/` and no self-hosted workflow |
 | `tests/integration/` | Partial | crate integration tests (`crates/*/tests/`); no top-level directory |
-| `tools/gen-udev` | Missing | README only |
+| `tools/gen-udev` | Done | `lightloom udev generate` |
 | `tools/pawnio-hash-pin` | Missing (covered) | pins are compiled into `crates/lightloom-iobroker/src/pins.rs`; no tool to recompute them |
 | `tools/shm-dump` | Missing | |
 | `tools/effects-bench`, `tools/device-probe`, `tools/package` | Done | `tools/README.md` |
 | `prelude/` | Done | `prelude/*.js`, `prelude/modules/*.js`, 7 test files |
-| `docs/security.md`, `docs/linux-porting.md` | Missing | |
+| `docs/security.md`, `docs/linux-porting.md` | Partial | `docs/security.md` done (threat model, in place vs planned); `docs/linux-porting.md` missing |
 | Packaging: `wix/`, `winget/` | Done, unverified | see packaging/README.md |
 | Packaging: `systemd/`, `udev/` | Partial | files present, untested |
 | Packaging: `appimage/`, `flatpak/` | Missing | |
@@ -276,6 +277,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
 7. **WP-AUDIO: audio FFT into `engine.audio`. Size M.**
    - Touches: `lightloom-inputs` (cpal WASAPI loopback + realfft → 200 bins, level, density, width per `docs/research/m6-inputs-network.md` §1); `lightloom-daemon/src/engine.rs` (push to the renderer through the existing `engine` command).
    - Accept: Audio Bars follows music, with under 100 ms input-to-paint.
+   - Status: implemented on `feature/audio-input` (`docs/audio.md`); latency still to be measured on the user's PC.
 8. **WP-SCREEN: screen zones into `engine.zone`. Size M.**
    - Touches: `lightloom-inputs` (DXGI duplication, `windows-capture` or `xcap` per §2.4; 28x20 HSL + 160x100 RGBA at 10-60 fps; display picker); the daemon push; one settings field in `Settings.svelte`.
    - Same crate as WP-AUDIO: run them one after the other, or split the module files.
@@ -324,6 +326,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
 19. **WP-FUZZ: broker fuzz target. Size S.**
     - `crates/lightloom-iobroker/fuzz/` (cargo-fuzz) or a proptest of `BrokerRequest` decoding and `server` handling with the fakes.
     - Accept: 1M iterations, no panic.
+    - **Done** on `feature/broker-fuzz`: `crates/lightloom-iobroker/src/fuzz.rs` (proptest properties plus a deterministic driver, 5,000 inputs per `cargo test`), cargo-fuzz targets `frame` and `session` in `crates/lightloom-iobroker/fuzz/` (see its README). 1M-input acceptance run in release: 263 s, 9.97M requests, no panic, no invariant broken. Found and fixed a stack overflow on nested `Batch` frames (`one_level` in `lightloom-protocol`).
 20. **WP-CONFORMANCE: conformance suite. Size M.**
     - `tests/conformance/` runner: dry-run over a user-supplied corpus with thresholds, replay of every recorded trace in `plugins/*/fixtures`, and the PSNR harness hook.
     - `.github/workflows/conformance-selfhosted.yml` for the reference machine.

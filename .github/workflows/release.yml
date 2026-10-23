@@ -148,7 +148,8 @@ jobs:
             cp "target/${{ matrix.target }}/release/$b" "$out/"
           done
           for f in LICENSE LICENSE-EXCEPTION.md README.md \
-            packaging/systemd/lightloomd.service packaging/udev/70-lightloom.rules.template; do
+            packaging/systemd/lightloomd.service packaging/udev/70-lightloom.rules \
+            packaging/sysusers.d/lightloom.conf; do
             if [ -f "$f" ]; then cp "$f" "$out/"; fi
           done
           # SBOMs ship inside the archive and beside it (everything uploaded lives under

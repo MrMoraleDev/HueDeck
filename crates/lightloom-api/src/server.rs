@@ -234,9 +234,12 @@ async fn device(State(ctx): State<ApiContext>, Path(key): Path<String>) -> Respo
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DevicePatch {
     enabled: Option<bool>,
     parameters: Option<Map<String, Value>>,
+    #[serde(default)]
+    blink_low_battery: Option<bool>,
 }
 
 async fn patch_device(
@@ -249,6 +252,7 @@ async fn patch_device(
             key,
             enabled: p.enabled,
             parameters: p.parameters,
+            blink_low_battery: p.blink_low_battery,
         })
         .await,
     )
@@ -409,6 +413,12 @@ struct SettingsPatch {
     signalrgb: Option<bool>,
     gpu_compositing: Option<bool>,
     smbus: Option<bool>,
+    #[serde(default)]
+    battery_low: Option<u8>,
+    #[serde(default)]
+    battery_critical: Option<u8>,
+    #[serde(default)]
+    battery_notifications: Option<bool>,
 }
 
 async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPatch>) -> Response {
@@ -417,6 +427,9 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
             signalrgb: p.signalrgb,
             gpu_compositing: p.gpu_compositing,
             smbus: p.smbus,
+            battery_low: p.battery_low,
+            battery_critical: p.battery_critical,
+            battery_notifications: p.battery_notifications,
         })
         .await,
     )

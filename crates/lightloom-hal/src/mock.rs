@@ -6,6 +6,7 @@
 //!   handle returns pre-scripted reads/feature reports and records every
 //!   operation into a shared [`TransactionRecorder`].
 //! * [`MockSmbus`] is a register-map SMBus bus that records transactions too.
+//! * [`MockNotifier`] keeps the system notifications it was asked to show.
 //!
 //! Golden tests compare `recorder.snapshot()` (or just `recorder.writes()`)
 //! against checked-in fixtures.
@@ -794,6 +795,29 @@ impl SmbusBus for MockSmbus {
             self.spd_set_page(0)?;
         }
         result
+    }
+}
+
+/// A [`crate::notify::Notifier`] that keeps what it is asked to show.
+#[derive(Debug, Default)]
+pub struct MockNotifier {
+    shown: Mutex<Vec<crate::notify::Notification>>,
+}
+
+impl MockNotifier {
+    /// The notifications shown so far.
+    pub fn shown(&self) -> Vec<crate::notify::Notification> {
+        self.shown.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl crate::notify::Notifier for MockNotifier {
+    fn notify(&self, notification: &crate::notify::Notification) -> HalResult<()> {
+        self.shown
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(notification.clone());
+        Ok(())
     }
 }
 

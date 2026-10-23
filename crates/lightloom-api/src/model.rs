@@ -106,6 +106,27 @@ pub struct DeviceView {
     pub endpoints: Vec<Endpoint>,
     /// Channel names (component editor).
     pub channels: Vec<ChannelView>,
+    /// The last battery report (devices whose plugin has the `battery` feature),
+    /// kept after the device goes away.
+    pub battery: Option<BatteryView>,
+    /// Pulse the device red while its battery is low (user setting).
+    pub blink_low_battery: bool,
+}
+
+/// A device's battery, as its plugin last reported it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatteryView {
+    /// Percent; `None` until the plugin reported a level.
+    pub level: Option<u8>,
+    /// `unknown`, `discharging`, `charging`, `fullCharging`, `full` or `wirelessCharging`.
+    pub state: String,
+    /// On external power (charging, or full on the charger).
+    pub charging: bool,
+    /// `ok`, `low` or `critical` under the user's thresholds.
+    pub status: String,
+    /// When the plugin last reported (Unix time, milliseconds).
+    pub updated_ms: u64,
 }
 
 /// A canvas endpoint (device, subdevice or component instance).
@@ -180,6 +201,14 @@ pub struct Settings {
     pub fps: u32,
     /// Never write to devices.
     pub dry_run: bool,
+    /// Low-battery threshold, percent (warnings, `battery.lowBatteryWarningLevel`).
+    pub battery_low: u8,
+    /// Critical battery threshold, percent.
+    pub battery_critical: u8,
+    /// Show low and critical battery alerts as system notifications.
+    pub battery_notifications: bool,
+    /// This OS has system notifications Lightloom can show.
+    pub notifications_available: bool,
 }
 
 /// A state change asked of the daemon.
@@ -238,6 +267,7 @@ pub enum Request {
         enabled: Option<bool>,
     },
     /// Enable/disable a device or set its plugin parameters.
+    #[serde(rename_all = "camelCase")]
     SetDevice {
         /// Device key.
         key: String,
@@ -245,6 +275,9 @@ pub enum Request {
         enabled: Option<bool>,
         /// `ControllableParameters` values (applied live, stored).
         parameters: Option<Map<String, Value>>,
+        /// Pulse the device red while its battery is low.
+        #[serde(default)]
+        blink_low_battery: Option<bool>,
     },
     /// Assign component instances to a channel (the device session restarts).
     SetChannel {
@@ -307,6 +340,15 @@ pub enum Request {
         /// Drive SMBus devices (scans the buses when turned on).
         #[serde(default)]
         smbus: Option<bool>,
+        /// Low-battery threshold, percent (`1..=95`, above the critical one).
+        #[serde(default)]
+        battery_low: Option<u8>,
+        /// Critical battery threshold, percent (below the low one).
+        #[serde(default)]
+        battery_critical: Option<u8>,
+        /// Battery alerts as system notifications.
+        #[serde(default)]
+        battery_notifications: Option<bool>,
     },
     /// Import the local SignalRGB setup (read in place): its canvas placements
     /// as a layout, and the component arrays of its channels.
@@ -370,7 +412,8 @@ impl Request {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
-    /// `state` (the snapshot changed), `stats` (counters only) or `log`.
+    /// `state` (the snapshot changed), `stats` (counters only), `log`, or
+    /// `battery` (a low or critical battery alert: `{key, name, level, severity}`).
     pub kind: String,
     /// Event payload (`log`: the line).
     #[serde(default, skip_serializing_if = "Value::is_null")]

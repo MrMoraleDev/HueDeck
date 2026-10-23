@@ -1705,7 +1705,8 @@ mod tests {
         let out = std::env::temp_dir().join(format!("huedeck-bench-smbus-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
-            seconds: 1.0,
+            // Long enough for Initialize on a loaded CI or dev machine.
+            seconds: 3.0,
             mock: None,
             mock_smbus: Some("msi-gpu".into()),
         };
@@ -1733,7 +1734,8 @@ mod tests {
         let out = std::env::temp_dir().join(format!("huedeck-bench-ram-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
-            seconds: 1.0,
+            // Long enough for Initialize on a loaded CI or dev machine.
+            seconds: 3.0,
             mock: None,
             mock_smbus: Some("crucial-ballistix".into()),
         };

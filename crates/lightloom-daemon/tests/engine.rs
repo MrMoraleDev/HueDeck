@@ -84,6 +84,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
                 vid: 0x1234,
                 pid: 0x4D4D,
                 endpoints: vec![info],
+                network: None,
             }],
             smbus: Vec::new(),
         },

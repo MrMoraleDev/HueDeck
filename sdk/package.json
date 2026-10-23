@@ -1,0 +1,17 @@
+{
+  "name": "@huedeck/sdk",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HueDeck plugin SDK: TypeScript typings of the plugin host API, a plugin lint and a mock-hardware simulator. No dependencies beyond Node 24. SPDX-License-Identifier: GPL-3.0-or-later",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "types": "huedeck.d.ts",
+  "bin": {
+    "huedeck-lint": "lint/cli.mjs",
+    "huedeck-sim": "simulator/cli.mjs"
+  },
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "test": "node --test \"**/tests/*.test.mjs\""
+  }
+}

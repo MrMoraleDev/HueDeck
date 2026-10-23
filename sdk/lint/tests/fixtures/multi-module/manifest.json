@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 2,
+  "id": "tests.multi-module",
+  "name": "Multi Module",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "tests",
+  "entry": "plugin.js",
+  "devices": [
+    { "vid": "0x1209", "pids": ["0x0006"] },
+    { "vid": "0x16C0", "pids": ["0x05DF"] }
+  ],
+  "permissions": ["hid"]
+}

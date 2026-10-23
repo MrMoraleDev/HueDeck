@@ -52,7 +52,7 @@ here); no SignalRGB code is used.
 | `0x30..0x32` | colour 1 (R, G, B) | the frame colour |
 | `0x36` | brightness | `0x64` (5 × 20) on Initialize; restored on Shutdown |
 | `0x38` | effect speed | read at start, restored on Shutdown |
-| `0x3F` | save (write `0x01` stores the state in the card's flash) | **never written** |
+| `0x3F` | save (write `0x01` stores the state in the card's flash) | only by "Save to devices" (`SaveToDevice`), see below |
 
 Every transfer is an SMBus Write Byte Data or Read Byte Data to `0x68`. On NvAPI one
 register byte plus one data byte (`NV_I2C_INFO_V3`, `i2cDevAddress = 0xD0`, port 1,
@@ -83,8 +83,32 @@ One write per register and no retries (OpenRGB's behaviour); a failed write is l
 - The bus is offered only to plugins whose `BrandGPUList()` names the card; the plugin's
   `SmbusAddresses()` is `[0x68]`, so its scan and its device session can reach no other
   address (`crates/lightloom-plugin-host/src/smbus.rs`).
-- Register `0x3F` is refused by the host as well (`SmbusDeniedRegisters()`), so no edit of
-  the plugin and no other plugin bound to `0x68` can store state in the card's flash.
+- Register `0x3F` is refused by the host (`SmbusDeniedRegisters()`) at all times except
+  inside the `SaveToDevice({action: "save"})` call the user asked for, so no other code path
+  of the plugin and no other plugin bound to `0x68` can store state in the card's flash.
+
+## Save to devices and exit modes (Lightloom extensions, untested on the card)
+
+"Save to devices" ([docs/host-api/save-shutdown.md](../host-api/save-shutdown.md)) stores one of
+three of OpenRGB's modes in the card's flash, with OpenRGB's own sequence: `DeviceUpdateMode()`
+(brightness `0x36 ← 0x64`, then the speed `0x38 ← 0x02` = `speed_values[MSI_GPU_SPEED_MID]` for
+modes that have one, then the mode `0x22`), `DeviceUpdateLEDs()` for modes with a colour
+(`0x26 ← 0`, colour 1), and `DeviceSaveMode()` = `MSIGPUController::Save()` (`0x3F ← 0x01`) (S2, S3):
+
+| Choice | Mode | Writes (fixture) |
+|---|---|---|
+| current colour | Static `0x13` | `save_static_123456` |
+| `spectrum` | Rainbow `0x08` (no colour) | `save_spectrum` |
+| `breathing` | Breathing `0x04`, colour 1 | `save_breathing_123456` |
+
+The card then goes back to Direct (`save_resume` = the Initialize writes) for the live effect, and
+the plugin's startup image takes the stored values, so a later restore (`shutdown_after_save`)
+gives back what was stored rather than the state before it. OpenRGB writes `0x3F ← 0x01`; the
+v2 controller (`MSIGPUv2Controller`, other cards) writes `0x00` to the same register, which this
+plugin does not drive.
+
+Exit modes (`Shutdown(false, mode)`): `restore` as above; `keep` writes the last frame colour in
+static mode (`shutdown_keep_123456`); `off` static black (`shutdown_off`). Neither touches `0x3F`.
 - Every NvAPI transfer goes to the card by PCI bus and ids, re-resolved after a driver
   reset, on one worker thread. It does not take `Global\Access_SMBUS.HTP.Method` (neither
   do OpenRGB and SignalRGB): with Lightloom's RAM sessions running, waiting for that mutex

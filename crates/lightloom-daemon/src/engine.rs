@@ -1699,7 +1699,13 @@ impl Engine {
             };
             match sent {
                 Ok(rx) => pending.push((name, key, choice, rx)),
-                Err(e) => results.push((name, SaveOutcome::failed(&key, action, e))),
+                Err(e) => {
+                    let outcome = SaveOutcome::failed(&key, action, e);
+                    if action == SaveAction::Save {
+                        self.audit_save(&name, &choice, &outcome);
+                    }
+                    results.push((name, outcome));
+                }
             }
         }
         let deadline = Instant::now() + SAVE_WAIT;

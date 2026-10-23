@@ -595,6 +595,8 @@ fn save_to_devices_and_exit_modes() {
         again["devices"][0]["error"].as_str().unwrap().contains("wait"),
         "{again}"
     );
+    let audit = std::fs::read_to_string(Paths::under(&home).save_audit_log()).unwrap();
+    assert_eq!(audit.lines().count(), 2, "the refusal is audited too: {audit}");
     assert_eq!(commits(), 1);
     let s = b.snapshot();
     let d = s.devices.iter().find(|d| d.key == GPU).unwrap();

@@ -210,6 +210,9 @@ pub struct SessionOptions {
     pub placements: BTreeMap<String, Placement>,
     /// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
     pub system_info: Option<Arc<lightloom_hal::SystemInfo>>,
+    /// Direct LED colours (OpenRGB SDK clients), read once per frame; they
+    /// win over the canvas for the endpoints they name.
+    pub direct: Option<Arc<lightloom_engine::DirectLeds>>,
 }
 
 impl Default for SessionOptions {
@@ -227,6 +230,7 @@ impl Default for SessionOptions {
             channel_components: BTreeMap::new(),
             placements: BTreeMap::new(),
             system_info: None,
+            direct: None,
         }
     }
 }
@@ -1024,7 +1028,13 @@ fn drive(
             live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
         }
         let (_, frame, captured) = frames.latest_stamped();
-        lock_device(shared).set_frame_at(frame, captured);
+        {
+            let mut dev = lock_device(shared);
+            dev.set_frame_at(frame, captured);
+            if let Some(direct) = &opts.direct {
+                dev.apply_direct(direct, &device.key);
+            }
+        }
         let t = Instant::now();
         last_render = Some(t);
         let result = rt.call_export_until("Render", CallArgs::None, budgets.render_budget(), stop);

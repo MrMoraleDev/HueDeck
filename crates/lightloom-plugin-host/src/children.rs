@@ -21,7 +21,7 @@
 use crate::device::Brightness;
 use lightloom_engine::{
     apply_brightness, compute_offsets, effective_brightness, CanvasSize, Component, ComponentInstance,
-    DeviceGeometry, Frame, OffsetTable, Placement, SamplerConfig,
+    DeviceGeometry, DirectLeds, Frame, OffsetTable, Placement, SamplerConfig,
 };
 use std::collections::BTreeMap;
 
@@ -48,6 +48,9 @@ struct Surface {
     factor: f32,
     /// `LightingMode::Forced` colour of the placement.
     forced: Option<lightloom_engine::Rgb>,
+    /// Direct colours (one per sample index) from [`DirectLeds`]; win over
+    /// the canvas and the forced colour.
+    direct: Option<std::sync::Arc<[lightloom_engine::Rgb]>>,
 }
 
 impl Surface {
@@ -69,6 +72,7 @@ impl Surface {
             table,
             factor,
             forced,
+            direct: None,
         }
     }
 
@@ -97,6 +101,10 @@ impl Surface {
 
     /// Colour of entry `i` of the table (black when off-canvas or absent), or the forced colour.
     fn sample(&self, frame: &Frame, cfg: &SamplerConfig, i: usize) -> [u8; 3] {
+        if let Some(d) = &self.direct {
+            let c = apply_brightness(d.get(i).copied().unwrap_or_default(), self.factor);
+            return [c.r, c.g, c.b];
+        }
         if let Some(c) = self.forced {
             let c = apply_brightness(c, self.factor);
             return [c.r, c.g, c.b];
@@ -332,6 +340,18 @@ impl Children {
             return true;
         }
         false
+    }
+
+    /// Take this frame's direct colours for every subdevice (cells,
+    /// row-major) and component instance (LEDs in order) from `direct`.
+    pub fn apply_direct(&mut self, direct: &DirectLeds) {
+        let prefix = format!("{}:", self.setup.device_key);
+        for s in &mut self.subdevices {
+            s.surface.direct = direct.get(&format!("{prefix}{}", s.id));
+        }
+        for c in self.channels.iter_mut().flat_map(|ch| ch.components.iter_mut()) {
+            c.surface.direct = direct.get(&c.instance.id);
+        }
     }
 
     /// The channels in creation order.
@@ -923,6 +943,39 @@ mod tests {
         assert!(c.set_channel_limit("Ch", 2));
         assert_eq!(c.led_counts(), vec![2, 0]);
         assert!(!c.set_channel_limit("nope", 2));
+    }
+
+    #[test]
+    fn direct_colours_win_until_released() {
+        let mut c = children();
+        let mut comp = Component::strip("Rev".into(), 3);
+        comp.led_mapping = vec![2, 1, 0];
+        c.setup
+            .channel_components
+            .insert("Ch".into(), vec![ComponentInstance::with_id(comp, "rev".into())]);
+        c.add_channel("Ch", 3, -1).unwrap();
+        c.create_subdevice("Sub").unwrap();
+        c.set_subdevice_size("Sub", 2, 1).unwrap();
+        let f = Frame::solid(320, 200, Rgb::new(1, 2, 3));
+        let direct = DirectLeds::new();
+        let owner = direct.new_owner();
+        let ttl = std::time::Duration::from_secs(60);
+        let (a, b, d) = (Rgb::new(10, 0, 0), Rgb::new(0, 20, 0), Rgb::new(0, 0, 30));
+        direct.write(owner, "rev", 3, 0, &[a, b, d], ttl);
+        direct.write(owner, "1462:7c91:S:Sub", 2, 1, &[b], ttl);
+        c.apply_direct(&direct);
+        // Colours are in LED order; the component's mapping still applies on the wire.
+        assert_eq!(c.channel_colors(&f, "Ch"), vec![0, 0, 30, 0, 20, 0, 10, 0, 0]);
+        assert_eq!(c.subdevice_color(&f, "Sub", 0, 0).unwrap(), [0, 0, 0]);
+        assert_eq!(c.subdevice_color(&f, "Sub", 1, 0).unwrap(), [0, 20, 0]);
+        c.set_brightness(Brightness {
+            global: 50,
+            layout: 100,
+        });
+        assert_eq!(c.subdevice_color(&f, "Sub", 1, 0).unwrap(), [0, 10, 0]);
+        direct.release(owner);
+        c.apply_direct(&direct);
+        assert_eq!(c.subdevice_color(&f, "Sub", 1, 0).unwrap(), [1, 1, 2]);
     }
 
     #[test]

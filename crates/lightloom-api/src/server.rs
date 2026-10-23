@@ -42,6 +42,11 @@ pub trait Backend: Send + Sync + 'static {
     fn subscribe(&self) -> broadcast::Receiver<Event>;
     /// The canvas (dashboard preview).
     fn frames(&self) -> Arc<FrameStore>;
+    /// Direct LED colours that win over the canvas (the OpenRGB SDK server
+    /// writes them); `None`: the daemon does not support them.
+    fn direct(&self) -> Option<Arc<lightloom_engine::DirectLeds>> {
+        None
+    }
 }
 
 /// Shared by every router.
@@ -413,6 +418,7 @@ struct SettingsPatch {
     smbus: Option<bool>,
     /// Wider than `u16` so an out-of-range number gets a clear 400.
     port: Option<u32>,
+    openrgb_sdk: Option<bool>,
 }
 
 /// `PATCH /v1/settings`. A `port` moves the native API and the dashboard:
@@ -463,6 +469,7 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
             gpu_compositing: p.gpu_compositing,
             smbus: p.smbus,
             port,
+            openrgb_sdk: p.openrgb_sdk,
         })
         .await;
     let mut value = match result {

@@ -32,8 +32,8 @@ use arc_swap::ArcSwap;
 use lightloom_api::model::{ChannelView, DeviceView, EffectView, Endpoint, Lighting, RendererView, Settings};
 use lightloom_api::{ApiError, Backend, Event, Request, Snapshot};
 use lightloom_engine::{
-    Component, ComponentInstance, ComponentLibrary, FrameStore, Layout, Placement, Rgb, CANVAS_HEIGHT,
-    CANVAS_WIDTH,
+    Component, ComponentInstance, ComponentLibrary, DirectLeds, FrameStore, Layout, Placement, Rgb,
+    CANVAS_HEIGHT, CANVAS_WIDTH,
 };
 use lightloom_hal::HidBackend;
 use lightloom_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
@@ -71,6 +71,7 @@ mod keys {
     pub const SMBUS: &str = "settings.smbus";
     /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
     pub const PORT: &str = "settings.port";
+    pub const OPENRGB_SDK: &str = "settings.openrgbSdk";
 }
 
 /// The database key of the port saved from the dashboard.
@@ -143,6 +144,8 @@ pub struct Shared {
     events: broadcast::Sender<Event>,
     requests: Sender<Envelope>,
     frames: Arc<FrameStore>,
+    /// OpenRGB SDK clients' colours, read by every session.
+    direct: Arc<DirectLeds>,
     shutdown: tokio::sync::Notify,
 }
 
@@ -171,6 +174,10 @@ impl Backend for Shared {
 
     fn frames(&self) -> Arc<FrameStore> {
         Arc::clone(&self.frames)
+    }
+
+    fn direct(&self) -> Option<Arc<DirectLeds>> {
+        Some(Arc::clone(&self.direct))
     }
 }
 
@@ -225,6 +232,7 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
         events,
         requests: tx,
         frames,
+        direct: Arc::new(DirectLeds::new()),
         shutdown: tokio::sync::Notify::new(),
     });
     let stop = Arc::new(AtomicBool::new(false));
@@ -314,6 +322,8 @@ struct Engine {
     gpu: bool,
     /// SMBus devices are driven.
     smbus: bool,
+    /// The OpenRGB SDK server is wanted (the API side serves it).
+    openrgb_sdk: bool,
     /// The SMBus buses (opened when SMBus is first enabled).
     smbus_hw: Option<SmbusHardware>,
     /// SMBus devices found by the last scan.
@@ -385,6 +395,7 @@ impl Engine {
             signalrgb: false,
             gpu: false,
             smbus: false,
+            openrgb_sdk: false,
             smbus_hw: None,
             smbus_present: Vec::new(),
             smbus_scan_due: true,
@@ -442,6 +453,7 @@ impl Engine {
         self.enabled = get(keys::ENABLED).and_then(|v| v.as_bool()).unwrap_or(true);
         self.signalrgb = get(keys::SIGNALRGB).and_then(|v| v.as_bool()).unwrap_or(false);
         self.gpu = get(keys::GPU).and_then(|v| v.as_bool()).unwrap_or(false);
+        self.openrgb_sdk = get(keys::OPENRGB_SDK).and_then(|v| v.as_bool()).unwrap_or(false);
         self.smbus = get(keys::SMBUS)
             .and_then(|v| v.as_bool())
             .unwrap_or(self.opts.config.smbus.enabled);
@@ -579,6 +591,7 @@ impl Engine {
         self.backend = Some(Arc::clone(&backend));
         let defaults = Arc::clone(&self.defaults);
         let events = self.shared.events.clone();
+        let direct = Arc::clone(&self.shared.direct);
         let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
             let d = lock(&defaults).clone();
             let key = device.key.clone();
@@ -606,6 +619,7 @@ impl Engine {
                 log_sink: Some(sink),
                 channel_components: channels,
                 system_info: d.system_info.clone(),
+                direct: Some(Arc::clone(&direct)),
                 ..SessionOptions::default()
             }
         });
@@ -1064,6 +1078,7 @@ impl Engine {
                 smbus: self.smbus,
                 port: self.opts.api_port,
                 port_notice: self.opts.api_port_notice.clone(),
+                openrgb_sdk: self.openrgb_sdk,
                 fps: self.fps(),
                 dry_run: self.opts.dry_run,
             },
@@ -1113,6 +1128,7 @@ impl Engine {
                     .map(|t| format!("{} · 0x{:02x}", t.bus.descriptor().name, t.addr)),
                 name: meta.name.clone(),
                 plugin: meta.name.clone(),
+                device_type: format!("{:?}", meta.device_type).to_ascii_lowercase(),
                 plugin_path: meta.source_path.to_string_lossy().into_owned(),
                 state: if !enabled {
                     "disabled".into()
@@ -1433,7 +1449,15 @@ impl Engine {
                 gpu_compositing,
                 smbus,
                 port,
+                openrgb_sdk,
             } => {
+                if let Some(on) = openrgb_sdk {
+                    if on != self.openrgb_sdk {
+                        self.openrgb_sdk = on;
+                        self.store.set(keys::OPENRGB_SDK, &on).map_err(internal)?;
+                        self.dirty = true;
+                    }
+                }
                 // The API side validated and bound the port; it moves the
                 // listener once this is saved.
                 if let Some(port) = port {
@@ -1478,6 +1502,7 @@ impl Engine {
                     "gpuCompositing": self.gpu,
                     "smbus": self.smbus,
                     "port": self.opts.api_port,
+                    "openrgbSdk": self.openrgb_sdk,
                 }))
             }
             Request::ImportSignalRgb { name } => {

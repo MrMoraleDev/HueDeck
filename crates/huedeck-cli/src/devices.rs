@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! `huedeck devices`: enumerate HID devices read-only and print the
-//! SignalRGB-shaped endpoint tuples grouped by physical device.
+//! SignalRGB-shaped endpoint tuples grouped by physical device (Windows:
+//! HID class paths; Linux: hidraw nodes split into top-level collections,
+//! where `collection` shows the Windows `ColNN` the same TLC would get).
 
 use huedeck_hal_windows::DeviceGroup;
 use serde_json::{json, Value};
@@ -158,26 +160,10 @@ pub fn to_json(groups: &[DeviceGroup]) -> Value {
     )
 }
 
-/// `HUEDECK_HID_BACKEND=hidapi` selects the hidapi backend instead of the
-/// native one (same results; kept for comparison while the native backend is new).
-#[cfg(windows)]
-pub fn use_hidapi() -> bool {
-    huedeck_runtime::hardware::use_hidapi()
-}
-
-/// Enumerate on this OS.
-#[cfg(windows)]
+/// Enumerate on this OS (read-only: Windows probes with zero-access handles,
+/// Linux reads sysfs only). `HUEDECK_HID_BACKEND=hidapi` selects hidapi on Windows.
 pub fn enumerate() -> anyhow::Result<Vec<DeviceGroup>> {
-    if use_hidapi() {
-        return Ok(huedeck_hal_windows::WindowsHidBackend::new()?.enumerate_grouped()?);
-    }
-    Ok(huedeck_hal_windows::NativeHidBackend::new().enumerate_grouped()?)
-}
-
-/// Enumerate on this OS.
-#[cfg(not(windows))]
-pub fn enumerate() -> anyhow::Result<Vec<DeviceGroup>> {
-    anyhow::bail!("`huedeck devices` is only implemented on Windows so far (Linux backend: later milestone)")
+    huedeck_runtime::hardware::connected_groups()
 }
 
 #[cfg(test)]

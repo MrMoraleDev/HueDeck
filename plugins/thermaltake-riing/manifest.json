@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.thermaltake-riing",
+  "name": "Thermaltake Riing / Riing Quad / Riing Trio",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-LED lighting of the five fan headers of the Thermaltake Riing (up to 20 LEDs each), Riing Quad (up to 60) and Riing Trio (up to 54) USB controllers. Adapted from OpenRGB's ThermaltakeRiingController (GPL-2.0-or-later); untested on hardware. Fan speeds are never touched and nothing is saved to the controller. Protocol notes: docs/hardware/thermaltake-riing.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    {
+      "vid": "0x264A",
+      "pids": [
+        "0x1FA5", "0x1FA6", "0x1FA7", "0x1FA8", "0x1FA9", "0x1FAA", "0x1FAB", "0x1FAC", "0x1FAD",
+        "0x1FAE", "0x1FAF", "0x1FB0", "0x1FB1", "0x1FB2", "0x1FB3", "0x1FB4", "0x1FB5",
+        "0x2260", "0x2261", "0x2262", "0x2263", "0x2264", "0x2265", "0x2266", "0x2267", "0x2268",
+        "0x2269", "0x226A", "0x226B", "0x226C", "0x226D", "0x226E", "0x226F", "0x2270", "0x232B",
+        "0x2135", "0x2136", "0x2137", "0x2138", "0x2139", "0x213A", "0x213B", "0x213C", "0x213D",
+        "0x213E", "0x213F", "0x2141", "0x2142", "0x2143", "0x2144", "0x2145"
+      ],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["TT RGB Plus.exe", "TTRGBPlus.exe", "TT RGB Plus 2.0.exe", "TTRGBPLUSService.exe"],
+  "keywords": ["thermaltake", "riing", "riing-quad", "riing-trio", "fan", "argb", "openrgb"]
+}

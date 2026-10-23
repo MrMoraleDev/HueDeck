@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.corsair-lighting-node",
+  "name": "Corsair Lighting Node (OpenRGB port)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-LED lighting of the two RGB headers of Corsair Lighting Node Core / Pro, Commander Pro, LS100 and LT100 kits, 1000D Obsidian and SPEC OMEGA RGB, as two channels of up to 204 LEDs. Adapted from OpenRGB (GPL-2.0-or-later); untested on hardware. No effect configuration (stored by the device), brightness, fan or temperature command is sent; at shutdown the headers go back to hardware control (the device's stored effect). Protocol notes: docs/hardware/corsair-lighting-node.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    {
+      "vid": "0x1B1C",
+      "pids": ["0x0C1A", "0x0C0B", "0x0C10", "0x0C1E", "0x1D00", "0x1D04", "0x0C23"],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["iCUE.exe", "Corsair.Service.exe", "CueLLAccessService.exe"],
+  "keywords": ["corsair", "lighting node", "commander pro", "argb", "openrgb"]
+}

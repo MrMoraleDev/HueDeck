@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.hyperx-mouse",
+  "name": "HyperX Pulsefire mice (Kingston ids)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-LED lighting of the HyperX Pulsefire mice with Kingston product ids: Surge, FPS Pro, Core, Dart (wired and wireless), Raid, Haste. Adapted from OpenRGB's HyperXMouseController (GPL-2.0-or-later); untested on hardware. Only Direct colour reports are sent: never the Dart's save-to-memory command, never DPI, polling rate or profile settings. Protocol notes: docs/hardware/hyperx-mouse.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x0951",
+      "pids": ["0x16D3", "0x16D7", "0x16DE", "0x16E1", "0x16E2", "0x16E4", "0x1727"],
+      "transport": "hid",
+      "interfaces": [1, 2, 3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["NGenuity2.exe", "HyperX NGENUITY.exe"],
+  "keywords": ["hyperx", "kingston", "pulsefire", "mouse", "openrgb"]
+}

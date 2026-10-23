@@ -19,6 +19,7 @@
 //! then the DACL is the gate, and the broker's static policy (deny ranges,
 //! write allowlist, rate limit) holds whatever the client sends.
 
+#[cfg(any(windows, test))]
 use std::io;
 #[cfg(windows)]
 use std::io::{Read, Write};

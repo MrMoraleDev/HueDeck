@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.logitech-keyboard",
+  "name": "Logitech G815 / G915 keyboards",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-key lighting of the Logitech G813 and G815 (wired) and the G915 and G915 TKL (wired, and through their LIGHTSPEED receivers 0xC541, 0xC545 and 0xC547, the last one after a read-only name probe) over HID++ per-key frames. Adapted from OpenRGB's LogitechG815Controller and LogitechG915Controller (GPL-2.0-or-later); untested on hardware. OpenRGB's direct-mode writes to feature 0x4522 (key disabling) and its 0x8071 cluster-effect writes with the persistence byte set are not sent, nor any hardware effect. The G213 (0xC336) is held back. Protocol notes: docs/hardware/logitech-keyboard.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x046D",
+      "pids": ["0xC232", "0xC33F", "0xC541", "0xC547", "0xC33E", "0xC545", "0xC343"],
+      "transport": "hid",
+      "interfaces": [1, 2],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["lghub.exe", "lghub_agent.exe", "lghub_updater.exe", "LCore.exe"],
+  "keywords": ["logitech", "g815", "g813", "g915", "keyboard", "hid++", "openrgb"]
+}

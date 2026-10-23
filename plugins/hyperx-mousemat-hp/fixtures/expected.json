@@ -1,0 +1,443 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Expected packets worked out from OpenRGB's C++ (commit d4798c120659ec5ba2e664a9e87bedff8d36f880, Controllers/HyperXMousematController) by a separate reference model that mirrors each C++ function buffer by buffer (openrgb-work/batch2/hyperx/gen_fixtures.py in the porting session's scratch space, not part of the repository); plugin.js was never run to make them. 'products' comes from the detector file (HyperXMousematControllerDetect.cpp; the _WIN32 branch where there is one). Each variant lists the exposed LEDs (name, OpenRGB LED index, grid cell), two colour sets in that order, the I/O for Initialize, a frame with each colour set and Shutdown, and how long an unchanged frame may go unsent (resend_ms, 0 = every Render). ops: write = output report (hid_write), send_report = feature report (hid_send_feature_report), pause = sleep; hex is the whole buffer at the length the C++ passes, report id first. HueDeck deviations described in docs/hardware/hyperx-mousemat.md are modelled the same way (the colour slots past the mat's LED count, which OpenRGB reads past its colour vector, are black; nothing at Initialize, a black frame at Shutdown).",
+ "products": [
+  {
+   "vid": "0x03F0",
+   "pid": "0x0F8D",
+   "name": "HyperX Pulsefire Mat",
+   "validate": {
+    "interface": 1,
+    "usage_page": 65424,
+    "usage": 65280
+   },
+   "variant": "MAT_15_5"
+  }
+ ],
+ "variants": {
+  "MAT_15_5": {
+   "size": [
+    15,
+    2
+   ],
+   "leds": [
+    {
+     "name": "Underglow LED 1",
+     "index": 0,
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 2",
+     "index": 1,
+     "pos": [
+      1,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 3",
+     "index": 2,
+     "pos": [
+      2,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 4",
+     "index": 3,
+     "pos": [
+      3,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 5",
+     "index": 4,
+     "pos": [
+      4,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 6",
+     "index": 5,
+     "pos": [
+      5,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 7",
+     "index": 6,
+     "pos": [
+      6,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 8",
+     "index": 7,
+     "pos": [
+      7,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 9",
+     "index": 8,
+     "pos": [
+      8,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 10",
+     "index": 9,
+     "pos": [
+      9,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 11",
+     "index": 10,
+     "pos": [
+      10,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 12",
+     "index": 11,
+     "pos": [
+      11,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 13",
+     "index": 12,
+     "pos": [
+      12,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 14",
+     "index": 13,
+     "pos": [
+      13,
+      0
+     ]
+    },
+    {
+     "name": "Underglow LED 15",
+     "index": 14,
+     "pos": [
+      14,
+      0
+     ]
+    },
+    {
+     "name": "LED Strip LED 1",
+     "index": 15,
+     "pos": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "LED Strip LED 2",
+     "index": 16,
+     "pos": [
+      1,
+      1
+     ]
+    },
+    {
+     "name": "LED Strip LED 3",
+     "index": 17,
+     "pos": [
+      2,
+      1
+     ]
+    },
+    {
+     "name": "LED Strip LED 4",
+     "index": 18,
+     "pos": [
+      3,
+      1
+     ]
+    },
+    {
+     "name": "LED Strip LED 5",
+     "index": 19,
+     "pos": [
+      4,
+      1
+     ]
+    }
+   ],
+   "resend_ms": 0,
+   "colours_a": [
+    [
+     14,
+     136,
+     90
+    ],
+    [
+     51,
+     195,
+     173
+    ],
+    [
+     88,
+     254,
+     0
+    ],
+    [
+     125,
+     57,
+     83
+    ],
+    [
+     162,
+     116,
+     166
+    ],
+    [
+     199,
+     175,
+     249
+    ],
+    [
+     236,
+     234,
+     76
+    ],
+    [
+     17,
+     37,
+     159
+    ],
+    [
+     54,
+     96,
+     242
+    ],
+    [
+     91,
+     155,
+     69
+    ],
+    [
+     128,
+     214,
+     152
+    ],
+    [
+     165,
+     17,
+     235
+    ],
+    [
+     202,
+     76,
+     62
+    ],
+    [
+     239,
+     135,
+     145
+    ],
+    [
+     20,
+     194,
+     228
+    ],
+    [
+     57,
+     253,
+     55
+    ],
+    [
+     94,
+     56,
+     138
+    ],
+    [
+     131,
+     115,
+     221
+    ],
+    [
+     168,
+     174,
+     48
+    ],
+    [
+     205,
+     233,
+     131
+    ]
+   ],
+   "colours_b": [
+    [
+     25,
+     143,
+     103
+    ],
+    [
+     62,
+     202,
+     186
+    ],
+    [
+     99,
+     5,
+     13
+    ],
+    [
+     136,
+     64,
+     96
+    ],
+    [
+     173,
+     123,
+     179
+    ],
+    [
+     210,
+     182,
+     6
+    ],
+    [
+     247,
+     241,
+     89
+    ],
+    [
+     28,
+     44,
+     172
+    ],
+    [
+     65,
+     103,
+     255
+    ],
+    [
+     102,
+     162,
+     82
+    ],
+    [
+     139,
+     221,
+     165
+    ],
+    [
+     176,
+     24,
+     248
+    ],
+    [
+     213,
+     83,
+     75
+    ],
+    [
+     250,
+     142,
+     158
+    ],
+    [
+     31,
+     201,
+     241
+    ],
+    [
+     68,
+     4,
+     68
+    ],
+    [
+     105,
+     63,
+     151
+    ],
+    [
+     142,
+     122,
+     234
+    ],
+    [
+     179,
+     181,
+     61
+    ],
+    [
+     216,
+     240,
+     144
+    ]
+   ],
+   "initialize": [],
+   "frame_a": [
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "0004F20000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "00810E885A8133C3AD8158FE00817D395381A274A681C7AFF981ECEA4C8111259F813660F2815B9B458180D69881A511EB81CA4C3E81EF87918114C2E48139FD37"
+    },
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "00815E388A818373DD81A8AE3081CDE983810000008100000081000000810000008100000081000000810000008100000081000000810000008100000081000000"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "0004F20000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "0081198F67813ECABA8163050D8188406081AD7BB381D2B60681F7F159811C2CAC814167FF8166A252818BDDA581B018F881D5534B81FA8E9E811FC9F181440444"
+    },
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "0081693F97818E7AEA81B3B53D81D8F090810000008100000081000000810000008100000081000000810000008100000081000000810000008100000081000000"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "0004F20000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "0081000000810000008100000081000000810000008100000081000000810000008100000081000000810000008100000081000000810000008100000081000000"
+    },
+    {
+     "op": "send_report",
+     "len": 65,
+     "hex": "0081000000810000008100000081000000810000008100000081000000810000008100000081000000810000008100000081000000810000008100000081000000"
+    }
+   ]
+  }
+ }
+}

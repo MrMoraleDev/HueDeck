@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 2,
+  "id": "example.hello-strip",
+  "name": "Hello Strip",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "HueDeck SDK example",
+  "description": "A made-up 8-LED USB HID strip (pid.codes test id 1209:0001): the plugin the SDK README builds. Not a real product.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [{ "vid": "0x1209", "pids": ["0x0001"], "transport": "hid" }],
+  "permissions": ["hid"]
+}

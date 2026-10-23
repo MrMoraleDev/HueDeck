@@ -43,8 +43,8 @@ use huedeck_api::model::{
 };
 use huedeck_api::{ApiError, Backend, Event, Request, Snapshot};
 use huedeck_engine::{
-    Component, ComponentInstance, ComponentLibrary, FrameStore, Layout, Placement, Rgb, CANVAS_HEIGHT,
-    CANVAS_WIDTH,
+    Component, ComponentInstance, ComponentLibrary, DirectLeds, FrameStore, Layout, Placement, Rgb,
+    CANVAS_HEIGHT, CANVAS_WIDTH,
 };
 use huedeck_hal::notify::{Notification, Notifier};
 use huedeck_hal::HidBackend;
@@ -93,6 +93,7 @@ mod keys {
     pub const BATTERY_BLINK: &str = "battery.blink";
     /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
     pub const PORT: &str = "settings.port";
+    pub const OPENRGB_SDK: &str = "settings.openrgbSdk";
 }
 
 /// The database key of the port saved from the dashboard.
@@ -172,6 +173,8 @@ pub struct Shared {
     events: broadcast::Sender<Event>,
     requests: Sender<Envelope>,
     frames: Arc<FrameStore>,
+    /// OpenRGB SDK clients' colours, read by every session.
+    direct: Arc<DirectLeds>,
     shutdown: tokio::sync::Notify,
 }
 
@@ -200,6 +203,10 @@ impl Backend for Shared {
 
     fn frames(&self) -> Arc<FrameStore> {
         Arc::clone(&self.frames)
+    }
+
+    fn direct(&self) -> Option<Arc<DirectLeds>> {
+        Some(Arc::clone(&self.direct))
     }
 }
 
@@ -254,6 +261,7 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
         events,
         requests: tx,
         frames,
+        direct: Arc::new(DirectLeds::new()),
         shutdown: tokio::sync::Notify::new(),
     });
     let stop = Arc::new(AtomicBool::new(false));
@@ -351,6 +359,8 @@ struct Engine {
     effects: EffectLibrary,
     components: ComponentLibrary,
     canvas: Canvas,
+    /// `engine.audio` capture, while the effect reads it.
+    audio: Option<huedeck_inputs::audio::AudioInput>,
     effect: Option<String>,
     brightness: u8,
     enabled: bool,
@@ -359,6 +369,8 @@ struct Engine {
     gpu: bool,
     /// SMBus devices are driven.
     smbus: bool,
+    /// The OpenRGB SDK server is wanted (the API side serves it).
+    openrgb_sdk: bool,
     /// The SMBus buses (opened when SMBus is first enabled).
     smbus_hw: Option<SmbusHardware>,
     /// SMBus devices found by the last scan.
@@ -435,6 +447,7 @@ impl Engine {
             effects: EffectLibrary::new(),
             components: ComponentLibrary::default(),
             canvas: Canvas::Null(NullRenderer::new(Pattern::Solid(Rgb::new(0, 0, 0)), 30.0)),
+            audio: None,
             effect: None,
             brightness: 100,
             enabled: true,
@@ -442,6 +455,7 @@ impl Engine {
             signalrgb: false,
             gpu: false,
             smbus: false,
+            openrgb_sdk: false,
             smbus_hw: None,
             smbus_present: Vec::new(),
             smbus_scan_due: true,
@@ -505,6 +519,7 @@ impl Engine {
         self.enabled = get(keys::ENABLED).and_then(|v| v.as_bool()).unwrap_or(true);
         self.signalrgb = get(keys::SIGNALRGB).and_then(|v| v.as_bool()).unwrap_or(false);
         self.gpu = get(keys::GPU).and_then(|v| v.as_bool()).unwrap_or(false);
+        self.openrgb_sdk = get(keys::OPENRGB_SDK).and_then(|v| v.as_bool()).unwrap_or(false);
         self.smbus = get(keys::SMBUS)
             .and_then(|v| v.as_bool())
             .unwrap_or(self.opts.config.smbus.enabled);
@@ -661,6 +676,7 @@ impl Engine {
         self.backend = Some(Arc::clone(&backend));
         let defaults = Arc::clone(&self.defaults);
         let events = self.shared.events.clone();
+        let direct = Arc::clone(&self.shared.direct);
         let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
             let d = lock(&defaults).clone();
             let key = device.key.clone();
@@ -689,6 +705,7 @@ impl Engine {
                 channel_components: channels,
                 system_info: d.system_info.clone(),
                 shutdown_mode: d.shutdown_mode_of(&key),
+                direct: Some(Arc::clone(&direct)),
                 battery_warning_level: d.battery_low,
                 ..SessionOptions::default()
             }
@@ -984,6 +1001,7 @@ impl Engine {
     }
 
     fn start_canvas(&mut self) {
+        self.audio = None;
         self.canvas.client().stop();
         if self
             .effect
@@ -1023,6 +1041,16 @@ impl Engine {
             canvas = Canvas::Null(NullRenderer::new(Pattern::Rainbow, f64::from(fps)));
             let _ = canvas.client().start(Arc::clone(&self.shared.frames));
         }
+        let uses_audio = self
+            .effect
+            .as_deref()
+            .and_then(|id| self.effects.get(id))
+            .is_some_and(|e| e.meta.uses.audio);
+        let sink = match &canvas {
+            Canvas::Cef(c) => Some(c.engine_sink()),
+            Canvas::Null(_) => None,
+        };
+        self.audio = crate::audio::feed(&self.opts.config.audio, fps, uses_audio, sink);
         self.canvas = canvas;
         self.dirty = true;
     }
@@ -1084,6 +1112,7 @@ impl Engine {
                 tracing::warn!("session {f}");
             }
         }
+        self.audio = None;
         self.canvas.client().stop();
     }
 
@@ -1149,6 +1178,7 @@ impl Engine {
                 smbus: self.smbus,
                 port: self.opts.api_port,
                 port_notice: self.opts.api_port_notice.clone(),
+                openrgb_sdk: self.openrgb_sdk,
                 fps: self.fps(),
                 dry_run: self.opts.dry_run,
                 shutdown_mode: lock(&self.defaults).shutdown_mode.as_str().into(),
@@ -1323,6 +1353,7 @@ impl Engine {
                     .map(|t| format!("{} · 0x{:02x}", t.bus.descriptor().name, t.addr)),
                 name: meta.name.clone(),
                 plugin: meta.name.clone(),
+                device_type: format!("{:?}", meta.device_type).to_ascii_lowercase(),
                 plugin_path: meta.source_path.to_string_lossy().into_owned(),
                 state: if !enabled {
                     "disabled".into()
@@ -1715,7 +1746,15 @@ impl Engine {
                 battery_critical,
                 battery_notifications,
                 port,
+                openrgb_sdk,
             } => {
+                if let Some(on) = openrgb_sdk {
+                    if on != self.openrgb_sdk {
+                        self.openrgb_sdk = on;
+                        self.store.set(keys::OPENRGB_SDK, &on).map_err(internal)?;
+                        self.dirty = true;
+                    }
+                }
                 if battery_low.is_some() || battery_critical.is_some() {
                     let t = Thresholds::new(
                         battery_low.unwrap_or(self.thresholds.low),
@@ -1805,6 +1844,7 @@ impl Engine {
                     "batteryCritical": self.thresholds.critical,
                     "batteryNotifications": self.battery_notify,
                     "port": self.opts.api_port,
+                    "openrgbSdk": self.openrgb_sdk,
                 }))
             }
             Request::ImportSignalRgb { name } => {

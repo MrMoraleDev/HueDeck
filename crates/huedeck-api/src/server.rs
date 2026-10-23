@@ -55,6 +55,8 @@ pub struct ApiContext {
     pub ui_dir: Option<PathBuf>,
     /// Let the SignalRGB-compatible API change state without the token.
     pub open_compat_mutations: bool,
+    /// The native listener, when the port can be changed (`PATCH /v1/settings`).
+    pub native: Option<Arc<crate::NativeListener>>,
 }
 
 impl ApiContext {
@@ -165,7 +167,7 @@ fn reply(result: Result<Value, ApiError>) -> Response {
 
 // ------------------------------------------------------------------ native
 
-/// The native API on [`crate::NATIVE_PORT`]: `/v1/...`, the WebSocket streams and the dashboard.
+/// The native API on `port` ([`crate::NATIVE_PORT`] by default): `/v1/...`, the WebSocket streams and the dashboard.
 pub fn native_router(ctx: ApiContext, port: u16) -> Router {
     let g = Guard::new(port, Arc::clone(&ctx.token), true);
     Router::new()
@@ -449,18 +451,78 @@ struct SettingsPatch {
     gpu_compositing: Option<bool>,
     smbus: Option<bool>,
     shutdown_mode: Option<String>,
+    /// Wider than `u16` so an out-of-range number gets a clear 400.
+    port: Option<u32>,
 }
 
+/// `PATCH /v1/settings`. A `port` moves the native API and the dashboard:
+/// the new port is bound first (busy: 409, nothing changes), the daemon
+/// persists it, the new listener starts and the old one stays for
+/// a grace period ([`crate::listener::DEFAULT_GRACE`]) so this response and the
+/// dashboard's navigation to the returned `url` go through.
 async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPatch>) -> Response {
-    reply(
-        ctx.call(Request::SetSettings {
+    let mut moved = None;
+    let port = match p.port {
+        None => None,
+        Some(raw) => {
+            let port = match crate::check_native_port(raw) {
+                Ok(port) => port,
+                Err(message) => {
+                    return error_response(&ApiError {
+                        status: 400,
+                        code: "invalid_port".into(),
+                        message,
+                    })
+                }
+            };
+            let Some(native) = ctx.native.clone() else {
+                return error_response(&ApiError::bad_request(
+                    "the port can only be changed on the native API",
+                ));
+            };
+            if port != native.port() {
+                match native.bind(port).await {
+                    Ok(listener) => moved = Some((native, listener)),
+                    Err(e) => {
+                        return error_response(&ApiError {
+                            status: 409,
+                            code: "port_in_use".into(),
+                            message: format!(
+                                "port {port} cannot be used ({e}); another program probably listens on it. Nothing was changed: choose another port"
+                            ),
+                        })
+                    }
+                }
+            }
+            Some(port)
+        }
+    };
+    let result = ctx
+        .call(Request::SetSettings {
             signalrgb: p.signalrgb,
             gpu_compositing: p.gpu_compositing,
             smbus: p.smbus,
             shutdown_mode: p.shutdown_mode,
+            port,
         })
-        .await,
-    )
+        .await;
+    let mut value = match result {
+        Ok(v) => v,
+        // The new listener (if any) is dropped: nothing changed.
+        Err(e) => return error_response(&e),
+    };
+    let serving = match moved {
+        Some((native, listener)) => {
+            native.serve(listener, ctx.clone());
+            Some(native.port())
+        }
+        None => ctx.native.as_ref().map(|n| n.port()),
+    };
+    if let (Some(port), Some(obj)) = (serving, value.as_object_mut()) {
+        obj.insert("port".into(), json!(port));
+        obj.insert("url".into(), json!(crate::native_url(port)));
+    }
+    Json(value).into_response()
 }
 
 #[derive(Deserialize, Default)]

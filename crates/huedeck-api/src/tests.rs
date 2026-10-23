@@ -11,6 +11,7 @@ use http_body_util::BodyExt;
 use huedeck_engine::{Frame, FrameStore, Rgb};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::{broadcast, oneshot};
 use tower::ServiceExt;
 
@@ -88,6 +89,7 @@ fn ctx(b: &Arc<Scripted>, open_compat: bool) -> ApiContext {
         token: Arc::from(TOKEN),
         ui_dir: None,
         open_compat_mutations: open_compat,
+        native: None,
     }
 }
 
@@ -121,7 +123,7 @@ async fn send(
     (status, value)
 }
 
-const HOST: &str = "127.0.0.1:16138";
+const HOST: &str = "127.0.0.1:53000";
 
 #[tokio::test]
 async fn the_guard_wants_a_loopback_host_the_same_origin_and_a_token_for_changes() {
@@ -129,9 +131,9 @@ async fn the_guard_wants_a_loopback_host_the_same_origin_and_a_token_for_changes
     let r = native_router(ctx(&b, false), NATIVE_PORT);
     let (s, _) = send(&r, "GET", "/v1/health", HOST, false, None).await;
     assert_eq!(s, StatusCode::OK);
-    let (s, _) = send(&r, "GET", "/v1/health", "localhost:16138", false, None).await;
+    let (s, _) = send(&r, "GET", "/v1/health", "localhost:53000", false, None).await;
     assert_eq!(s, StatusCode::OK);
-    let (s, v) = send(&r, "GET", "/v1/health", "rebind.example:16138", false, None).await;
+    let (s, v) = send(&r, "GET", "/v1/health", "rebind.example:53000", false, None).await;
     assert_eq!(
         (s, v["error"]["code"].as_str()),
         (StatusCode::FORBIDDEN, Some("forbidden_host"))
@@ -352,6 +354,179 @@ async fn the_dashboard_page_carries_the_token() {
     // Client-side routes get the page too; missing assets do not.
     let (s, _) = send(&r, "GET", "/effects", HOST, false, None).await;
     assert_eq!(s, StatusCode::OK);
+}
+
+#[test]
+fn the_native_port_is_53000_and_moves_only_within_range() {
+    assert_eq!(NATIVE_PORT, 53000);
+    assert_eq!(check_native_port(53000), Ok(53000));
+    assert_eq!(check_native_port(1024), Ok(1024));
+    assert_eq!(check_native_port(65535), Ok(65535));
+    for bad in [0, 80, 1023, 65536, 70000, 16038, 16034, 6742] {
+        assert!(check_native_port(bad).is_err(), "{bad}");
+    }
+    assert_eq!(native_url(17000), "http://127.0.0.1:17000/");
+}
+
+#[tokio::test]
+async fn a_bad_port_is_refused_before_anything_changes() {
+    let b = backend();
+    let mut c = ctx(&b, false);
+    c.native = Some(Arc::new(NativeListener::new(Duration::from_millis(10))));
+    let r = native_router(c, NATIVE_PORT);
+    for port in [json!(80), json!(70000), json!(16038)] {
+        let (s, v) = send(
+            &r,
+            "PATCH",
+            "/v1/settings",
+            HOST,
+            true,
+            Some(json!({"port": port})),
+        )
+        .await;
+        assert_eq!(
+            (s, v["error"]["code"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid_port")),
+            "{port}"
+        );
+    }
+    // Without a native listener (e.g. the compat side) the port cannot move.
+    let r = native_router(ctx(&b, false), NATIVE_PORT);
+    let (s, _) = send(
+        &r,
+        "PATCH",
+        "/v1/settings",
+        HOST,
+        true,
+        Some(json!({"port": 17000})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(b.calls.lock().unwrap().is_empty());
+    // Other settings still pass through, with no port.
+    let (s, _) = send(
+        &r,
+        "PATCH",
+        "/v1/settings",
+        HOST,
+        true,
+        Some(json!({"smbus": false})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        b.calls.lock().unwrap()[0],
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            smbus: Some(false),
+            shutdown_mode: None,
+            port: None
+        }
+    );
+}
+
+/// One HTTP/1.1 request over a real socket: (status, JSON body).
+async fn http(port: u16, method: &str, path: &str, body: Option<Value>) -> std::io::Result<(u16, Value)> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+    let body = body.map(|b| b.to_string()).unwrap_or_default();
+    let head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {TOKEN}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await?;
+    let text = String::from_utf8_lossy(&raw);
+    let status = text.split(' ').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let json = text
+        .split_once("\r\n\r\n")
+        .and_then(|(_, b)| serde_json::from_str(b).ok())
+        .unwrap_or(Value::Null);
+    Ok((status, json))
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_port_moves_and_the_old_listener_closes_after_the_grace_period() {
+    let b = backend();
+    let served = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&served);
+    let grace = Duration::from_millis(700);
+    let native = Arc::new(NativeListener::new(grace).on_serve(move |p| seen.lock().unwrap().push(p)));
+    let mut c = ctx(&b, false);
+    c.native = Some(Arc::clone(&native));
+    let first = crate::listener::bind_loopback(0).await.unwrap();
+    let old = first.local_addr().unwrap().port();
+    native.serve(first, c.clone());
+    assert_eq!(native.port(), old);
+
+    let new = free_port();
+    let (s, v) = http(old, "PATCH", "/v1/settings", Some(json!({"port": new})))
+        .await
+        .unwrap();
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["port"], new);
+    assert_eq!(v["url"], format!("http://127.0.0.1:{new}/"));
+    assert_eq!(native.port(), new);
+    assert_eq!(*served.lock().unwrap(), vec![old, new]);
+    assert_eq!(
+        b.calls.lock().unwrap()[0],
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            smbus: None,
+            shutdown_mode: None,
+            port: Some(new)
+        }
+    );
+    // Both answer during the grace period; the dashboard page comes from the new one.
+    assert_eq!(http(new, "GET", "/v1/health", None).await.unwrap().0, 200);
+    assert_eq!(http(old, "GET", "/v1/health", None).await.unwrap().0, 200);
+    tokio::time::sleep(grace + Duration::from_millis(800)).await;
+    assert!(
+        http(old, "GET", "/v1/health", None).await.is_err(),
+        "the old listener is closed"
+    );
+    assert_eq!(http(new, "GET", "/v1/health", None).await.unwrap().0, 200);
+
+    // A busy port: 409, nothing changes, nothing is saved.
+    let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let busy = holder.local_addr().unwrap().port();
+    let (s, v) = http(new, "PATCH", "/v1/settings", Some(json!({"port": busy})))
+        .await
+        .unwrap();
+    assert_eq!(
+        (s, v["error"]["code"].as_str()),
+        (409, Some("port_in_use")),
+        "{v}"
+    );
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains(&busy.to_string()));
+    assert_eq!(native.port(), new);
+    assert_eq!(b.calls.lock().unwrap().len(), 1);
+
+    // The same port again is no move (the choice is still saved).
+    let (s, v) = http(new, "PATCH", "/v1/settings", Some(json!({"port": new})))
+        .await
+        .unwrap();
+    assert_eq!((s, v["port"].as_u64()), (200, Some(u64::from(new))));
+    assert_eq!(*served.lock().unwrap(), vec![old, new]);
+
+    native.shutdown().await;
+    assert!(http(new, "GET", "/v1/health", None).await.is_err());
+    drop(holder);
 }
 
 #[test]

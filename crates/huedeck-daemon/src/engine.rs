@@ -83,7 +83,12 @@ mod keys {
     pub const SHUTDOWN_MODE: &str = "settings.shutdownMode";
     /// Followed by the device key: that device's exit mode (`""`: the setting's).
     pub const DEVICE_SHUTDOWN_MODE: &str = "shutdownMode.";
+    /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
+    pub const PORT: &str = "settings.port";
 }
+
+/// The database key of the port saved from the dashboard.
+pub const PORT_KEY: &str = keys::PORT;
 
 /// How long a "Save to devices" request waits for the devices' sessions.
 const SAVE_WAIT: Duration = Duration::from_secs(20);
@@ -138,6 +143,10 @@ pub struct EngineOptions {
     pub renderer: Option<PathBuf>,
     /// Plugin index cache file (`None`: load every plugin file each time).
     pub plugin_cache: Option<PathBuf>,
+    /// Port the native API and dashboard listen on (shown in the settings).
+    pub api_port: u16,
+    /// Why that is not the configured port (busy at startup), for the settings.
+    pub api_port_notice: Option<String>,
 }
 
 struct Envelope {
@@ -1091,6 +1100,8 @@ impl Engine {
                 signalrgb_available: huedeck_plugin_host::catalog::signalrgb_app_dir().is_some(),
                 gpu_compositing: self.gpu,
                 smbus: self.smbus,
+                port: self.opts.api_port,
+                port_notice: self.opts.api_port_notice.clone(),
                 fps: self.fps(),
                 dry_run: self.opts.dry_run,
                 shutdown_mode: lock(&self.defaults).shutdown_mode.as_str().into(),
@@ -1511,7 +1522,24 @@ impl Engine {
                 gpu_compositing,
                 smbus,
                 shutdown_mode,
+                port,
             } => {
+                // The API side validated and bound the port; it moves the
+                // listener once this is saved.
+                if let Some(port) = port {
+                    let port =
+                        huedeck_api::check_native_port(u32::from(port)).map_err(ApiError::bad_request)?;
+                    self.store.set(keys::PORT, &port).map_err(internal)?;
+                    if port != self.opts.api_port || self.opts.api_port_notice.is_some() {
+                        self.log(format!(
+                            "the dashboard and the API move to {}",
+                            huedeck_api::native_url(port)
+                        ));
+                    }
+                    self.opts.api_port = port;
+                    self.opts.api_port_notice = None;
+                    self.dirty = true;
+                }
                 if let Some(mode) = shutdown_mode {
                     let mode = ShutdownMode::parse(&mode).ok_or_else(|| {
                         ApiError::bad_request(format!("unknown exit mode {mode:?} (restore, keep, off)"))
@@ -1556,6 +1584,7 @@ impl Engine {
                     "gpuCompositing": self.gpu,
                     "smbus": self.smbus,
                     "shutdownMode": lock(&self.defaults).shutdown_mode.as_str(),
+                    "port": self.opts.api_port,
                 }))
             }
             Request::ImportSignalRgb { name } => {
@@ -1972,5 +2001,7 @@ pub fn locate(paths: Paths, config: Config, dry_run: bool, hardware: HardwareMod
         dry_run,
         hardware,
         ephemeral: false,
+        api_port: huedeck_api::NATIVE_PORT,
+        api_port_notice: None,
     }
 }

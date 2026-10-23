@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Local API of `huedeckd`: the native REST + WebSocket API and the dashboard
-//! on [`NATIVE_PORT`], the SignalRGB-compatible REST API on
+//! on [`NATIVE_PORT`] (changeable from the dashboard, see [`listener`]), the
+//! SignalRGB-compatible REST API on
 //! [`COMPAT_REST_PORT`] and its canvas-event listener on
 //! [`COMPAT_CANVAS_EVENT_PORT`]. Loopback only; see [`server`] for the
 //! security model.
@@ -12,14 +13,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod listener;
 pub mod model;
 pub mod server;
 
+pub use listener::NativeListener;
 pub use model::{ApiError, Event, Request, Snapshot};
 pub use server::{canvas_event_router, compat_router, native_router, ApiContext, Backend};
 
-/// Native REST + WS (dashboard, CLI).
-pub const NATIVE_PORT: u16 = 16138;
+/// Native REST + WS (dashboard, CLI): the default port, the same on every OS.
+/// The dashboard setting (Settings → Port) and `config.toml` `[api] port`
+/// override it.
+pub const NATIVE_PORT: u16 = 53000;
+/// Lowest port the native API may move to (no privileged ports).
+pub const MIN_NATIVE_PORT: u16 = 1024;
 /// SignalRGB-compatible REST `/api/v1/*`.
 pub const COMPAT_REST_PORT: u16 = 16038;
 /// SignalRGB-compatible `POST /canvas/event?sender&event`.
@@ -28,6 +35,33 @@ pub const COMPAT_CANVAS_EVENT_PORT: u16 = 16034;
 pub const OPENRGB_SDK_PORT: u16 = 6742;
 /// Loopback only, always.
 pub const BIND_ADDRESS: &str = "127.0.0.1";
+/// Whether the native API may listen on `port`: `1024..=65535`, and not one
+/// of the SignalRGB-compatible ports or the OpenRGB SDK port. The message
+/// says why not.
+pub fn check_native_port(port: u32) -> Result<u16, String> {
+    let Ok(p) = u16::try_from(port) else {
+        return Err(format!(
+            "port {port} is out of range: choose {MIN_NATIVE_PORT}-65535"
+        ));
+    };
+    if p < MIN_NATIVE_PORT {
+        return Err(format!(
+            "port {p} is out of range: choose {MIN_NATIVE_PORT}-65535 (lower ports need administrator rights)"
+        ));
+    }
+    if [COMPAT_REST_PORT, COMPAT_CANVAS_EVENT_PORT, OPENRGB_SDK_PORT].contains(&p) {
+        return Err(format!(
+            "port {p} is reserved for HueDeck's SignalRGB-compatible or OpenRGB listeners: choose another"
+        ));
+    }
+    Ok(p)
+}
+
+/// The dashboard's address on `port`.
+pub fn native_url(port: u16) -> String {
+    format!("http://{BIND_ADDRESS}:{port}/")
+}
+
 /// `api_version` in the compat envelope.
 pub const COMPAT_API_VERSION: &str = "1.0";
 /// Compat path prefix.

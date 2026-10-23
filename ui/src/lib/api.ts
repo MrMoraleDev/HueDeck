@@ -66,6 +66,8 @@ export const api = {
   components: () => request<LibraryComponent[]>("GET", "/v1/components"),
   setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean }) =>
     request("PATCH", "/v1/settings", patch),
+  /** Move the dashboard and the API to `port`; answers with the new address. */
+  setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),
   importSignalRgb: () => request<{ placements: number; channels: number; layout: string }>(
     "POST",
     "/v1/import/signalrgb",

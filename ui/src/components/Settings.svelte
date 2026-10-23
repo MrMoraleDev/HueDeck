@@ -112,6 +112,17 @@
   </section>
 
   <section class="panel">
+    <h2>OpenRGB SDK</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.openrgbSdk}
+        onchange={(e) => daemon.run(() => api.setSettings({ openrgbSdk: (e.target as HTMLInputElement).checked }))}
+      /> Let OpenRGB SDK clients drive HueDeck's devices (127.0.0.1:6742)</label
+    >
+  </section>
+
+  <section class="panel">
     <h2>Effects</h2>
     <label class="check"
       ><input

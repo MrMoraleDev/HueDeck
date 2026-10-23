@@ -93,6 +93,7 @@ fn settings(
             battery_notifications: notify,
             port: None,
             network: None,
+            openrgb_sdk: None,
         },
     )
 }

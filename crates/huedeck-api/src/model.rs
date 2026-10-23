@@ -120,6 +120,9 @@ pub struct DeviceView {
     pub name: String,
     /// Plugin name.
     pub plugin: String,
+    /// The plugin's `DeviceType()` (`keyboard`, `gpu`, `other`, ...).
+    #[serde(default)]
+    pub device_type: String,
     /// Plugin file.
     pub plugin_path: String,
     /// `running`, `starting`, `stopping`, `done`, `disabled` or `absent`.
@@ -248,6 +251,10 @@ pub struct Settings {
     /// startup and the default port was used instead); `None` normally.
     #[serde(default)]
     pub port_notice: Option<String>,
+    /// Serve the OpenRGB SDK protocol on 127.0.0.1:6742 so OpenRGB SDK
+    /// clients see and drive HueDeck's devices (opt-in).
+    #[serde(default)]
+    pub openrgb_sdk: bool,
     /// Effect frame rate.
     pub fps: u32,
     /// Never write to devices.
@@ -404,6 +411,9 @@ pub enum Request {
         /// already bound it and moves the listener).
         #[serde(default)]
         port: Option<u16>,
+        /// Serve the OpenRGB SDK protocol (127.0.0.1:6742).
+        #[serde(default)]
+        openrgb_sdk: Option<bool>,
         /// Network lights (starts or stops the discovery services).
         #[serde(default)]
         network: Option<bool>,

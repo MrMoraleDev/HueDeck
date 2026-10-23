@@ -25,14 +25,18 @@ here.)
 
 ## What the user needs
 
-1. The PawnIO driver, official edition, 2.2.0 or later (https://pawnio.eu). Installing it
-   is the user's step for now (an option of the Lightloom installer and an install / remove
-   button in Settings are planned). Without it `lightloom` and the daemon say that RAM
-   lighting is off (from PawnIO's uninstall entry) and GPU lighting keeps working.
-2. Once, from an elevated prompt: `lightloom-setup --smbus --pawnio-modules <dir>`, with
-   `<dir>` the PawnIO.Modules 0.2.11 release as downloaded (`SmbusPIIX4.bin`, `Echo.bin`,
-   `COPYING`; SHA-256 pinned). It registers the `LightloomIoBroker` service. A broker of an
-   older protocol (before v3) is reported as such and not used: run it again to update.
+1. The PawnIO driver, official edition, 2.2.0 or later, and the `LightloomIoBroker`
+   service. The installer's *RAM and motherboard lighting* option (checked by default) or
+   Settings → PawnIO / RAM lighting → Install in the dashboard sets up both behind one UAC
+   prompt: `lightloom-setup --pawnio-install --smbus` downloads the official PawnIO 2.2.0
+   installer (SHA-256 and signer pinned) when PawnIO is missing or older, and registers the
+   broker with the PawnIO.Modules 0.2.11 files bundled next to it (`SmbusPIIX4.bin`,
+   `Echo.bin`, `COPYING`, sources; SHA-256 pinned). By hand, from an elevated prompt:
+   `lightloom-setup --smbus [--pawnio-modules <dir>]`. Without PawnIO `lightloom` and the daemon
+   say that RAM lighting is off (from PawnIO's uninstall entry) and GPU lighting keeps
+   working. A broker of an older protocol (before v3) is reported as such and not used:
+   Install (Repair / update) in Settings replaces it.
+2. (Nothing else: the daemon opens the broker's buses once the service runs.)
 3. SignalRGB and OpenRGB closed: Lightloom never touches the SMBus alongside them.
 
 Then RAM lighting is on by default (`lightloom light red`, `lightloom plugins`, the daemon);

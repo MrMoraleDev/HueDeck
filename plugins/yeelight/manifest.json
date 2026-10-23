@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.yeelight",
+  "name": "Yeelight",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Yeelight Wi-Fi bulbs and strips over the Yeelight WiFi Light Inter-Operation Specification (turn on \"LAN Control\" in the Yeelight app): M-SEARCH discovery on UDP 1982, JSON commands on TCP 55443, colour streamed in music mode (the light connects back to a listener on an ephemeral port) with a 1 command/s fallback; white-only lights get brightness and power. Untested: nobody working on HueDeck owns a Yeelight. Protocol notes: docs/hardware/yeelight.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    { "network": { "udpPorts": [1982], "tcpPorts": [55443] } }
+  ],
+  "permissions": ["network-udp", "network-tcp", "settings"],
+  "keywords": ["yeelight", "xiaomi", "wifi", "lan", "bulb", "light", "network"]
+}

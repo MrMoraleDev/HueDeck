@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.ddp",
+  "name": "DDP",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Generic DDP (Distributed Display Protocol) output to pixel controllers added by IP (WLED, xLights, ESPixelStick and others on UDP 4048). Written from the public 3waylabs DDP specification. Untested: nobody on the project owns a DDP receiver. Protocol notes: docs/hardware/ddp.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    { "network": { "udpPorts": [4048] } }
+  ],
+  "permissions": ["network-udp", "settings"],
+  "keywords": ["ddp", "distributed display protocol", "wled", "xlights", "espixelstick", "pixel controller", "led strip"]
+}

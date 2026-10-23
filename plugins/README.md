@@ -16,6 +16,14 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 | `hid-lamparray` | any HID LampArray (Windows Dynamic Lighting) device no other plugin claims | Razer DeathAdder V2 Pro's LampArray collection |
 | `msi-gpu` | MSI graphics card RGB at I2C 0x68 (SMBus plugin, NVIDIA through NvAPI): RTX 3060 Gaming X Trio LHR | none yet |
 | `crucial-ballistix` | Crucial Ballistix DDR4 RGB modules (SMBus plugin, chipset SMBus through the HueDeck I/O broker and PawnIO): BL8G32C16U4WL | none yet |
+| `wled` | WLED controllers (network: mDNS, UDP realtime DRGB/DNRGB) | none yet |
+| `ddp` | any DDP receiver added by IP (network: UDP 4048) | none yet |
+| `e131` | any E1.31 / sACN receiver added by IP (network: UDP 5568, unicast) | none yet |
+| `philips-hue` | Philips Hue bridges (network: mDNS, link-button pairing, CLIP v1 REST over HTTP) | none yet |
+| `nanoleaf` | Nanoleaf panels (network: mDNS, token pairing, extControl UDP streaming) | none yet |
+| `govee` | Govee lights with LAN control enabled (network: UDP 4001/4002/4003) | none yet |
+| `lifx` | LIFX bulbs (network: LAN protocol, UDP 56700) | none yet |
+| `yeelight` | Yeelight lights with LAN control enabled (network: SSDP discovery, TCP 55443, music mode) | none yet |
 
 ## A plugin directory
 
@@ -105,6 +113,22 @@ the reviewed addresses of the first-party RAM plugins; GPU buses need neither. T
 `plugins/_testkit/mock-bus.mjs` (the `bus` objects, both shapes) next to `mock-device.mjs`,
 and in HueDeck's host with `huedeck bench --mock-smbus <plugin>`. Details:
 [docs/host-api/smbus.md](../docs/host-api/smbus.md), HueDeck section.
+
+## Network plugins
+
+`Type()` `"network"` plugins drive lights on the local network. They run only while the
+dashboard setting *Network lights* is on (off by default), in two contexts: a discovery
+service (`DiscoveryService`, `service.*`, mDNS / broadcast discovery, pairing, settings) and
+one device session per controller the service announces (`controller` = the announced data).
+Everything they may reach is on the LAN; there is no proxy and no `https`. The contract,
+HueDeck's extensions (`socket.listen(port, peerIp)`) and the dashboard conventions (`name`,
+`ip`, `status`, `paired`, `startLink()`, `discovery.forceDiscover(ip)`,
+`discovery.forgetController(id)`) are in
+[docs/host-api/network-huedeck.md](../docs/host-api/network-huedeck.md). The manifest has a
+`network` claim (`mdns` = the `MDns` types without `.local.`, `udpPorts`, `tcpPorts`). Test
+with `plugins/_testkit/mock-net.mjs` (sockets, XHR routes, the `service` object, and the
+`@SignalRGB/udp|tcp|base64` imports); `crates/huedeck-plugin-host/tests/network_plugins.rs`
+also runs every first-party network plugin in HueDeck's real host on the loopback interface.
 
 ## Adapting a device from OpenRGB
 

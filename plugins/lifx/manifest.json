@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.lifx",
+  "name": "LIFX",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "LIFX Wi-Fi bulbs over the public LIFX LAN protocol (UDP 56700): GetService broadcast discovery, one colour per bulb with SetColor (HSBK), at most 20 messages a second, colour and power restored on shutdown. Multizone strips and tiles get one colour. Untested: nobody working on HueDeck owns a LIFX bulb. Protocol notes: docs/hardware/lifx.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    { "network": { "udpPorts": [56700] } }
+  ],
+  "permissions": ["network-udp", "settings"],
+  "keywords": ["lifx", "wifi", "lan", "bulb", "light", "network"]
+}

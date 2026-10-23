@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.nanoleaf",
+  "name": "Nanoleaf",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Nanoleaf panels (Light Panels/Aurora, Canvas, Shapes, Elements, Lines) on the LAN through the Nanoleaf OpenAPI: power-button pairing, one LED per panel laid out from the panel positions, colours streamed with extControl (v2 over UDP 60222, v1 for Light Panels), the previous effect restored on shutdown. Untested: nobody working on HueDeck owns Nanoleaf panels. Notes: docs/hardware/nanoleaf.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    { "network": { "mdns": ["_nanoleafapi._tcp"], "udpPorts": [60222, 60221], "tcpPorts": [16021] } }
+  ],
+  "permissions": ["network-udp", "network-http", "mdns", "settings"],
+  "keywords": ["nanoleaf", "light panels", "aurora", "canvas", "shapes", "elements", "lines", "network", "lan"]
+}

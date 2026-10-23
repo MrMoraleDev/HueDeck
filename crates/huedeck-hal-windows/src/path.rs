@@ -92,6 +92,19 @@ pub fn parse_hid_path(path: &str) -> ParsedHidPath {
     }
 }
 
+/// The tuple's `interface` for a collection whose path names `mi` (`MI_xx`,
+/// `-1` when absent): `MI_xx` when present; otherwise `0` for a non-composite
+/// USB device, as hidapi and SignalRGB report, and `-1` for every other
+/// transport (docs/host-api/hid-usb.md, "Endpoint tuple semantics"). The
+/// Linux backend applies the same rule to `bInterfaceNumber`.
+pub fn endpoint_interface(mi: i32, usb: bool) -> i32 {
+    match (mi, usb) {
+        (mi, _) if mi >= 0 => mi,
+        (_, true) => 0,
+        (_, false) => -1,
+    }
+}
+
 /// Convert a HID device-interface path into the device instance id that
 /// cfgmgr32 (`CM_Locate_DevNodeW`) understands:
 /// `\\?\HID#VID_1532&PID_007C&MI_00#8&2a1b&0&0000#{guid}` →

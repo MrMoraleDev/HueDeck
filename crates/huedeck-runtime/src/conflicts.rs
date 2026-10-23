@@ -139,6 +139,8 @@ mod tests {
         );
     }
 
+    // The claim is a named mutex on Windows; elsewhere nothing shares the buses yet.
+    #[cfg(windows)]
     #[test]
     fn one_smbus_owner_per_machine() {
         let Ok(first) = claim_smbus() else {

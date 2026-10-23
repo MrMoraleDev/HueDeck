@@ -2,10 +2,11 @@
 //! The HID backend of a hardware run and the present devices some plugin claims.
 
 use huedeck_hal::HidBackend;
+use huedeck_hal_windows::DeviceGroup;
 use huedeck_plugin_host::catalog::Catalog;
 use huedeck_plugin_host::manager::Present;
-#[cfg(windows)]
 use huedeck_plugin_host::session::SessionDevice;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// `HUEDECK_HID_BACKEND=hidapi` selects the hidapi backend instead of the native one.
@@ -23,6 +24,42 @@ pub fn matches_filter(key: &str, filters: &[String]) -> bool {
         })
 }
 
+/// `(vid, pid)` pairs and `(usage_page, usage)` pairs the catalog's plugins claim.
+pub fn claims(catalog: &Catalog) -> (BTreeSet<(u16, u16)>, BTreeSet<(u16, u16)>) {
+    let wanted = catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
+    let usages = catalog
+        .entries()
+        .iter()
+        .flat_map(|e| e.meta.hid_usages.iter().map(|[page, usage]| (*page, *usage)))
+        .collect();
+    (wanted, usages)
+}
+
+/// The groups some plugin drives, after `filters`, each with its plugin.
+pub fn present(groups: Vec<DeviceGroup>, catalog: &Catalog, filters: &[String]) -> Vec<Present> {
+    let mut targets = Vec::new();
+    for g in groups {
+        let key = g.key.to_string();
+        if !matches_filter(&key, filters) {
+            continue;
+        }
+        let endpoints: Vec<_> = g.endpoints.into_iter().map(|e| e.info).collect();
+        if let Some(plugin) = catalog.lookup_device(g.key.vid, g.key.pid, &endpoints) {
+            targets.push(Present {
+                device: SessionDevice {
+                    smbus: None,
+                    key,
+                    vid: g.key.vid,
+                    pid: g.key.pid,
+                    endpoints,
+                },
+                plugin: plugin.clone(),
+            });
+        }
+    }
+    targets
+}
+
 /// The HID backend of a hardware run, kept to enumerate again after hotplug events.
 #[cfg(windows)]
 pub enum Hardware {
@@ -32,9 +69,17 @@ pub enum Hardware {
     Hidapi(Arc<huedeck_hal_windows::WindowsHidBackend>),
 }
 
-#[cfg(windows)]
+/// The HID backend of a hardware run (hidraw), kept to enumerate again after hotplug events.
+#[cfg(target_os = "linux")]
+pub enum Hardware {
+    /// `/dev/hidraw*` backend.
+    Hidraw(Arc<huedeck_hal_linux::LinuxHidBackend>),
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 impl Hardware {
-    /// The backend [`use_hidapi`] selects.
+    /// The backend of this OS ([`use_hidapi`] selects between the two on Windows).
+    #[cfg(windows)]
     pub fn open() -> anyhow::Result<Self> {
         use anyhow::Context;
         Ok(if use_hidapi() {
@@ -46,11 +91,21 @@ impl Hardware {
         })
     }
 
+    /// The hidraw backend (nothing is opened until a session starts).
+    #[cfg(target_os = "linux")]
+    pub fn open() -> anyhow::Result<Self> {
+        Ok(Self::Hidraw(Arc::new(huedeck_hal_linux::LinuxHidBackend::new())))
+    }
+
     /// The backend as the plugin host sees it.
     pub fn backend(&self) -> Arc<dyn HidBackend> {
         match self {
+            #[cfg(windows)]
             Self::Native(b) => b.clone(),
+            #[cfg(windows)]
             Self::Hidapi(b) => b.clone(),
+            #[cfg(target_os = "linux")]
+            Self::Hidraw(b) => b.clone(),
         }
     }
 
@@ -59,54 +114,31 @@ impl Hardware {
     /// before filtering.
     pub fn targets(&self, catalog: &Catalog, filters: &[String]) -> anyhow::Result<(Vec<Present>, usize)> {
         use anyhow::Context;
-        let wanted: std::collections::BTreeSet<(u16, u16)> =
-            catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
-        let usages: std::collections::BTreeSet<(u16, u16)> = catalog
-            .entries()
-            .iter()
-            .flat_map(|e| e.meta.hid_usages.iter().map(|[page, usage]| (*page, *usage)))
-            .collect();
+        let (wanted, usages) = claims(catalog);
         let groups = match self {
+            #[cfg(windows)]
             Self::Native(b) => b.enumerate_grouped_matching(&wanted, &usages),
+            #[cfg(windows)]
             Self::Hidapi(b) => b.enumerate_grouped_matching(&wanted, &usages),
+            #[cfg(target_os = "linux")]
+            Self::Hidraw(b) => b.enumerate_grouped_matching(&wanted, &usages),
         }
         .context("enumerating HID devices")?;
         let total = groups.len();
-        let mut targets = Vec::new();
-        for g in groups {
-            let key = g.key.to_string();
-            if !matches_filter(&key, filters) {
-                continue;
-            }
-            let endpoints: Vec<_> = g.endpoints.into_iter().map(|e| e.info).collect();
-            if let Some(plugin) = catalog.lookup_device(g.key.vid, g.key.pid, &endpoints) {
-                targets.push(Present {
-                    device: SessionDevice {
-                        smbus: None,
-                        key,
-                        vid: g.key.vid,
-                        pid: g.key.pid,
-                        endpoints,
-                    },
-                    plugin: plugin.clone(),
-                });
-            }
-        }
-        Ok((targets, total))
+        Ok((present(groups, catalog, filters), total))
     }
 }
 
-/// No hardware backend on this platform yet.
-#[cfg(not(windows))]
+/// No hardware backend on this platform.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub enum Hardware {}
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl Hardware {
-    /// Always an error: the Linux backend arrives with milestone M7.
+    /// Always an error: HueDeck drives hardware on Windows and Linux only.
     pub fn open() -> anyhow::Result<Self> {
         anyhow::bail!(
-            "driving hardware is only implemented on Windows so far (Linux backend: milestone M7); \
-             try `huedeck bench --mock VID:PID`"
+            "driving hardware is implemented on Windows and Linux only; try `huedeck bench --mock VID:PID`"
         )
     }
 
@@ -121,20 +153,38 @@ impl Hardware {
     }
 }
 
-/// Every connected HID device (read-only enumeration): key, VID, PID.
+/// Every connected HID device grouped by physical device (read-only
+/// enumeration; `HUEDECK_HID_BACKEND=hidapi` selects hidapi on Windows).
 #[cfg(windows)]
+pub fn connected_groups() -> anyhow::Result<Vec<DeviceGroup>> {
+    if use_hidapi() {
+        return Ok(huedeck_hal_windows::WindowsHidBackend::new()?.enumerate_grouped()?);
+    }
+    Ok(huedeck_hal_windows::NativeHidBackend::new().enumerate_grouped()?)
+}
+
+/// Every connected HID device grouped by physical device (sysfs only, nothing opened).
+#[cfg(target_os = "linux")]
+pub fn connected_groups() -> anyhow::Result<Vec<DeviceGroup>> {
+    Ok(huedeck_hal_linux::LinuxHidBackend::new().enumerate_grouped()?)
+}
+
+/// Every connected HID device: not implemented on this OS.
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn connected_groups() -> anyhow::Result<Vec<DeviceGroup>> {
+    anyhow::bail!("HID enumeration is implemented on Windows and Linux only")
+}
+
+/// Every connected HID device (read-only enumeration): key, VID, PID.
 pub fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
+    #[cfg(windows)]
     let groups = huedeck_hal_windows::NativeHidBackend::new().enumerate_grouped()?;
+    #[cfg(not(windows))]
+    let groups = connected_groups()?;
     Ok(groups
         .into_iter()
         .map(|g| (g.key.to_string(), g.key.vid, g.key.pid))
         .collect())
-}
-
-/// Every connected HID device: not implemented on this OS yet.
-#[cfg(not(windows))]
-pub fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
-    anyhow::bail!("HID enumeration is only implemented on Windows so far")
 }
 
 #[cfg(test)]

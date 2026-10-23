@@ -1,0 +1,37 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.asus-aura-keyboard",
+  "name": "ASUS Aura keyboards (ROG / TUF)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-key lighting of ASUS ROG and TUF keyboards over USB: ROG Strix Scope TKL family, ROG Azoth, Claymore, Falchion, Strix Flare / Flare II / Flare II Animate, Strix Scope / RX / NX Wireless Deluxe / Scope II / Scope II 96, TUF Gaming K1, K3, K3 Gen II, K5, K7. Adapted from OpenRGB's AsusAuraKeyboardController and AsusAuraTUFKeyboardController (GPL-2.0-or-later); untested on hardware. The save command and hardware effects are never sent. Protocol notes: docs/hardware/asus-aura-keyboard.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x0B05",
+      "pids": ["0x190C", "0x1A05", "0x1954", "0x19D0", "0x1A83", "0x1A85", "0x184D", "0x193C", "0x193E", "0x1875", "0x18CF", "0x18AF", "0x19FC", "0x19FE", "0x18F8", "0x1951", "0x1B12", "0x19F6", "0x19F8", "0x1AB3", "0x1AB5", "0x1AAE", "0x1B78", "0x1945", "0x194B", "0x1B30", "0x1899", "0x18AA", "0x1C5E"],
+      "transport": "hid",
+      "interfaces": [1, 2],
+      "tested": []
+    }
+  ],
+  "permissions": [
+    "hid"
+  ],
+  "conflictingProcesses": [
+    "ArmouryCrate.exe",
+    "ArmouryCrate.Service.exe",
+    "LightingService.exe"
+  ],
+  "keywords": [
+    "asus",
+    "rog",
+    "tuf",
+    "aura",
+    "keyboard",
+    "openrgb"
+  ]
+}

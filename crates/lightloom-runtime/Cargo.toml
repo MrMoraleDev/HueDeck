@@ -19,6 +19,7 @@ serde_json = { workspace = true }
 lightloom-hal = { path = "../lightloom-hal" }
 lightloom-hal-windows = { path = "../lightloom-hal-windows" }
 lightloom-nvapi = { path = "../lightloom-nvapi" }
+lightloom-protocol = { path = "../lightloom-protocol" }
 lightloom-plugin-host = { path = "../lightloom-plugin-host" }
 lightloom-engine = { path = "../lightloom-engine" }
 lightloom-effects = { path = "../lightloom-effects" }

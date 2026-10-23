@@ -1,25 +1,40 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! `lightloom-setup`: one-shot elevated registration of the Lightloom I/O broker.
+//! `lightloom-setup`: the elevated helper of RAM lighting. It installs the
+//! PawnIO driver (verified download of the official installer) and registers
+//! the Lightloom I/O broker.
 //!
 //! RAM lighting needs the chipset SMBus, which only a privileged process may
-//! reach (through the PawnIO driver). Run once from an elevated prompt (one
-//! UAC prompt), and only when the user opts into RAM lighting:
+//! reach (through the PawnIO driver). This runs elevated, behind one UAC
+//! prompt, and only when the user opts in: the installer's checkbox, the
+//! dashboard's Settings → PawnIO / RAM lighting buttons, or by hand:
 //!
 //! ```text
-//! lightloom-setup --smbus --pawnio-modules <dir> [--client-sid SID] [--plan]
-//! lightloom-setup --smbus --uninstall [--plan]
+//! lightloom-setup --pawnio-install [--smbus] [--elevate] [--pause] [--plan]
+//! lightloom-setup --smbus [--pawnio-modules <dir>] [--client-sid SID] [--elevate] [--pause] [--plan]
+//! lightloom-setup --smbus --uninstall [--elevate] [--pause] [--plan]
 //! ```
 //!
-//! Install:
-//! 1. check the PawnIO driver: installed, official edition, 2.2.0 or later.
-//!    **This tool never downloads or installs PawnIO** (installing it is the
-//!    user's choice: pawnio.eu, or an option of the Lightloom installer); when
-//!    it is missing or too old this tool stops and says so;
-//! 2. check `SmbusPIIX4.bin` and `Echo.bin` in `<dir>` (the signed PawnIO.Modules
-//!    0.2.11 release the user downloaded) against their SHA-256 pins, and copy
-//!    them with `COPYING` and the module sources found there (LGPL-2.1) to
+//! `--pawnio-install` ([`pawnio_setup`]): when PawnIO is missing, older than
+//! 2.2.0 or unreadable, download the official `PawnIO_setup.exe` 2.2.0 from
+//! its GitHub release into `%ProgramFiles%\Lightloom\downloads` (writable by
+//! administrators only), check its size, SHA-256 and Authenticode signer
+//! (`namazso.eu`) against [`lightloom_iobroker::pins::PAWNIO_SETUP`], run it
+//! with `-install -silent`, delete it, and read PawnIO's version again. When
+//! the download or a check fails (offline, say) nothing is changed and the
+//! exit code is [`exit::PAWNIO_UNAVAILABLE`]: RAM lighting stays off, the
+//! dashboard offers to try again. This is the only network access Lightloom
+//! makes on its own (docs/privacy.md).
+//!
+//! `--smbus` (install):
+//! 1. check the PawnIO driver: installed, official edition, 2.2.0 or later
+//!    (without `--pawnio-install` this tool does not install it and stops);
+//! 2. check `SmbusPIIX4.bin` and `Echo.bin` in the modules directory (default:
+//!    `pawnio-modules` next to this executable, where the Lightloom installer
+//!    puts the signed PawnIO.Modules 0.2.11 release) against their SHA-256
+//!    pins, and copy them with `COPYING` and the module sources (LGPL-2.1) to
 //!    `%ProgramFiles%\Lightloom\pawnio\0.2.11\`;
-//! 3. copy `lightloom-iobroker.exe` to `%ProgramFiles%\Lightloom\` (a LocalSystem
+//! 3. stop and delete an existing `LightloomIoBroker` (an update), copy
+//!    `lightloom-iobroker.exe` to `%ProgramFiles%\Lightloom\` (a LocalSystem
 //!    service must not run from a folder its user can write), and check that
 //!    the copy is byte for byte the file hashed before copying (its SHA-256 is
 //!    printed, to compare with the release's);
@@ -30,16 +45,30 @@
 //!
 //! Nothing comes from the environment or the search path: Program Files is
 //! read from `HKLM` ([`lightloom_iobroker::boot::program_files`]), the SID from
-//! the process token, and no other program is started.
+//! the process token.
 //!
 //! `--uninstall` stops and deletes the service and removes those files. It
-//! never uninstalls PawnIO. `--plan` prints the steps and changes nothing.
+//! never uninstalls PawnIO (other programs use it). `--plan` prints the steps
+//! and changes nothing. `--elevate` starts this same command through the UAC
+//! prompt when not elevated yet (and waits for it); `--pause` keeps the
+//! window open on an error.
 
+// Outside Windows only the argument parser and the pure checks are used.
+#![cfg_attr(not(windows), allow(dead_code))]
+
+mod pawnio_setup;
+
+#[cfg(windows)]
+mod net;
+#[cfg(windows)]
+mod trust;
+
+use lightloom_hal_windows::pawnio::exit;
 use lightloom_iobroker::detect::PawnIoStatus;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// One thing the setup does.
+/// One thing the broker setup does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Step {
     /// Copy the pinned module blobs, `COPYING` and their sources.
@@ -54,11 +83,11 @@ enum Step {
     },
     /// Start it.
     StartService,
-    /// Stop it (uninstall).
+    /// Stop it (uninstall, or before an update) and wait until it stopped.
     StopService,
-    /// Delete it (uninstall).
+    /// Delete it (uninstall, or before an update).
     DeleteService,
-    /// Remove the broker and the module copies (uninstall).
+    /// Remove the broker, the module copies and the download folder (uninstall).
     RemoveFiles { broker: PathBuf, modules: PathBuf },
 }
 
@@ -79,8 +108,8 @@ impl std::fmt::Display for Step {
                 exe.display()
             ),
             Step::StartService => write!(f, "start {}", lightloom_iobroker::SERVICE_NAME),
-            Step::StopService => write!(f, "stop {}", lightloom_iobroker::SERVICE_NAME),
-            Step::DeleteService => write!(f, "delete {}", lightloom_iobroker::SERVICE_NAME),
+            Step::StopService => write!(f, "stop {} (if it runs)", lightloom_iobroker::SERVICE_NAME),
+            Step::DeleteService => write!(f, "delete {} (if registered)", lightloom_iobroker::SERVICE_NAME),
             Step::RemoveFiles { broker, modules } => {
                 write!(
                     f,
@@ -112,6 +141,16 @@ impl Layout {
     fn broker(&self) -> PathBuf {
         self.root.join("lightloom-iobroker.exe")
     }
+
+    /// Where `--pawnio-install` puts the installer while it checks and runs it.
+    fn downloads(&self) -> PathBuf {
+        self.root.join("downloads")
+    }
+}
+
+/// The modules directory the Lightloom installer lays out next to this tool.
+fn bundled_modules(exe_dir: &Path) -> PathBuf {
+    exe_dir.join("pawnio-modules")
 }
 
 /// What to do.
@@ -125,7 +164,8 @@ enum Action {
 }
 
 /// The steps for `action`, given what PawnIO detection found. An install
-/// stops when PawnIO is not usable: this tool does not install it.
+/// stops when PawnIO is not usable. An install over an existing service
+/// replaces it (stop, delete, copy, register, start).
 fn plan_steps(action: &Action, pawnio: PawnIoStatus, layout: &Layout) -> Result<Vec<Step>, String> {
     match action {
         Action::Uninstall => Ok(vec![
@@ -143,10 +183,12 @@ fn plan_steps(action: &Action, pawnio: PawnIoStatus, layout: &Layout) -> Result<
             if let Some(problem) = pawnio.problem() {
                 return Err(format!(
                     "{problem}. RAM lighting needs it: install the official edition of PawnIO \
-                     (https://pawnio.eu), then run this again."
+                     (https://pawnio.eu, or `lightloom-setup --pawnio-install`), then run this again."
                 ));
             }
             Ok(vec![
+                Step::StopService,
+                Step::DeleteService,
                 Step::CopyModules {
                     from: modules_from.clone(),
                     to: layout.modules(),
@@ -167,7 +209,8 @@ fn plan_steps(action: &Action, pawnio: PawnIoStatus, layout: &Layout) -> Result<
 }
 
 /// Files copied with the blobs when present: the licence and the module
-/// sources (LGPL-2.1 asks for the source next to the object code).
+/// sources (LGPL-2.1 asks for the source next to the object code). The
+/// `include` directory of the sources is copied as well.
 const MODULE_EXTRAS: &[&str] = &["COPYING", "SmbusPIIX4.p", "Echo.p", "sleepmode.inc", "SOURCE.txt"];
 
 /// Check the pinned blobs in `dir` (and that `COPYING` is there).
@@ -213,79 +256,105 @@ fn copy_verified(from: &Path, to: &Path) -> Result<String, String> {
 #[derive(Debug, Default)]
 struct Args {
     smbus: bool,
+    pawnio_install: bool,
     uninstall: bool,
     plan: bool,
+    elevate: bool,
+    pause: bool,
     modules: Option<PathBuf>,
     client_sid: Option<String>,
+    /// The arguments as given, without `--elevate` (for the elevated copy).
+    forward: Vec<String>,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut out = Args::default();
     let mut it = args.skip(1);
     while let Some(a) = it.next() {
+        if a != "--elevate" {
+            out.forward.push(a.clone());
+        }
         match a.as_str() {
             "--smbus" => out.smbus = true,
+            "--pawnio-install" => out.pawnio_install = true,
             "--uninstall" => out.uninstall = true,
             "--plan" => out.plan = true,
+            "--elevate" => out.elevate = true,
+            "--pause" => out.pause = true,
             "--pawnio-modules" => {
-                out.modules = Some(it.next().ok_or("--pawnio-modules needs a directory")?.into())
+                let dir = it.next().ok_or("--pawnio-modules needs a directory")?;
+                out.forward.push(dir.clone());
+                out.modules = Some(dir.into());
             }
-            "--client-sid" => out.client_sid = Some(it.next().ok_or("--client-sid needs a SID")?),
+            "--client-sid" => {
+                let sid = it.next().ok_or("--client-sid needs a SID")?;
+                out.forward.push(sid.clone());
+                out.client_sid = Some(sid);
+            }
             other => return Err(format!("unexpected argument {other:?}")),
         }
     }
-    if !out.smbus {
-        return Err("nothing to do: --smbus is the only setup there is".into());
+    if !out.smbus && !out.pawnio_install {
+        return Err("nothing to do: give --pawnio-install and/or --smbus".into());
     }
-    if !out.uninstall && out.modules.is_none() {
-        return Err(
-            "--pawnio-modules <dir> is required: the PawnIO.Modules 0.2.11 release, as downloaded".into(),
-        );
+    if out.uninstall && (out.pawnio_install || !out.smbus) {
+        return Err("--uninstall goes with --smbus alone (PawnIO is never uninstalled by Lightloom)".into());
     }
     Ok(out)
 }
 
-const USAGE: &str = "usage: lightloom-setup --smbus --pawnio-modules <dir> [--client-sid SID] [--plan]\n       lightloom-setup --smbus --uninstall [--plan]";
+const USAGE: &str = "usage: lightloom-setup --pawnio-install [--smbus] [--elevate] [--pause] [--plan]\n       \
+lightloom-setup --smbus [--pawnio-modules <dir>] [--client-sid SID] [--elevate] [--pause] [--plan]\n       \
+lightloom-setup --smbus --uninstall [--elevate] [--pause] [--plan]";
 
 fn main() -> ExitCode {
     let args = match parse(std::env::args()) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("lightloom-setup: {e}\n{USAGE}");
-            return ExitCode::from(2);
+            return ExitCode::from(exit::USAGE as u8);
         }
     };
     #[cfg(windows)]
     {
-        win::run(args)
+        ExitCode::from(win::run(args) as u8)
     }
     #[cfg(not(windows))]
     {
         let _ = args;
         eprintln!("lightloom-setup: Windows only (Linux reaches /dev/i2c-* without a broker)");
-        ExitCode::from(2)
+        ExitCode::from(exit::USAGE as u8)
     }
 }
 
 #[cfg(windows)]
 mod win {
     use super::*;
+    use lightloom_hal_windows::elevate;
+    use lightloom_hal_windows::pawnio::{command_line, ERROR_CANCELLED};
     use lightloom_iobroker::{detect, SERVICE_DISPLAY_NAME, SERVICE_NAME};
     use std::ffi::OsString;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use windows_service::service::{
         ServiceAccess, ServiceAction, ServiceActionType, ServiceErrorControl, ServiceFailureActions,
         ServiceFailureResetPeriod, ServiceInfo, ServiceSidType, ServiceStartType, ServiceState, ServiceType,
     };
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
-    fn layout() -> Result<Layout, String> {
-        let root = lightloom_iobroker::boot::program_files().join("Lightloom");
+    /// `ERROR_SERVICE_MARKED_FOR_DELETE`: the old service is still going away.
+    const MARKED_FOR_DELETE: i32 = 1072;
+
+    fn exe_dir() -> Result<PathBuf, String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let dir = exe.parent().ok_or("no directory for lightloom-setup.exe")?;
+        exe.parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "no directory for lightloom-setup.exe".into())
+    }
+
+    fn layout() -> Result<Layout, String> {
         Ok(Layout {
-            root,
-            broker_source: dir.join("lightloom-iobroker.exe"),
+            root: lightloom_iobroker::boot::program_files().join("Lightloom"),
+            broker_source: exe_dir()?.join("lightloom-iobroker.exe"),
         })
     }
 
@@ -347,6 +416,20 @@ mod win {
                 );
             }
         }
+        let include = from.join("include");
+        if include.is_dir() {
+            let dest = to.join("include");
+            std::fs::create_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+            for entry in std::fs::read_dir(&include).map_err(|e| format!("{}: {e}", include.display()))? {
+                let path = entry.map_err(|e| e.to_string())?.path();
+                if path.is_file() && path.extension().is_some_and(|x| x == "inc") {
+                    if let Some(name) = path.file_name() {
+                        std::fs::copy(&path, dest.join(name))
+                            .map_err(|e| format!("{}: {e}", path.display()))?;
+                    }
+                }
+            }
+        }
         // Copied blobs are checked again: the broker loads only pinned files.
         check_modules(to)
     }
@@ -354,6 +437,13 @@ mod win {
     fn manager(access: ServiceManagerAccess) -> Result<ServiceManager, String> {
         ServiceManager::local_computer(None::<&str>, access)
             .map_err(|e| format!("service manager (run elevated): {e}"))
+    }
+
+    fn os_code(e: &windows_service::Error) -> Option<i32> {
+        match e {
+            windows_service::Error::Winapi(io) => io.raw_os_error(),
+            _ => None,
+        }
     }
 
     fn register(exe: &Path, modules: &Path, sid: &str) -> Result<(), String> {
@@ -376,9 +466,17 @@ mod win {
             account_name: None, // LocalSystem
             account_password: None,
         };
-        let service = m
-            .create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)
-            .map_err(|e| format!("registering {SERVICE_NAME}: {e}"))?;
+        // A service deleted just before (an update) may take a moment to go.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let service = loop {
+            match m.create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START) {
+                Ok(s) => break s,
+                Err(e) if os_code(&e) == Some(MARKED_FOR_DELETE) && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                Err(e) => return Err(format!("registering {SERVICE_NAME}: {e}")),
+            }
+        };
         let _ = service.set_description(
             "Serves the chipset SMBus (RAM lighting) to Lightloom through the PawnIO driver: closed operation set, \
              SPD writes refused, global SMBus mutex.",
@@ -409,7 +507,31 @@ mod win {
             .map_err(|e| format!("failure actions: {e}"))
     }
 
-    fn execute(step: &Step) -> Result<(), String> {
+    fn stop_service() -> Result<(), String> {
+        let m = manager(ServiceManagerAccess::CONNECT)?;
+        let Ok(s) = m.open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::QUERY_STATUS) else {
+            return Ok(()); // not registered
+        };
+        let stopped = |s: &windows_service::service::Service| {
+            s.query_status()
+                .is_ok_and(|st| st.current_state == ServiceState::Stopped)
+        };
+        if stopped(&s) {
+            return Ok(());
+        }
+        s.stop().map_err(|e| format!("stopping {SERVICE_NAME}: {e}"))?;
+        // Its executable is replaced or removed next: wait until it ended.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !stopped(&s) {
+            if Instant::now() >= deadline {
+                return Err(format!("{SERVICE_NAME} did not stop within 20 s"));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        Ok(())
+    }
+
+    fn execute(step: &Step, layout: &Layout) -> Result<(), String> {
         match step {
             Step::CopyModules { from, to } => copy_modules(from, to),
             Step::CopyBroker { from, to } => {
@@ -430,20 +552,7 @@ mod win {
                 s.start::<&str>(&[])
                     .map_err(|e| format!("starting {SERVICE_NAME}: {e}"))
             }
-            Step::StopService => {
-                let m = manager(ServiceManagerAccess::CONNECT)?;
-                match m.open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::QUERY_STATUS) {
-                    Ok(s) => {
-                        if s.query_status()
-                            .is_ok_and(|st| st.current_state != ServiceState::Stopped)
-                        {
-                            s.stop().map_err(|e| format!("stopping {SERVICE_NAME}: {e}"))?;
-                        }
-                        Ok(())
-                    }
-                    Err(_) => Ok(()), // not registered
-                }
-            }
+            Step::StopService => stop_service(),
             Step::DeleteService => {
                 let m = manager(ServiceManagerAccess::CONNECT)?;
                 match m.open_service(SERVICE_NAME, ServiceAccess::DELETE) {
@@ -453,41 +562,139 @@ mod win {
             }
             Step::RemoveFiles { broker, modules } => {
                 let _ = std::fs::remove_file(broker);
-                match std::fs::remove_dir_all(modules) {
+                let _ = std::fs::remove_dir_all(layout.downloads());
+                let result = match std::fs::remove_dir_all(modules) {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                         Err(format!("{}: {e}", modules.display()))
                     }
                     _ => Ok(()),
+                };
+                // `pawnio\` and `Lightloom\` themselves, when nothing else is left in them.
+                if let Some(parent) = modules.parent() {
+                    let _ = std::fs::remove_dir(parent);
                 }
+                let _ = std::fs::remove_dir(&layout.root);
+                result
             }
         }
     }
 
-    pub fn run(args: Args) -> ExitCode {
+    /// Whether this process is the only one on its console: it was given a
+    /// new window (started from the installer, not from a terminal).
+    fn alone_on_console() -> bool {
+        use windows::Win32::System::Console::GetConsoleProcessList;
+        let mut ids = [0u32; 4];
+        // SAFETY: `ids` is a writable buffer of the length passed.
+        unsafe { GetConsoleProcessList(&mut ids) == 1 }
+    }
+
+    /// Start this command again through the UAC prompt and wait for it.
+    fn relaunch_elevated(args: &Args) -> u32 {
+        let exe = match std::env::current_exe() {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("lightloom-setup: {e}");
+                return exit::FAILED;
+            }
+        };
+        let line = command_line(&args.forward);
+        println!("Asking Windows for administrator rights (UAC prompt)…");
+        if alone_on_console() {
+            // The elevated copy opens its own window; this one has nothing to show.
+            // SAFETY: detaching from this process's own console.
+            let _ = unsafe { windows::Win32::System::Console::FreeConsole() };
+        }
+        match elevate::run_elevated(&exe, &line).and_then(|p| p.wait()) {
+            Ok(code) => code,
+            Err(e) if e.raw_os_error() == Some(ERROR_CANCELLED) => {
+                eprintln!("lightloom-setup: the UAC prompt was declined; nothing was changed");
+                exit::CANCELLED
+            }
+            Err(e) => {
+                eprintln!("lightloom-setup: starting elevated: {e}");
+                exit::FAILED
+            }
+        }
+    }
+
+    fn pause(code: u32) {
+        use std::io::BufRead;
+        if code == exit::OK {
+            println!("Done. This window closes in a few seconds.");
+            std::thread::sleep(Duration::from_secs(4));
+        } else {
+            println!("Press Enter to close this window.");
+            let _ = std::io::stdin().lock().read_line(&mut String::new());
+        }
+    }
+
+    pub fn run(args: Args) -> u32 {
+        if args.elevate && !args.plan && !elevate::is_elevated() {
+            return relaunch_elevated(&args);
+        }
+        let code = run_here(&args);
+        if args.pause {
+            pause(code);
+        }
+        code
+    }
+
+    fn run_here(args: &Args) -> u32 {
         let layout = match layout() {
             Ok(l) => l,
             Err(e) => {
                 eprintln!("lightloom-setup: {e}");
-                return ExitCode::from(1);
+                return exit::FAILED;
             }
         };
+        let mut pawnio_planned = false;
+        if args.pawnio_install {
+            match pawnio_setup::ensure_pawnio(&layout.downloads(), args.plan) {
+                Ok(planned) => pawnio_planned = planned,
+                Err(e) => {
+                    eprintln!("lightloom-setup: {e}");
+                    eprintln!(
+                        "RAM lighting stays off; nothing else was changed. Try again later from the dashboard \
+                         (Settings → PawnIO / RAM lighting)."
+                    );
+                    return exit::PAWNIO_UNAVAILABLE;
+                }
+            }
+        }
+        if !args.smbus {
+            return exit::OK;
+        }
         let (action, pawnio) = if args.uninstall {
             (Action::Uninstall, PawnIoStatus::NotInstalled)
         } else {
-            let modules_from = args.modules.clone().unwrap_or_default();
+            let modules_from = match &args.modules {
+                Some(m) => m.clone(),
+                None => match exe_dir() {
+                    Ok(d) => bundled_modules(&d),
+                    Err(e) => {
+                        eprintln!("lightloom-setup: {e}");
+                        return exit::FAILED;
+                    }
+                },
+            };
             if let Err(e) = check_modules(&modules_from) {
                 eprintln!("lightloom-setup: {e}");
-                return ExitCode::from(1);
+                return exit::FAILED;
             }
             let client_sid = match args.client_sid.clone().map_or_else(token_sid, Ok) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("lightloom-setup: {e}; pass --client-sid");
-                    return ExitCode::from(1);
+                    return exit::FAILED;
                 }
             };
-            // Opens the PawnIO device (elevated) and runs the Echo probes.
-            let pawnio = detect::probe(Some(&modules_from)).status;
+            // Opens the PawnIO device (elevated) and runs the Echo probes. A
+            // plan whose PawnIO install would run first assumes it worked.
+            let pawnio = if pawnio_planned {
+                PawnIoStatus::Ready(lightloom_iobroker::pawnio::MIN_VERSION)
+            } else {
+                detect::probe(Some(&modules_from)).status
+            };
             (
                 Action::Install {
                     modules_from,
@@ -500,7 +707,7 @@ mod win {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("lightloom-setup: {e}");
-                return ExitCode::from(1);
+                return exit::FAILED;
             }
         };
         for step in &steps {
@@ -509,12 +716,15 @@ mod win {
                 continue;
             }
             println!("{step}");
-            if let Err(e) = execute(step) {
+            if let Err(e) = execute(step, &layout) {
                 eprintln!("lightloom-setup: {e}");
-                return ExitCode::from(1);
+                return exit::FAILED;
             }
         }
-        ExitCode::SUCCESS
+        if !args.plan && !args.uninstall {
+            println!("RAM lighting is set up: Lightloom picks the I/O service up on its own.");
+        }
+        exit::OK
     }
 }
 
@@ -551,16 +761,21 @@ mod tests {
             );
         }
         let steps = plan_steps(&install(), PawnIoStatus::Ready(0x0002_0200), &layout()).unwrap();
-        assert_eq!(steps.len(), 4);
-        assert!(matches!(&steps[0], Step::CopyModules { to, .. } if to.ends_with(r"pawnio\0.2.11")));
+        assert_eq!(steps.len(), 6);
+        assert_eq!(
+            steps[..2],
+            [Step::StopService, Step::DeleteService],
+            "an existing broker is replaced (update)"
+        );
+        assert!(matches!(&steps[2], Step::CopyModules { to, .. } if to.ends_with(r"pawnio\0.2.11")));
         assert!(
-            matches!(&steps[1], Step::CopyBroker { to, .. } if to.starts_with(r"C:\Program Files\Lightloom")),
+            matches!(&steps[3], Step::CopyBroker { to, .. } if to.starts_with(r"C:\Program Files\Lightloom")),
             "the service binary lives where only administrators write"
         );
         assert!(
-            matches!(&steps[2], Step::RegisterService { client_sid, .. } if client_sid == "S-1-5-21-1-2-3-1001")
+            matches!(&steps[4], Step::RegisterService { client_sid, .. } if client_sid == "S-1-5-21-1-2-3-1001")
         );
-        assert_eq!(steps[3], Step::StartService);
+        assert_eq!(steps[5], Step::StartService);
     }
 
     #[test]
@@ -571,6 +786,19 @@ mod tests {
             .iter()
             .all(|s| !s.to_string().to_lowercase().contains("uninstall pawnio")));
         assert!(steps[2].to_string().contains("PawnIO itself stays"));
+    }
+
+    #[test]
+    fn downloads_and_bundled_modules_have_fixed_places() {
+        assert_eq!(
+            layout().downloads(),
+            PathBuf::from(r"C:\Program Files\Lightloom\downloads"),
+            "an administrators-only folder: nothing can swap the installer between check and run"
+        );
+        assert_eq!(
+            bundled_modules(Path::new(r"C:\Users\u\AppData\Local\Programs\Lightloom")),
+            PathBuf::from(r"C:\Users\u\AppData\Local\Programs\Lightloom\pawnio-modules")
+        );
     }
 
     #[test]
@@ -601,19 +829,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn parse_list(list: &[&str]) -> Result<Args, String> {
+        parse(
+            std::iter::once("lightloom-setup")
+                .chain(list.iter().copied())
+                .map(String::from),
+        )
+    }
+
     #[test]
     fn command_line() {
-        let parse_list = |list: &[&str]| {
-            parse(
-                std::iter::once("lightloom-setup")
-                    .chain(list.iter().copied())
-                    .map(String::from),
-            )
-        };
         assert!(parse_list(&[]).is_err());
-        assert!(parse_list(&["--smbus"]).is_err(), "install needs the modules");
+        let a = parse_list(&["--smbus"]).unwrap();
+        assert!(a.modules.is_none(), "the bundled modules are the default");
         let a = parse_list(&["--smbus", "--pawnio-modules", "x", "--plan"]).unwrap();
-        assert!(a.plan && !a.uninstall);
+        assert!(a.plan && !a.uninstall && a.modules == Some(PathBuf::from("x")));
         assert!(parse_list(&["--smbus", "--uninstall"]).unwrap().uninstall);
+        assert!(parse_list(&["--smbus", "--pawnio-modules"]).is_err());
+        assert!(parse_list(&["--smbus", "--bogus"]).is_err());
+    }
+
+    #[test]
+    fn pawnio_install_arguments() {
+        let a = parse_list(&["--pawnio-install"]).unwrap();
+        assert!(a.pawnio_install && !a.smbus);
+        let a = parse_list(&["--pawnio-install", "--smbus", "--elevate", "--pause"]).unwrap();
+        assert!(a.pawnio_install && a.smbus && a.elevate && a.pause);
+        assert_eq!(
+            a.forward,
+            ["--pawnio-install", "--smbus", "--pause"],
+            "the elevated copy gets everything but --elevate"
+        );
+        assert!(
+            parse_list(&["--pawnio-install", "--uninstall", "--smbus"]).is_err(),
+            "Lightloom never uninstalls PawnIO"
+        );
+        assert!(parse_list(&["--uninstall"]).is_err());
+        assert!(parse_list(&["--elevate"]).is_err(), "nothing to do");
+        let a = parse_list(&["--smbus", "--client-sid", "S-1-5-21-9", "--elevate"]).unwrap();
+        assert_eq!(a.forward, ["--smbus", "--client-sid", "S-1-5-21-9"]);
+    }
+
+    #[test]
+    fn dashboard_arguments_parse() {
+        use lightloom_hal_windows::pawnio::{setup_args, SetupAction};
+        for action in [SetupAction::Install, SetupAction::Remove] {
+            let list: Vec<&str> = setup_args(action).to_vec();
+            let a = parse_list(&list).unwrap();
+            assert!(a.smbus && a.pause && !a.elevate, "{action:?}");
+            assert_eq!(a.uninstall, action == SetupAction::Remove);
+            assert_eq!(a.pawnio_install, action == SetupAction::Install);
+        }
     }
 }

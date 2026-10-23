@@ -19,6 +19,7 @@
 
 use crate::conflicts::smbus_blockers;
 use crate::hardware::matches_filter;
+use crate::pawnio::BrokerHealth;
 use lightloom_plugin_host::catalog::Catalog;
 use lightloom_plugin_host::discover::{scan_buses, ScanBudget, ScanOutcome};
 use lightloom_plugin_host::manager::Present;
@@ -32,6 +33,7 @@ pub struct SmbusHardware {
     buses: Vec<BusHandle>,
     nvapi: Option<lightloom_nvapi::NvapiHub>,
     notes: Vec<String>,
+    broker: Option<BrokerHealth>,
 }
 
 impl std::fmt::Debug for SmbusHardware {
@@ -40,6 +42,7 @@ impl std::fmt::Debug for SmbusHardware {
             .field("buses", &self.buses)
             .field("nvapi", &self.nvapi.is_some())
             .field("notes", &self.notes)
+            .field("broker", &self.broker)
             .finish()
     }
 }
@@ -69,8 +72,14 @@ impl SmbusHardware {
                 (Vec::new(), None)
             }
         };
-        buses.extend(chipset_buses(&mut notes));
-        Self { buses, nvapi, notes }
+        let mut broker = None;
+        buses.extend(chipset_buses(&mut notes, &mut broker));
+        Self {
+            buses,
+            nvapi,
+            notes,
+            broker,
+        }
     }
 
     /// Given buses (tests, mock runs).
@@ -79,6 +88,7 @@ impl SmbusHardware {
             buses,
             nvapi: None,
             notes: Vec::new(),
+            broker: None,
         }
     }
 
@@ -90,6 +100,11 @@ impl SmbusHardware {
     /// What is missing and why (shown to the user).
     pub fn notes(&self) -> &[String] {
         &self.notes
+    }
+
+    /// The I/O broker's `Health` answer, when it answered.
+    pub fn broker(&self) -> Option<&BrokerHealth> {
+        self.broker.as_ref()
     }
 
     /// Scan every bus with the SMBus plugins of `catalog` and return the
@@ -133,8 +148,8 @@ impl SmbusHardware {
 /// The chipset buses of the Lightloom I/O broker; when it does not answer, a
 /// note says why (from PawnIO's uninstall entry; the device is never opened).
 #[cfg(windows)]
-fn chipset_buses(notes: &mut Vec<String>) -> Vec<BusHandle> {
-    use lightloom_hal_windows::broker::{broker_buses, PipeTransport};
+fn chipset_buses(notes: &mut Vec<String>, broker: &mut Option<BrokerHealth>) -> Vec<BusHandle> {
+    use lightloom_hal_windows::broker::{broker_buses_after, broker_health, PipeTransport};
     use lightloom_hal_windows::pawnio::{message, pawnio_presence};
     let transport = match PipeTransport::shared() {
         Ok(t) => t,
@@ -149,11 +164,20 @@ fn chipset_buses(notes: &mut Vec<String>) -> Vec<BusHandle> {
             return Vec::new();
         }
     };
-    match broker_buses(transport) {
+    let health = match broker_health(&transport) {
+        Ok(h) => h,
+        Err(e) => {
+            notes.push(format!("Lightloom I/O broker: {e}: no RAM lighting"));
+            return Vec::new();
+        }
+    };
+    *broker = Some(BrokerHealth::from_report(&health, 0));
+    match broker_buses_after(&health, transport) {
         Ok(buses) => {
             if buses.is_empty() {
                 notes.push("the Lightloom I/O broker serves no SMBus bus: no RAM lighting".into());
             }
+            *broker = Some(BrokerHealth::from_report(&health, buses.len()));
             buses.into_iter().map(|b| BusHandle::new(Box::new(b))).collect()
         }
         Err(e) => {
@@ -165,7 +189,7 @@ fn chipset_buses(notes: &mut Vec<String>) -> Vec<BusHandle> {
 
 /// No chipset SMBus outside Windows yet (Linux: `/dev/i2c-*` later).
 #[cfg(not(windows))]
-fn chipset_buses(_notes: &mut Vec<String>) -> Vec<BusHandle> {
+fn chipset_buses(_notes: &mut Vec<String>, _broker: &mut Option<BrokerHealth>) -> Vec<BusHandle> {
     Vec::new()
 }
 

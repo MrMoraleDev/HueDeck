@@ -1140,6 +1140,7 @@ dependencies = [
  "lightloom-hal-windows",
  "lightloom-nvapi",
  "lightloom-plugin-host",
+ "lightloom-protocol",
  "serde",
  "serde_json",
  "tracing",
@@ -1149,6 +1150,7 @@ dependencies = [
 name = "lightloom-setup"
 version = "0.0.1"
 dependencies = [
+ "lightloom-hal-windows",
  "lightloom-iobroker",
  "windows",
  "windows-service",

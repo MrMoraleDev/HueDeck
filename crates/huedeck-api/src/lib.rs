@@ -15,6 +15,7 @@
 
 pub mod listener;
 pub mod model;
+pub mod openrgb;
 pub mod server;
 
 pub use listener::NativeListener;
@@ -31,7 +32,7 @@ pub const MIN_NATIVE_PORT: u16 = 1024;
 pub const COMPAT_REST_PORT: u16 = 16038;
 /// SignalRGB-compatible `POST /canvas/event?sender&event`.
 pub const COMPAT_CANVAS_EVENT_PORT: u16 = 16034;
-/// OpenRGB SDK server (M6).
+/// OpenRGB SDK server ([`openrgb`]; opt-in).
 pub const OPENRGB_SDK_PORT: u16 = 6742;
 /// Loopback only, always.
 pub const BIND_ADDRESS: &str = "127.0.0.1";

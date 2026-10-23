@@ -64,7 +64,7 @@ export const api = {
   deleteLayout: (name: string) => request("DELETE", `/v1/layouts/${enc(name)}`),
   setLayoutBrightness: (brightness: number) => request("PATCH", "/v1/layout", { brightness }),
   components: () => request<LibraryComponent[]>("GET", "/v1/components"),
-  setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean }) =>
+  setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean; openrgbSdk?: boolean }) =>
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */
   setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),

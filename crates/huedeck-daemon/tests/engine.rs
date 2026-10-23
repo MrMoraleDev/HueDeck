@@ -57,6 +57,10 @@ fn wait_for(backend: &dyn Backend, what: &str, mut done: impl FnMut(&Snapshot) -
     }
 }
 
+fn d_type(b: &dyn Backend) -> String {
+    device(&b.snapshot()).unwrap().device_type.clone()
+}
+
 fn device(s: &Snapshot) -> Option<&huedeck_api::model::DeviceView> {
     s.devices.iter().find(|d| d.key == KEY)
 }
@@ -126,11 +130,50 @@ fn the_engine_drives_a_device_and_follows_requests() {
         gpu_compositing: None,
         smbus: None,
         port: Some(p),
+        openrgb_sdk: None,
     };
     assert_eq!(call(b, port(17000)).unwrap()["port"], 17000);
     wait_for(b, "the new port in the settings", |s| s.settings.port == 17000);
     assert_eq!(call(b, port(80)).unwrap_err().status, 400);
     assert!(mock.recorder().writes().iter().any(|w| w[0] == 0x01));
+
+    // OpenRGB SDK: off by default, saved when turned on; direct colours win
+    // over the canvas while they live, then the canvas is back.
+    assert_eq!(d_type(b), "other");
+    assert!(!b.snapshot().settings.openrgb_sdk);
+    let on = Request::SetSettings {
+        signalrgb: None,
+        gpu_compositing: None,
+        smbus: None,
+        port: None,
+        openrgb_sdk: Some(true),
+    };
+    assert_eq!(call(b, on).unwrap()["openrgbSdk"], true);
+    assert!(b.snapshot().settings.openrgb_sdk);
+    let direct = b.direct().expect("the daemon supports direct colours");
+    let owner = direct.new_owner();
+    let probe = huedeck_engine::Rgb::new(7, 77, 177);
+    direct.write(owner, KEY, 2, 0, &[probe, probe], Duration::from_secs(30));
+    let lit = |w: &Vec<u8>| w.len() >= 4 && w[..4] == [0x01, 7, 77, 177];
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !mock.recorder().writes().iter().any(lit) {
+        assert!(
+            Instant::now() < deadline,
+            "the direct colour never reached the device"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    direct.release(owner);
+    let seen = mock.recorder().writes().len();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let writes = mock.recorder().writes();
+        if writes.len() > seen + 2 && !lit(writes.last().unwrap()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the canvas never came back");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let s = wait_for(b, "the channel", |s| {
         device(s).is_some_and(|d| !d.channels.is_empty())
     });
@@ -444,6 +487,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
             gpu_compositing: None,
             smbus: Some(false),
             port: None,
+            openrgb_sdk: None,
         },
     )
     .unwrap();

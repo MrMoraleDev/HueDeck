@@ -10,6 +10,13 @@
 //! seconds. Every session ends with the plugin's `Shutdown(false)` when the
 //! daemon stops.
 //!
+//! "Save to devices" ([`Request::SaveToDevices`]) hands each chosen device's
+//! session a `SaveToDevice(request)` (crate `huedeck_plugin_host::save`): only
+//! with the client's `confirm`, at most once a minute per device (the device
+//! manager's limit), and with one line per attempt in `save-audit.log`. What
+//! devices show when HueDeck closes ([`ShutdownMode`]) is a setting with
+//! per-device overrides, handed to every session (and changed live).
+//!
 //! SMBus devices (GPU RGB; RAM RGB when the I/O broker is installed and
 //! healthy) are on unless turned off (`[smbus] enabled = false`, the
 //! dashboard setting). Their buses are scanned at start, on a rescan request and when
@@ -29,7 +36,10 @@ use crate::lifecycle::LifecycleState;
 use crate::paths::{self, Paths};
 use crate::store::{StateExport, Store};
 use arc_swap::ArcSwap;
-use huedeck_api::model::{ChannelView, DeviceView, EffectView, Endpoint, Lighting, RendererView, Settings};
+use huedeck_api::model::{
+    ChannelView, DeviceSaveChoice, DeviceView, EffectView, Endpoint, Lighting, RendererView, SaveSupport,
+    Settings,
+};
 use huedeck_api::{ApiError, Backend, Event, Request, Snapshot};
 use huedeck_engine::{
     Component, ComponentInstance, ComponentLibrary, FrameStore, Layout, Placement, Rgb, CANVAS_HEIGHT,
@@ -41,6 +51,7 @@ use huedeck_plugin_host::device::{Brightness, LogSink, WriteMode};
 use huedeck_plugin_host::discover::ScanBudget;
 use huedeck_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
 use huedeck_plugin_host::meta::{ControllableParameter, ParamValue};
+use huedeck_plugin_host::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode};
 use huedeck_plugin_host::session::{
     Control, EndpointKind, SessionDevice, SessionHandle, SessionOptions, SessionState,
 };
@@ -69,7 +80,13 @@ mod keys {
     pub const SIGNALRGB: &str = "settings.signalrgb";
     pub const GPU: &str = "settings.gpuCompositing";
     pub const SMBUS: &str = "settings.smbus";
+    pub const SHUTDOWN_MODE: &str = "settings.shutdownMode";
+    /// Followed by the device key: that device's exit mode (`""`: the setting's).
+    pub const DEVICE_SHUTDOWN_MODE: &str = "shutdownMode.";
 }
+
+/// How long a "Save to devices" request waits for the devices' sessions.
+const SAVE_WAIT: Duration = Duration::from_secs(20);
 
 /// The layout every installation starts with.
 pub const DEFAULT_LAYOUT: &str = "Default";
@@ -246,6 +263,20 @@ struct SessionDefaults {
     use_signalrgb: bool,
     system_info: Option<Arc<huedeck_hal::SystemInfo>>,
     write_mode: WriteMode,
+    /// What devices show when HueDeck closes.
+    shutdown_mode: ShutdownMode,
+    /// Per-device exit modes.
+    shutdown_overrides: BTreeMap<String, ShutdownMode>,
+}
+
+impl SessionDefaults {
+    /// The exit mode of `key`.
+    fn shutdown_mode_of(&self, key: &str) -> ShutdownMode {
+        self.shutdown_overrides
+            .get(key)
+            .copied()
+            .unwrap_or(self.shutdown_mode)
+    }
 }
 
 /// The canvas source.
@@ -462,13 +493,19 @@ impl Engine {
         d.layout = self.layout.clone();
         d.use_signalrgb = self.signalrgb;
         d.system_info = huedeck_runtime::system::machine_info().map(Arc::new);
-        d.parameters = self
-            .store
-            .devices()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|r| (r.key, r.parameters))
+        let rows = self.store.devices().unwrap_or_default();
+        let get = |k: &str| self.store.get::<Value>(k).ok().flatten();
+        d.shutdown_mode = get(keys::SHUTDOWN_MODE)
+            .and_then(|v| v.as_str().and_then(ShutdownMode::parse))
+            .unwrap_or_default();
+        d.shutdown_overrides = rows
+            .iter()
+            .filter_map(|r| {
+                let v = get(&format!("{}{}", keys::DEVICE_SHUTDOWN_MODE, r.key))?;
+                Some((r.key.clone(), ShutdownMode::parse(v.as_str()?)?))
+            })
             .collect();
+        d.parameters = rows.into_iter().map(|r| (r.key, r.parameters)).collect();
         drop(d);
         self.reload_channels();
     }
@@ -597,6 +634,7 @@ impl Engine {
                 log_sink: Some(sink),
                 channel_components: channels,
                 system_info: d.system_info.clone(),
+                shutdown_mode: d.shutdown_mode_of(&key),
                 ..SessionOptions::default()
             }
         });
@@ -1055,6 +1093,7 @@ impl Engine {
                 smbus: self.smbus,
                 fps: self.fps(),
                 dry_run: self.opts.dry_run,
+                shutdown_mode: lock(&self.defaults).shutdown_mode.as_str().into(),
             },
             conflicts: {
                 let mut all = self.conflicts.clone();
@@ -1115,6 +1154,23 @@ impl Engine {
                 default_scale: meta.default_scale,
                 image,
                 parameters,
+                save: meta
+                    .save_caps
+                    .as_ref()
+                    .filter(|_| meta.lifecycle.save_to_device)
+                    .map(|c| SaveSupport {
+                        static_colors: c.static_colors,
+                        effects: c.effects.clone(),
+                        wait_secs: self.manager.as_ref().map_or(0, |m| m.save_wait_secs(key)),
+                    }),
+                shutdown_modes: save::supported_modes(meta)
+                    .iter()
+                    .map(|m| m.as_str().to_string())
+                    .collect(),
+                shutdown_mode: defaults
+                    .shutdown_overrides
+                    .get(key)
+                    .map(|m| m.as_str().to_string()),
                 ..DeviceView::default()
             };
             if let Some(h) = sessions.get(key) {
@@ -1296,10 +1352,16 @@ impl Engine {
                 }
                 Ok(json!({ "brightness": self.brightness, "enabled": self.enabled }))
             }
+            Request::SaveToDevices {
+                preview,
+                confirm,
+                devices,
+            } => self.save_to_devices(preview, confirm, devices),
             Request::SetDevice {
                 key,
                 enabled,
                 parameters,
+                shutdown_mode,
             } => {
                 let known = self
                     .store
@@ -1309,6 +1371,33 @@ impl Engine {
                     .any(|r| r.key == key);
                 if !known {
                     return Err(ApiError::not_found(format!("no device {key}")));
+                }
+                if let Some(mode) = shutdown_mode {
+                    let mode = match mode.as_str() {
+                        "" | "default" => None,
+                        m => Some(ShutdownMode::parse(m).ok_or_else(|| {
+                            ApiError::bad_request(format!(
+                                "unknown exit mode {m:?} (restore, keep, off, default)"
+                            ))
+                        })?),
+                    };
+                    self.store
+                        .set(
+                            &format!("{}{key}", keys::DEVICE_SHUTDOWN_MODE),
+                            &mode.map_or("", ShutdownMode::as_str),
+                        )
+                        .map_err(internal)?;
+                    let effective = {
+                        let mut d = lock(&self.defaults);
+                        match mode {
+                            Some(m) => d.shutdown_overrides.insert(key.clone(), m),
+                            None => d.shutdown_overrides.remove(&key),
+                        };
+                        d.shutdown_mode_of(&key)
+                    };
+                    if let Some(h) = self.sessions().find(|h| h.key() == key) {
+                        h.control(Control::ShutdownMode(effective));
+                    }
                 }
                 if let Some(values) = parameters {
                     self.store
@@ -1421,7 +1510,24 @@ impl Engine {
                 signalrgb,
                 gpu_compositing,
                 smbus,
+                shutdown_mode,
             } => {
+                if let Some(mode) = shutdown_mode {
+                    let mode = ShutdownMode::parse(&mode).ok_or_else(|| {
+                        ApiError::bad_request(format!("unknown exit mode {mode:?} (restore, keep, off)"))
+                    })?;
+                    self.store
+                        .set(keys::SHUTDOWN_MODE, &mode.as_str())
+                        .map_err(internal)?;
+                    let d = {
+                        let mut d = lock(&self.defaults);
+                        d.shutdown_mode = mode;
+                        d.clone()
+                    };
+                    for h in self.sessions() {
+                        h.control(Control::ShutdownMode(d.shutdown_mode_of(h.key())));
+                    }
+                }
                 if let Some(on) = smbus {
                     if on != self.smbus {
                         self.smbus = on;
@@ -1445,7 +1551,12 @@ impl Engine {
                         self.reload_libraries();
                     }
                 }
-                Ok(json!({ "signalrgb": self.signalrgb, "gpuCompositing": self.gpu, "smbus": self.smbus }))
+                Ok(json!({
+                    "signalrgb": self.signalrgb,
+                    "gpuCompositing": self.gpu,
+                    "smbus": self.smbus,
+                    "shutdownMode": lock(&self.defaults).shutdown_mode.as_str(),
+                }))
             }
             Request::ImportSignalRgb { name } => {
                 self.import_signalrgb(name.unwrap_or_else(|| "SignalRGB".into()))
@@ -1491,6 +1602,159 @@ impl Engine {
                 Ok(json!({ "stopping": true }))
             }
         }
+    }
+
+    /// "Save to devices": a preview (every device, or the ones named) or a save of
+    /// the named devices, which needs `confirm`. Each device's session runs its
+    /// plugin's `SaveToDevice(request)`; the answer lists every device with what
+    /// was (or would be) stored or why not. Saves are written to the audit log.
+    fn save_to_devices(
+        &mut self,
+        preview: bool,
+        confirm: bool,
+        devices: BTreeMap<String, DeviceSaveChoice>,
+    ) -> Result<Value, ApiError> {
+        let action = if preview {
+            SaveAction::Preview
+        } else {
+            SaveAction::Save
+        };
+        if action == SaveAction::Save {
+            if !confirm {
+                return Err(ApiError::bad_request(
+                    "saving writes the devices' own memory: ask the user, then send \"confirm\": true",
+                ));
+            }
+            if devices.is_empty() {
+                return Err(ApiError::bad_request("name the devices to save"));
+            }
+        }
+        let wanted: Vec<(String, SaveChoice)> = if devices.is_empty() {
+            self.present
+                .iter()
+                .map(|p| (p.device.key.clone(), SaveChoice::default()))
+                .collect()
+        } else {
+            devices
+                .into_iter()
+                .map(|(k, c)| (k, SaveChoice { effect: c.effect }))
+                .collect()
+        };
+        let mut results: Vec<(String, SaveOutcome)> = Vec::new();
+        let mut pending = Vec::new();
+        for (key, choice) in wanted {
+            let Some(p) = self.present.iter().find(|p| p.device.key == key) else {
+                results.push((
+                    key.clone(),
+                    SaveOutcome::failed(&key, action, "no such device is connected"),
+                ));
+                continue;
+            };
+            let name = p.plugin.meta.name.clone();
+            let meta = &p.plugin.meta;
+            let refused = match meta.save_caps.as_ref().filter(|_| meta.lifecycle.save_to_device) {
+                None => Some("this device cannot store lighting in its own memory".to_string()),
+                Some(c) if !c.allows(&choice) => Some(match &choice.effect {
+                    Some(e) => format!("this device cannot store the {e} effect"),
+                    None => "this device cannot store the current colours".into(),
+                }),
+                Some(_) => None,
+            };
+            if let Some(why) = refused {
+                results.push((name, SaveOutcome::failed(&key, action, why)));
+                continue;
+            }
+            let sent = match &mut self.manager {
+                Some(m) => m.save(&key, action, choice.clone()).map_err(|e| e.to_string()),
+                None => Err("no devices are driven".into()),
+            };
+            match sent {
+                Ok(rx) => pending.push((name, key, choice, rx)),
+                Err(e) => results.push((name, SaveOutcome::failed(&key, action, e))),
+            }
+        }
+        let deadline = Instant::now() + SAVE_WAIT;
+        for (name, key, choice, rx) in pending {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let outcome = rx
+                .recv_timeout(left)
+                .unwrap_or_else(|_| SaveOutcome::failed(&key, action, "the device did not answer in time"));
+            if action == SaveAction::Save {
+                self.audit_save(&name, &choice, &outcome);
+            }
+            results.push((name, outcome));
+        }
+        let list: Vec<Value> = results
+            .into_iter()
+            .map(|(name, o)| {
+                json!({
+                    "key": o.key,
+                    "name": name,
+                    "ok": o.ok,
+                    "dryRun": o.dry_run,
+                    "result": o.result,
+                    "error": o.error,
+                })
+            })
+            .collect();
+        self.dirty = true;
+        Ok(json!({ "preview": preview, "devices": list }))
+    }
+
+    /// One line per save attempt in `save-audit.log` (and the event log).
+    fn audit_save(&self, name: &str, choice: &SaveChoice, o: &SaveOutcome) {
+        let what = choice.effect.as_deref().unwrap_or("static colours");
+        let stored = o
+            .result
+            .get("zones")
+            .and_then(Value::as_array)
+            .map(|zones| {
+                zones
+                    .iter()
+                    .map(|z| {
+                        format!(
+                            "{}={}",
+                            z.get("name").and_then(Value::as_str).unwrap_or("?"),
+                            z.get("color").and_then(Value::as_str).unwrap_or("?")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        let outcome = match (&o.error, o.ok) {
+            (_, true) => "stored".to_string(),
+            (Some(e), false) => format!("failed: {e}"),
+            (None, false) => "failed".to_string(),
+        };
+        let line = format!(
+            "{} save {} ({name}) {what}{}{}: {outcome}",
+            humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
+            o.key,
+            if stored.is_empty() {
+                String::new()
+            } else {
+                format!(" [{stored}]")
+            },
+            if o.dry_run { " (dry run, nothing sent)" } else { "" },
+        );
+        let path = self.opts.paths.save_audit_log();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| {
+                use std::io::Write;
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)?;
+                writeln!(f, "{line}")
+            });
+        if let Err(e) = written {
+            tracing::warn!("cannot write {}: {e}", path.display());
+        }
+        tracing::warn!(target: "huedeck::save", "{line}");
+        let _ = self.shared.events.send(Event::log(line));
     }
 
     /// Component instances for `device`'s `channel` from what a client sent:

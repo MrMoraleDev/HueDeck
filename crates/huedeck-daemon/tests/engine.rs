@@ -240,6 +240,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: None,
             parameters: Some(json!({"mode": "Forced"}).as_object().unwrap().clone()),
+            shutdown_mode: None,
         },
     )
     .unwrap();
@@ -252,6 +253,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: Some(false),
             parameters: None,
+            shutdown_mode: None,
         },
     )
     .unwrap();
@@ -264,6 +266,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: Some(true),
             parameters: None,
+            shutdown_mode: None,
         },
     )
     .unwrap();
@@ -424,6 +427,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
             signalrgb: None,
             gpu_compositing: None,
             smbus: Some(false),
+            shutdown_mode: None,
         },
     )
     .unwrap();
@@ -433,6 +437,217 @@ fn fixed_smbus_device_runs_and_is_listed() {
     let last = rec.payloads(TransactionKind::SmbusWrite).pop().unwrap();
     assert_eq!(&last[..2], &[0x68, 0x22], "Shutdown() writes the mode last");
     handle.shutdown();
+    drop(shared);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// "Save to devices" and the exit modes through the engine, on the MSI GPU plugin
+/// over a mock bus: a preview, the confirm requirement, the save (with its audit
+/// line), the per-device minute, and the exit mode reaching the plugin.
+#[test]
+fn save_to_devices_and_exit_modes() {
+    use huedeck_api::model::DeviceSaveChoice;
+    use huedeck_hal::mock::{MockSmbus, TransactionKind, TransactionRecorder};
+    use huedeck_hal::{PciIds, SmbusBusKind};
+    use huedeck_plugin_host::smbus::BusHandle;
+    use std::collections::BTreeMap;
+
+    let home = std::env::temp_dir().join(format!("huedeck-engine-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let rec = TransactionRecorder::new();
+    let mut bus = MockSmbus::new("NVIDIA GeForce RTX 3060", SmbusBusKind::Nvidia, rec.clone())
+        .with_pci(PciIds {
+            vendor: 0x10DE,
+            device: 0x2504,
+            sub_vendor: 0x1462,
+            sub_device: 0x3903,
+        })
+        .with_instance("pci01");
+    bus.add_device(0x68, []);
+    let mut config = Config::default();
+    config.smbus.enabled = true;
+    let backend: Arc<dyn HidBackend> = Arc::new(MockHid::new());
+    let handle = engine::start(EngineOptions {
+        paths: Paths::under(&home),
+        config,
+        dry_run: false,
+        hardware: HardwareMode::Fixed {
+            backend,
+            devices: Vec::new(),
+            smbus: vec![BusHandle::new(Box::new(bus))],
+        },
+        ephemeral: true,
+        plugins_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")),
+        effects_dir: None,
+        components_dir: None,
+        renderer: None,
+        plugin_cache: None,
+    })
+    .unwrap();
+    let shared = handle.shared();
+    let b: &dyn Backend = &*shared;
+    const GPU: &str = "smbus:10de:2504:1462:3903@pci01:68";
+    let s = wait_for(b, "the GPU rendering", |s| {
+        s.devices
+            .iter()
+            .any(|d| d.key == GPU && d.state == "running" && d.frames > 2)
+    });
+    let d = s.devices.iter().find(|d| d.key == GPU).unwrap();
+    let save = d.save.as_ref().expect("the MSI GPU can save");
+    assert!(save.static_colors && save.effects == ["spectrum", "breathing"]);
+    assert_eq!(d.shutdown_modes, ["restore", "keep", "off"]);
+    assert_eq!(s.settings.shutdown_mode, "restore");
+    let commits = || {
+        rec.payloads(TransactionKind::SmbusWrite)
+            .iter()
+            .filter(|w| w[..2] == [0x68, 0x3F])
+            .count()
+    };
+
+    // A preview of every device writes nothing.
+    let preview = call(
+        b,
+        Request::SaveToDevices {
+            preview: true,
+            confirm: false,
+            devices: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(preview["devices"][0]["key"], GPU);
+    assert_eq!(preview["devices"][0]["ok"], true, "{preview}");
+    assert_eq!(preview["devices"][0]["result"]["zones"][0]["name"], "GPU");
+    assert_eq!(commits(), 0);
+
+    // A save needs the user's confirmation and named devices.
+    let one = |effect: Option<&str>| {
+        BTreeMap::from([(
+            GPU.to_string(),
+            DeviceSaveChoice {
+                effect: effect.map(String::from),
+            },
+        )])
+    };
+    let refused = call(
+        b,
+        Request::SaveToDevices {
+            preview: false,
+            confirm: false,
+            devices: one(None),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(refused.status, 400);
+    assert_eq!(commits(), 0);
+    let saved = call(
+        b,
+        Request::SaveToDevices {
+            preview: false,
+            confirm: true,
+            devices: one(Some("spectrum")),
+        },
+    )
+    .unwrap();
+    assert_eq!(saved["devices"][0]["ok"], true, "{saved}");
+    assert_eq!(commits(), 1);
+    let audit = std::fs::read_to_string(Paths::under(&home).save_audit_log()).unwrap();
+    assert_eq!(audit.lines().count(), 1);
+    assert!(
+        audit.contains(GPU) && audit.contains("spectrum") && audit.contains("stored"),
+        "{audit}"
+    );
+
+    // Once a minute per device; the refusal is in the answer and in the audit log.
+    let again = call(
+        b,
+        Request::SaveToDevices {
+            preview: false,
+            confirm: true,
+            devices: one(None),
+        },
+    )
+    .unwrap();
+    assert_eq!(again["devices"][0]["ok"], false);
+    assert!(
+        again["devices"][0]["error"].as_str().unwrap().contains("wait"),
+        "{again}"
+    );
+    assert_eq!(commits(), 1);
+    let s = b.snapshot();
+    let d = s.devices.iter().find(|d| d.key == GPU).unwrap();
+    assert!(d.save.as_ref().unwrap().wait_secs > 0);
+    // An effect the device does not offer.
+    let wave = call(
+        b,
+        Request::SaveToDevices {
+            preview: true,
+            confirm: false,
+            devices: one(Some("wave")),
+        },
+    )
+    .unwrap();
+    assert_eq!(wave["devices"][0]["ok"], false);
+
+    // Exit modes: the setting, a per-device override, validation.
+    call(
+        b,
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            smbus: None,
+            shutdown_mode: Some("keep".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(b.snapshot().settings.shutdown_mode, "keep");
+    assert_eq!(
+        call(
+            b,
+            Request::SetSettings {
+                signalrgb: None,
+                gpu_compositing: None,
+                smbus: None,
+                shutdown_mode: Some("explode".into()),
+            },
+        )
+        .unwrap_err()
+        .status,
+        400
+    );
+    call(
+        b,
+        Request::SetDevice {
+            key: GPU.into(),
+            enabled: None,
+            parameters: None,
+            shutdown_mode: Some("off".into()),
+        },
+    )
+    .unwrap();
+    let s = b.snapshot();
+    assert_eq!(
+        s.devices
+            .iter()
+            .find(|d| d.key == GPU)
+            .unwrap()
+            .shutdown_mode
+            .as_deref(),
+        Some("off")
+    );
+    // Give the session a frame to take the new mode, then stop: the GPU goes static black.
+    let frames = s.devices.iter().find(|d| d.key == GPU).unwrap().frames;
+    wait_for(b, "a frame after the mode change", |s| {
+        s.devices.iter().any(|d| d.key == GPU && d.frames > frames + 1)
+    });
+    handle.shutdown();
+    let sent = rec.payloads(TransactionKind::SmbusWrite);
+    let tail: Vec<[u8; 2]> = sent[sent.len() - 5..].iter().map(|w| [w[1], w[2]]).collect();
+    assert_eq!(
+        tail,
+        [[0x26, 0], [0x30, 0], [0x31, 0], [0x32, 0], [0x22, 0x13]],
+        "Shutdown(false, \"off\")"
+    );
+    assert_eq!(commits(), 1, "exit modes never store anything");
     drop(shared);
     let _ = std::fs::remove_dir_all(&home);
 }

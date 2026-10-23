@@ -299,7 +299,9 @@ pub enum BrokerOp {
     Batch {
         /// Bus; every op must name it too.
         bus: BusId,
-        /// 1..=[`MAX_BATCH_OPS`] transfer ops.
+        /// 1..=[`MAX_BATCH_OPS`] transfer ops. A batch inside a batch is
+        /// refused while decoding ([`one_level`]).
+        #[serde(deserialize_with = "one_level")]
         ops: Vec<BrokerOp>,
     },
     /// Hold the bus (on chipset buses the global SMBus mutex) across the
@@ -505,6 +507,35 @@ impl BrokerOp {
     }
 }
 
+thread_local! {
+    /// Whether a [`one_level`] list is being decoded on this thread.
+    static IN_BATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Decode the list of a `Batch` (ops or results), refusing a `Batch` inside
+/// it at once. Without this a 4 KiB frame of nested batches (3 bytes a
+/// level) makes serde recurse about 1300 levels deep, which overflows the
+/// broker's worker thread stack (an abort of the LocalSystem service, not
+/// an error) on some builds; a nested batch is refused by
+/// [`BrokerOp::validate`] anyway.
+fn one_level<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            IN_BATCH.with(|b| b.set(false));
+        }
+    }
+    if IN_BATCH.with(|b| b.replace(true)) {
+        return Err(serde::de::Error::custom("a batch inside a batch"));
+    }
+    let _reset = Reset;
+    Vec::<T>::deserialize(d)
+}
+
 /// A request frame.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerRequest {
@@ -546,7 +577,8 @@ pub enum BrokerPayload {
     /// when the batch stopped early the error of op `results.len()` (the ops
     /// after it were not sent).
     Batch {
-        /// Results of the ops done.
+        /// Results of the ops done (never a batch: [`one_level`]).
+        #[serde(deserialize_with = "one_level")]
         results: Vec<BrokerPayload>,
         /// Why op `results.len()` was not done, if the batch stopped there.
         error: Option<BrokerError>,
@@ -1067,6 +1099,66 @@ mod tests {
         for a in SPD_SET_PAGE {
             assert!(!BROKER_WRITE_ALLOWLIST.contains(&a));
         }
+    }
+
+    /// Nested batches are refused while decoding, before any recursion: a
+    /// frame of them decodes on a small stack even in a debug build.
+    #[test]
+    fn nested_batches_are_refused_while_decoding() {
+        const BATCH: u8 = 11; // variant index of BrokerOp::Batch
+        const HEALTH: u8 = 15;
+        let frame = |depth: usize| {
+            let mut b = vec![BROKER_PROTOCOL_VERSION as u8, 0];
+            for _ in 0..depth {
+                b.extend([BATCH, 0, 1]);
+            }
+            b.push(HEALTH);
+            b
+        };
+        let one = BrokerRequest::new(
+            0,
+            BrokerOp::Batch {
+                bus: 0,
+                ops: vec![BrokerOp::Health],
+            },
+        );
+        assert_eq!(frame(1), encode(&one).unwrap(), "variant indexes");
+        let deep = frame((MAX_FRAME_BYTES - 3) / 3);
+        assert!(deep.len() <= MAX_FRAME_BYTES);
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                assert_eq!(decode::<BrokerRequest>(&frame(1)).unwrap(), one);
+                for depth in [2, 3, 1364] {
+                    assert!(decode::<BrokerRequest>(&frame(depth)).is_err(), "{depth}");
+                }
+                assert!(decode::<BrokerRequest>(&deep).is_err());
+                // The guard is reset after an error: a plain batch decodes again.
+                assert_eq!(decode::<BrokerRequest>(&frame(1)).unwrap(), one);
+                // Responses: a batch result inside a batch result.
+                let nested = BrokerResponse {
+                    id: 1,
+                    result: Ok(BrokerPayload::Batch {
+                        results: vec![BrokerPayload::Batch {
+                            results: Vec::new(),
+                            error: None,
+                        }],
+                        error: None,
+                    }),
+                };
+                assert!(decode::<BrokerResponse>(&encode(&nested).unwrap()).is_err());
+                let flat = BrokerResponse {
+                    id: 1,
+                    result: Ok(BrokerPayload::Batch {
+                        results: vec![BrokerPayload::Ack],
+                        error: None,
+                    }),
+                };
+                assert_eq!(decode::<BrokerResponse>(&encode(&flat).unwrap()).unwrap(), flat);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

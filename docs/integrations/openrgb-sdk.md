@@ -62,6 +62,8 @@ How long direct colours last:
 
 Brightness still applies to direct colours: global × layout × endpoint brightness, the same as for canvas colours.
 
+The low-battery alert (a red pulse) still wins over direct colours.
+
 **Limits.** Payloads above 1 MiB, and packets without the `ORGB` magic, close the connection. Malformed LED packets are ignored. There is no rate limit: the device plugins already render at the canvas frame rate, so faster updates are simply coalesced.
 
 ## Protocol coverage

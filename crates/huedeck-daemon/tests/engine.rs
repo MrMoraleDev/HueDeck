@@ -9,7 +9,7 @@ use huedeck_daemon::config::Config;
 use huedeck_daemon::engine::{self, EngineOptions, HardwareMode};
 use huedeck_daemon::paths::{self, Paths};
 use huedeck_engine::{Placement, Point};
-use huedeck_hal::mock::MockHid;
+use huedeck_hal::mock::{MockHid, MockNotifier};
 use huedeck_hal::{HidBackend, ReportLengths};
 use huedeck_plugin_host::session::SessionDevice;
 use serde_json::{json, Value};
@@ -97,6 +97,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
         components_dir: None,
         renderer: None,
         plugin_cache: None,
+        notifier: Arc::new(MockNotifier::default()),
         api_port: huedeck_api::NATIVE_PORT,
         api_port_notice: None,
     })
@@ -129,6 +130,9 @@ fn the_engine_drives_a_device_and_follows_requests() {
         signalrgb: None,
         gpu_compositing: None,
         smbus: None,
+        battery_low: None,
+        battery_critical: None,
+        battery_notifications: None,
         port: Some(p),
         openrgb_sdk: None,
     };
@@ -145,6 +149,9 @@ fn the_engine_drives_a_device_and_follows_requests() {
         signalrgb: None,
         gpu_compositing: None,
         smbus: None,
+        battery_low: None,
+        battery_critical: None,
+        battery_notifications: None,
         port: None,
         openrgb_sdk: Some(true),
     };
@@ -300,6 +307,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: None,
             parameters: Some(json!({"mode": "Forced"}).as_object().unwrap().clone()),
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -312,6 +320,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: Some(false),
             parameters: None,
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -324,6 +333,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: Some(true),
             parameters: None,
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -442,6 +452,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
         components_dir: None,
         renderer: None,
         plugin_cache: None,
+        notifier: Arc::new(MockNotifier::default()),
         api_port: huedeck_api::NATIVE_PORT,
         api_port_notice: None,
     })
@@ -486,6 +497,9 @@ fn fixed_smbus_device_runs_and_is_listed() {
             signalrgb: None,
             gpu_compositing: None,
             smbus: Some(false),
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
             port: None,
             openrgb_sdk: None,
         },

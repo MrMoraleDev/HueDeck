@@ -244,6 +244,9 @@ rustflags = ["-C", "target-feature=+crt-static"]
   Both are worse: two copies to service, or an extra elevated installer.
 - Verification step for CI: run the PE-import check on the staged folder and fail on any import outside an allow-list
   (System32 DLLs, `api-ms-win-*`, `libcef.dll`, `chrome_elf.dll`). This belongs to the installer agent's `tools/package/stage-windows.ps1`.
+- **Done (WP-CRT):** the repo `.cargo/config.toml` sets `+crt-static` for every Windows MSVC target, and
+  `tools/package/check-imports.ps1` (called by `stage-windows.ps1`) fails on any import outside the system allow-list,
+  and on any C runtime DLL (`VCRUNTIME*`, `MSVCP*`, `ucrtbase`, `api-ms-win-crt-*`) [V-local: release build re-parsed].
 
 Related, not a driver but an out-of-the-box blocker: on a clean Windows 11 install **Smart App Control**
 blocks unsigned executables outright, and SmartScreen warns on download. Authenticode signing of

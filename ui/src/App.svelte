@@ -7,6 +7,7 @@
   import Layout from "./components/Layout.svelte";
   import Devices from "./components/Devices.svelte";
   import Settings from "./components/Settings.svelte";
+  import BatteryBadge from "./components/BatteryBadge.svelte";
   import logotype from "./assets/huedeck-logotype.svg";
 
   type Tab = "effects" | "layout" | "devices" | "settings";
@@ -34,6 +35,7 @@
   });
 
   const s = $derived(daemon.snapshot);
+  const batteries = $derived(s ? s.devices.filter((d) => d.connected && d.battery) : []);
   let brightness = $state(100);
   let dragging = false;
   $effect(() => {
@@ -78,6 +80,15 @@
       >
         {s.lighting.enabled ? "Pause lighting" : "Resume lighting"}
       </button>
+    </div>
+  {/if}
+  {#if batteries.length}
+    <div class="row batteries">
+      {#each batteries as d (d.key)}
+        <span class="row battery" title={d.name}
+          ><span class="muted name">{d.name}</span> <BatteryBadge battery={d.battery!} name={d.name} /></span
+        >
+      {/each}
     </div>
   {/if}
   <span class="badge" class:good={daemon.connected} class:bad={!daemon.connected}>
@@ -140,6 +151,19 @@
   .num {
     width: 2.5em;
     text-align: right;
+  }
+  .batteries {
+    gap: 12px;
+  }
+  .battery {
+    gap: 6px;
+  }
+  .battery .name {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
   }
   nav {
     display: flex;

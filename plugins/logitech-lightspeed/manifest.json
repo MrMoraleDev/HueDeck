@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.logitech-lightspeed",
+  "name": "Logitech Lightspeed mice and headsets (wired)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Static colour per lighting zone for the Logitech G mice and headsets OpenRGB drives as wired 'Lightspeed' devices: G502 Proteus Spectrum / HERO / LIGHTSPEED, G403 Prodigy / LIGHTSPEED, G703 / G703 HERO, G900, G903 / G903 HERO and G Pro Wireless on their cable, and the G633, G635, G733 and G935 headsets. The HID++ 2.0 RGB-effects feature 0x8070 and the zones are found with read-only queries; the device is put in software control (OpenRGB: saving to flash off). Devices with only the 0x8071 feature are held back at run time. Adapted from OpenRGB's LogitechProtocolCommon and LogitechLightspeedController (GPL-2.0-or-later); untested on hardware. The LIGHTSPEED / POWERPLAY receivers are not claimed. Protocol notes: docs/hardware/logitech-lightspeed.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    {
+      "vid": "0x046D",
+      "pids": ["0xC08D", "0xC332", "0xC08B", "0xC083", "0xC082", "0xC087", "0xC090", "0xC081", "0xC086", "0xC091", "0xC088", "0x0A5C", "0x0A89", "0x0AB5", "0x0AFE", "0x0B1F", "0x0A87"],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["lghub.exe", "lghub_agent.exe", "lghub_updater.exe", "LCore.exe"],
+  "keywords": ["logitech", "lightspeed", "g502", "g703", "g903", "g935", "g733", "hid++", "openrgb"]
+}

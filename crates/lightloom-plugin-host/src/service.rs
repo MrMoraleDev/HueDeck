@@ -265,6 +265,9 @@ pub struct ServiceOptions {
     pub load_budget: Duration,
     /// Each call into the plugin.
     pub call_budget: Budget,
+    /// Open the discovery sockets and browse mDNS (tests turn it off: the
+    /// plugin's own sockets and requests still work, nothing is broadcast).
+    pub discovery: bool,
 }
 
 impl Default for ServiceOptions {
@@ -277,6 +280,7 @@ impl Default for ServiceOptions {
                 js: Duration::from_secs(2),
                 wall: Duration::from_secs(15),
             },
+            discovery: true,
         }
     }
 }
@@ -471,10 +475,12 @@ fn run(
         SocketAddr::new(ip, config.broadcast_port.min(65535) as u16)
     });
     let listen = (config.listen_port > 0 && config.listen_port <= 65535).then_some(config.listen_port as u16);
-    for note in lock_net(&net).open_discovery(broadcast, listen) {
-        natives.log(&note);
+    if opts.discovery {
+        for note in lock_net(&net).open_discovery(broadcast, listen) {
+            natives.log(&note);
+        }
     }
-    let mut browser = (!config.mdns.is_empty()).then(|| MdnsBrowser::new(&config.mdns));
+    let mut browser = (opts.discovery && !config.mdns.is_empty()).then(|| MdnsBrowser::new(&config.mdns));
     if let Some(e) = browser.as_ref().and_then(|b| b.error()) {
         natives.log(e);
     }

@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.wled",
+  "name": "WLED",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "WLED LED controllers on the LAN: found by mDNS (_wled._tcp) or added by IP, checked with GET /json/info, streamed with WLED's UDP realtime protocol (DRGB/DNRGB, 2 s timeout so WLED returns to its own effect). Written from WLED's public documentation. Untested: nobody on the project owns a WLED controller. Protocol notes: docs/hardware/wled.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    { "network": { "mdns": ["_wled._tcp"], "udpPorts": [21324], "tcpPorts": [80] } }
+  ],
+  "permissions": ["network-udp", "network-http", "mdns", "settings"],
+  "keywords": ["wled", "esp32", "esp8266", "led strip", "addressable", "udp realtime", "drgb", "dnrgb"]
+}

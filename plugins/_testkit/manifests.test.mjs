@@ -12,6 +12,8 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+// Registers the @SignalRGB/* module hook network plugins import.
+import "./mock-net.mjs";
 
 const plugins = join(dirname(fileURLToPath(import.meta.url)), "..");
 const schema = JSON.parse(readFileSync(join(plugins, "..", "schemas", "plugin-manifest-v2.schema.json"), "utf8"));
@@ -88,6 +90,33 @@ for (const dir of dirs) {
           assert.ok((smbus.spdManufacturers ?? []).length > 0, "a RAM plugin declares spdManufacturers (SPD check)");
         }
         assert.equal(String(plugin.Type()).toUpperCase(), "SMBUS");
+        continue;
+      }
+      if ("network" in claim) {
+        const net = claim.network;
+        const keys = schema.$defs.networkClaim.properties.network.properties;
+        for (const key of Object.keys(net)) {
+          assert.ok(key in keys, `network claim key '${key}' is not in the schema`);
+        }
+        for (const port of [...(net.udpPorts ?? []), ...(net.tcpPorts ?? [])]) {
+          assert.ok(Number.isInteger(port) && port >= 1 && port <= 65535, `port ${port}`);
+        }
+        const pattern = new RegExp(keys.mdns.items.pattern);
+        for (const t of net.mdns ?? []) {
+          assert.match(t, pattern);
+        }
+        // The plugin's DiscoveryService browses exactly the claimed mDNS types (its constructor
+        // only sets fields, so no globals are needed).
+        const plugin = await import(pathToFileURL(join(plugins, dir, manifest.entry)).href);
+        assert.equal(String(plugin.Type()).toLowerCase(), "network");
+        assert.equal(typeof plugin.DiscoveryService, "function", "network plugins export DiscoveryService");
+        const discovery = new plugin.DiscoveryService();
+        const browsed = (discovery.MDns ?? []).map((t) => String(t).replace(/\.local\.?$/, ""));
+        assert.deepEqual([...browsed].sort(), [...(net.mdns ?? [])].sort(), "MDns equals the manifest mdns");
+        for (const p of manifest.permissions) {
+          assert.ok(p.startsWith("network-") || ["mdns", "settings"].includes(p), `permission '${p}'`);
+        }
+        assert.equal(manifest.permissions.includes("mdns"), browsed.length > 0, "mdns permission iff MDns");
         continue;
       }
       if ("hidUsage" in claim) {

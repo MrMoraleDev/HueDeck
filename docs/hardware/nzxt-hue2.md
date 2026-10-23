@@ -136,6 +136,11 @@ happens automatically (the legend is not part of the checkout; not verified on h
 hardware effect sent on exit could become the device's remembered state. Black uses only the
 reports every frame already uses.
 
+"Save to devices" (HueDeck extension) is not offered: OpenRGB's controller has no save command
+for this family, and its "automatic" save marking is unverified, so there is no documented
+persistent store to write deliberately (the Kraken X3 has none either). Exit modes: only the
+black exit above ("its own lighting" in the dashboard); "keep" and "off" fall back to it.
+
 ## HueDeck mapping
 
 - **Kraken X3 (`2007`, `2014`).** OpenRGB's zone 0 "RGB Header" is the HueDeck channel

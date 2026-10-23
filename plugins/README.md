@@ -76,7 +76,8 @@ instead of USB ids, and HueDeck runs them only when they declare where they may 
   and the devices may live at. Nothing else on the bus is reachable.
 - `SmbusBuses()` (optional): bus kinds to be offered (`"nvidia"`, `"amd"`, `"intel"`, ...).
 - `SmbusDeniedRegisters()` (optional, HueDeck extension): registers the host never lets the
-  plugin write (save-to-flash and the like; MSI GPU: `0x3F`). The manifest lists them as
+  plugin write (save-to-flash and the like; MSI GPU: `0x3F`), except inside the user's
+  "Save to devices" call (`SaveToDevice`). The manifest lists them as
   `smbus.deniedRegisters` (checked against the export).
 - GPU plugins export `BrandGPUList()`; a GPU bus is offered only to the plugins that list
   that card's four PCI ids.
@@ -105,6 +106,17 @@ the reviewed addresses of the first-party RAM plugins; GPU buses need neither. T
 `plugins/_testkit/mock-bus.mjs` (the `bus` objects, both shapes) next to `mock-device.mjs`,
 and in HueDeck's host with `huedeck bench --mock-smbus <plugin>`. Details:
 [docs/host-api/smbus.md](../docs/host-api/smbus.md), HueDeck section.
+
+## Saving to the device and exit modes (HueDeck extensions)
+
+A plugin whose device keeps lighting in its own flash or EEPROM can offer "Save to devices":
+export `SaveCapabilities()` and `SaveToDevice(request)`, repeat the capabilities as `save` in
+`manifest.json`, keep every write of the save flag or register inside `SaveToDevice` with
+`action: "save"`, and test that no other path (frames, previews, every exit mode, suspend) sends
+it. `Shutdown(SystemSuspending, mode)` gets the exit mode (`"restore"`, `"keep"`, `"off"`) as a
+second argument; list the ones you implement in `ShutdownModes()` and `shutdownModes`. "Keep" and
+"off" must never store anything. Contract and host guarantees:
+[docs/host-api/save-shutdown.md](../docs/host-api/save-shutdown.md).
 
 ## Adapting a device from OpenRGB
 

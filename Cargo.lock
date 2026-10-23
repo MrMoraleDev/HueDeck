@@ -1140,6 +1140,7 @@ dependencies = [
  "huedeck-hal-windows",
  "huedeck-nvapi",
  "huedeck-plugin-host",
+ "huedeck-protocol",
  "serde",
  "serde_json",
  "tracing",
@@ -1149,6 +1150,7 @@ dependencies = [
 name = "huedeck-setup"
 version = "0.0.1"
 dependencies = [
+ "huedeck-hal-windows",
  "huedeck-iobroker",
  "windows",
  "windows-service",

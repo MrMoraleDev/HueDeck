@@ -29,6 +29,60 @@ pub struct Snapshot {
     pub conflicts: Vec<String>,
     /// Problems worth showing (renderer missing, plugin directories empty, ...).
     pub warnings: Vec<String>,
+    /// PawnIO / RAM lighting (Settings).
+    pub pawnio: PawnIoView,
+}
+
+/// PawnIO and the HueDeck I/O broker: what RAM lighting needs (Windows).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PawnIoView {
+    /// The Install / Remove buttons can work: Windows, `huedeck-setup.exe`
+    /// next to `huedeckd.exe`, real hardware mode.
+    pub supported: bool,
+    /// PawnIO's uninstall entry exists.
+    pub installed: bool,
+    /// Its `DisplayVersion`.
+    pub version: Option<String>,
+    /// 2.2.0 or later.
+    pub version_ok: bool,
+    /// `official` / `unrestricted` / `unknown`, as the broker reported it
+    /// (`None` while HueDeck has not talked to the broker).
+    pub edition: Option<String>,
+    /// The `HueDeckIoBroker` service: `notInstalled`, `stopped`, `pending`, `running`, `unknown`.
+    pub service: String,
+    /// The broker answered and HueDeck uses it.
+    pub broker_healthy: bool,
+    /// Chipset SMBus buses (RAM) in use.
+    pub ram_buses: usize,
+    /// One line for the user.
+    pub status: String,
+    /// The last Install / Remove run (running or ended).
+    pub job: Option<PawnIoJob>,
+}
+
+/// An Install / Remove run of the elevated helper.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PawnIoJob {
+    /// `install` / `remove`.
+    pub action: String,
+    /// Still running (or the UAC prompt still open).
+    pub running: bool,
+    /// How it ended; `None` while running.
+    pub ok: Option<bool>,
+    /// What to tell the user.
+    pub message: String,
+}
+
+/// What the PawnIO / RAM lighting buttons ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PawnIoAction {
+    /// Install PawnIO when needed (verified download) and (re)register the I/O broker.
+    Install,
+    /// Remove the I/O broker; PawnIO stays.
+    Remove,
 }
 
 /// The canvas: effect, brightness, layout, renderer.
@@ -328,6 +382,13 @@ pub enum Request {
         /// The document.
         state: Value,
     },
+    /// PawnIO / RAM lighting status, read again now (read-only).
+    PawnIoStatus,
+    /// Start the elevated helper for RAM lighting (Windows shows one UAC prompt).
+    PawnIoSetup {
+        /// Install or remove.
+        action: PawnIoAction,
+    },
     /// Enumerate devices again now.
     Rescan,
     /// Stop the daemon (every plugin restores its device first).
@@ -360,6 +421,8 @@ impl Request {
             Request::ListComponents => "listComponents",
             Request::Export => "export",
             Request::Import { .. } => "import",
+            Request::PawnIoStatus => "pawnIoStatus",
+            Request::PawnIoSetup { .. } => "pawnIoSetup",
             Request::Rescan => "rescan",
             Request::Shutdown => "shutdown",
         }
@@ -482,6 +545,13 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Request::StepEffect { previous: true }).unwrap(),
             serde_json::json!({"op": "stepEffect", "previous": true})
+        );
+        assert_eq!(
+            serde_json::to_value(Request::PawnIoSetup {
+                action: PawnIoAction::Remove
+            })
+            .unwrap(),
+            serde_json::json!({"op": "pawnIoSetup", "action": "remove"})
         );
     }
 }

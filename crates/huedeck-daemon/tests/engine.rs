@@ -119,6 +119,20 @@ fn the_engine_drives_a_device_and_follows_requests() {
     });
     assert_eq!(device(&s).unwrap().channels[0].name, "ARGB");
 
+    // PawnIO / RAM lighting: the status reads; the elevated helper never runs from a mock run.
+    let v = call(b, Request::PawnIoStatus).unwrap();
+    assert_eq!(v["supported"], false, "{v}");
+    assert!(v["status"].as_str().is_some_and(|s| !s.is_empty()));
+    let e = call(
+        b,
+        Request::PawnIoSetup {
+            action: huedeck_api::model::PawnIoAction::Install,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(e.status, 409, "{e}");
+    assert!(b.snapshot().pawnio.job.is_none(), "nothing was started");
+
     // Lighting.
     call(
         b,

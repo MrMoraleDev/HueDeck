@@ -15,6 +15,7 @@ pub mod engine;
 pub mod instance;
 pub mod lifecycle;
 pub mod paths;
+pub mod pawnio;
 pub mod store;
 
 use anyhow::Context;

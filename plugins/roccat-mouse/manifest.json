@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.roccat-mouse",
+  "name": "Roccat mice",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-LED lighting of Roccat mice: Kone Aimo and Kone Aimo 16K, Kone Pro, Kone Pro Air (wireless and wired), Kone XP, Burst Core and Burst Pro. Adapted from OpenRGB's Roccat controllers (GPL-2.0-or-later); untested on hardware. The profile (flash) report, DPI and polling rate are never touched; at exit the Kone Pro, Burst and Kone XP go back to their built-in lighting. Held back: Burst Pro Air (1E7D:2CA6, colours through the profile report id) and Kova (1E7D:2CEE, no direct mode, every change rewrites the stored profile). Protocol notes: docs/hardware/roccat-mouse.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x1E7D",
+      "pids": ["0x2E27", "0x2E2C", "0x2C88", "0x2C8E", "0x2C92", "0x2C8B", "0x2DE6", "0x2DE1"],
+      "transport": "hid",
+      "interfaces": [0, 1, 2, 3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["ROCCAT_Swarm.exe", "ROCCAT_Swarm_Monitor.exe", "Turtle Beach Swarm II.exe"],
+  "keywords": ["roccat", "kone", "burst", "mouse", "openrgb"]
+}

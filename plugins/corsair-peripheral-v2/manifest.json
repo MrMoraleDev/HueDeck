@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.corsair-peripheral-v2",
+  "name": "Corsair Peripheral V2 (OpenRGB port)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-LED lighting of Corsair peripherals on the V2 protocol: K55 RGB PRO, K57 RGB (wired), K60 RGB PRO family, K70 Core / RGB PRO / RGB TKL, K95 RGB PLATINUM XT, K100; Dark Core RGB SE / Pro SE, Harpoon and Ironclaw Wireless, Katar Pro, M55, M65 RGB Ultra, M75, Scimitar Elite RGB; MM700; and the devices OpenRGB knows behind Slipstream wireless receivers. Adapted from OpenRGB (GPL-2.0-or-later); untested on hardware. Software render mode while running, hardware render mode (the device's own lighting) at shutdown; no DPI, polling, profile or other non-lighting command. Protocol notes: docs/hardware/corsair-peripheral-v2.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "other",
+  "devices": [
+    {
+      "vid": "0x1B1C",
+      "pids": ["0x1BA4", "0x1B6E", "0x1BA0", "0x1B8D", "0x1BAD", "0x1BC7", "0x1BED", "0x1BFD", "0x2B01", "0x1BC4", "0x1BB3", "0x1B73", "0x1BB9", "0x1B89", "0x1B7C", "0x1BC5", "0x1B7D", "0x1B4B", "0x1B7E", "0x1B5E", "0x1B4C", "0x2B32", "0x2B00", "0x1B93", "0x1BBA", "0x1BAC", "0x1B70", "0x1B9E", "0x1BB5", "0x1BF0", "0x1BDC", "0x1BF1", "0x1BE3", "0x1BA6", "0x1B65", "0x1B66", "0x1B9B", "0x1BC9"],
+      "transport": "hid",
+      "interfaces": [1],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["iCUE.exe", "Corsair.Service.exe", "CueLLAccessService.exe"],
+  "keywords": ["corsair", "keyboard", "mouse", "mousemat", "slipstream", "openrgb"]
+}

@@ -4,6 +4,7 @@
 // a row (pid.codes test id 1209:0001). Its protocol, also made up: one 65-byte output report,
 // report id 0, then command 0x01 "set colours", the LED count, and R, G, B per LED.
 
+/// <reference path="../../huedeck.d.ts" />
 /* global device, shutdownColor, LightingMode, forcedColor */
 
 const LEDS = 8;
@@ -30,6 +31,7 @@ export function ControllableParameters() {
 }
 
 // The strip has one HID interface; accept its collection only.
+/** @param {HueDeck.HidEndpoint} endpoint */
 export function Validate(endpoint) {
   return endpoint.interface === 0 || endpoint.interface === -1;
 }
@@ -42,13 +44,16 @@ export function Render() {
   sendColors();
 }
 
+/** @param {boolean} [systemSuspending] */
 export function Shutdown(systemSuspending) {
   sendColors(systemSuspending ? "#000000" : shutdownColor);
 }
 
+/** @param {string} [overrideColor] */
 function sendColors(overrideColor) {
   const packet = [0x00, 0x01, LEDS];
   for (let i = 0; i < LEDS; i++) {
+    /** @type {HueDeck.RGB} */
     let color;
     if (overrideColor) {
       color = hexToRgb(overrideColor);
@@ -62,6 +67,10 @@ function sendColors(overrideColor) {
   device.write(packet, 65);
 }
 
+/**
+ * @param {string} hex
+ * @returns {HueDeck.RGB}
+ */
 function hexToRgb(hex) {
   const n = parseInt(String(hex).replace("#", ""), 16);
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];

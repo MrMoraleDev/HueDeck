@@ -28,3 +28,6 @@ tracing-subscriber = { workspace = true }
 # PawnIO IOCTLs (NtDeviceIoControlFile), the named pipe, Global\Access_SMBUS.HTP.Method.
 windows = { workspace = true }
 windows-service = { workspace = true }
+
+[build-dependencies]
+lightloom-winres = { path = "../lightloom-winres" }

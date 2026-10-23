@@ -35,3 +35,6 @@ lightloom-runtime = { path = "../lightloom-runtime" }
 # Ctrl-C on Unix; Windows uses lightloom_hal_windows::console (close/log-off/shutdown too).
 [target.'cfg(not(windows))'.dependencies]
 ctrlc = { workspace = true }
+
+[build-dependencies]
+lightloom-winres = { path = "../lightloom-winres" }

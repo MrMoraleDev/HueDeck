@@ -58,6 +58,8 @@ ctrlc = "3.4"
 # SPIKE A (lightloom-renderer): CEF offscreen Chromium + memory-mapped shm ring. CEF itself is BSD-3.
 cef = { version = "=154.5.0", default-features = false }
 memmap2 = "0.9"
+# Icon and version resources of the Windows executables (build scripts, via lightloom-winres).
+winresource = "0.1"
 
 [profile.release]
 opt-level = 3

@@ -118,6 +118,28 @@ export interface Snapshot {
   settings: Settings;
   conflicts: string[];
   warnings: string[];
+  pawnio: PawnIoView;
+}
+
+export interface PawnIoJob {
+  action: "install" | "remove";
+  running: boolean;
+  ok?: boolean | null;
+  message: string;
+}
+
+/** PawnIO and the Lightloom I/O service: what RAM lighting needs (Windows). */
+export interface PawnIoView {
+  supported: boolean;
+  installed: boolean;
+  version?: string | null;
+  versionOk: boolean;
+  edition?: string | null;
+  service: "notInstalled" | "stopped" | "pending" | "running" | "unknown";
+  brokerHealthy: boolean;
+  ramBuses: number;
+  status: string;
+  job?: PawnIoJob | null;
 }
 
 export interface LibraryComponent {

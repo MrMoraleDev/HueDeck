@@ -31,6 +31,8 @@ huedeck-engine = { path = "../huedeck-engine" }
 huedeck-render = { path = "../huedeck-render" }
 huedeck-effects = { path = "../huedeck-effects" }
 huedeck-runtime = { path = "../huedeck-runtime" }
+# NATIVE_PORT (the daemon's default port).
+huedeck-api = { path = "../huedeck-api" }
 
 # Ctrl-C on Unix; Windows uses huedeck_hal_windows::console (close/log-off/shutdown too).
 [target.'cfg(not(windows))'.dependencies]

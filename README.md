@@ -89,9 +89,9 @@ and gives you a modern dashboard in your browser.
 
 ### Dashboard, API and command line
 
-- **Dashboard** at `http://127.0.0.1:16138`: effects with live controls and preview,
-  layout editor, devices and channels, settings, export and import of your whole
-  setup in one file.
+- **Dashboard** at `http://127.0.0.1:53000` (the port can be changed in Settings;
+  loopback only): effects with live controls and preview, layout editor, devices
+  and channels, settings, export and import of your whole setup in one file.
 - **Local API**: everything the dashboard does, over REST and WebSocket (`/v1/...`),
   with live state events and a live canvas stream. Script your lights.
 - **`huedeck` CLI**: list devices, set a colour, run an effect, record and replay
@@ -143,14 +143,16 @@ There is no release yet. From source (stable Rust toolchain, Windows for now):
 cargo build --release                          # huedeckd and huedeck
 cargo build --release -p huedeck-renderer --features cef   # effects (CMake + Ninja on PATH)
 cd ui && npm ci && npm run build               # the dashboard (ui/dist)
-target/release/huedeckd --open                 # devices, effects, API; opens http://127.0.0.1:16138
+target/release/huedeckd --open                 # devices, effects, API; opens http://127.0.0.1:53000
 ```
 
 `huedeckd` finds the renderer, the dashboard, its plugins and starter effects next
 to its executable (in a source checkout: the tree's `plugins/`, `effects/` and
 `ui/dist`). Settings live in `%LOCALAPPDATA%\HueDeck` (database, API token) and
 `%APPDATA%\HueDeck\config.toml` (ports, frame rate, extra plugin directories,
-devices to leave alone); `--home DIR` keeps everything in one directory,
+devices to leave alone); the dashboard's Settings → Port wins over `[api] port`
+there, and `huedeckd --port N` over both for one run. `huedeck url` prints where
+the running daemon serves. `--home DIR` keeps everything in one directory,
 `--dry-run` never writes to devices. Close other RGB software that owns the same
 devices: HueDeck leaves them alone while it runs and tells you so.
 

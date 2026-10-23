@@ -20,13 +20,16 @@ pub const INJECT_URL: &str = "huedeck://renderer/inject.js";
 
 /// `window.engine` with every input zeroed; `getSensorValue(name)` reads
 /// `engine.sensors[name]` (filled by `engine` control commands).
+/// `engine.audio.freq` is a plain Array, replaced on every push as SignalRGB
+/// does (`engine.audio.freq = [...]`): `freq.map(v => v / 127)` must yield
+/// fractions, which an `Int8Array` would truncate to 0.
 pub fn engine_bootstrap_js() -> String {
     let cells = ZONE_COLS * ZONE_ROWS;
     let image = ZONE_IMAGE_WIDTH * ZONE_IMAGE_HEIGHT * 4;
     format!(
         "(function () {{\n\
          \x20 var e = window.engine = window.engine || {{}};\n\
-         \x20 e.audio = {{ freq: new Int8Array({AUDIO_FREQ_BINS}), level: -100, rawlevel: 0, width: 0, density: 0 }};\n\
+         \x20 e.audio = {{ freq: new Array({AUDIO_FREQ_BINS}).fill(0), level: -100, rawlevel: 0, width: 0, density: 0 }};\n\
          \x20 e.zone = {{ hue: new Int16Array({cells}), saturation: new Int8Array({cells}), \
          lightness: new Int8Array({cells}), imagedata: new Uint8ClampedArray({image}) }};\n\
          \x20 e.vision = {{}};\n\
@@ -223,7 +226,7 @@ mod tests {
     #[test]
     fn bootstrap_shapes() {
         let js = engine_bootstrap_js();
-        assert!(js.contains("freq: new Int8Array(200)"));
+        assert!(js.contains("freq: new Array(200).fill(0)"));
         assert!(js.contains("hue: new Int16Array(560)"));
         assert!(js.contains("imagedata: new Uint8ClampedArray(64000)"));
         assert!(js.contains("level: -100"));

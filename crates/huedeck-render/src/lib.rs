@@ -17,7 +17,7 @@ pub mod cef;
 pub mod clock;
 pub mod null;
 
-pub use cef::{CefRenderer, CefRendererConfig, CefStatus};
+pub use cef::{CefRenderer, CefRendererConfig, CefStatus, EngineDataSink};
 pub use clock::FrameClock;
 pub use null::{NullRenderer, Pattern};
 

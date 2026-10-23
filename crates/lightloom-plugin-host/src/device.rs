@@ -14,12 +14,13 @@
 //! reads return a zero-filled buffer with `getLastReadSize() == 0`. Failures
 //! are counted in [`IoStats`] and logged once per operation kind.
 
+use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::children::{ChildSetup, Children};
 use crate::runtime::Deadline;
 use crate::stats::{LatencyHistogram, LatencySummary};
 use lightloom_engine::{
     apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, Frame, OffsetTable, Placement,
-    SamplerConfig,
+    Rgb, SamplerConfig,
 };
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportSpec};
 use rquickjs::{Ctx, Function, Object};
@@ -49,6 +50,10 @@ const LOG_ONCE_LIMIT: usize = 256;
 const MAX_LOG_CHARS: usize = 4096;
 /// Longest id or name a plugin may pass (characters): subdevices, channels, components.
 pub const MAX_ID_CHARS: usize = 256;
+/// One pulse of the alert override (see [`DeviceContext::set_alert`]).
+pub const ALERT_PERIOD: Duration = Duration::from_millis(1600);
+/// Dimmest point of the alert pulse (fraction of the alert colour).
+const ALERT_FLOOR: f32 = 0.15;
 
 /// `s` cut to at most `max` characters (strings copied out of the engine escape its heap cap).
 pub(crate) fn capped(mut s: String, max: usize) -> String {
@@ -211,6 +216,14 @@ pub struct DeviceContext {
     deadline: Option<Deadline>,
     /// `getDeviceInfo()` strings of a device without HID endpoints (SMBus).
     info_override: Option<Vec<String>>,
+    /// The `battery` feature: `None` until the plugin adds it.
+    battery: Option<BatteryStatus>,
+    /// `battery.lowBatteryWarningLevel` (percent, the user's setting).
+    battery_warning_level: u8,
+    /// Alert override colour: every LED of the device and its children pulses it.
+    alert: Option<Rgb>,
+    /// The alert colour at the current frame's pulse phase.
+    alert_now: Option<[u8; 3]>,
 }
 
 impl std::fmt::Debug for DeviceContext {
@@ -308,6 +321,10 @@ impl DeviceContext {
             system_info: String::new(),
             deadline: None,
             info_override: None,
+            battery: None,
+            battery_warning_level: DEFAULT_WARNING_LEVEL,
+            alert: None,
+            alert_now: None,
         };
         ctx.update_factor();
         ctx
@@ -444,6 +461,79 @@ impl DeviceContext {
             self.pending_frame = Some(captured);
         }
         self.frame = frame;
+        self.update_alert();
+    }
+
+    // ------------------------------------------------------------------ battery and alert
+
+    /// What the plugin reported through the `battery` feature (`None`: it never added it).
+    pub fn battery(&self) -> Option<BatteryStatus> {
+        self.battery
+    }
+
+    /// `device.addFeature("battery")`: the device has a battery (level unknown yet).
+    pub fn enable_battery(&mut self) {
+        self.battery.get_or_insert_with(BatteryStatus::default);
+    }
+
+    /// `battery.setBatteryLevel(level)`.
+    pub fn set_battery_level(&mut self, level: f64) {
+        self.battery
+            .get_or_insert_with(BatteryStatus::default)
+            .set_level(level);
+    }
+
+    /// `battery.setBatteryState(state)`.
+    pub fn set_battery_state(&mut self, raw: i32) {
+        self.battery
+            .get_or_insert_with(BatteryStatus::default)
+            .set_state(raw);
+    }
+
+    /// `battery.lowBatteryWarningLevel`, percent.
+    pub fn battery_warning_level(&self) -> u8 {
+        self.battery_warning_level
+    }
+
+    /// Set `battery.lowBatteryWarningLevel` (clamped to `0..=100`).
+    pub fn set_battery_warning_level(&mut self, level: u8) {
+        self.battery_warning_level = level.min(100);
+    }
+
+    /// Override every LED of the device and its children (forced colours and
+    /// brightness sliders included) with `color`, pulsing over [`ALERT_PERIOD`];
+    /// `None` ends the override. The caller decides when (a low battery).
+    pub fn set_alert(&mut self, color: Option<Rgb>) {
+        self.alert = color;
+        self.update_alert();
+    }
+
+    /// The alert override is on.
+    pub fn alert(&self) -> Option<Rgb> {
+        self.alert
+    }
+
+    /// The alert colour at the pulse phase of now (once per frame, so every LED
+    /// of a frame agrees).
+    fn update_alert(&mut self) {
+        self.alert_now = self.alert.map(|c| {
+            let period = ALERT_PERIOD.as_secs_f32();
+            let phase = (self.created.elapsed().as_secs_f32() % period) / period;
+            let wave = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
+            let k = ALERT_FLOOR + (1.0 - ALERT_FLOOR) * wave;
+            let scale = |v: u8| (f32::from(v) * k).round() as u8;
+            [scale(c.r), scale(c.g), scale(c.b)]
+        });
+    }
+
+    /// Replace every colour of a flat RGB stream with the alert colour.
+    fn alert_stream(&self, mut rgb: Vec<u8>) -> Vec<u8> {
+        if let Some(c) = self.alert_now {
+            for px in rgb.as_chunks_mut::<3>().0 {
+                px.copy_from_slice(&c);
+            }
+        }
+        rgb
     }
 
     /// Sampler parameters (canvas size, pivot, sample point, `DefaultScale()`).
@@ -547,6 +637,9 @@ impl DeviceContext {
         if x >= self.size[0] || y >= self.size[1] {
             return [0, 0, 0];
         }
+        if let Some(c) = self.alert_now {
+            return c;
+        }
         if let Some(c) = self.forced {
             let c = apply_brightness(c, self.factor);
             return [c.r, c.g, c.b];
@@ -627,7 +720,7 @@ impl DeviceContext {
     /// subdevice or a cell outside its grid.
     pub fn subdevice_color(&mut self, id: &str, x: i32, y: i32) -> [u8; 3] {
         match self.children.subdevice_color(&self.frame, id, x, y) {
-            Ok(c) => c,
+            Ok(c) => self.alert_now.unwrap_or(c),
             Err(e) => {
                 // One line per subdevice: out-of-bounds messages differ by coordinates.
                 self.log_once_keyed(format!("subdeviceColor:{id}"), &e);
@@ -654,11 +747,11 @@ impl DeviceContext {
 
     /// `channel(name).getColors()` as flat RGB.
     pub fn channel_colors(&self, name: &str) -> Vec<u8> {
-        self.children.channel_colors(&self.frame, name)
+        self.alert_stream(self.children.channel_colors(&self.frame, name))
     }
 
     fn component_colors(&self, name: &str, id: &str) -> Vec<u8> {
-        self.children.component_colors(&self.frame, name, id)
+        self.alert_stream(self.children.component_colors(&self.frame, name, id))
     }
 
     fn component_data(&self, name: &str, id: &str) -> String {
@@ -1249,6 +1342,19 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
         .set_name(capped(name, MAX_ID_CHARS)));
     native!("log", |d, text: String| d.log(&text));
     native!("systemInfo", |d| d.system_info.clone());
+    // The `battery` feature (docs/host-api/hid-usb.md §addFeature).
+    native!("batteryEnable", |d| d.enable_battery());
+    native!("batterySetLevel", |d, level: f64| d.set_battery_level(level));
+    native!("batterySetState", |d, state: i32| d.set_battery_state(state));
+    // [level (-1: never set), state, lowBatteryWarningLevel]
+    native!("batteryGet", |d| {
+        let b = d.battery.unwrap_or_default();
+        vec![
+            b.level.map_or(-1, i32::from),
+            b.state.raw(),
+            i32::from(d.battery_warning_level),
+        ]
+    });
     // Subdevices (components-channels.md §2).
     native!("subCreate", |d, id: String| d
         .create_subdevice(&capped(id, MAX_ID_CHARS)));
@@ -1478,6 +1584,46 @@ mod tests {
         assert_eq!(ctx.color(2, 0), [0, 0, 0], "outside the grid");
         ctx.set_placement(Placement::default());
         assert_eq!(ctx.color(0, 0), [1, 2, 3]);
+    }
+
+    #[test]
+    fn the_alert_overrides_forced_colours_and_brightness_and_ends() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        ctx.set_geometry([2, 1], vec![[0, 0], [1, 0]]).unwrap();
+        ctx.set_frame(Arc::new(Frame::solid(320, 200, Rgb::new(1, 2, 3))));
+        ctx.set_placement(Placement {
+            lighting_mode: lightloom_engine::LightingMode::Forced,
+            forced_color: "#00ff00".into(),
+            brightness: 0,
+            ..Placement::default()
+        });
+        ctx.set_alert(Some(Rgb::new(255, 0, 0)));
+        let [r, g, b] = ctx.color(1, 0);
+        assert!(r > 0 && g == 0 && b == 0, "{r} {g} {b}");
+        assert_eq!(ctx.color(2, 0), [0, 0, 0], "outside the grid");
+        assert_eq!(ctx.alert_stream(vec![9; 6]), vec![r, 0, 0, r, 0, 0]);
+        ctx.set_alert(None);
+        assert_eq!(ctx.color(1, 0), [0, 0, 0], "forced green at brightness 0");
+        assert_eq!(ctx.alert_stream(vec![9; 3]), vec![9; 3]);
+    }
+
+    #[test]
+    fn battery_setters_create_the_report() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        assert_eq!(ctx.battery(), None);
+        ctx.enable_battery();
+        assert_eq!(ctx.battery().unwrap().level, None);
+        ctx.set_battery_state(2);
+        ctx.set_battery_level(55.0);
+        let b = ctx.battery().unwrap();
+        assert_eq!(
+            (b.level, b.state),
+            (Some(55), crate::battery::BatteryState::Charging)
+        );
+        ctx.set_battery_warning_level(140);
+        assert_eq!(ctx.battery_warning_level(), 100);
     }
 
     #[test]

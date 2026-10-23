@@ -118,6 +118,61 @@ Values (call sites): `"battery"` 46, `"keyboard"` 18, `"mouse"` 10, `"udp"` 5, `
 - `mouse.sendHid(MOUSEEVENTF flag, {XButton?, WheelDelta?})` (docs; 0 corpus uses); `mouse.sendEvent({button:"LeftClick"...}, "Button Press")` (`BUND\Razer\Razer_Modern_Mouse.js:360`).
 - `udp.send(ip, port, bytes[, BIG_ENDIAN])`, `udp.createSocket()`; `dtls.createConnection(ip, 2100, username, psk)`, `dtls.send(bytes)`, `dtls.CloseConnection()`, callbacks `onConnectionEstablished/Closed/Error(fn)` (PhilipsHue); `base64.Encode(bytes)→string`, `base64.Decode(string)→bytes` (Twinkly/Govee).
 
+### 7.1 The `battery` feature in Lightloom
+
+`device.addFeature("battery")` (idempotent) installs the `battery` global; in a device session
+it also marks the device as having a battery (level unknown until set).
+
+| member | Lightloom behaviour |
+|---|---|
+| `setBatteryLevel(level)` | `Number(level)`, rounded, clamped to 0..100; a non-finite value is ignored. |
+| `setBatteryState(state)` | `Math.trunc(Number(state))`; 0..5 kept, anything else stored as 0. |
+| `batteryLevel` | last level, 0 before the first `setBatteryLevel`. |
+| `batteryState` | last state number. |
+| `stateString` | `Unknown`, `Draining`, `Charging`, `Full (charging)`, `Full`, `Wireless charging`. |
+| `lowBatteryWarningLevel` | the user's low-battery threshold (Settings, default 15); updates live. |
+| `unknown` `draining` `charging` `fullCharging` `full` `wirelessCharging` | 0, 1, 2, 3, 4, 5. `disabled` is 0 (no corpus use, number unknown). |
+
+States 2, 3, 4 and 5 count as "on power". Each setter call stamps the report with the wall
+clock. Natives: `batteryEnable`, `batterySetLevel`, `batterySetState`, `batteryGet`
+(`crates/lightloom-plugin-host/src/device.rs`); the session publishes the report
+(`LiveSnapshot::battery`, `SessionReport::battery`); the dry-run report lists `battery`
+(`{level, state}`) for plugins that added the feature.
+
+Plugins should poll their device rarely (every 30-60 s) and call the setters when a value
+changes; polling inside `Render()` must stay within the frame budget (short reads, one query per
+frame).
+
+**What the daemon does with it** (`crates/lightloom-daemon/src/battery.rs`, device-agnostic):
+
+- `DeviceView.battery` = `{level, state, charging, status, updatedMs}`; `state` is `unknown`,
+  `discharging`, `charging`, `fullCharging`, `full` or `wirelessCharging`; `status` is `ok`,
+  `low` or `critical`. The last report is kept after the device goes away.
+- A device not on power at or below the low threshold (`settings.batteryLow`, default 15 %) is
+  low, at or below `settings.batteryCritical` (default 5 %) critical. While that lasts the
+  snapshot carries a warning (the dashboard banner) and the badge turns amber or red.
+- Alerts: once per discharge cycle at low and once at critical (a critical alert also uses up
+  the low one). An alert re-arms when the device is on power or back at its threshold + 5
+  points. An alert is a log line, a WebSocket event `{kind: "battery", data: {key, name, level,
+  severity}}` and, when `settings.batteryNotifications` is on (default), a system notification.
+- `PATCH /v1/settings {batteryLow, batteryCritical, batteryNotifications}`: `1 <= batteryLow <=
+  95`, `batteryCritical < batteryLow`, else 400. `notificationsAvailable` tells the dashboard
+  whether this OS has a notifier.
+- `PATCH /v1/devices/{key} {blinkLowBattery: true}` (default off): while that device is low or
+  critical the engine overrides every LED of the device, its subdevices and its channel
+  components with red pulsing over 1.6 s (15-100 %), regardless of forced colours and
+  brightness sliders (`Control::Alert`, `DeviceContext::set_alert`).
+
+**System notifications.** `lightloom_hal::Notifier` is the platform trait. Windows: toasts
+(`lightloom-hal-windows/src/toast.rs`, `ToastNotificationManager::CreateToastNotifierWithId`)
+under the AppUserModelID `Lightloom.Lightloom`. Lightloom has no package identity and, as a portable
+app, no Start-menu shortcut, so the least invasive registration is one per-user key written
+just before the first toast (no administrator rights):
+`HKCU\Software\Classes\AppUserModelId\Lightloom.Lightloom`, value `DisplayName = Lightloom`. Delete
+the key to undo it. Each toast is shown from its own short-lived thread. Other OSes get
+`NoNotifier` for now (Linux: libnotify / `org.freedesktop.Notifications` later, behind the
+same trait).
+
 
 ## 8. Lightloom extensions for generic HID drivers
 

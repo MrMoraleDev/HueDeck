@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createMockDevice, installGlobals, loadPlugin, hexToBytes, bytesToHex } from "../../_testkit/mock-device.mjs";
-import { DETECTORS, DEVICES } from "../devices.js";
+import { DETECTORS, DEVICES, LED_ID_ZERO, MAX_BRIGHTNESS_100, STANDARD, EXTENDED } from "../devices.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginPath = join(here, "..", "plugin.js");
@@ -438,9 +438,212 @@ test("collection probe: when no collection declares the report, the first one is
   }
 });
 
-// --- Lightloom extensions: "Save to devices" and the exit modes ------------------------------------
+// --- battery ------------------------------------------------------------------------------------
 
-import { LED_ID_ZERO, MAX_BRIGHTNESS_100, STANDARD, EXTENDED } from "../devices.js";
+/** A device answering every request: status success, the request echoed, the battery answers in argument 1. */
+function batteryDevice({ level = 0xBF, charging = 0, status = 0x02, silent = () => false } = {}) {
+  return (sent) => {
+    if (silent()) return undefined;
+    const reply = sent.slice();
+    reply[1] = 0x02;
+    if (sent[7] === 0x07) {
+      reply[1] = status;
+      reply[10] = sent[8] === 0x80 ? level : charging;
+    }
+    return reply;
+  };
+}
+
+/** The battery requests (command class 0x07) sent since the last call, as spaced hex. */
+function batteryRequests(device) {
+  const out = device.sent.filter((s) => s.bytes[7] === 0x07).map((s) => bytesToHex(s.bytes));
+  device.sent.length = 0;
+  device.written.length = 0;
+  return out;
+}
+
+/** A 91-byte battery request: report id 0, transaction id, size 2, class 0x07, id, crc. */
+function batteryRequest(transactionId, commandId) {
+  const bytes = new Array(91).fill(0);
+  bytes[2] = transactionId;
+  bytes[6] = 0x02;
+  bytes[7] = 0x07;
+  bytes[8] = commandId;
+  bytes[89] = 0x02 ^ 0x07 ^ commandId;
+  return bytesToHex(bytes);
+}
+
+test("battery: DeathAdder V2 Pro (Wireless) asks 0x07 0x80 then 0x07 0x84 on separate frames, 45 s apart", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { device, plugin, restore } = await setup({ productId: 0x007D, color: [1, 2, 3], featureReply: batteryDevice({ level: 0xBF, charging: 1 }) });
+  try {
+    plugin.Initialize();
+    assert.deepEqual(device.features, ["battery"]);
+    assert.deepEqual(batteryRequests(device), [], "nothing asked in Initialize");
+    plugin.Render();
+    assert.deepEqual(batteryRequests(device), [], "not on the first frame");
+    t.mock.timers.tick(2000);
+    plugin.Render();
+    assert.deepEqual(batteryRequests(device), [batteryRequest(0x3F, 0x80)], "level first");
+    assert.deepEqual(device.battery.levels, [], "reported once both answers are in");
+    plugin.Render();
+    assert.deepEqual(batteryRequests(device), [batteryRequest(0x3F, 0x84)], "charging status on the next frame");
+    assert.deepEqual(device.battery.levels, [75], "0xBF / 255 = 75 %");
+    assert.deepEqual(device.battery.states, [2], "charging");
+    plugin.Render();
+    t.mock.timers.tick(44_999);
+    plugin.Render();
+    assert.deepEqual(batteryRequests(device), [], "nothing before 45 s");
+    t.mock.timers.tick(1);
+    plugin.Render();
+    plugin.Render();
+    assert.deepEqual(batteryRequests(device), [batteryRequest(0x3F, 0x80), batteryRequest(0x3F, 0x84)]);
+    assert.deepEqual(device.battery.levels, [75], "unchanged values are not reported again");
+  } finally {
+    restore();
+  }
+});
+
+test("battery: percent scaling and states (full when charging at 100 %, draining when not charging)", async (t) => {
+  const cases = [
+    { level: 0xFF, charging: 1, percent: 100, state: 4 },
+    { level: 0xFF, charging: 0, percent: 100, state: 1 },
+    { level: 0x80, charging: 0, percent: 50, state: 1 },
+    { level: 0x00, charging: 1, percent: 0, state: 2 },
+    { level: 0x01, charging: 0, percent: 0, state: 1 },
+  ];
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  for (const c of cases) {
+    const { device, plugin, restore } = await setup({ productId: 0x00AB, color: [1, 2, 3], featureReply: batteryDevice(c) });
+    try {
+      plugin.Initialize();
+      t.mock.timers.tick(2000);
+      plugin.Render();
+      plugin.Render();
+      assert.deepEqual(batteryRequests(device), [batteryRequest(0x1F, 0x80), batteryRequest(0x1F, 0x84)]);
+      assert.deepEqual([device.battery.levels, device.battery.states], [[c.percent], [c.state]], JSON.stringify(c));
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("battery: Basilisk V3 X HyperSpeed has no charging-status query (level only, draining)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { device, plugin, restore } = await setup({ productId: 0x00B9, color: [1, 2, 3], featureReply: batteryDevice({ level: 0x40 }) });
+  try {
+    plugin.Initialize();
+    t.mock.timers.tick(2000);
+    plugin.Render();
+    plugin.Render();
+    assert.deepEqual(batteryRequests(device), [batteryRequest(0x1F, 0x80)]);
+    assert.deepEqual([device.battery.levels, device.battery.states], [[25], [1]]);
+  } finally {
+    restore();
+  }
+});
+
+test("battery: products without a battery get no feature and no battery query", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  for (const productId of [0x0084, 0x007E, 0x0F1F, 0x056C]) {
+    const { device, plugin, restore } = await setup({ productId, color: [1, 2, 3], featureReply: batteryDevice() });
+    try {
+      plugin.Initialize();
+      for (let i = 0; i < 4; i++) {
+        t.mock.timers.tick(30_000);
+        plugin.Render();
+      }
+      assert.deepEqual(device.features, [], `0x${productId.toString(16)}`);
+      assert.deepEqual(batteryRequests(device), []);
+      assert.deepEqual(device.battery.levels, []);
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("battery: a receiver's paired mouse is asked with the mouse's transaction id", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const answer = batteryDevice({ level: 0xFF, charging: 0 });
+  const replies = (sent) => {
+    const reply = answer(sent);
+    if (sent[7] === 0x00 && sent[8] === 0xBF) {
+      const slots = [3, 0x01, 0x00, 0xA4, 0x01, 0x00, 0xAB, 0x00, 0xFF, 0xFF];
+      for (let i = 0; i < slots.length; i++) reply[9 + i] = slots[i];
+    }
+    return reply;
+  };
+  const { device, plugin, restore } = await setup({ productId: 0x00A4, color: [1, 2, 3], featureReply: replies });
+  try {
+    plugin.Initialize();
+    assert.deepEqual(device.features, ["battery"], "the dock has none, its Basilisk V3 Pro has one");
+    t.mock.timers.tick(2000);
+    plugin.Render();
+    plugin.Render();
+    assert.deepEqual(batteryRequests(device), [batteryRequest(0x1F, 0x80), batteryRequest(0x1F, 0x84)]);
+    assert.deepEqual([device.battery.levels, device.battery.states], [[100], [1]]);
+  } finally {
+    restore();
+  }
+});
+
+test("battery: a silent device keeps its level, turns unknown once, is logged once, and comes back", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  let asleep = false;
+  const { device, plugin, restore } = await setup({
+    productId: 0x00AB, color: [1, 2, 3], featureReply: batteryDevice({ level: 0x80, silent: () => asleep }),
+  });
+  try {
+    plugin.Initialize();
+    t.mock.timers.tick(2000);
+    plugin.Render();
+    plugin.Render();
+    assert.deepEqual([device.battery.levels, device.battery.states], [[50], [1]]);
+    batteryRequests(device);
+    asleep = true;
+    device.setFeatureReport(0x00, []);
+    const pausesBefore = device.pauses.length;
+    for (let i = 0; i < 3; i++) {
+      t.mock.timers.tick(45_000);
+      plugin.Render();
+      plugin.Render();
+    }
+    assert.deepEqual(batteryRequests(device), [batteryRequest(0x1F, 0x80), batteryRequest(0x1F, 0x80), batteryRequest(0x1F, 0x80)],
+      "one level query per poll, no charging query without a level");
+    assert.deepEqual([device.battery.levels, device.battery.states], [[50, 50], [1, 0]], "level kept, state unknown");
+    assert.equal(device.logs.filter((l) => /battery/.test(l.message)).length, 1, "logged once");
+    const batteryWaits = device.pauses.slice(pausesBefore).filter((ms) => ms === 2).length;
+    assert.ok(batteryWaits <= 3 * 10, `at most 10 short reads per query (${batteryWaits})`);
+    asleep = false;
+    t.mock.timers.tick(45_000);
+    plugin.Render();
+    plugin.Render();
+    assert.deepEqual(device.battery.states, [1, 0, 1], "back once it answers");
+  } finally {
+    restore();
+  }
+});
+
+test("battery: an answer 'not supported' stops the polling", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { device, plugin, restore } = await setup({ productId: 0x0090, color: [1, 2, 3], featureReply: batteryDevice({ status: 0x05 }) });
+  try {
+    plugin.Initialize();
+    t.mock.timers.tick(2000);
+    plugin.Render();
+    assert.deepEqual(batteryRequests(device), [batteryRequest(0x1F, 0x80)]);
+    for (let i = 0; i < 3; i++) {
+      t.mock.timers.tick(45_000);
+      plugin.Render();
+    }
+    assert.deepEqual(batteryRequests(device), []);
+    assert.deepEqual(device.battery.states, []);
+  } finally {
+    restore();
+  }
+});
+
+// --- Lightloom extensions: "Save to devices" and the exit modes ------------------------------------
 
 /** A 91-byte Razer report built here (report id 0, transaction id, size, class, id, args, XOR crc of bytes 3..88). */
 function razerReport(tid, cls, id, size, args) {

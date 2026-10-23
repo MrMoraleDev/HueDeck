@@ -243,6 +243,8 @@ struct DevicePatch {
     enabled: Option<bool>,
     parameters: Option<Map<String, Value>>,
     shutdown_mode: Option<String>,
+    #[serde(default)]
+    blink_low_battery: Option<bool>,
 }
 
 async fn patch_device(
@@ -256,6 +258,7 @@ async fn patch_device(
             enabled: p.enabled,
             parameters: p.parameters,
             shutdown_mode: p.shutdown_mode,
+            blink_low_battery: p.blink_low_battery,
         })
         .await,
     )
@@ -451,6 +454,12 @@ struct SettingsPatch {
     gpu_compositing: Option<bool>,
     smbus: Option<bool>,
     shutdown_mode: Option<String>,
+    #[serde(default)]
+    battery_low: Option<u8>,
+    #[serde(default)]
+    battery_critical: Option<u8>,
+    #[serde(default)]
+    battery_notifications: Option<bool>,
     /// Wider than `u16` so an out-of-range number gets a clear 400.
     port: Option<u32>,
 }
@@ -503,6 +512,9 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
             gpu_compositing: p.gpu_compositing,
             smbus: p.smbus,
             shutdown_mode: p.shutdown_mode,
+            battery_low: p.battery_low,
+            battery_critical: p.battery_critical,
+            battery_notifications: p.battery_notifications,
             port,
         })
         .await;

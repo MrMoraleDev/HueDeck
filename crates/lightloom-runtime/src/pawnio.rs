@@ -93,6 +93,18 @@ pub fn facts() -> PawnIoFacts {
     }
 }
 
+/// The state of the I/O broker service (service manager, read-only).
+pub fn broker_service_state() -> ServiceState {
+    #[cfg(windows)]
+    {
+        lightloom_hal_windows::service::service_state(SERVICE_NAME)
+    }
+    #[cfg(not(windows))]
+    {
+        ServiceState::NotInstalled
+    }
+}
+
 /// The I/O broker's service name (`lightloom_iobroker::SERVICE_NAME`).
 pub const SERVICE_NAME: &str = "LightloomIoBroker";
 

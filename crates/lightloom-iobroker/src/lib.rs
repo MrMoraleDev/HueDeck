@@ -37,8 +37,12 @@ pub mod pipe;
 pub mod policy;
 pub mod server;
 
-#[cfg(test)]
-pub(crate) mod fake;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fake;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzz;
 
 /// Windows service name registered by `lightloom-setup --smbus`.
 pub const SERVICE_NAME: &str = "LightloomIoBroker";

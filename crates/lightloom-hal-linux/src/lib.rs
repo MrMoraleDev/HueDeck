@@ -1,33 +1,38 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Linux HAL backends (M7).
 //!
-//! Planned: hidapi `linux-native` (hidraw) with `lightloom-hid-desc` splitting
-//! each interface into top-level collections so `Validate` sees the same
-//! `{interface, usage, usage_page, collection}` tuples as on Windows; `nusb`
-//! for raw USB; `serialport`; udev hotplug; `/dev/i2c-*` SMBus (no broker);
-//! hwmon sensors and pwm fan control.
+//! * [`sysfs`]: hidraw nodes from `/sys/class/hidraw` (identity, USB parent,
+//!   report descriptor) without opening them;
+//! * [`tlc`]: the report-descriptor split into top-level collections and the
+//!   grouping into physical devices, giving the same
+//!   `{interface, usage, usage_page, collection}` tuples as Windows;
+//! * [`uevent`]: netlink uevent parsing (udev and kernel shapes);
+//! * `hidraw` (Linux only): [`LinuxHidBackend`], report I/O on `/dev/hidrawN`;
+//! * `hotplug` (Linux only): [`HidrawHotplug`], the udev netlink monitor.
+//!
+//! The pure modules compile on every OS so their tests (and the tuple-parity
+//! fixtures shared with the Windows path logic) run in Windows CI too.
+//! `unsafe` is confined to the Linux-only `sys` module (ioctls, poll, socket).
+//!
+//! Planned: `nusb` raw USB, `serialport`, `/dev/i2c-*` SMBus, hwmon.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
-#[cfg(unix)]
-mod imp {
-    use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidHandle};
-    use lightloom_hal::{HalError, HalResult};
+pub mod sysfs;
+pub mod tlc;
+pub mod uevent;
 
-    /// Placeholder hidraw backend; every call reports `Unsupported` until M7.
-    #[derive(Debug, Default, Clone, Copy)]
-    pub struct LinuxHidBackend;
+#[cfg(test)]
+mod fixtures;
 
-    impl HidBackend for LinuxHidBackend {
-        fn enumerate(&self) -> HalResult<Vec<HidEndpointInfo>> {
-            Err(HalError::Unsupported("hidraw backend lands in M7"))
-        }
+#[cfg(target_os = "linux")]
+pub mod hidraw;
+#[cfg(target_os = "linux")]
+pub mod hotplug;
+#[cfg(target_os = "linux")]
+mod sys;
 
-        fn open(&self, _path: &str) -> HalResult<Box<dyn HidHandle>> {
-            Err(HalError::Unsupported("hidraw backend lands in M7"))
-        }
-    }
-}
-
-#[cfg(unix)]
-pub use imp::LinuxHidBackend;
+#[cfg(target_os = "linux")]
+pub use hidraw::LinuxHidBackend;
+#[cfg(target_os = "linux")]
+pub use hotplug::HidrawHotplug;

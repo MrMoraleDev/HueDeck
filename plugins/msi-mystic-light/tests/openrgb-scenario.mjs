@@ -31,8 +31,10 @@ const hex = (bytes) => bytesToHex(bytes).replace(/ /g, "");
 /**
  * Runs `scenario` through the plugin at `pluginPath` with `vendorId`. Returns { device, plugin,
  * events, restore, rowZones } where `events` are the I/O calls up to the last frame.
+ * `beforeShutdown(plugin, device)` runs after the last frame (its I/O: `hookEvents`, its return
+ * value: `extra`); `shutdownMode` is Shutdown()'s second argument (HueDeck exit modes).
  */
-export async function runScenario(pluginPath, scenario, { vendorId }) {
+export async function runScenario(pluginPath, scenario, { vendorId, beforeShutdown = null, shutdownMode = undefined }) {
   const image = hexToBytes(scenario.image);
   const sizes = { ...scenario.sizes };
   let frame = 0;
@@ -105,10 +107,13 @@ export async function runScenario(pluginPath, scenario, { vendorId }) {
       }
     }
     const events = eventsOf(device.calls);
+    const hookStart = device.calls.length;
+    const extra = beforeShutdown ? beforeShutdown(plugin, device) : undefined;
+    const afterHook = device.calls.length;
     const before = device.calls.length;
-    plugin.Shutdown(false);
+    plugin.Shutdown(false, shutdownMode);
     const shutdown = eventsOf(device.calls.slice(before));
-    return { device, plugin, events, shutdown, rowZones };
+    return { device, plugin, events, shutdown, rowZones, extra, hookEvents: eventsOf(device.calls.slice(hookStart, afterHook)) };
   } finally {
     restoreGlobals();
   }

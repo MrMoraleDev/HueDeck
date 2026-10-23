@@ -11,7 +11,9 @@
 //     `Size()`, `ControllableParameters()` against schemas/controllable-parameters.schema.json;
 //   * exports against the manifest: `VendorId()` / `ProductId()` against the USB claims,
 //     `HidUsages()` against the hidUsage claims, `SmbusAddresses()`, `SmbusDeniedRegisters()`,
-//     `SpdManufacturers()`, `SmbusBatchWrites()` and `BrandGPUList()` against the SMBus claim;
+//     `SpdManufacturers()`, `SmbusBatchWrites()` and `BrandGPUList()` against the SMBus claim,
+//     `SaveCapabilities()` / `ShutdownModes()` against `save` / `shutdownModes` (and a plugin
+//     that can save exports `SaveToDevice(request)`);
 //   * the sources for globals a HueDeck plugin does not have (DOM, Node, timers).
 //
 // plugins/_testkit/manifests.test.mjs runs this over every first-party plugin.
@@ -425,6 +427,18 @@ function checkExportsAgainstManifest(readings, manifest, add) {
         add("warning", "manifest", "smbus-mismatch", `SmbusBuses() ${show(ex.SmbusBuses)} differs from smbus.buses ${show(s.buses)}`, "/devices");
       }
     }
+  }
+
+  // Save to devices and exit modes (docs/host-api/save-shutdown.md).
+  const saveLifecycle = readings.some((r) => r.lifecycle?.SaveToDevice);
+  if (!deepEqual(ex.SaveCapabilities ?? null, manifest.save ?? null)) {
+    add("error", "manifest", "save-mismatch", `SaveCapabilities() ${show(ex.SaveCapabilities ?? null)} differs from save ${show(manifest.save ?? null)}`, "/save");
+  }
+  if ((manifest.save !== undefined || ex.SaveCapabilities !== undefined) && !saveLifecycle) {
+    add("error", "exports", "save-without-export", "SaveCapabilities() / save without a SaveToDevice(request) export: HueDeck saves nothing", "/save");
+  }
+  if (!deepEqual(ex.ShutdownModes ?? [], manifest.shutdownModes ?? [])) {
+    add("error", "manifest", "shutdown-modes-mismatch", `ShutdownModes() ${show(ex.ShutdownModes ?? [])} differs from shutdownModes ${show(manifest.shutdownModes ?? [])}`, "/shutdownModes");
   }
 
   // Informational fields.

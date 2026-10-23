@@ -160,6 +160,12 @@ impl CefRenderer {
         self.shared.send(&line)
     }
 
+    /// A handle pushing `window.engine` data from another thread (an input
+    /// source running at its own rate); it follows renderer restarts.
+    pub fn engine_sink(&self) -> EngineDataSink {
+        EngineDataSink(Arc::clone(&self.shared))
+    }
+
     /// New control values: sent to the running renderer and kept for restarts.
     /// `false` when no renderer is running (the values still apply to the next).
     pub fn set_properties(&self, values: Map<String, Value>) -> bool {
@@ -178,6 +184,26 @@ impl CefRenderer {
     pub fn tap(&self, x: f64, y: f64) -> bool {
         let line = serde_json::json!({ "cmd": "tap", "x": x, "y": y }).to_string() + "\n";
         self.shared.send(&line)
+    }
+}
+
+/// Pushes `window.engine` data to a [`CefRenderer`] (see [`CefRenderer::engine_sink`]).
+#[derive(Clone)]
+pub struct EngineDataSink(Arc<Shared>);
+
+impl std::fmt::Debug for EngineDataSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EngineDataSink")
+    }
+}
+
+impl EngineDataSink {
+    /// Same as [`CefRenderer::push_engine_data`]; `false` when no renderer is running.
+    pub fn push(&self, data: Map<String, Value>) -> bool {
+        let line = serde_json::json!({ "cmd": "engine", "data": data }).to_string()
+            + "
+";
+        self.0.send(&line)
     }
 }
 

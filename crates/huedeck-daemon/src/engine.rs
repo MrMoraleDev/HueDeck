@@ -306,6 +306,8 @@ struct Engine {
     effects: EffectLibrary,
     components: ComponentLibrary,
     canvas: Canvas,
+    /// `engine.audio` capture, while the effect reads it.
+    audio: Option<huedeck_inputs::audio::AudioInput>,
     effect: Option<String>,
     brightness: u8,
     enabled: bool,
@@ -378,6 +380,7 @@ impl Engine {
             effects: EffectLibrary::new(),
             components: ComponentLibrary::default(),
             canvas: Canvas::Null(NullRenderer::new(Pattern::Solid(Rgb::new(0, 0, 0)), 30.0)),
+            audio: None,
             effect: None,
             brightness: 100,
             enabled: true,
@@ -900,6 +903,7 @@ impl Engine {
     }
 
     fn start_canvas(&mut self) {
+        self.audio = None;
         self.canvas.client().stop();
         if self
             .effect
@@ -939,6 +943,16 @@ impl Engine {
             canvas = Canvas::Null(NullRenderer::new(Pattern::Rainbow, f64::from(fps)));
             let _ = canvas.client().start(Arc::clone(&self.shared.frames));
         }
+        let uses_audio = self
+            .effect
+            .as_deref()
+            .and_then(|id| self.effects.get(id))
+            .is_some_and(|e| e.meta.uses.audio);
+        let sink = match &canvas {
+            Canvas::Cef(c) => Some(c.engine_sink()),
+            Canvas::Null(_) => None,
+        };
+        self.audio = crate::audio::feed(&self.opts.config.audio, fps, uses_audio, sink);
         self.canvas = canvas;
         self.dirty = true;
     }
@@ -999,6 +1013,7 @@ impl Engine {
                 tracing::warn!("session {f}");
             }
         }
+        self.audio = None;
         self.canvas.client().stop();
     }
 

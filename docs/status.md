@@ -276,6 +276,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
 7. **WP-AUDIO: audio FFT into `engine.audio`. Size M.**
    - Touches: `lightloom-inputs` (cpal WASAPI loopback + realfft → 200 bins, level, density, width per `docs/research/m6-inputs-network.md` §1); `lightloom-daemon/src/engine.rs` (push to the renderer through the existing `engine` command).
    - Accept: Audio Bars follows music, with under 100 ms input-to-paint.
+   - Status: implemented on `feature/audio-input` (`docs/audio.md`); latency still to be measured on the user's PC.
 8. **WP-SCREEN: screen zones into `engine.zone`. Size M.**
    - Touches: `lightloom-inputs` (DXGI duplication, `windows-capture` or `xcap` per §2.4; 28x20 HSL + 160x100 RGBA at 10-60 fps; display picker); the daemon push; one settings field in `Settings.svelte`.
    - Same crate as WP-AUDIO: run them one after the other, or split the module files.

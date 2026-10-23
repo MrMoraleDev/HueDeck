@@ -76,6 +76,8 @@ export const api = {
     batteryNotifications?: boolean;
   }) =>
     request("PATCH", "/v1/settings", patch),
+  /** Move the dashboard and the API to `port`; answers with the new address. */
+  setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),
   importSignalRgb: () => request<{ placements: number; channels: number; layout: string }>(
     "POST",
     "/v1/import/signalrgb",

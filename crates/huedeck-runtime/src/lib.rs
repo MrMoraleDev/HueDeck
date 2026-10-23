@@ -8,11 +8,13 @@
 //! * [`signalrgb`]: a local SignalRGB installation's setup, read in place (channel
 //!   components, placements, effects);
 //! * [`notify`]: this OS's system notifications (Windows toasts);
+//! * [`dirs`]: HueDeck's data and config directories and the daemon's `api-port` file;
 //! * [`system`]: machine facts for `@SignalRGB/systeminfo` and the process's memory.
 
 #![forbid(unsafe_code)]
 
 pub mod conflicts;
+pub mod dirs;
 pub mod effects;
 pub mod hardware;
 pub mod hotplug;

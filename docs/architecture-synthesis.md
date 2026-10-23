@@ -8,7 +8,8 @@
 > the AMD ADLX SDK is not MIT-licensed; NVIDIA's public nvapi headers are MIT and may be
 > vendored. ADR-0004 and ADR-0006 carry the amended decisions. Since 2026-10-18 the
 > project license is GPL-3.0-or-later with an add-on exception (ADR-0010, superseding
-> ADR-0006 and decision D11 below).
+> ADR-0006 and decision D11 below). Since 2026-10-22 the native API's default port is
+> 53000 (changeable from the dashboard), not the 16138 written below.
 
 Base: **OpenLux (Architect A, Rust core)** — highest combined score across the three judges (218 vs GlowRGB 213 vs LumenRGB 199) and the only proposal that scored well on both least-privilege/Linux-readiness and real-time behaviour. Every fatal flaw the judges raised against it is resolved below by grafting from B and C:
 

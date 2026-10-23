@@ -91,6 +91,7 @@ fn settings(
             battery_low: low,
             battery_critical: critical,
             battery_notifications: notify,
+            port: None,
         },
     )
 }
@@ -129,6 +130,8 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
         renderer: None,
         plugin_cache: None,
         notifier: notifier.clone(),
+        api_port: huedeck_api::NATIVE_PORT,
+        api_port_notice: None,
     })
     .unwrap();
     let shared = handle.shared();

@@ -27,6 +27,9 @@
 //!
 //! [smbus]
 //! enabled = true                # drive SMBus devices (GPU RGB; RAM RGB when the I/O broker is installed); false turns it off (the dashboard setting wins)
+//!
+//! [network]
+//! enabled = false               # network lights: discovery and LAN devices (WLED, Hue, ...); the dashboard setting wins
 //! ```
 
 use anyhow::Context;
@@ -51,6 +54,18 @@ pub struct Config {
     pub devices: DevicesConfig,
     /// SMBus devices.
     pub smbus: SmbusConfig,
+    /// Network lights.
+    pub network: NetworkConfig,
+}
+
+/// `[network]`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NetworkConfig {
+    /// Run the network plugins' discovery and drive the LAN devices they
+    /// announce, unless the dashboard setting says otherwise. Off by default
+    /// (opt-in): it sends discovery traffic (mDNS, broadcasts) on the LAN.
+    pub enabled: bool,
 }
 
 /// `[smbus]`.

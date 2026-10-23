@@ -212,8 +212,9 @@ impl HidHandle for LinuxHidHandle {
                 let numbered = self.numbered();
                 return Ok(tlc::place_input(numbered, report, buf));
             }
-            // Another TLC's report: drop it and keep waiting.
-            if timeout_ms == 0 || deadline.is_some_and(|d| Instant::now() >= d) {
+            // Another TLC's report: drop it and keep waiting (a non-blocking
+            // read goes on while reports are queued: the per-fd ring holds 64).
+            if deadline.is_some_and(|d| Instant::now() >= d) {
                 return Ok(0);
             }
         }

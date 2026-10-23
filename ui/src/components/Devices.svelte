@@ -5,6 +5,7 @@
   import type { DeviceView, LibraryComponent, Snapshot } from "../lib/types";
   import ControlInput from "./ControlInput.svelte";
   import SaveDialog from "./SaveDialog.svelte";
+  import BatteryBadge from "./BatteryBadge.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let library = $state<LibraryComponent[]>([]);
@@ -62,6 +63,7 @@
           <span class="muted key">{d.bus ? `SMBus · ${d.bus}` : d.key}</span>
         </div>
         <span class={`badge ${stateBadge(d)}`}>{d.state}</span>
+        {#if d.battery}<BatteryBadge battery={d.battery} />{/if}
         {#if d.connected}
           <span class="muted stats"
             >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? "bus" : "HID"} errors</span
@@ -84,6 +86,16 @@
         {/if}
       </div>
       <p class="muted plugin">Plugin: {d.plugin} <span class="path">({d.pluginPath})</span></p>
+      {#if d.battery}
+        <label class="check blink"
+          ><input
+            type="checkbox"
+            checked={d.blinkLowBattery}
+            onchange={(e) =>
+              daemon.run(() => api.setDevice(d.key, { blinkLowBattery: (e.target as HTMLInputElement).checked }))}
+          /> Pulse red while the battery is low (below {snapshot.settings.batteryLow} %)</label
+        >
+      {/if}
 
       {#if open === d.key}
         {#if d.parameters.length}
@@ -212,6 +224,10 @@
   }
   .path {
     opacity: 0.6;
+  }
+  .blink {
+    font-size: 12px;
+    margin: 6px 0 0;
   }
   .channel {
     border-top: 1px solid var(--line);

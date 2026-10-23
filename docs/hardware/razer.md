@@ -50,6 +50,7 @@ and the Synapse 3 / Synapse executables). `007C`, `007D` and `007E` are marked t
 | S7 | OpenRGB `KeyboardLayoutManager/KeyboardLayoutManager.cpp`, `.h`; `RGBController/RGBControllerKeyNames.cpp` | GPL-2.0-or-later | Key names of keyboard zones (simulated by the table generator, see below) |
 | S8 | OpenRGB `Controllers/RazerController/RazerDeviceGuard.cpp`, `DetectionManager.cpp` | GPL-2.0-or-later | Read only, nothing taken: the global mutex OpenRGB shares with Synapse; how detectors run per HID collection |
 | S9 | HueDeck's recordings `trace_1532_007c.json` (`#00ff00`) and `trace_multi.json` (`#ff8000`) of the user's DeathAdder V2 Pro, and the retired plugin `razer-deathadder-v2-pro` (HueDeck, GPL-3.0-or-later; `docs/hardware/razer-deathadder-v2-pro.md`, `fixtures/deathadder-v2-pro-recorded.json`) | data / HueDeck | The DeathAdder V2 Pro packets |
+| S10 | OpenRazer kernel driver, https://github.com/openrazer/openrazer (`driver/razerchromacommon.c`, `driver/razermouse_driver.c` and `.h`, `driver/razerkbd_driver.c` and `.h`, master as read on 2026-10-22) | GPL-2.0-or-later | Protocol facts only, no code: the battery queries (class, ids, size, answer byte), which products answer them and with which transaction id |
 
 All OpenRGB files are at commit `d4798c120659ec5ba2e664a9e87bedff8d36f880`
 (https://gitlab.com/CalcProgrammer1/OpenRGB); every one carries
@@ -296,6 +297,61 @@ The single-device plugin `plugins/razer-deathadder-v2-pro/` that claimed them to
 on 2026-10-22, after this plugin was tested on the mouse (see "Tested on hardware"), so there is
 no double claim.
 
+## Battery (S10)
+
+OpenRGB reads no battery. The two read-only queries below are protocol facts from OpenRazer
+(S10): `razer_chroma_misc_get_battery_level()` and `razer_chroma_misc_get_charging_status()` in
+`razerchromacommon.c`, and the `charge_level` / `charge_status` readers in `razermouse_driver.c`
+and `razerkbd_driver.c`, which print argument 1 of the answer. No OpenRazer code was copied; the
+plugin builds both with its own `razer-protocol.js` `report()`.
+
+| Query | Class, id, size | Arguments | Answer |
+|-------|-----------------|-----------|--------|
+| battery level | `07 80`, `02` | none | argument 1 (byte 10 with the report id at byte 0): 0..255 |
+| charging status | `07 84`, `02` | none | argument 1: `1` while charging, `0` otherwise |
+
+Both are ordinary 91-byte reports (report id, transaction id, size, class, id, crc as in "The
+90-byte report"). Neither changes anything on the device; the plugin never sends a battery or
+power setting.
+
+Which products: `plugins/razer/battery.js`, hand-written (`devices.js` is generated from OpenRGB,
+which has no battery data). It lists the products of this plugin that OpenRazer's level reader
+accepts, with OpenRazer's transaction id for the battery queries, which can differ from the
+lighting one in OpenRGB's table (Viper Ultimate and Mamba: `0xFF`; DeathAdder V2 Pro, Lancehead
+2017, Mamba 2018, BlackWidow V3 Pro wired: `0x3F`; the wireless keyboards: `0x9F`; the rest
+`0x1F`):
+
+- mice: `0024` `0025` `003E` `0044` `0045` `0059` `005A` `006F` `0070` `0072` `0073` `007A`
+  `007B` `007C` `007D` `0086` `0088` `008F` `0090` `00A7` `00A8` `00AA` `00AB` `00AF` `00B0`
+  `00B9` `00CC` `00CD` `00D6` `00D7`;
+- keyboards: `0258` `0271` `025A` `025C` `0290` `0292` `0296` `0298` `02D5` `02D7`.
+
+The Basilisk V3 X HyperSpeed (`00B9`) gets the level query only: OpenRazer answers a fixed 0 for
+its charging status without asking. Docks, receivers without a battery of their own (Mouse Dock
+Chroma `007E`, Mouse Dock Pro `00A4`), the Charging Pad, headsets (the Kraken V4 family uses other
+reports) and products OpenRazer does not list (Naga Pro V3 `00E7`/`00E8`, the Bluetooth PIDs
+`00AC`/`00D8`, the BlackWidow V4 Pro 75% `02B3`/`02B4`, the BlackWidow V4 Low Profile TKL
+`02D2`/`02D4`) are not asked. A receiver whose paired device is in the table (a Mouse Dock Pro with
+a Basilisk V3 Pro) reports that device's battery, asked with the paired device's report id and
+OpenRazer's transaction id; with several such devices the first one counts (one battery per
+HueDeck device).
+
+How the plugin polls (`plugin.js`, "battery"):
+
+1. `Initialize()` calls `device.addFeature("battery")` for a product with a battery and sends
+   nothing more.
+2. The first query goes out 2 s after `Initialize()`, then every 45 s (wall clock,
+   `Date.now()`), after the frame of that `Render()`. The level query and the charging query go
+   out on two consecutive frames, so a frame carries at most one query: one send and at most 10
+   reads 2 ms apart (OpenRazer itself reads once, about 1 ms after the request). Only an answer
+   with the same transaction id, class and id and status success (`0x02`) counts.
+3. Percent = `round(level * 100 / 255)`. State (SignalRGB numbers): charging and 100 % -> 4
+   (full), charging -> 2 (charging), else 1 (draining). Level and state go to
+   `battery.setBatteryLevel()` / `battery.setBatteryState()` only when they changed.
+4. No usable answer (device asleep or off, status failure / timeout, empty or foreign replies):
+   the last level stays, the state becomes 0 (unknown) once, one log line until the device
+   answers again. Status 5 (not supported): one log line and polling stops for the session.
+
 ## Geometry
 
 Zones are stacked top to bottom in table order; LED (row, col) of a zone is the cell
@@ -312,7 +368,7 @@ Everything except the DeathAdder V2 Pro (`007C`, `007D`) and the Mouse Dock Chro
 "Tested on hardware"): no other product of this plugin has run on hardware (`tested` in
 `manifest.json` lists those three only). In particular the paired-device path,
 the ARGB controller's interface selection, the Kraken V4 reports and the custom-matrix devices
-are unverified.
+are unverified. The battery queries are untested on hardware for every product.
 
 ## Left out, and why
 

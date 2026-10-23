@@ -29,14 +29,17 @@
 // Never sent: DPI, polling rate, battery or power settings, and the "save" storage flag outside
 // SaveToDevice() (HueDeck's "Save to devices", after the user confirmed it; extended-matrix
 // devices only: docs/hardware/razer.md, "Save to devices").
+// Products with a battery (battery.js) are asked for their battery level and charging status
+// (read-only queries 0x07 0x80 / 0x07 0x84, facts from OpenRazer) every 45 seconds.
 
-/* global device */
+/* global device, battery */
 
 import * as rz from "./razer-protocol.js";
 import {
   DETECTORS, DEVICES, KEYMAPS, REPORT_INDEX_7, SOFTWARE_MODE_AT_START, LED_ID_ZERO, KEEPALIVE,
   MAX_BRIGHTNESS_100, KRAKEN_V4_WIRELESS, VENDOR_ID, STANDARD, EXTENDED, LINEAR, EXTENDED_ARGB, CUSTOM,
 } from "./devices.js";
+import { BATTERY } from "./battery.js";
 
 const PRODUCT_IDS = [...new Set(DETECTORS.map((d) => d[1]))];
 
@@ -60,6 +63,17 @@ const RESEND_MS = 1000;
 const KEEPALIVE_MS = 1000;
 
 const LAMPARRAY_USAGE_PAGE = 0x59;
+
+/** Battery queries: the first one this long after Initialize(), then every BATTERY_POLL_MS. */
+const BATTERY_FIRST_MS = 2000;
+const BATTERY_POLL_MS = 45000;
+/** Reads of the answer to a battery query, 2 ms apart (OpenRazer reads once, about 1 ms after). */
+const BATTERY_READS = 10;
+/** SignalRGB battery states (docs/host-api/hid-usb.md section 7). */
+const BATTERY_UNKNOWN = 0;
+const BATTERY_DRAINING = 1;
+const BATTERY_CHARGING = 2;
+const BATTERY_FULL = 4;
 
 // HueDeck's own recording of the DeathAdder V2 Pro (docs/hardware/razer-deathadder-v2-pro.md,
 // the notes of the retired single-device plugin): the wired mouse and its receiver keep exactly
@@ -95,6 +109,7 @@ let protocol = null;      // "razer" | "razer-argb" | "kraken-v4" | "recorded"
 let argbEndpoints = null; // { report: endpoint, argb: endpoint } for the ARGB controller
 let argbSizes = null;     // channel LED counts last sent with the zone-size report
 let lastKeepaliveAt = 0;
+let power = null;         // battery polling state, see batterySetup()
 
 // --- detection ---------------------------------------------------------------------------------
 
@@ -131,6 +146,7 @@ export function Initialize() {
   argbEndpoints = null;
   argbSizes = null;
   lastKeepaliveAt = 0;
+  power = null;
 
   const pid = device.productId();
   const rows = DETECTORS.filter((row) => row[1] === pid);
@@ -152,6 +168,7 @@ export function Initialize() {
 
   if (protocol === "recorded") {
     recordedInitialize();
+    batterySetup([main]);
     return;
   }
   if (protocol === "kraken-v4") {
@@ -195,6 +212,7 @@ export function Initialize() {
     // carry the user's brightness.
     setBrightness(target, target.maxBrightness);
   }
+  batterySetup([main, ...paired]);
 }
 
 export function Render() {
@@ -204,6 +222,7 @@ export function Render() {
   switch (protocol) {
     case "recorded":
       recordedRender();
+      batteryPoll();
       return;
     case "kraken-v4":
       renderTarget(main, (colours) => krakenV4SetDirect(main, colours));
@@ -216,6 +235,7 @@ export function Render() {
         renderTarget(target, (colours) => setLeds(target, colours));
       }
       keepalive();
+      batteryPoll();
   }
 }
 
@@ -542,6 +562,142 @@ function keepalive() {
   usbSend(main, rz.getDeviceMode(main.ctx));
   device.pause(5);
   device.get_report([main.ctx.reportIndex], rz.REPORT_LENGTH);
+}
+
+// --- battery ---------------------------------------------------------------------------------------
+
+/**
+ * The first target (the opened device, then the paired ones) whose product has a battery gets the
+ * "battery" feature; one battery per HueDeck device. Nothing is sent here.
+ */
+function batterySetup(targets) {
+  const target = targets.find((t) => BATTERY[t.pid]);
+  if (!target) {
+    return;
+  }
+  const info = BATTERY[target.pid];
+  if (typeof device.addFeature === "function") {
+    device.addFeature("battery");
+  }
+  power = {
+    target,
+    chargingStatus: info.chargingStatus,
+    ctx: { reportIndex: target.ctx.reportIndex, transactionId: info.transactionId },
+    nextAt: Date.now() + BATTERY_FIRST_MS,
+    step: "level",
+    level: null,        // last level read, percent
+    reported: null,     // { level, state } last handed to the host
+    silent: false,      // "not answering" already logged
+  };
+}
+
+/**
+ * Called after the frame: on a poll tick one query (the level; the charging status on the next
+ * frame), each a single request and at most BATTERY_READS short reads.
+ */
+function batteryPoll() {
+  if (!power) {
+    return;
+  }
+  const now = Date.now();
+  if (now < power.nextAt) {
+    return;
+  }
+  if (power.step === "level") {
+    const answer = batteryQuery(rz.getBatteryLevel(power.ctx));
+    if (!answer.ok) {
+      batteryUnanswered(answer, now);
+      return;
+    }
+    power.level = Math.min(100, Math.max(0, Math.round((rz.arg(answer.response, 1) * 100) / 255)));
+    if (power.chargingStatus) {
+      power.step = "charging";
+      power.nextAt = now;           // next frame
+      return;
+    }
+    batteryReport(power.level, BATTERY_DRAINING);
+    power.nextAt = now + BATTERY_POLL_MS;
+    return;
+  }
+  power.step = "level";
+  power.nextAt = now + BATTERY_POLL_MS;
+  const answer = batteryQuery(rz.getChargingStatus(power.ctx));
+  if (!answer.ok) {
+    batteryUnanswered(answer, now);
+    return;
+  }
+  const charging = rz.arg(answer.response, 1) === 1;
+  let state = BATTERY_DRAINING;
+  if (charging) {
+    state = power.level >= 100 ? BATTERY_FULL : BATTERY_CHARGING;
+  }
+  batteryReport(power.level, state);
+}
+
+/** One battery request and its answer: { ok, response } or { ok: false, status }. */
+function batteryQuery(request) {
+  if (device.send_report(request, rz.REPORT_LENGTH) < 0) {
+    return { ok: false, status: null };
+  }
+  for (let read = 0; read < BATTERY_READS; read++) {
+    device.pause(2);
+    const response = device.get_report([power.ctx.reportIndex], rz.REPORT_LENGTH);
+    if (!response || response.length < 11) {
+      continue;
+    }
+    if (response[2] !== request[2] || response[7] !== request[7] || response[8] !== request[8]) {
+      continue;
+    }
+    if (response[1] === rz.STATUS_SUCCESS) {
+      return { ok: true, response };
+    }
+    if (response[1] !== rz.STATUS_NEW && response[1] !== rz.STATUS_BUSY) {
+      return { ok: false, status: response[1] };
+    }
+  }
+  return { ok: false, status: null };
+}
+
+/**
+ * No usable answer (asleep, out of range, switched off, or garbage): the level stays, the state
+ * becomes unknown until the next answer; logged once. "Not supported" stops the polling.
+ */
+function batteryUnanswered(answer, now) {
+  power.step = "level";
+  power.nextAt = now + BATTERY_POLL_MS;
+  if (answer.status === rz.STATUS_NOT_SUPPORTED) {
+    device.log(`${power.target.name}: the battery query is not supported; battery polling stopped.`);
+    power = null;
+    return;
+  }
+  if (!power.silent) {
+    device.log(`${power.target.name}: no battery answer (device asleep or off?); state unknown until it answers.`);
+    power.silent = true;
+  }
+  if (power.reported) {
+    batteryReport(power.reported.level, BATTERY_UNKNOWN);
+  }
+}
+
+/** Hand level and state to the host when either changed. */
+function batteryReport(level, state) {
+  if (state !== BATTERY_UNKNOWN) {
+    power.silent = false;
+  }
+  if (power.reported && power.reported.level === level && power.reported.state === state) {
+    return;
+  }
+  power.reported = { level, state };
+  const api = globalThis.battery;
+  if (!api) {
+    return;
+  }
+  if (typeof api.setBatteryLevel === "function") {
+    api.setBatteryLevel(level);
+  }
+  if (typeof api.setBatteryState === "function") {
+    api.setBatteryState(state);
+  }
 }
 
 // --- RazerController: frames and effects ------------------------------------------------------------
@@ -984,4 +1140,4 @@ function hex4(v) {
 }
 
 // Exposed for the tests.
-export const _internals = { layoutOf, layoutVariant };
+export const _internals = { layoutOf, layoutVariant, BATTERY_POLL_MS, BATTERY_FIRST_MS };

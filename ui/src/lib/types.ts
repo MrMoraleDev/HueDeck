@@ -70,6 +70,10 @@ export interface DeviceView {
   shutdownModes: ShutdownMode[];
   /** This device's own exit mode (null: the setting's). */
   shutdownMode?: ShutdownMode | null;
+  /** The plugin's last battery report (devices with a battery only). */
+  battery?: BatteryView | null;
+  /** Pulse red while the battery is low. */
+  blinkLowBattery: boolean;
 }
 
 export type ShutdownMode = "restore" | "keep" | "off";
@@ -89,6 +93,16 @@ export interface SaveResult {
   dryRun: boolean;
   result: { effect?: string; zones?: { name: string; color: string }[]; note?: string } | null;
   error?: string | null;
+}
+
+export interface BatteryView {
+  /** Percent; null until the plugin reported one. */
+  level?: number | null;
+  state: "unknown" | "discharging" | "charging" | "fullCharging" | "full" | "wirelessCharging";
+  charging: boolean;
+  status: "ok" | "low" | "critical";
+  /** Unix time of the report, milliseconds. */
+  updatedMs: number;
 }
 
 export interface EffectControl {
@@ -137,6 +151,10 @@ export interface Settings {
   portNotice: string | null;
   fps: number;
   dryRun: boolean;
+  batteryLow: number;
+  batteryCritical: number;
+  batteryNotifications: boolean;
+  notificationsAvailable: boolean;
 }
 
 export interface Snapshot {

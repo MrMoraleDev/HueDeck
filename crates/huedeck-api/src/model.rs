@@ -113,6 +113,11 @@ pub struct DeviceView {
     pub shutdown_modes: Vec<String>,
     /// This device's own exit mode (`None`: the setting's).
     pub shutdown_mode: Option<String>,
+    /// The last battery report (devices whose plugin has the `battery` feature),
+    /// kept after the device goes away.
+    pub battery: Option<BatteryView>,
+    /// Pulse the device red while its battery is low (user setting).
+    pub blink_low_battery: bool,
 }
 
 /// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).
@@ -135,6 +140,22 @@ pub struct DeviceSaveChoice {
     /// A built-in effect the device advertises; `None`: the current colours.
     #[serde(default)]
     pub effect: Option<String>,
+}
+
+/// A device's battery, as its plugin last reported it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatteryView {
+    /// Percent; `None` until the plugin reported a level.
+    pub level: Option<u8>,
+    /// `unknown`, `discharging`, `charging`, `fullCharging`, `full` or `wirelessCharging`.
+    pub state: String,
+    /// On external power (charging, or full on the charger).
+    pub charging: bool,
+    /// `ok`, `low` or `critical` under the user's thresholds.
+    pub status: String,
+    /// When the plugin last reported (Unix time, milliseconds).
+    pub updated_ms: u64,
 }
 
 /// A canvas endpoint (device, subdevice or component instance).
@@ -218,6 +239,14 @@ pub struct Settings {
     /// What devices show when HueDeck closes: `restore` (their own lighting),
     /// `keep` (the last colours, not stored) or `off`.
     pub shutdown_mode: String,
+    /// Low-battery threshold, percent (warnings, `battery.lowBatteryWarningLevel`).
+    pub battery_low: u8,
+    /// Critical battery threshold, percent.
+    pub battery_critical: u8,
+    /// Show low and critical battery alerts as system notifications.
+    pub battery_notifications: bool,
+    /// This OS has system notifications HueDeck can show.
+    pub notifications_available: bool,
 }
 
 /// A state change asked of the daemon.
@@ -288,6 +317,9 @@ pub enum Request {
         /// empty string: the setting's).
         #[serde(default)]
         shutdown_mode: Option<String>,
+        /// Pulse the device red while its battery is low.
+        #[serde(default)]
+        blink_low_battery: Option<bool>,
     },
     /// "Save to devices": store lighting in the devices' own memory (flash or
     /// EEPROM), so it shows at boot without HueDeck. A preview says what would be
@@ -369,6 +401,15 @@ pub enum Request {
         /// What devices show when HueDeck closes (`restore`, `keep`, `off`).
         #[serde(default)]
         shutdown_mode: Option<String>,
+        /// Low-battery threshold, percent (`1..=95`, above the critical one).
+        #[serde(default)]
+        battery_low: Option<u8>,
+        /// Critical battery threshold, percent (below the low one).
+        #[serde(default)]
+        battery_critical: Option<u8>,
+        /// Battery alerts as system notifications.
+        #[serde(default)]
+        battery_notifications: Option<bool>,
         /// Port of the native API and the dashboard (saved; the API side has
         /// already bound it and moves the listener).
         #[serde(default)]
@@ -437,7 +478,8 @@ impl Request {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
-    /// `state` (the snapshot changed), `stats` (counters only) or `log`.
+    /// `state` (the snapshot changed), `stats` (counters only), `log`, or
+    /// `battery` (a low or critical battery alert: `{key, name, level, severity}`).
     pub kind: String,
     /// Event payload (`log`: the line).
     #[serde(default, skip_serializing_if = "Value::is_null")]

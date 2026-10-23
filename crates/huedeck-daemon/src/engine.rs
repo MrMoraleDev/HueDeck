@@ -31,21 +31,24 @@
 //! the buses, the daemon leaves them alone (and a `huedeck` run started
 //! while the daemon drives them leaves its SMBus devices out).
 
+use crate::battery::{self, BatteryMonitor, Severity, Thresholds};
 use crate::config::Config;
 use crate::lifecycle::LifecycleState;
 use crate::paths::{self, Paths};
 use crate::store::{StateExport, Store};
 use arc_swap::ArcSwap;
 use huedeck_api::model::{
-    ChannelView, DeviceSaveChoice, DeviceView, EffectView, Endpoint, Lighting, RendererView, SaveSupport,
-    Settings,
+    BatteryView, ChannelView, DeviceSaveChoice, DeviceView, EffectView, Endpoint, Lighting, RendererView,
+    SaveSupport, Settings,
 };
 use huedeck_api::{ApiError, Backend, Event, Request, Snapshot};
 use huedeck_engine::{
     Component, ComponentInstance, ComponentLibrary, FrameStore, Layout, Placement, Rgb, CANVAS_HEIGHT,
     CANVAS_WIDTH,
 };
+use huedeck_hal::notify::{Notification, Notifier};
 use huedeck_hal::HidBackend;
+use huedeck_plugin_host::battery::BatteryStatus;
 use huedeck_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use huedeck_plugin_host::device::{Brightness, LogSink, WriteMode};
 use huedeck_plugin_host::discover::ScanBudget;
@@ -62,7 +65,7 @@ use huedeck_runtime::effects::{EffectLibrary, EffectSource};
 use huedeck_runtime::hotplug::{Hotplug, HOTPLUG_SETTLE};
 use huedeck_runtime::smbus::SmbusHardware;
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -83,6 +86,11 @@ mod keys {
     pub const SHUTDOWN_MODE: &str = "settings.shutdownMode";
     /// Followed by the device key: that device's exit mode (`""`: the setting's).
     pub const DEVICE_SHUTDOWN_MODE: &str = "shutdownMode.";
+    pub const BATTERY_LOW: &str = "settings.batteryLow";
+    pub const BATTERY_CRITICAL: &str = "settings.batteryCritical";
+    pub const BATTERY_NOTIFICATIONS: &str = "settings.batteryNotifications";
+    /// Keys of the devices that pulse red while their battery is low.
+    pub const BATTERY_BLINK: &str = "battery.blink";
     /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
     pub const PORT: &str = "settings.port";
 }
@@ -101,8 +109,10 @@ pub const DEFAULT_EFFECT: &str = "huedeck:rainbow-wave";
 const OTHER_HUEDECK: &str = "another HueDeck process";
 /// How often conflicting software is looked for again while it blocks the devices.
 const CONFLICT_RECHECK: Duration = Duration::from_secs(3);
-/// How often counters refresh the snapshot.
+/// How often counters refresh the snapshot (and battery reports are looked at).
 const STATS_EVERY: Duration = Duration::from_secs(1);
+/// The colour a device pulses while its battery is low (when the user asked for it).
+const LOW_BATTERY_ALERT: Rgb = Rgb::new(255, 0, 0);
 
 /// Which devices the engine drives.
 pub enum HardwareMode {
@@ -143,6 +153,8 @@ pub struct EngineOptions {
     pub renderer: Option<PathBuf>,
     /// Plugin index cache file (`None`: load every plugin file each time).
     pub plugin_cache: Option<PathBuf>,
+    /// System notifications (battery alerts).
+    pub notifier: Arc<dyn Notifier>,
     /// Port the native API and dashboard listen on (shown in the settings).
     pub api_port: u16,
     /// Why that is not the configured port (busy at startup), for the settings.
@@ -276,6 +288,8 @@ struct SessionDefaults {
     shutdown_mode: ShutdownMode,
     /// Per-device exit modes.
     shutdown_overrides: BTreeMap<String, ShutdownMode>,
+    /// `battery.lowBatteryWarningLevel` of new sessions.
+    battery_low: u8,
 }
 
 impl SessionDefaults {
@@ -364,6 +378,18 @@ struct Engine {
     last_conflict_check: Instant,
     last_stats: Instant,
     dirty: bool,
+    /// Battery thresholds.
+    thresholds: Thresholds,
+    /// Battery alerts as system notifications.
+    battery_notify: bool,
+    /// Devices that pulse red while their battery is low.
+    blink: BTreeSet<String>,
+    /// The last battery report of every device that sent one (kept after it goes away).
+    batteries: BTreeMap<String, BatteryStatus>,
+    /// Which alerts are armed.
+    battery_monitor: BatteryMonitor,
+    /// Devices pulsing red now, with the start time of the session told to.
+    alerting: BTreeMap<String, Instant>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -428,6 +454,12 @@ impl Engine {
             last_conflict_check: Instant::now(),
             last_stats: Instant::now(),
             dirty: true,
+            thresholds: Thresholds::default(),
+            battery_notify: true,
+            blink: BTreeSet::new(),
+            batteries: BTreeMap::new(),
+            battery_monitor: BatteryMonitor::default(),
+            alerting: BTreeMap::new(),
         };
         e.enter(LifecycleState::LoadingConfig);
         e.load_state();
@@ -476,6 +508,18 @@ impl Engine {
         self.smbus = get(keys::SMBUS)
             .and_then(|v| v.as_bool())
             .unwrap_or(self.opts.config.smbus.enabled);
+        let percent = |k: &str| get(k).and_then(|v| v.as_u64()).and_then(|v| u8::try_from(v).ok());
+        self.thresholds = Thresholds::new(
+            percent(keys::BATTERY_LOW).unwrap_or(battery::DEFAULT_LOW),
+            percent(keys::BATTERY_CRITICAL).unwrap_or(battery::DEFAULT_CRITICAL),
+        )
+        .unwrap_or_default();
+        self.battery_notify = get(keys::BATTERY_NOTIFICATIONS)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        self.blink = get(keys::BATTERY_BLINK)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
         let name = get(keys::LAYOUT)
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| DEFAULT_LAYOUT.into());
@@ -501,6 +545,7 @@ impl Engine {
         };
         d.layout = self.layout.clone();
         d.use_signalrgb = self.signalrgb;
+        d.battery_low = self.thresholds.low;
         d.system_info = huedeck_runtime::system::machine_info().map(Arc::new);
         let rows = self.store.devices().unwrap_or_default();
         let get = |k: &str| self.store.get::<Value>(k).ok().flatten();
@@ -644,6 +689,7 @@ impl Engine {
                 channel_components: channels,
                 system_info: d.system_info.clone(),
                 shutdown_mode: d.shutdown_mode_of(&key),
+                battery_warning_level: d.battery_low,
                 ..SessionOptions::default()
             }
         });
@@ -1022,6 +1068,7 @@ impl Engine {
             if self.last_stats.elapsed() >= STATS_EVERY {
                 self.last_stats = Instant::now();
                 self.dirty = true;
+                self.check_batteries();
             }
             if self.dirty {
                 self.publish();
@@ -1105,6 +1152,10 @@ impl Engine {
                 fps: self.fps(),
                 dry_run: self.opts.dry_run,
                 shutdown_mode: lock(&self.defaults).shutdown_mode.as_str().into(),
+                battery_low: self.thresholds.low,
+                battery_critical: self.thresholds.critical,
+                battery_notifications: self.battery_notify,
+                notifications_available: cfg!(windows),
             },
             conflicts: {
                 let mut all = self.conflicts.clone();
@@ -1116,8 +1167,128 @@ impl Engine {
                 );
                 all
             },
-            warnings: self.warnings.clone(),
+            warnings: {
+                let mut all = self.warnings.clone();
+                all.extend(self.battery_warnings());
+                all
+            },
         }
+    }
+
+    // ---------------------------------------------------------------- battery
+
+    /// The display name of device `key`.
+    fn device_name(&self, key: &str) -> String {
+        self.sessions()
+            .find(|h| h.key() == key)
+            .and_then(|h| h.endpoints().first().map(|e| e.name.clone()))
+            .or_else(|| {
+                self.present
+                    .iter()
+                    .find(|p| p.device.key == key)
+                    .map(|p| p.plugin.meta.name.clone())
+            })
+            .unwrap_or_else(|| key.to_string())
+    }
+
+    /// A dashboard warning for every running device whose battery is low now.
+    fn battery_warnings(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for h in self.sessions() {
+            let Some(b) = self.batteries.get(h.key()) else {
+                continue;
+            };
+            let level = b.level.unwrap_or(0);
+            let name = self.device_name(h.key());
+            match battery::severity(b, self.thresholds) {
+                Severity::Critical => {
+                    out.push(format!("{name}: battery critical ({level} %). Charge it now."))
+                }
+                Severity::Low => out.push(format!("{name}: battery low ({level} %). Charge it soon.")),
+                Severity::Ok => {}
+            }
+        }
+        out
+    }
+
+    /// Read the battery reports of the sessions: keep them, raise the alerts
+    /// they arm (event, log line, system notification) and switch the
+    /// low-battery pulse of the devices that want it.
+    fn check_batteries(&mut self) {
+        let reports: Vec<(String, Instant, BatteryStatus)> = self
+            .sessions()
+            .filter_map(|h| h.live().battery.map(|b| (h.key().to_string(), h.started(), b)))
+            .collect();
+        let running: BTreeMap<String, Instant> = self
+            .sessions()
+            .map(|h| (h.key().to_string(), h.started()))
+            .collect();
+        // A session that ended took its pulse with it.
+        self.alerting.retain(|k, started| running.get(k) == Some(started));
+        let t = self.thresholds;
+        for (key, started, report) in reports {
+            if self.batteries.get(&key) != Some(&report) {
+                self.batteries.insert(key.clone(), report);
+                self.dirty = true;
+            }
+            if let Some(severity) = self.battery_monitor.observe(&key, &report, t) {
+                self.battery_alert(&key, severity, report.level.unwrap_or(0));
+            }
+            let pulse = self.blink.contains(&key) && battery::severity(&report, t) != Severity::Ok;
+            self.set_pulse(&key, started, pulse);
+        }
+    }
+
+    /// Start or end the low-battery pulse of device `key` (session `started`).
+    fn set_pulse(&mut self, key: &str, started: Instant, on: bool) {
+        let pulsing = self.alerting.get(key) == Some(&started);
+        if on == pulsing {
+            return;
+        }
+        let Some(h) = self.sessions().find(|h| h.key() == key) else {
+            return;
+        };
+        h.control(Control::Alert(on.then_some(LOW_BATTERY_ALERT)));
+        if on {
+            self.alerting.insert(key.to_string(), started);
+        } else {
+            self.alerting.remove(key);
+        }
+    }
+
+    fn battery_alert(&self, key: &str, severity: Severity, level: u8) {
+        let name = self.device_name(key);
+        let (title, body) = match severity {
+            Severity::Critical => (
+                format!("{name}: battery critical"),
+                format!("{level} % left. Charge it now."),
+            ),
+            _ => (
+                format!("{name}: battery low"),
+                format!("{level} % left. Charge it soon."),
+            ),
+        };
+        self.log(format!("{title} ({level} %)"));
+        let _ = self.shared.events.send(Event {
+            kind: "battery".into(),
+            data: json!({ "key": key, "name": name, "level": level, "severity": severity.name() }),
+        });
+        if self.battery_notify {
+            if let Err(e) = self.opts.notifier.notify(&Notification { title, body }) {
+                tracing::debug!("battery notification not shown: {e}");
+            }
+        }
+    }
+
+    fn battery_view(&self, key: &str) -> Option<BatteryView> {
+        let b = self.batteries.get(key)?;
+        Some(BatteryView {
+            level: b.level,
+            state: battery::state_name(b.state).into(),
+            charging: b.state.on_power(),
+            status: battery::severity(b, self.thresholds).name().into(),
+            updated_ms: b.updated_ms,
+        })
     }
 
     fn device_views(&self) -> Vec<DeviceView> {
@@ -1182,6 +1353,8 @@ impl Engine {
                     .shutdown_overrides
                     .get(key)
                     .map(|m| m.as_str().to_string()),
+                battery: self.battery_view(key),
+                blink_low_battery: self.blink.contains(key),
                 ..DeviceView::default()
             };
             if let Some(h) = sessions.get(key) {
@@ -1248,6 +1421,8 @@ impl Engine {
                 state: "absent".into(),
                 enabled: r.enabled,
                 connected: false,
+                battery: self.battery_view(&r.key),
+                blink_low_battery: self.blink.contains(&r.key),
                 ..DeviceView::default()
             });
         }
@@ -1373,6 +1548,7 @@ impl Engine {
                 enabled,
                 parameters,
                 shutdown_mode,
+                blink_low_battery,
             } => {
                 let known = self
                     .store
@@ -1421,6 +1597,19 @@ impl Engine {
                         .extend(values.clone());
                     if let Some(h) = self.sessions().find(|h| h.key() == key) {
                         h.control(Control::Parameters(values));
+                    }
+                }
+                if let Some(on) = blink_low_battery {
+                    let changed = if on {
+                        self.blink.insert(key.clone())
+                    } else {
+                        self.blink.remove(&key)
+                    };
+                    if changed {
+                        self.store
+                            .set(keys::BATTERY_BLINK, &self.blink)
+                            .map_err(internal)?;
+                        self.check_batteries();
                     }
                 }
                 if let Some(on) = enabled {
@@ -1522,8 +1711,36 @@ impl Engine {
                 gpu_compositing,
                 smbus,
                 shutdown_mode,
+                battery_low,
+                battery_critical,
+                battery_notifications,
                 port,
             } => {
+                if battery_low.is_some() || battery_critical.is_some() {
+                    let t = Thresholds::new(
+                        battery_low.unwrap_or(self.thresholds.low),
+                        battery_critical.unwrap_or(self.thresholds.critical),
+                    )
+                    .map_err(ApiError::bad_request)?;
+                    if t != self.thresholds {
+                        self.store.set(keys::BATTERY_LOW, &t.low).map_err(internal)?;
+                        self.store
+                            .set(keys::BATTERY_CRITICAL, &t.critical)
+                            .map_err(internal)?;
+                        if t.low != self.thresholds.low {
+                            lock(&self.defaults).battery_low = t.low;
+                            self.control_all(|| Control::BatteryWarningLevel(t.low));
+                        }
+                        self.thresholds = t;
+                        self.check_batteries();
+                    }
+                }
+                if let Some(on) = battery_notifications {
+                    self.battery_notify = on;
+                    self.store
+                        .set(keys::BATTERY_NOTIFICATIONS, &on)
+                        .map_err(internal)?;
+                }
                 // The API side validated and bound the port; it moves the
                 // listener once this is saved.
                 if let Some(port) = port {
@@ -1584,6 +1801,9 @@ impl Engine {
                     "gpuCompositing": self.gpu,
                     "smbus": self.smbus,
                     "shutdownMode": lock(&self.defaults).shutdown_mode.as_str(),
+                    "batteryLow": self.thresholds.low,
+                    "batteryCritical": self.thresholds.critical,
+                    "batteryNotifications": self.battery_notify,
                     "port": self.opts.api_port,
                 }))
             }
@@ -2002,6 +2222,7 @@ pub fn locate(paths: Paths, config: Config, dry_run: bool, hardware: HardwareMod
         components_dir: paths::resource_dir("components", "components"),
         renderer,
         plugin_cache: huedeck_plugin_host::catalog::default_cache_path(),
+        notifier: huedeck_runtime::notify::system_notifier(),
         paths,
         config,
         dry_run,

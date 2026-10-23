@@ -421,6 +421,9 @@ async fn a_bad_port_is_refused_before_anything_changes() {
             gpu_compositing: None,
             smbus: Some(false),
             shutdown_mode: None,
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
             port: None
         }
     );
@@ -486,6 +489,9 @@ async fn the_port_moves_and_the_old_listener_closes_after_the_grace_period() {
             gpu_compositing: None,
             smbus: None,
             shutdown_mode: None,
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
             port: Some(new)
         }
     );

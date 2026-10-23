@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod battery;
 pub mod config;
 pub mod engine;
 pub mod instance;

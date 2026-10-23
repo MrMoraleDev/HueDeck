@@ -74,6 +74,7 @@ export const api = {
     batteryLow?: number;
     batteryCritical?: number;
     batteryNotifications?: boolean;
+    openrgbSdk?: boolean;
   }) =>
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */

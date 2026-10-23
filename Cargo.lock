@@ -1072,6 +1072,10 @@ name = "lightloom-hal-linux"
 version = "0.0.1"
 dependencies = [
  "lightloom-hal",
+ "lightloom-hal-windows",
+ "lightloom-hid-desc",
+ "libc",
+ "tracing",
 ]
 
 [[package]]
@@ -1183,6 +1187,7 @@ dependencies = [
  "lightloom-effects",
  "lightloom-engine",
  "lightloom-hal",
+ "lightloom-hal-linux",
  "lightloom-hal-windows",
  "lightloom-nvapi",
  "lightloom-plugin-host",

@@ -64,8 +64,11 @@ export const api = {
   deleteLayout: (name: string) => request("DELETE", `/v1/layouts/${enc(name)}`),
   setLayoutBrightness: (brightness: number) => request("PATCH", "/v1/layout", { brightness }),
   components: () => request<LibraryComponent[]>("GET", "/v1/components"),
-  setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean }) =>
+  setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean; network?: boolean }) =>
     request("PATCH", "/v1/settings", patch),
+  networkAdd: (plugin: string, ip: string) => request("POST", `/v1/network/${enc(plugin)}/add`, { ip }),
+  networkAction: (plugin: string, id: string, action: "pair" | "forget") =>
+    request("POST", `/v1/network/${enc(plugin)}/controllers/${enc(id)}/${action}`),
   importSignalRgb: () => request<{ placements: number; channels: number; layout: string }>(
     "POST",
     "/v1/import/signalrgb",

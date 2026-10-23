@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# cargo-fuzz targets (nightly + libFuzzer) build as their own workspace.
+exclude = ["crates/huedeck-iobroker/fuzz"]
 default-members = ["crates/huedeck-cli", "crates/huedeck-daemon"]
 
 [workspace.package]
@@ -58,6 +60,8 @@ ctrlc = "3.4"
 # SPIKE A (huedeck-renderer): CEF offscreen Chromium + memory-mapped shm ring. CEF itself is BSD-3.
 cef = { version = "=154.5.0", default-features = false }
 memmap2 = "0.9"
+# Property-based tests and the fuzz harness of the io-broker (dev-dependency only).
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = 3

@@ -487,6 +487,7 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
         vid,
         pid,
         endpoints: vec![info],
+        network: None,
     };
     Ok((Arc::new(mock), device))
 }

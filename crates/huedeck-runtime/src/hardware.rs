@@ -87,6 +87,7 @@ impl Hardware {
                         vid: g.key.vid,
                         pid: g.key.pid,
                         endpoints,
+                        network: None,
                     },
                     plugin: plugin.clone(),
                 });

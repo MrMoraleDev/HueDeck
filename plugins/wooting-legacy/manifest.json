@@ -1,0 +1,35 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.wooting-legacy",
+  "name": "Wooting keyboards (legacy firmware)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-key lighting of the Wooting One and Wooting Two with legacy (V1) firmware on the Atmel vendor id 0x03EB (usage page 0x1337). Same code as plugins/wooting (a plugin has one vendor id). Adapted from OpenRGB's WootingKeyboardController (GPL-2.0-or-later); untested on hardware. Sends only the colour-init, raw-colour and (at shutdown) reset-all colour commands; nothing is stored. Protocol notes: docs/hardware/wooting.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x03EB",
+      "pids": [
+        "0xFF01",
+        "0xFF02"
+      ],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": [
+    "hid"
+  ],
+  "conflictingProcesses": [
+    "Wootility.exe"
+  ],
+  "keywords": [
+    "wooting",
+    "keyboard",
+    "legacy",
+    "openrgb"
+  ]
+}

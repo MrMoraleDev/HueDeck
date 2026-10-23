@@ -5,7 +5,7 @@ Developer and packaging helpers that are not part of the shipped binaries.
 
 | Tool              | Purpose                                                                                   | Status |
 |-------------------|-------------------------------------------------------------------------------------------|--------|
-| `gen-udev/`       | Emit `70-huedeck.rules` from loaded plugin VID:PID lists (see its README)                  | planned (M7) |
+| `gen-udev/`       | Emit `70-huedeck.rules` from the plugin manifests: `huedeck udev generate` (see its README) | done (M7) |
 | `pawnio-hash-pin/`| Compute and verify SHA-256 pins of the PawnIO modules the iobroker is allowed to load      | planned (M5) |
 | `shm-dump/`       | Dump the renderer shared-memory ring (3x 320x200 BGRA + engine data + seq) to PNG/JSON for debugging frame timing | planned |
 | `effects-bench/`  | `bench.py`: paint cadence, errors and memory of effects through `huedeck-renderer` (GPU and software compositing); `psnr.py`: frames against stock Chrome on a frozen harness page (docs/hardware/effects-m3.md) | done (M3) |

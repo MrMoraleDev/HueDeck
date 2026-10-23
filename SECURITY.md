@@ -37,8 +37,10 @@ minor release receives security fixes.
 
 ## Threat model (summary)
 
-Full text: [docs/architecture-synthesis.md](docs/architecture-synthesis.md) section 9
-and [docs/architecture.md](docs/architecture.md).
+Full text, with what is in place today and what is still planned (the Chromium sandbox,
+manifest permission enforcement, plugin source pinning, signing):
+[docs/security.md](docs/security.md). The design background is in
+[docs/architecture-synthesis.md](docs/architecture-synthesis.md) section 9.
 
 | Asset / boundary | Threat | Control |
 |---|---|---|

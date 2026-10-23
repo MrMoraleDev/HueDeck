@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Where the daemon keeps things.
 //!
-//! * **data** (machine-local): `state.sqlite`, the API token, the instance
+//! * **data** (machine-local): `state.sqlite`, the API token, `api-port`, the instance
 //!   lock, the renderer's work files: `%LOCALAPPDATA%\Lightloom` on Windows,
 //!   `$XDG_DATA_HOME/lightloom` (else `~/.local/share/lightloom`) elsewhere.
 //! * **config** (roams with the user): `config.toml` and the user's own
@@ -25,42 +25,16 @@ pub struct Paths {
 }
 
 impl Paths {
-    /// The platform defaults, or `LIGHTLOOM_HOME`.
+    /// The platform defaults, or `LIGHTLOOM_HOME` ([`lightloom_runtime::dirs`]).
     pub fn from_env() -> Self {
-        if let Some(home) = std::env::var_os("LIGHTLOOM_HOME").filter(|h| !h.is_empty()) {
-            return Self::under(Path::new(&home));
-        }
-        let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-        let home = env("HOME")
-            .or_else(|| env("USERPROFILE"))
-            .unwrap_or_else(|| PathBuf::from("."));
-        if cfg!(windows) {
-            Self {
-                data: env("LOCALAPPDATA")
-                    .unwrap_or_else(|| home.join("AppData").join("Local"))
-                    .join("Lightloom"),
-                config: env("APPDATA")
-                    .unwrap_or_else(|| home.join("AppData").join("Roaming"))
-                    .join("Lightloom"),
-            }
-        } else {
-            Self {
-                data: env("XDG_DATA_HOME")
-                    .unwrap_or_else(|| home.join(".local").join("share"))
-                    .join("lightloom"),
-                config: env("XDG_CONFIG_HOME")
-                    .unwrap_or_else(|| home.join(".config"))
-                    .join("lightloom"),
-            }
-        }
+        let (data, config) = lightloom_runtime::dirs::from_env();
+        Self { data, config }
     }
 
     /// Data and config under one directory (`--home`, tests).
     pub fn under(root: &Path) -> Self {
-        Self {
-            data: root.join("data"),
-            config: root.join("config"),
-        }
+        let (data, config) = lightloom_runtime::dirs::under(root);
+        Self { data, config }
     }
 
     /// The database.
@@ -71,6 +45,11 @@ impl Paths {
     /// The API token.
     pub fn token_file(&self) -> PathBuf {
         self.data.join("api-token")
+    }
+
+    /// The port the native API serves on now (for `lightloom`).
+    pub fn port_file(&self) -> PathBuf {
+        self.data.join(lightloom_runtime::dirs::API_PORT_FILE)
     }
 
     /// The single-instance lock.

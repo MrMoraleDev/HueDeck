@@ -354,11 +354,19 @@ declare namespace Lightloom {
 
     // --- properties -----------------------------------------------------------------
 
-    /** Add a parameter at run time; its value becomes a global named `property`. @signalrgb */
+    /**
+     * Add a parameter at run time, or replace the one with the same `property`; its value
+     * becomes a global named `property` (a stored user value wins over `default`). The device
+     * card in the dashboard follows at once. Non-objects and objects without `property` are
+     * refused and logged. @signalrgb
+     */
     addProperty(parameter: ControllableParameter): void;
-    /** @signalrgb */
+    /** Remove a parameter (exported ones too) from the device card. @signalrgb */
     removeProperty(name: string): void;
-    /** @signalrgb */
+    /**
+     * The object given to `addProperty` (or the `ControllableParameters()` row): mutate it and
+     * pass it to `addProperty` again to update the control. @signalrgb
+     */
     getProperty(name: string): ControllableParameter | undefined;
     /** @signalrgb */
     hasProperty(name: string): boolean;
@@ -375,13 +383,16 @@ declare namespace Lightloom {
      * @signalrgb
      */
     addFeature(name: "battery" | "keyboard" | "mouse" | "base64" | "udp" | "dtls"): void;
-    /** Shown in the session log in Lightloom; returns an id. @signalrgb */
+    /**
+     * Show a message on the device card (and in the session log) until `denotify(id)`;
+     * returns its id. Priority 0 info, 1 important, 2 and 3 errors. @signalrgb
+     */
     notify(title: string, text: string, priority?: number, button?: string): string;
-    /** @signalrgb @stub */
+    /** Withdraw a `notify` message. @signalrgb */
     denotify(id: string): void;
-    /** @signalrgb @stub */
+    /** Show a message on the device card, or replace the one with the same id. @signalrgb */
     addMessage(id: string, message: string, tooltip?: string): void;
-    /** @signalrgb @stub */
+    /** Withdraw a message (`DeviceMessages()` rows too, by their `property`). @signalrgb */
     removeMessage(id: string): void;
     /** Log a line; `{ hex: true }` prints a byte array as hex. @signalrgb */
     log(value: unknown, options?: { hex?: boolean; toFile?: boolean }): void;

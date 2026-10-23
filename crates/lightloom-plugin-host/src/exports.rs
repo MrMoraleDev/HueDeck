@@ -9,7 +9,7 @@
 //! dry-run can count every problem at once.
 
 use crate::meta::{
-    coerce_number, smbus_kind, ControllableParameter, DeviceMessage, DeviceType, LifecycleExports, ParamType,
+    coerce_number, coerce_param_value, smbus_kind, ControllableParameter, DeviceMessage, DeviceType, LifecycleExports, ParamType,
     ParamValue, PluginMeta, PluginType, ProductIdExport,
 };
 use serde_json::Value as J;
@@ -63,6 +63,14 @@ fn truthy(v: &J) -> bool {
     }
 }
 
+/// A boolean attribute that may be quoted (`"live": "false"`).
+fn flag(v: &J) -> bool {
+    match v {
+        J::String(s) => !matches!(s.trim().to_ascii_lowercase().as_str(), "" | "false" | "0"),
+        other => truthy(other),
+    }
+}
+
 fn pair_u32(v: &J) -> Option<[u32; 2]> {
     let a = v.as_array()?;
     let x = as_f64(a.first()?)?;
@@ -79,7 +87,9 @@ fn param_value(v: &J) -> Option<ParamValue> {
     }
 }
 
-fn parameter(v: &J, warnings: &mut Vec<String>) -> Option<ControllableParameter> {
+/// One `ControllableParameters()` row or `device.addProperty(obj)` object;
+/// `None` without a `property`, and (with a warning) with an unknown `type`.
+pub(crate) fn parameter(v: &J, warnings: &mut Vec<String>) -> Option<ControllableParameter> {
     let o = v.as_object()?;
     let property = o.get("property").and_then(as_string)?;
     let raw_type = o.get("type").and_then(as_string).unwrap_or_default();
@@ -106,8 +116,12 @@ fn parameter(v: &J, warnings: &mut Vec<String>) -> Option<ControllableParameter>
         min: f("min"),
         max: f("max"),
         step: f("step"),
-        default: o.get("default").and_then(param_value),
-        live: o.get("live").map(truthy).unwrap_or(true),
+        default: o
+            .get("default")
+            .map(|d| coerce_param_value(param_type, d))
+            .as_ref()
+            .and_then(param_value),
+        live: o.get("live").map(flag).unwrap_or(true),
         order: f("order").map(|v| v as i64),
         filter: s("filter"),
         property,

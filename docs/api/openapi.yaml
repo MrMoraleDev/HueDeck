@@ -114,7 +114,7 @@ paths:
                 parameters:
                   type: object
                   additionalProperties: true
-                  description: "`ControllableParameters` values by property, applied live and stored."
+                  description: "Parameter values by property (`ControllableParameters` and run-time `device.addProperty` names), coerced to the control type (`\"800\"` -> 800 for a number), applied live and stored."
                 blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low. }
       responses:
         "200":
@@ -835,8 +835,21 @@ components:
         image: { type: [string, "null"] }
         parameters:
           type: array
-          description: "`ControllableParameters()` entries, each with its current `value`."
+          description: >-
+            The plugin's parameters, each with its current `value` (stored, else the default):
+            the `ControllableParameters()` entries, then as the running plugin changes them with
+            `device.addProperty` / `removeProperty`. Fields: `property`, `label`, `group`,
+            `description`, `tooltip`, `type` (color, combobox, number, boolean, hue, textfield,
+            keycode), `values`, `min`, `max`, `step`, `default`, `live` (false: apply on release /
+            commit only), `order`, `filter` (textfield regex), `value`. Numeric and boolean strings
+            of the plugin are coerced.
           items: { type: object, additionalProperties: true }
+        messages:
+          type: array
+          description: >-
+            Messages on the device card: `DeviceMessages()`, then as the running plugin changes
+            them with `device.addMessage` / `removeMessage` and `device.notify` / `denotify`.
+          items: { $ref: "#/components/schemas/DeviceMessageView" }
         endpoints: { type: array, items: { $ref: "#/components/schemas/Endpoint" } }
         channels: { type: array, items: { $ref: "#/components/schemas/ChannelView" } }
         battery:
@@ -845,6 +858,14 @@ components:
             - type: "null"
           description: The last battery report (plugins with the `battery` feature), kept after the device goes away.
         blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low (user setting). }
+    DeviceMessageView:
+      type: object
+      properties:
+        id: { type: string, description: "`DeviceMessages()` `property`, `addMessage` id, or the alert id `notify` returned." }
+        title: { type: [string, "null"], description: "`notify` title." }
+        message: { type: string }
+        tooltip: { type: [string, "null"] }
+        priority: { type: [integer, "null"], description: "`notify` priority: 0 info, 1 important, 2 and 3 errors; null for plain messages." }
     BatteryView:
       type: object
       properties:

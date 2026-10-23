@@ -33,6 +33,8 @@
 //!
 //! * [`hotplug`] (Windows only): HID arrival/removal notifications
 //!   (`CM_Register_Notification`).
+//! * [`toast`] (Windows only): system notifications as toasts, under a
+//!   per-user AppUserModelID registration (`huedeck_hal::Notifier`).
 //!
 //! Raw USB (`nusb`), serial and LampArray follow in later milestones.
 
@@ -59,6 +61,8 @@ pub mod probe;
 pub mod registry;
 #[cfg(windows)]
 pub mod system;
+#[cfg(windows)]
+pub mod toast;
 
 #[cfg(windows)]
 pub use hid::WindowsHidBackend;

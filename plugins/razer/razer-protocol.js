@@ -102,6 +102,24 @@ export function getWirelessConnections(ctx) {
   return report(ctx, 0x00, COMMAND_ID_GET_WIRELESS_CONNECTIONS, 0x50);
 }
 
+// Battery queries (read-only). Not in OpenRGB: the command class, ids, data size and answer byte
+// are protocol facts from OpenRazer's driver (razerchromacommon.c, GPL-2.0-or-later; no code
+// copied): class 0x07, size 0x02, no arguments; the answer is argument 1. See docs/hardware/razer.md.
+export const COMMAND_CLASS_MISC = 0x07;
+export const COMMAND_ID_GET_BATTERY_LEVEL = 0x80;
+export const COMMAND_ID_GET_CHARGING_STATUS = 0x84;
+export const STATUS_NOT_SUPPORTED = 0x05;
+
+/** Battery level request: 0x07 0x80, size 0x02; answer argument 1 = level 0..255. */
+export function getBatteryLevel(ctx) {
+  return report(ctx, COMMAND_CLASS_MISC, COMMAND_ID_GET_BATTERY_LEVEL, 0x02);
+}
+
+/** Charging status request: 0x07 0x84, size 0x02; answer argument 1 = 1 while charging. */
+export function getChargingStatus(ctx) {
+  return report(ctx, COMMAND_CLASS_MISC, COMMAND_ID_GET_CHARGING_STATUS, 0x02);
+}
+
 // --- settings ---------------------------------------------------------------------------------
 
 /** razer_create_device_mode_report(mode, param). */

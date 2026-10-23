@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.hyperx-keyboard",
+  "name": "HyperX keyboards (Kingston ids)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-LED lighting of the HyperX keyboards with Kingston product ids: Alloy Elite RGB, Alloy FPS RGB, Alloy Elite 2, Alloy Origins, Alloy Origins 60. Adapted from OpenRGB's HyperXKeyboardController (GPL-2.0-or-later); untested on hardware. Only Direct reports are sent: never the Alloy Elite's profile commands, never brightness or other settings. The Alloy Origins Core (0951:16E6) is held back. Protocol notes: docs/hardware/hyperx-keyboard.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x0951",
+      "pids": ["0x16BE", "0x16DC", "0x1711", "0x1734", "0x16E5"],
+      "transport": "hid",
+      "interfaces": [2, 3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["NGenuity2.exe", "HyperX NGENUITY.exe"],
+  "keywords": ["hyperx", "kingston", "alloy", "keyboard", "openrgb"]
+}

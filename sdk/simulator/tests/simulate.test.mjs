@@ -48,6 +48,15 @@ test("parameter defaults are globals before Initialize; overrides win", async ()
   assert.equal(globalThis.LightingMode, undefined, "parameter globals are removed after the run");
 });
 
+test("the battery feature: the global exists after addFeature, the report lists what was set", async () => {
+  const run = await simulate(join(here, "fixtures", "battery-mouse"), { color: "#0000FF", frames: 2 });
+  assert.equal(run.ok, true, formatRun(run));
+  assert.deepEqual(run.battery, { level: 42, state: 2, levels: [42], states: [2] });
+  assert.match(formatRun(run), /\nbattery: 42 %, charging\n/);
+  assert.match(run.phases[2].traffic[0], /^send_report +4 B {2}05 00 00 FF$/);
+  assert.equal(globalThis.battery, undefined, "the feature global is removed after the run");
+});
+
 test("Validate refusing every endpoint stops the run", async () => {
   const run = await simulate(strip, { endpoints: [{ interface: 2, usage: 1, usage_page: 0xff00, collection: 0 }] });
   assert.equal(run.ok, false);

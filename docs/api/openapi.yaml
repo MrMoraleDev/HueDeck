@@ -115,6 +115,7 @@ paths:
                   type: object
                   additionalProperties: true
                   description: "`ControllableParameters` values by property, applied live and stored."
+                blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low. }
       responses:
         "200":
           description: Done.
@@ -485,6 +486,9 @@ paths:
                 signalrgb: { type: boolean, description: "Use the local SignalRGB installation's plugins, effects, components and channels (read in place)." }
                 gpuCompositing: { type: boolean }
                 smbus: { type: boolean, description: Drive SMBus devices (scans the buses when turned on). }
+                batteryLow: { type: integer, minimum: 1, maximum: 95, description: "Low-battery threshold, percent (plugins see it as `battery.lowBatteryWarningLevel`); above `batteryCritical`, else `400 bad_request`." }
+                batteryCritical: { type: integer, minimum: 0, description: Critical battery threshold, percent; below `batteryLow`. }
+                batteryNotifications: { type: boolean, description: Show low and critical battery alerts as system notifications. }
                 port: { type: integer, minimum: 1024, maximum: 65535, description: "Port of the native API and the dashboard (loopback only)." }
       responses:
         "200":
@@ -497,6 +501,9 @@ paths:
                   signalrgb: { type: boolean }
                   gpuCompositing: { type: boolean }
                   smbus: { type: boolean }
+                  batteryLow: { type: integer }
+                  batteryCritical: { type: integer }
+                  batteryNotifications: { type: boolean }
                   port: { type: integer }
                   url: { type: string, examples: ["http://127.0.0.1:53000/"] }
         "400":
@@ -649,7 +656,8 @@ paths:
       description: |
         Upgrade to a WebSocket. The server sends text frames, each one `Event` as JSON; the first
         is `{"kind": "state"}`. `state` means the snapshot changed (refetch `GET /v1/state`),
-        `stats` that only counters changed, `log` carries a log line in `data`. A client too slow
+        `stats` that only counters changed, `log` carries a log line in `data`, `battery` a low
+        or critical battery alert (`data`: `{key, name, level, severity}`). A client too slow
         to keep up gets `state` again instead of the events it missed. Client frames are ignored.
       responses:
         "101":
@@ -831,6 +839,20 @@ components:
           items: { type: object, additionalProperties: true }
         endpoints: { type: array, items: { $ref: "#/components/schemas/Endpoint" } }
         channels: { type: array, items: { $ref: "#/components/schemas/ChannelView" } }
+        battery:
+          oneOf:
+            - $ref: "#/components/schemas/BatteryView"
+            - type: "null"
+          description: The last battery report (plugins with the `battery` feature), kept after the device goes away.
+        blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low (user setting). }
+    BatteryView:
+      type: object
+      properties:
+        level: { type: [integer, "null"], minimum: 0, maximum: 100, description: Percent; null until the plugin reported a level. }
+        state: { enum: [unknown, discharging, charging, fullCharging, full, wirelessCharging] }
+        charging: { type: boolean, description: On external power. }
+        status: { enum: [ok, low, critical], description: Under the user's thresholds. }
+        updatedMs: { type: integer, description: When the plugin last reported (Unix time, ms). }
     Endpoint:
       type: object
       properties:
@@ -898,9 +920,13 @@ components:
         portNotice: { type: [string, "null"], description: Why the daemon does not serve on the configured port (it was busy at startup). }
         fps: { type: integer }
         dryRun: { type: boolean }
+        batteryLow: { type: integer, description: Low-battery threshold, percent. }
+        batteryCritical: { type: integer, description: Critical battery threshold, percent. }
+        batteryNotifications: { type: boolean }
+        notificationsAvailable: { type: boolean, description: This OS has system notifications HueDeck can show. }
     Event:
       type: object
       required: [kind]
       properties:
-        kind: { enum: [state, stats, log] }
-        data: { description: "`log`: the line." }
+        kind: { enum: [state, stats, log, battery] }
+        data: { description: "`log`: the line; `battery`: `{key, name, level, severity}`." }

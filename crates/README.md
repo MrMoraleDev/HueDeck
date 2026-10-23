@@ -47,15 +47,15 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 
 | crate | kind | status | contents |
 |---|---|---|---|
-| `huedeck-hal` | lib | done | `HidBackend/HidHandle`, `UsbBackend`, `SerialBackend`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend`, `HalError`, `DeviceKey`; feature `mock`: `MockHid`, `MockSmbus`, `TransactionRecorder` |
-| `huedeck-hal-windows` | lib | HID done; USB and serial missing | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `group`, `hotplug`, `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence, process and port probes |
+| `huedeck-hal` | lib | done | `HidBackend/HidHandle`, `Notifier`, `UsbBackend`, `SerialBackend`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend`, `HalError`, `DeviceKey`; feature `mock`: `MockHid`, `MockSmbus`, `TransactionRecorder` |
+| `huedeck-hal-windows` | lib | HID done; USB and serial missing | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `group`, `hotplug`, `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence, process and port probes, toast notifications |
 | `huedeck-hal-linux` | lib | stub (M7) | placeholder for hidraw, nusb, serialport, udev, `/dev/i2c-*`, hwmon |
 | `huedeck-hid-desc` | lib | done | HID 1.11 report-descriptor parser: items, top-level collections, report ids and sizes, report fields (LampArray) |
 | `huedeck-protocol` | lib | done | `shm` frame ring (`"HDFR"`, 3 slots, seqlock), `broker` operations (protocol 3: `BusLock`, `Batch`, `SpdRead`), postcard framing |
 | `huedeck-engine` | lib | done | `Rgb`, `Frame`, `FrameStore`, `Layout`/`Placement` (= `schemas/layout.schema.json`), the sampler, brightness math, components and channel instances |
 | `huedeck-render` | lib (+ test bin) | done | `NullRenderer` (solid, rainbow, test patterns), `CefRenderer` (spawns and supervises `huedeck-renderer --serve`), `FrameClock` |
 | `huedeck-renderer` | lib + bin | done; Chromium sandbox off | CEF windowless host (feature `cef`), shm ring writer, `window.engine` and control injection, URL filter, control pipe, snapshots and stats |
-| `huedeck-plugin-host` | lib | HID and SMBus done; rawusb, serial, network missing | QuickJS-NG runtime per plugin (64 MiB, deadlines), `js/host.js` compat host, natives (`device`, `children`, `bus`), `@SignalRGB/*` / `@huedeck/*` resolver, catalogue and VID:PID index, device sessions, SMBus policy and SPD check, `compat dry-run` |
+| `huedeck-plugin-host` | lib | HID and SMBus done; rawusb, serial, network missing | QuickJS-NG runtime per plugin (64 MiB, deadlines), `js/host.js` compat host, natives (`device`, `children`, `bus`), `@SignalRGB/*` / `@huedeck/*` resolver, catalogue and VID:PID index, device sessions, the `battery` feature, SMBus policy and SPD check, `compat dry-run` |
 | `huedeck-effects` | lib | done | `parse_effect_meta(html)` (= `schemas/effect-meta.schema.json`), control coercion, JS initialisers |
 | `huedeck-inputs` | lib | shapes only (M6) | `AudioSnapshot`, `ZoneSnapshot`, `InputSource` |
 | `huedeck-api` | lib | native done; compat partial | axum routers: native `/v1` REST + WS + dashboard (`docs/api/openapi.yaml`), SignalRGB-compatible REST and canvas events, loopback / Origin / token guard, movable native listener |
@@ -63,12 +63,12 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 | `huedeck-nvapi` | lib | done | dynamic `nvapi64.dll` binding, one NvAPI worker thread, `NvapiBus: SmbusBus` per GPU |
 | `huedeck-iobroker` | lib + bin | done (AMD PIIX4 only) | LocalSystem service: PawnIO IOCTLs, pinned modules, PIIX4 transfers, global SMBus mutex, static policy and rate limit, named pipe with DACL, audit log |
 | `huedeck-setup` | bin | done | `--smbus` (checks PawnIO, never installs it; copies the broker and modules, registers the service), `--uninstall`, `--plan` |
-| `huedeck-daemon` | lib + bin `huedeckd` | done | single instance, token, port choice, engine thread (sessions, canvas, renderer, SQLite), API serving, a shutdown that restores devices |
+| `huedeck-daemon` | lib + bin `huedeckd` | done | single instance, token, port choice, engine thread (sessions, canvas, renderer, SQLite), battery thresholds and alerts, API serving, a shutdown that restores devices |
 | `huedeck-cli` | bin `huedeck` | done | `devices`, `light`, `rainbow`, `bench` (`--mock`), `plugins`, `compat dry-run`, `url` |
 
-Test counts (`#[test]` per crate, 2026-10-23): plugin-host 122, iobroker 52, hal-windows 43,
-renderer 28, engine 26, hal 26, nvapi 19, cli 17, protocol 15, daemon 13, effects 12,
-runtime 12, render 10, api 15, hid-desc 8, setup 5, inputs 1, hal-linux 0.
+Test counts (`#[test]` and `#[tokio::test]` per crate, 2026-10-23): plugin-host 128, iobroker 52,
+hal-windows 44, renderer 28, engine 26, hal 26, daemon 22, nvapi 19, cli 17, api 16, protocol 15,
+effects 12, runtime 12, render 10, hid-desc 8, setup 5, inputs 1, hal-linux 0.
 
 ## Outside the crates
 

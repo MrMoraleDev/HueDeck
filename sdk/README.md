@@ -147,6 +147,8 @@ Options: `--color #RRGGBB`, `--frames N`, `--param name=value` (overrides a para
 `--pid 0x...` (pick one of several product ids), `--endpoint iface:usage:usagePage[:collection]`
 (the collections `Validate()` is offered; repeatable), `--suspend` (`Shutdown(true)`),
 `--module file.js` (another plugin module of the directory), `--json`.
+A plugin that adds the `battery` feature gets a `battery:` line with the last level and state
+it set.
 
 SMBus plugins get `Scan(bus)` on a free-address mock bus and then a session on the fixed bus
 bound to the first address `Scan()` returned. By default every address of `SmbusAddresses()`

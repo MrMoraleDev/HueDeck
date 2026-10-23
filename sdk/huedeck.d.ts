@@ -418,8 +418,18 @@ declare namespace HueDeck {
 
   // ------------------------------------------------------------------ feature globals
 
-  /** Global `battery` after `device.addFeature("battery")`. @signalrgb */
+  /** Battery state numbers (`battery.*` constants). 2..5 count as "on power". */
+  type BatteryState = 0 | 1 | 2 | 3 | 4 | 5;
+
+  /**
+   * Global `battery` after `device.addFeature("battery")` (idempotent). In a HueDeck device
+   * session the daemon shows the level, warns at the user's thresholds (a notification, a
+   * `battery` event, optionally a red pulse on the device). Poll the device rarely (every
+   * 30-60 s) and call the setters when a value changes. docs/host-api/hid-usb.md §7.1.
+   * @signalrgb
+   */
   interface Battery {
+    /** No number in the corpus; 0. */
     readonly disabled: 0;
     readonly unknown: 0;
     readonly draining: 1;
@@ -427,14 +437,16 @@ declare namespace HueDeck {
     readonly fullCharging: 3;
     readonly full: 4;
     readonly wirelessCharging: 5;
+    /** Last level set, 0 before the first `setBatteryLevel`. */
     readonly batteryLevel: number;
-    readonly batteryState: number;
-    readonly stateString: string;
-    /** Percent below which the UI warns. */
+    /** Last state set. */
+    readonly batteryState: BatteryState;
+    readonly stateString: "Unknown" | "Draining" | "Charging" | "Full (charging)" | "Full" | "Wireless charging";
+    /** The user's low-battery threshold, percent (Settings, default 15); updates live. */
     readonly lowBatteryWarningLevel: number;
-    /** 0..100. */
+    /** Percent: rounded and clamped to 0..100; a non-finite value is ignored. */
     setBatteryLevel(level: number): void;
-    /** One of the state constants above. */
+    /** One of the state constants; anything outside 0..5 is stored as 0 (unknown). */
     setBatteryState(state: number): void;
   }
 

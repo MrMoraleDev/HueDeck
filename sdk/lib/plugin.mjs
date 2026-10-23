@@ -94,13 +94,12 @@ const FEATURES = {
   base64: () => ({ ...createBase64Feature() }),
   keyboard: () => ({ sendHid: noop, sendKey: noop, sendEvent: noop }),
   mouse: () => ({ sendHid: noop, sendEvent: noop }),
-  battery: () => ({
-    disabled: 0, unknown: 0, draining: 1, charging: 2, fullCharging: 3, full: 4, wirelessCharging: 5,
-    batteryLevel: 0, batteryState: 0, stateString: "Unknown", lowBatteryWarningLevel: 15,
-    setBatteryLevel(level) { this.batteryLevel = Number(level) || 0; },
-    setBatteryState(state) { this.batteryState = Number(state) || 0; },
-  }),
+  // The _testkit mock's recording battery (levels / states it was given).
+  battery: (mock) => mock.battery,
 };
+
+/** Feature globals `device.addFeature()` may install: spread into installGlobals() so they are removed after a run. */
+export const FEATURE_GLOBALS = Object.freeze(Object.fromEntries(Object.keys(FEATURES).map((name) => [name, undefined])));
 
 /**
  * The `device` global of a simulated session: the _testkit mock (HID traffic, canvas colour,
@@ -142,12 +141,6 @@ export function createSimDevice(options = {}) {
     addMessage: record("addMessage"),
     removeMessage: record("removeMessage"),
     fanControlDisabled: () => true,
-    addFeature: (name) => {
-      mock.calls.push({ method: "addFeature", args: [name] });
-      const make = FEATURES[String(name)];
-      if (make === undefined) throw new HostApiMissing(`device.addFeature(${name})`);
-      if (globalThis[name] === undefined) globalThis[name] = make();
-    },
     addProperty: (obj) => {
       if (obj && typeof obj.property === "string") {
         properties.set(obj.property, obj);
@@ -165,6 +158,16 @@ export function createSimDevice(options = {}) {
   for (const [k, v] of Object.entries(extras)) {
     if (!(k in mock)) mock[k] = v;
   }
+  // Features install their global, as in the host (the testkit mock only records the call).
+  const recordFeature = mock.addFeature;
+  mock.addFeature = (name) => {
+    if (typeof recordFeature === "function") recordFeature(name);
+    else mock.calls.push({ method: "addFeature", args: [name] });
+    const make = FEATURES[String(name)];
+    if (make === undefined) throw new HostApiMissing(`device.addFeature(${name})`);
+    const value = make(mock);
+    if (value !== undefined && globalThis[name] !== value) globalThis[name] = value;
+  };
   // Not implemented in HueDeck device sessions yet (host.js `unimplemented`).
   for (const k of [
     "bulk_transfer", "control_transfer", "setProtocol", "createFanControl", "removeFanControl", "setRPM",
@@ -175,7 +178,7 @@ export function createSimDevice(options = {}) {
       throw new HostApiMissing(`device.${k}`);
     };
   }
-  const recordingKeys = new Set(["calls", "sent", "written", "logs", "pauses", "channels", "subdevices", "setColor", "setFeatureReport", "setChannelColors"]);
+  const recordingKeys = new Set(["calls", "sent", "written", "logs", "pauses", "channels", "subdevices", "features", "battery", "setColor", "setFeatureReport", "setChannelColors"]);
   return new Proxy(mock, {
     get(target, key, receiver) {
       if (typeof key !== "string" || key in target || recordingKeys.has(key) || key === "then" || key === "toJSON") {

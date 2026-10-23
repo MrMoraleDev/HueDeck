@@ -195,7 +195,9 @@ the user's rights, bounded only by the request filter.
 ## 6. Privacy
 
 No telemetry, no accounts, no crash upload, no update checks. HueDeck makes no network
-connection of its own; the only listeners are the loopback ones above.
+connection of its own; the only listeners are the loopback ones above. Battery alerts use the
+OS's local notifications (on Windows, toasts under the AppUserModelID `HueDeck.HueDeck`,
+registered with one per-user key, `HKCU\Software\Classes\AppUserModelId\HueDeck.HueDeck`).
 
 ## 7. Updates, downloads and plugin sources
 

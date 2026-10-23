@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createMockBus } from "../../plugins/_testkit/mock-bus.mjs";
 import { bytesToHex } from "../../plugins/_testkit/mock-device.mjs";
 import { findEntry } from "../lint/lint.mjs";
-import { createSimDevice, importPlugin, installGlobals, parameterDefaults, readExports } from "../lib/plugin.mjs";
+import { createSimDevice, FEATURE_GLOBALS, importPlugin, installGlobals, parameterDefaults, readExports } from "../lib/plugin.mjs";
 
 /** `#RRGGBB` / `RRGGBB` / [r, g, b] -> [r, g, b]. */
 export function parseColor(color) {
@@ -105,7 +105,7 @@ async function simulateHid(entry, ex, params, rgb, frames, options, out) {
   out.productId = productId;
   const endpoints = options.endpoints ?? [{ interface: 0, usage: 0x0001, usage_page: 0xff00, collection: 0 }];
   const device = createSimDevice({ color: rgb, productId, vendorId: out.vendorId, endpoints });
-  const restore = installGlobals({ device, ...NOT_IN_HOST });
+  const restore = installGlobals({ device, ...NOT_IN_HOST, ...FEATURE_GLOBALS });
   try {
     const plugin = await importPlugin(entry);
     const run = phaseRunner(out, () => device.calls.length, (from) => hidTraffic(device, from));
@@ -126,8 +126,16 @@ async function simulateHid(entry, ex, params, rgb, frames, options, out) {
     await session(plugin, params, frames, options, run);
   } finally {
     out.log.push(...device.logs.map((l) => l.message));
+    out.battery = batteryReport(device);
     restore();
   }
+}
+
+// What the plugin reported through the `battery` feature, when it added it.
+function batteryReport(device) {
+  if (!device.features.includes("battery")) return undefined;
+  const b = device.battery;
+  return { level: b.levels.length ? b.batteryLevel : null, state: b.batteryState, levels: [...b.levels], states: [...b.states] };
 }
 
 async function simulateSmbus(entry, ex, params, rgb, frames, options, out) {
@@ -149,7 +157,7 @@ async function simulateSmbus(entry, ex, params, rgb, frames, options, out) {
   }));
   const free = { ...mock.free, SpdSlots: () => slots.map((s) => ({ ...s })) };
   const device = createSimDevice({ color: rgb });
-  const restore = installGlobals({ device, bus: mock.fixed, ...NOT_IN_HOST });
+  const restore = installGlobals({ device, bus: mock.fixed, ...NOT_IN_HOST, ...FEATURE_GLOBALS });
   try {
     const plugin = await importPlugin(entry);
     let opsFrom = 0;
@@ -185,6 +193,7 @@ async function simulateSmbus(entry, ex, params, rgb, frames, options, out) {
     await session(plugin, params, frames, options, run);
   } finally {
     out.log.push(...device.logs.map((l) => l.message), ...mock.logs);
+    out.battery = batteryReport(device);
     restore();
   }
 }
@@ -280,6 +289,10 @@ export function formatRun(run) {
     for (const t of p.traffic) lines.push(`  ${t}`);
     if (p.traffic.length === 0 && !p.error) lines.push("  (nothing sent)");
     if (p.error) lines.push(`  THREW ${p.error}`);
+  }
+  if (run.battery) {
+    const states = ["unknown", "draining", "charging", "full (charging)", "full", "wireless charging"];
+    lines.push(`battery: ${run.battery.level === null ? "no level reported" : `${run.battery.level} %`}, ${states[run.battery.state] ?? run.battery.state}`);
   }
   if (run.log.length > 0) {
     lines.push("log:");

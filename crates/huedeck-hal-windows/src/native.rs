@@ -273,11 +273,7 @@ fn endpoint_info(path: &str, wanted: Wanted<'_>, strings: bool) -> Result<Option
     // non-composite USB device, as hidapi and SignalRGB report, and -1 for every
     // other transport (docs/host-api/hid-usb.md, "Endpoint tuple semantics").
     let usb = probe::hid_bus(path) == probe::HidBus::Usb;
-    let interface_number = match (parsed.interface_number, usb) {
-        (mi, _) if mi >= 0 => mi,
-        (_, true) => 0,
-        (_, false) => HidEndpointInfo::UNKNOWN_INTERFACE,
-    };
+    let interface_number = crate::path::endpoint_interface(parsed.interface_number, usb);
     let (serial, mut manufacturer, product) = if strings {
         (
             hid_string(handle.0, HidD_GetSerialNumberString),

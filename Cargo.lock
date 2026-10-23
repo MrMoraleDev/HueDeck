@@ -1072,6 +1072,10 @@ name = "huedeck-hal-linux"
 version = "0.0.1"
 dependencies = [
  "huedeck-hal",
+ "huedeck-hal-windows",
+ "huedeck-hid-desc",
+ "libc",
+ "tracing",
 ]
 
 [[package]]
@@ -1183,6 +1187,7 @@ dependencies = [
  "huedeck-effects",
  "huedeck-engine",
  "huedeck-hal",
+ "huedeck-hal-linux",
  "huedeck-hal-windows",
  "huedeck-nvapi",
  "huedeck-plugin-host",

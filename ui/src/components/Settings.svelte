@@ -94,6 +94,26 @@
   </section>
 
   <section class="panel">
+    <h2>When HueDeck closes</h2>
+    {#each [["restore", "Give each device its own lighting back (its built-in effect, or what it showed before HueDeck)"], ["keep", "Keep the last colours HueDeck showed (until the device is switched off)"], ["off", "Turn the lights off"]] as [mode, label] (mode)}
+      <label class="check"
+        ><input
+          type="radio"
+          name="shutdown-mode"
+          value={mode}
+          checked={snapshot.settings.shutdownMode === mode}
+          onchange={() => daemon.run(() => api.setSettings({ shutdownMode: mode as "restore" | "keep" | "off" }))}
+        /> {label}</label
+      >
+    {/each}
+    <p class="muted">
+      Nothing is stored in the devices: after a power cycle they show what they keep in their own memory (see Devices →
+      Save to devices). A device can have its own choice in its settings; devices whose plugin cannot do it fall back to
+      their own lighting.
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>Effects</h2>
     <label class="check"
       ><input

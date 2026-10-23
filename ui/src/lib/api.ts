@@ -2,7 +2,7 @@
 // The daemon's native API (crates/huedeck-api/src/server.rs). Requests that change
 // state carry the token huedeckd embeds in the page it serves.
 
-import type { LibraryComponent, Placement, Snapshot } from "./types";
+import type { LibraryComponent, Placement, SaveResult, ShutdownMode, Snapshot } from "./types";
 
 function token(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="huedeck-token"]')?.content ?? "";
@@ -54,7 +54,7 @@ export const api = {
   applyPreset: (id: string, name: string) => request("POST", `/v1/effects/${enc(id)}/presets/${enc(name)}/apply`),
   deletePreset: (id: string, name: string) => request("DELETE", `/v1/effects/${enc(id)}/presets/${enc(name)}`),
   setLighting: (patch: { brightness?: number; enabled?: boolean }) => request("PATCH", "/v1/lighting", patch),
-  setDevice: (key: string, patch: { enabled?: boolean; parameters?: Record<string, unknown> }) =>
+  setDevice: (key: string, patch: { enabled?: boolean; parameters?: Record<string, unknown>; shutdownMode?: ShutdownMode | "default" }) =>
     request("PATCH", `/v1/devices/${enc(key)}`, patch),
   setChannel: (key: string, channel: string, components: unknown[]) =>
     request("PUT", `/v1/devices/${enc(key)}/channels/${enc(channel)}`, components),
@@ -64,7 +64,7 @@ export const api = {
   deleteLayout: (name: string) => request("DELETE", `/v1/layouts/${enc(name)}`),
   setLayoutBrightness: (brightness: number) => request("PATCH", "/v1/layout", { brightness }),
   components: () => request<LibraryComponent[]>("GET", "/v1/components"),
-  setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean }) =>
+  setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean; shutdownMode?: ShutdownMode }) =>
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */
   setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),
@@ -76,6 +76,12 @@ export const api = {
   exportState: () => request<unknown>("GET", "/v1/export"),
   importState: (state: unknown) => request("POST", "/v1/import", state),
   rescan: () => request("POST", "/v1/rescan"),
+  /** What "Save to devices" would store (nothing is written); every device when `devices` is empty. */
+  savePreview: (devices: Record<string, { effect: string | null }> = {}) =>
+    request<{ devices: SaveResult[] }>("POST", "/v1/save/preview", { devices }),
+  /** Store lighting in the devices' own memory; only after the user confirmed it. */
+  saveToDevices: (devices: Record<string, { effect: string | null }>) =>
+    request<{ devices: SaveResult[] }>("POST", "/v1/save", { confirm: true, devices }),
   shutdown: () => request("POST", "/v1/shutdown"),
   tap: (x: number, y: number) => request("POST", "/v1/canvas/tap", { x, y }),
 };

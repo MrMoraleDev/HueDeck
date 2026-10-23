@@ -28,6 +28,7 @@ protocol for both), but has not been run on hardware. The DualShock 4 ids are un
 | S3 | Linux `drivers/hid/hid-playstation.c` (`GPL-2.0-or-later`), read 2026-10-18 | Names of the report fields and valid-flag bits. Facts only, no code |
 | S4 | Linux v5.15 `drivers/hid/hid-sony.c` (`GPL-2.0-or-later`) | The DualShock 4 USB report there also used `buf[1] = 0x07; /* blink + LEDs + motor */`; "If both delay values are zero the DualShock 4 disables blinking."; over Bluetooth the DualShock 4 sends report 1 until "feature report 2 is requested", then report 17 |
 | S5 | pydualsense (`pydualsense/pydualsense.py`, `pydualsense/enums.py`), read 2026-10-18 | DualSense bits S3 leaves unnamed: `valid_flag0` 0x04/0x08 "set the right/left trigger motor"; `valid_flag1` 0x40 "adjustment of overall motor/effect power (index 37)"; `valid_flag2` 0x01 `PlayerLedBrightness`, 0x02 `UninterrumpableLed`; byte 43 `high = 0`, `medium = 1`, `low = 2`. Facts only |
+| S7 | Linux `drivers/hid/hid-playstation.c` (`GPL-2.0-or-later`), master read 2026-10-22: `struct dualsense_input_report`, `struct dualshock4_input_report_common`, the battery parts of `dualsense_parse_report()`, `dualshock4_parse_report()` and `dualshock4_dongle_parse_report()` | Battery: offsets, bit fields, the level formula and the charging states. Facts only, no code |
 | S6 | HueDeck's device listing on the reference machine, and a recording of the (since retired) `sony-dualsense` plugin on the user's DualSense (`huedeck light red --record`, 2026-10-18) | The DualSense's only HID collection (interface 3, usage page 0x0001, usage 0x0005, 48-byte output report); the replay below |
 
 ## Products
@@ -153,6 +154,35 @@ Kept as OpenRGB sends them: the light bar flags (DS4 0x02 and 0x04 with blink 0/
 (`valid_flag1` 0x10, `valid_flag2` 0x01). Byte 9 is written as 0 instead of OpenRGB's mode
 value; with its flag clear the controller ignores it either way.
 
+## Battery (S7)
+
+Not in OpenRGB. The controllers report their battery in every USB input report `0x01` (64 bytes,
+report id at byte 0); the plugin only reads it, nothing is sent for it.
+
+| Controller | Byte (report id = 0) | Field (S7) |
+|------------|----------------------|------------|
+| DualSense, DualSense Edge | 53 | `status[0]` of `struct dualsense_input_report` (struct offset 52; the USB struct starts at `data[1]`): bits 0-3 level 0..10, bits 4-7 charging state |
+| DualShock 4 (`05C4`, `09CC`, `0BA0`) | 30 | `status[0]` of `struct dualshock4_input_report_common` (struct offset 29): bits 0-3 level, bit 4 cable connected |
+| DualShock 4 USB wireless adapter (`0BA0`) | 31 | `status[1]`, bit 2 (`DS4_STATUS1_DONGLE_STATE`): 0 a controller is connected, 1 none |
+
+Level to percent as in the Linux driver: `min(level * 10 + 5, 100)` (each step covers 10 %).
+States (SignalRGB numbers: 0 unknown, 1 draining, 2 charging, 4 full):
+
+- DualSense charging state 0 -> draining, 1 -> charging, 2 -> full (100 %); `0xA` (voltage or
+  temperature out of range), `0xB` (temperature error) and anything else -> unknown, the last level
+  kept (Linux reports "not charging" / "unknown" with capacity 0).
+- DualShock 4 with the cable: level below 10 -> charging; 10 -> 100 %, charging; 11 -> full;
+  14, 15 and others (charging error) -> unknown, last level kept. Without the cable: draining,
+  levels above 9 count as 100 %.
+- DualShock 4 adapter with no controller connected -> unknown, last level kept.
+
+How the plugin reads it: `Initialize()` adds the `battery` feature (not for a DualShock 4 that
+sends Bluetooth reports, which gets nothing at all). In `Render()`, after the frame, at most every
+5 s: non-blocking reads (`device.read([0x00], 64, 0)`) drain the reports waiting, at most 64, and
+the newest report `0x01` counts; when nothing is waiting nothing changes. Level and state go to
+`battery.setBatteryLevel()` / `battery.setBatteryState()` only when they changed. Bluetooth input
+reports (DualSense `0x31`, battery one byte later) are not handled: the plugin is USB only.
+
 ## Shutdown (`Shutdown()`)
 
 OpenRGB sends nothing when it exits (S2), and neither protocol as OpenRGB uses it has a command
@@ -216,4 +246,5 @@ Every product id except the DualSense `0CE6` (see "Tested on hardware"): the Dua
 (`05C4`, `09CC`, `0BA0`) and the DualSense Edge (`0DF2`). On the DualSense the plugin differs from
 what the user's controller first accepted from `sony-dualsense` in three ways: no start report, the
 light bar setup flag (with `lightbar_setup` 0) in every report, and the player LED fields; the
-2026-10-22 test covered the light bar with these reports.
+2026-10-22 test covered the light bar with these reports. Battery reading is untested on hardware
+for every product.

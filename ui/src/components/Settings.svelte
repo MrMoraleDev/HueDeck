@@ -8,6 +8,24 @@
   let { snapshot }: { snapshot: Snapshot } = $props();
   let message = $state<string | null>(null);
   let file: HTMLInputElement;
+  let low = $state(15);
+  let critical = $state(5);
+  // Follow the daemon's values only when they change (a refresh must not undo typing).
+  let seen = "";
+  $effect(() => {
+    const now = `${snapshot.settings.batteryLow}/${snapshot.settings.batteryCritical}`;
+    if (now !== seen) {
+      seen = now;
+      low = snapshot.settings.batteryLow;
+      critical = snapshot.settings.batteryCritical;
+    }
+  });
+  const thresholdsValid = $derived(low >= 1 && low <= 95 && critical >= 0 && critical < low);
+
+  function saveThresholds() {
+    if (thresholdsValid) void daemon.run(() => api.setSettings({ batteryLow: low, batteryCritical: critical }));
+  }
+
   let port = $state<number | null>(null);
   let moving = $state<string | null>(null);
   const portValue = $derived(port ?? snapshot.settings.port);
@@ -150,6 +168,17 @@
   </section>
 
   <section class="panel">
+    <h2>OpenRGB SDK</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.openrgbSdk}
+        onchange={(e) => daemon.run(() => api.setSettings({ openrgbSdk: (e.target as HTMLInputElement).checked }))}
+      /> Let OpenRGB SDK clients drive HueDeck's devices (127.0.0.1:6742)</label
+    >
+  </section>
+
+  <section class="panel">
     <h2>Effects</h2>
     <label class="check"
       ><input
@@ -161,6 +190,40 @@
     <p class="muted">
       Off (the default) paints effects at a steadier frame rate with less memory; on can help effects with heavy canvas
       filters. Renderer: {snapshot.lighting.renderer.status ?? snapshot.lighting.renderer.kind}.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Battery</h2>
+    <div class="row">
+      <label class="row"
+        >Low below <input type="number" min="1" max="95" style="width:70px" bind:value={low} onchange={saveThresholds} />
+        %</label
+      >
+      <label class="row"
+        >Critical below
+        <input type="number" min="0" max="94" style="width:70px" bind:value={critical} onchange={saveThresholds} /> %</label
+      >
+    </div>
+    {#if !thresholdsValid}
+      <p class="bad">The low level must be 1 to 95 %, and the critical level below it.</p>
+    {/if}
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.batteryNotifications}
+        disabled={!snapshot.settings.notificationsAvailable}
+        onchange={(e) =>
+          daemon.run(() => api.setSettings({ batteryNotifications: (e.target as HTMLInputElement).checked }))}
+      /> Show a system notification when a battery runs low or critical</label
+    >
+    <p class="muted">
+      For wireless devices whose plugin reports a battery. The dashboard warns while a device on battery is at or under
+      the low level. Notifications come once per discharge, at the low and at the critical level, and again after the
+      device was charged or climbed 5 points above the level.{snapshot.settings.notificationsAvailable
+        ? ""
+        : " System notifications are not available on this system yet."} Each device can also pulse red while its battery
+      is low (Devices).
     </p>
   </section>
 
@@ -249,6 +312,9 @@
   }
   dd {
     margin: 0;
+  }
+  .bad {
+    color: var(--bad);
   }
   .warn {
     color: var(--warn);

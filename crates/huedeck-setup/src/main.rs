@@ -53,7 +53,7 @@
 //! prompt when not elevated yet (and waits for it); `--pause` keeps the
 //! window open on an error.
 
-// Outside Windows only the argument parser and the pure checks are used.
+// Windows-only tool: elsewhere it only builds (CI), so its steps go unused.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 mod pawnio_setup;

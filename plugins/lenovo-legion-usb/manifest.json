@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.lenovo-legion-usb",
+  "name": "Lenovo Legion USB lighting",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-key keyboard and case lighting (logo, vents, neon) of Lenovo Legion laptops with the ITE USB lighting controller (048D, usage page 0xFF89 / usage 0x07): Legion Y740, Legion 7 / 7S Gen 5 and Gen 6, Legion 7 / 7S Gen 7 to Gen 9 and Legion 7 Gen 10 in Direct mode. Adapted from OpenRGB's LenovoUSBController and LenovoGen7And8USBController (GPL-2.0-or-later); untested on hardware. Lighting profiles are never saved, brightness and profile are never changed; on exit the laptop gets its own lighting back. The Legion 5 Gen 10 (048D:C195) is held back: OpenRGB has no Direct mode for it. Protocol notes: docs/hardware/lenovo-legion-usb.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x048D",
+      "pids": ["0xC935", "0xC956", "0xC957", "0xC968", "0xC967", "0xC977", "0xC978", "0xC988", "0xC987", "0xC997", "0xC998", "0xC197"],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["LegionSpace.exe", "LegionZone.exe", "LenovoVantage.exe", "LenovoVantageService.exe"],
+  "keywords": ["lenovo", "legion", "laptop", "keyboard", "per-key", "openrgb"]
+}

@@ -18,6 +18,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 huedeck-hal = { path = "../huedeck-hal" }
 huedeck-hal-windows = { path = "../huedeck-hal-windows" }
+# hidraw backend and udev hotplug (its pure parts build everywhere).
+huedeck-hal-linux = { path = "../huedeck-hal-linux" }
 huedeck-nvapi = { path = "../huedeck-nvapi" }
 huedeck-protocol = { path = "../huedeck-protocol" }
 huedeck-plugin-host = { path = "../huedeck-plugin-host" }

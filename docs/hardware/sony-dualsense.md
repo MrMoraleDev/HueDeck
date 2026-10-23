@@ -76,3 +76,11 @@ The controller accepted every report, and a second run (red, green and blue for 
 then 20 s of rainbow; 930 reports, 0 errors) was watched by the user: the light bar showed
 each colour and the rainbow (2026-10-18). `0CE6` is marked tested; the DualSense Edge
 (`0DF2`) is not.
+
+## Battery
+
+The retired plugin did not read the battery. `plugins/sony-gamepad/` does, from the USB input
+report `0x01`: byte 53 (report id at byte 0), bits 0-3 level 0..10 (`min(level * 10 + 5, 100)`
+percent), bits 4-7 charging state (0 discharging, 1 charging, 2 full, others error/unknown);
+facts from Linux `drivers/hid/hid-playstation.c`. Details: `docs/hardware/sony-gamepad.md`,
+"Battery".

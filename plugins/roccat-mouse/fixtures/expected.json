@@ -1,0 +1,1024 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Expected I/O worked out from OpenRGB's C++ (commit d4798c120659ec5ba2e664a9e87bedff8d36f880, Controllers/RoccatController: RoccatKoneAimoController, RoccatKoneProController, RoccatKoneProAirController, RoccatKoneXPController, RoccatBurstController, their RGBControllers and RoccatControllerDetect.cpp) by a separate reference model (openrgb-work/batch2/roccat/gen.py in the porting session's scratch space, not in the repository); plugin.js was never run to make them. Per variant: LED names and grid cells (zones in OpenRGB order, a multi-LED zone gets its own row, consecutive one-LED zones share a row), two colour sets in LED order, and the I/O of Initialize, a frame with each colour set and Shutdown. Deliberate HueDeck deviations (docs/hardware/roccat-mouse.md): Kone XP enters direct with EnableDirect(on) and one ready poll only (OpenRGB's profile write SetMode, which also carries DPI and polling rate, is never sent); Kone Pro, Burst and Kone XP Shutdown switch back to the built-in lighting (0E 06 01 00 00 FF); Kone Aimo keeps the 0D 2E header constant; Kone Aimo and Kone Pro Air Shutdown send black. ops: send_report = SET_FEATURE, get_report = GET_FEATURE (report id, length), write = output report. 'held_back' lists OpenRGB ids this plugin does not claim, with the reason.",
+ "products": [
+  {
+   "pid": "0x2E27",
+   "name": "Roccat Kone Aimo",
+   "variant": "KONE_AIMO",
+   "validate": {
+    "interface": 0,
+    "usage_page": 11,
+    "usage": 0
+   }
+  },
+  {
+   "pid": "0x2E2C",
+   "name": "Roccat Kone Aimo 16K",
+   "variant": "KONE_AIMO",
+   "validate": {
+    "interface": 0,
+    "usage_page": 11,
+    "usage": 0
+   }
+  },
+  {
+   "pid": "0x2C88",
+   "name": "Roccat Kone Pro",
+   "variant": "KONE_PRO",
+   "validate": {
+    "interface": 3,
+    "usage_page": 65281,
+    "usage": 1
+   }
+  },
+  {
+   "pid": "0x2C8E",
+   "name": "Roccat Kone Pro Air",
+   "variant": "KONE_PRO_AIR",
+   "validate": {
+    "interface": 2,
+    "usage_page": 65280,
+    "usage": 1
+   }
+  },
+  {
+   "pid": "0x2C92",
+   "name": "Roccat Kone Pro Air (Wired)",
+   "variant": "KONE_PRO_AIR",
+   "validate": {
+    "interface": 1,
+    "usage_page": 65299,
+    "usage": 1
+   }
+  },
+  {
+   "pid": "0x2C8B",
+   "name": "Roccat Kone XP",
+   "variant": "KONE_XP",
+   "validate": {
+    "interface": 3,
+    "usage_page": 65281,
+    "usage": 1
+   }
+  },
+  {
+   "pid": "0x2DE6",
+   "name": "Roccat Burst Core",
+   "variant": "BURST_CORE",
+   "validate": {
+    "interface": 3,
+    "usage_page": 65281,
+    "usage": 1
+   }
+  },
+  {
+   "pid": "0x2DE1",
+   "name": "Roccat Burst Pro",
+   "variant": "BURST_PRO",
+   "validate": {
+    "interface": 3,
+    "usage_page": 65281,
+    "usage": 1
+   }
+  }
+ ],
+ "held_back": [
+  {
+   "pid": "0x2CA6",
+   "name": "Roccat Burst Pro Air",
+   "held_back": "every colour update and the mode change are SET_FEATURE reports with report id 0x06, the report id the Burst / Kone Pro controllers use for the profile (flash) write; OpenRGB marks its saving as unknown (@save :warning:)"
+  },
+  {
+   "pid": "0x2CEE",
+   "name": "Roccat Kova",
+   "held_back": "no direct mode: every colour change reads and rewrites the stored profile (report 0x06, which also holds DPI and polling rate)"
+  },
+  {
+   "pid": "0x343A",
+   "name": "Roccat Sense Aimo Mid",
+   "held_back": "reaching direct mode needs the mode report 0x02, which OpenRGB marks as automatically saved; no separate software-control switch"
+  },
+  {
+   "pid": "0x343B",
+   "name": "Roccat Sense Aimo XXL",
+   "held_back": "as Sense Aimo Mid"
+  },
+  {
+   "pid": "0x3A34",
+   "name": "Roccat Elo 7.1",
+   "held_back": "USB audio headset; the start sequence writes output reports FF 01, FF 02, FF 03 00 01 that OpenRGB does not explain (could be audio settings)"
+  }
+ ],
+ "variants": {
+  "KONE_AIMO": {
+   "size": [
+    4,
+    4
+   ],
+   "leds": [
+    {
+     "name": "Wheel LED",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Strip left LED 1",
+     "pos": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "Strip left LED 2",
+     "pos": [
+      1,
+      1
+     ]
+    },
+    {
+     "name": "Strip left LED 3",
+     "pos": [
+      2,
+      1
+     ]
+    },
+    {
+     "name": "Strip left LED 4",
+     "pos": [
+      3,
+      1
+     ]
+    },
+    {
+     "name": "Strip right LED 1",
+     "pos": [
+      0,
+      2
+     ]
+    },
+    {
+     "name": "Strip right LED 2",
+     "pos": [
+      1,
+      2
+     ]
+    },
+    {
+     "name": "Strip right LED 3",
+     "pos": [
+      2,
+      2
+     ]
+    },
+    {
+     "name": "Strip right LED 4",
+     "pos": [
+      3,
+      2
+     ]
+    },
+    {
+     "name": "Lower left LED",
+     "pos": [
+      0,
+      3
+     ]
+    },
+    {
+     "name": "Lower right LED",
+     "pos": [
+      1,
+      3
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     11,
+     3,
+     255
+    ],
+    [
+     48,
+     104,
+     248
+    ],
+    [
+     85,
+     205,
+     241
+    ],
+    [
+     122,
+     50,
+     234
+    ],
+    [
+     159,
+     151,
+     227
+    ],
+    [
+     196,
+     252,
+     220
+    ],
+    [
+     233,
+     97,
+     213
+    ],
+    [
+     14,
+     198,
+     206
+    ],
+    [
+     51,
+     43,
+     199
+    ],
+    [
+     88,
+     144,
+     192
+    ],
+    [
+     125,
+     245,
+     185
+    ]
+   ],
+   "colours_b": [
+    [
+     200,
+     128,
+     7
+    ],
+    [
+     197,
+     181,
+     26
+    ],
+    [
+     194,
+     234,
+     45
+    ],
+    [
+     191,
+     31,
+     64
+    ],
+    [
+     188,
+     84,
+     83
+    ],
+    [
+     185,
+     137,
+     102
+    ],
+    [
+     182,
+     190,
+     121
+    ],
+    [
+     179,
+     243,
+     140
+    ],
+    [
+     176,
+     40,
+     159
+    ],
+    [
+     173,
+     93,
+     178
+    ],
+    [
+     170,
+     146,
+     197
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "get_report",
+     "id": 0,
+     "len": 3
+    },
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010100FF"
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "send_report",
+     "len": 46,
+     "hex": "0D2E0B03FF003068F80055CDF1007A32EA009F97E300C4FCDC00E961D5000EC6CE00332BC7005890C0007DF5B900"
+    },
+    {
+     "op": "get_report",
+     "id": 13,
+     "len": 3
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "send_report",
+     "len": 46,
+     "hex": "0D2EC8800700C5B51A00C2EA2D00BF1F4000BC545300B9896600B6BE7900B3F38C00B0289F00AD5DB200AA92C500"
+    },
+    {
+     "op": "get_report",
+     "id": 13,
+     "len": 3
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "send_report",
+     "len": 46,
+     "hex": "0D2E0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "op": "get_report",
+     "id": 13,
+     "len": 3
+    }
+   ]
+  },
+  "KONE_PRO": {
+   "size": [
+    2,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Left Button",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Right Button",
+     "pos": [
+      1,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     11,
+     3,
+     255
+    ],
+    [
+     48,
+     104,
+     248
+    ]
+   ],
+   "colours_b": [
+    [
+     200,
+     128,
+     7
+    ],
+    [
+     197,
+     181,
+     26
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010100FF"
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "send_report",
+     "len": 11,
+     "hex": "0D0B0B03FF3068F8000000"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "send_report",
+     "len": 11,
+     "hex": "0D0BC88007C5B51A000000"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010000FF"
+    }
+   ]
+  },
+  "KONE_PRO_AIR": {
+   "size": [
+    2,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Left Button",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Right Button",
+     "pos": [
+      1,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     11,
+     3,
+     255
+    ],
+    [
+     48,
+     104,
+     248
+    ]
+   ],
+   "colours_b": [
+    [
+     200,
+     128,
+     7
+    ],
+    [
+     197,
+     181,
+     26
+    ]
+   ],
+   "initialize": [],
+   "frame_a": [
+    {
+     "op": "write",
+     "len": 16,
+     "hex": "0010100B00096464640B0B03FF3068F8"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "write",
+     "len": 16,
+     "hex": "0010100B00096464640BC88007C5B51A"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "write",
+     "len": 16,
+     "hex": "0010100B00096464640B000000000000"
+    }
+   ]
+  },
+  "KONE_XP": {
+   "size": [
+    9,
+    3
+   ],
+   "leds": [
+    {
+     "name": "Left LED 1",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Left LED 2",
+     "pos": [
+      1,
+      0
+     ]
+    },
+    {
+     "name": "Left LED 3",
+     "pos": [
+      2,
+      0
+     ]
+    },
+    {
+     "name": "Left LED 4",
+     "pos": [
+      3,
+      0
+     ]
+    },
+    {
+     "name": "Left LED 5",
+     "pos": [
+      4,
+      0
+     ]
+    },
+    {
+     "name": "Left LED 6",
+     "pos": [
+      5,
+      0
+     ]
+    },
+    {
+     "name": "Left LED 7",
+     "pos": [
+      6,
+      0
+     ]
+    },
+    {
+     "name": "Left LED 8",
+     "pos": [
+      7,
+      0
+     ]
+    },
+    {
+     "name": "Left LED 9",
+     "pos": [
+      8,
+      0
+     ]
+    },
+    {
+     "name": "Right LED 1",
+     "pos": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "Right LED 2",
+     "pos": [
+      1,
+      1
+     ]
+    },
+    {
+     "name": "Right LED 3",
+     "pos": [
+      2,
+      1
+     ]
+    },
+    {
+     "name": "Right LED 4",
+     "pos": [
+      3,
+      1
+     ]
+    },
+    {
+     "name": "Right LED 5",
+     "pos": [
+      4,
+      1
+     ]
+    },
+    {
+     "name": "Right LED 6",
+     "pos": [
+      5,
+      1
+     ]
+    },
+    {
+     "name": "Right LED 7",
+     "pos": [
+      6,
+      1
+     ]
+    },
+    {
+     "name": "Right LED 8",
+     "pos": [
+      7,
+      1
+     ]
+    },
+    {
+     "name": "Right LED 9",
+     "pos": [
+      8,
+      1
+     ]
+    },
+    {
+     "name": "Scrollwheel LED",
+     "pos": [
+      0,
+      2
+     ]
+    },
+    {
+     "name": "DPI button LED",
+     "pos": [
+      1,
+      2
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     11,
+     3,
+     255
+    ],
+    [
+     48,
+     104,
+     248
+    ],
+    [
+     85,
+     205,
+     241
+    ],
+    [
+     122,
+     50,
+     234
+    ],
+    [
+     159,
+     151,
+     227
+    ],
+    [
+     196,
+     252,
+     220
+    ],
+    [
+     233,
+     97,
+     213
+    ],
+    [
+     14,
+     198,
+     206
+    ],
+    [
+     51,
+     43,
+     199
+    ],
+    [
+     88,
+     144,
+     192
+    ],
+    [
+     125,
+     245,
+     185
+    ],
+    [
+     162,
+     90,
+     178
+    ],
+    [
+     199,
+     191,
+     171
+    ],
+    [
+     236,
+     36,
+     164
+    ],
+    [
+     17,
+     137,
+     157
+    ],
+    [
+     54,
+     238,
+     150
+    ],
+    [
+     91,
+     83,
+     143
+    ],
+    [
+     128,
+     184,
+     136
+    ],
+    [
+     165,
+     29,
+     129
+    ],
+    [
+     202,
+     130,
+     122
+    ]
+   ],
+   "colours_b": [
+    [
+     200,
+     128,
+     7
+    ],
+    [
+     197,
+     181,
+     26
+    ],
+    [
+     194,
+     234,
+     45
+    ],
+    [
+     191,
+     31,
+     64
+    ],
+    [
+     188,
+     84,
+     83
+    ],
+    [
+     185,
+     137,
+     102
+    ],
+    [
+     182,
+     190,
+     121
+    ],
+    [
+     179,
+     243,
+     140
+    ],
+    [
+     176,
+     40,
+     159
+    ],
+    [
+     173,
+     93,
+     178
+    ],
+    [
+     170,
+     146,
+     197
+    ],
+    [
+     167,
+     199,
+     216
+    ],
+    [
+     164,
+     252,
+     235
+    ],
+    [
+     161,
+     49,
+     254
+    ],
+    [
+     158,
+     102,
+     17
+    ],
+    [
+     155,
+     155,
+     36
+    ],
+    [
+     152,
+     208,
+     55
+    ],
+    [
+     149,
+     5,
+     74
+    ],
+    [
+     146,
+     58,
+     93
+    ],
+    [
+     143,
+     111,
+     112
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010100FF"
+    },
+    {
+     "op": "get_report",
+     "id": 4,
+     "len": 4
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "send_report",
+     "len": 122,
+     "hex": "0D7A0B03FFFFFFFF3068F8FFFFFF55CDF1FFFFFF7A32EAFFFFFF9F97E3FFFFFFC4FCDCFFFFFFE961D5FFFFFF0EC6CEFFFFFF332BC7FFFFFF5890C0FFFFFF7DF5B9FFFFFFA25AB2FFFFFFC7BFABFFFFFFEC24A4FFFFFF11899DFFFFFF36EE96FFFFFF5B538FFFFFFF80B888FFFFFFA51D81FFFFFFCA827AFFFFFF"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "send_report",
+     "len": 122,
+     "hex": "0D7AC88007FFFFFFC5B51AFFFFFFC2EA2DFFFFFFBF1F40FFFFFFBC5453FFFFFFB98966FFFFFFB6BE79FFFFFFB3F38CFFFFFFB0289FFFFFFFAD5DB2FFFFFFAA92C5FFFFFFA7C7D8FFFFFFA4FCEBFFFFFFA131FEFFFFFF9E6611FFFFFF9B9B24FFFFFF98D037FFFFFF95054AFFFFFF923A5DFFFFFF8F6F70FFFFFF"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010000FF"
+    },
+    {
+     "op": "get_report",
+     "id": 4,
+     "len": 4
+    }
+   ]
+  },
+  "BURST_CORE": {
+   "size": [
+    1,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Scroll Wheel",
+     "pos": [
+      0,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     11,
+     3,
+     255
+    ]
+   ],
+   "colours_b": [
+    [
+     200,
+     128,
+     7
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010100FF"
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "send_report",
+     "len": 11,
+     "hex": "0D0B0B03FF000000000000"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "send_report",
+     "len": 11,
+     "hex": "0D0BC88007000000000000"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010000FF"
+    }
+   ]
+  },
+  "BURST_PRO": {
+   "size": [
+    2,
+    1
+   ],
+   "leds": [
+    {
+     "name": "Scroll Wheel",
+     "pos": [
+      0,
+      0
+     ]
+    },
+    {
+     "name": "Logo",
+     "pos": [
+      1,
+      0
+     ]
+    }
+   ],
+   "colours_a": [
+    [
+     11,
+     3,
+     255
+    ],
+    [
+     48,
+     104,
+     248
+    ]
+   ],
+   "colours_b": [
+    [
+     200,
+     128,
+     7
+    ],
+    [
+     197,
+     181,
+     26
+    ]
+   ],
+   "initialize": [
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010100FF"
+    }
+   ],
+   "frame_a": [
+    {
+     "op": "send_report",
+     "len": 11,
+     "hex": "0D0B0B03FF3068F8000000"
+    }
+   ],
+   "frame_b": [
+    {
+     "op": "send_report",
+     "len": 11,
+     "hex": "0D0BC88007C5B51A000000"
+    }
+   ],
+   "shutdown": [
+    {
+     "op": "send_report",
+     "len": 6,
+     "hex": "0E06010000FF"
+    }
+   ]
+  }
+ }
+}

@@ -41,6 +41,7 @@ toml = { workspace = true }
 huedeck-api = { path = "../huedeck-api" }
 huedeck-engine = { path = "../huedeck-engine" }
 huedeck-hal = { path = "../huedeck-hal" }
+huedeck-inputs = { path = "../huedeck-inputs" }
 huedeck-plugin-host = { path = "../huedeck-plugin-host" }
 huedeck-render = { path = "../huedeck-render" }
 huedeck-runtime = { path = "../huedeck-runtime" }

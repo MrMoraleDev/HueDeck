@@ -50,6 +50,7 @@ export interface DeviceView {
   pid: number;
   name: string;
   plugin: string;
+  deviceType?: string;
   pluginPath: string;
   state: string;
   enabled: boolean;
@@ -64,6 +65,20 @@ export interface DeviceView {
   parameters: Parameter[];
   endpoints: Endpoint[];
   channels: ChannelView[];
+  /** The plugin's last battery report (devices with a battery only). */
+  battery?: BatteryView | null;
+  /** Pulse red while the battery is low. */
+  blinkLowBattery: boolean;
+}
+
+export interface BatteryView {
+  /** Percent; null until the plugin reported one. */
+  level?: number | null;
+  state: "unknown" | "discharging" | "charging" | "fullCharging" | "full" | "wirelessCharging";
+  charging: boolean;
+  status: "ok" | "low" | "critical";
+  /** Unix time of the report, milliseconds. */
+  updatedMs: number;
 }
 
 export interface EffectControl {
@@ -104,12 +119,18 @@ export interface Settings {
   signalrgbAvailable: boolean;
   gpuCompositing: boolean;
   smbus: boolean;
+  /** OpenRGB SDK server on 127.0.0.1:6742 (opt-in). */
+  openrgbSdk: boolean;
   /** Port of the dashboard and the API (127.0.0.1 only). */
   port: number;
   /** Set when the configured port was busy at startup and the default one is used. */
   portNotice: string | null;
   fps: number;
   dryRun: boolean;
+  batteryLow: number;
+  batteryCritical: number;
+  batteryNotifications: boolean;
+  notificationsAvailable: boolean;
 }
 
 export interface Snapshot {

@@ -12,6 +12,8 @@ pub const HOTPLUG_SETTLE: Duration = Duration::from_millis(250);
 pub struct Hotplug {
     #[cfg(windows)]
     _source: Option<huedeck_hal_windows::hotplug::HidHotplug>,
+    #[cfg(target_os = "linux")]
+    _source: Option<huedeck_hal_linux::HidrawHotplug>,
     events: Option<std::sync::mpsc::Receiver<huedeck_hal::DeviceEvent>>,
 }
 
@@ -19,7 +21,7 @@ impl Hotplug {
     /// No notifications.
     pub fn inactive() -> Self {
         Self {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             _source: None,
             events: None,
         }
@@ -27,10 +29,13 @@ impl Hotplug {
 
     /// Subscribe; falls back to [`Hotplug::inactive`] (with a warning on stderr)
     /// when the OS refuses.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub fn start() -> Self {
         use huedeck_hal::HotplugSource;
+        #[cfg(windows)]
         let mut source = huedeck_hal_windows::hotplug::HidHotplug::new();
+        #[cfg(target_os = "linux")]
+        let mut source = huedeck_hal_linux::HidrawHotplug::new();
         match source.subscribe() {
             Ok(events) => Self {
                 _source: Some(source),
@@ -43,8 +48,8 @@ impl Hotplug {
         }
     }
 
-    /// No notifications on this OS yet.
-    #[cfg(not(windows))]
+    /// No notifications on this OS.
+    #[cfg(not(any(windows, target_os = "linux")))]
     pub fn start() -> Self {
         Self::inactive()
     }

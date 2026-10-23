@@ -19,7 +19,10 @@
 //!    session;
 //!    Changes sent through [`SessionHandle::control`] apply before the next
 //!    `Render()`: parameter values (then `on<name>Changed()`), brightness,
-//!    placement (then `onBrightnessChanged()` for a new device brightness);
+//!    placement (then `onBrightnessChanged()` for a new device brightness),
+//!    the alert override and `battery.lowBatteryWarningLevel`. What the plugin
+//!    reports through the `battery` feature is readable meanwhile
+//!    ([`LiveSnapshot::battery`]);
 //! 6. on stop calls `Shutdown(false)` (unless told not to), repeats the
 //!    feature-report reads and returns a [`SessionReport`].
 //!
@@ -29,6 +32,7 @@
 //! released by the host, and `Render()` runs at most once per
 //! [`SMBUS_FRAME_INTERVAL`] whatever the canvas rate.
 
+use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::bus::{lock_guard, SharedGuard};
 use crate::catalog::CatalogEntry;
 use crate::children::ChildSetup;
@@ -39,7 +43,7 @@ use crate::device::{
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
 use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
 use crate::stats::LatencyHistogram;
-use huedeck_engine::{ComponentInstance, FrameStore, Placement, SamplerConfig};
+use huedeck_engine::{ComponentInstance, FrameStore, Placement, Rgb, SamplerConfig};
 use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, NoHid};
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -210,6 +214,11 @@ pub struct SessionOptions {
     pub placements: BTreeMap<String, Placement>,
     /// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
     pub system_info: Option<Arc<huedeck_hal::SystemInfo>>,
+    /// Direct LED colours (OpenRGB SDK clients), read once per frame; they
+    /// win over the canvas for the endpoints they name.
+    pub direct: Option<Arc<huedeck_engine::DirectLeds>>,
+    /// `battery.lowBatteryWarningLevel` (percent).
+    pub battery_warning_level: u8,
 }
 
 impl Default for SessionOptions {
@@ -227,6 +236,8 @@ impl Default for SessionOptions {
             channel_components: BTreeMap::new(),
             placements: BTreeMap::new(),
             system_info: None,
+            direct: None,
+            battery_warning_level: DEFAULT_WARNING_LEVEL,
         }
     }
 }
@@ -396,6 +407,8 @@ pub struct SessionReport {
     pub device_removed: bool,
     /// SMBus counters (SMBus devices only).
     pub smbus: Option<SmbusStats>,
+    /// The last battery report (plugins with the `battery` feature only).
+    pub battery: Option<BatteryStatus>,
     /// Session wall time.
     pub elapsed_ms: f64,
 }
@@ -434,6 +447,7 @@ impl SessionReport {
             memory_bytes: 0,
             device_removed: false,
             smbus: None,
+            battery: None,
             elapsed_ms: 0.0,
         }
     }
@@ -494,6 +508,8 @@ struct LiveStats {
     endpoints: std::sync::Mutex<Arc<Vec<EndpointView>>>,
     /// The device's channels (empty until `Initialize()` ran).
     channels: std::sync::Mutex<Arc<Vec<ChannelInfo>>>,
+    /// The plugin's last battery report.
+    battery: std::sync::Mutex<Option<BatteryStatus>>,
 }
 
 /// Counters readable while the session runs.
@@ -514,6 +530,8 @@ pub struct LiveSnapshot {
     pub disconnected: bool,
     /// Session start to the first successful (or dry-run) write.
     pub first_write_ms: Option<f64>,
+    /// What the plugin reports through the `battery` feature (`None`: no battery).
+    pub battery: Option<BatteryStatus>,
 }
 
 impl LiveStats {
@@ -538,6 +556,14 @@ impl LiveStats {
         }
     }
 
+    /// Publish the device's battery report when it changed.
+    fn publish_battery(&self, battery: Option<BatteryStatus>) {
+        let mut slot = self.battery.lock().unwrap_or_else(|e| e.into_inner());
+        if *slot != battery {
+            *slot = battery;
+        }
+    }
+
     fn snapshot(&self) -> LiveSnapshot {
         let state = match self.state.load(Ordering::Acquire) {
             0 => SessionState::Starting,
@@ -556,6 +582,7 @@ impl LiveStats {
                 0 => None,
                 us => Some(us as f64 / 1000.0),
             },
+            battery: *self.battery.lock().unwrap_or_else(|e| e.into_inner()),
         }
     }
 }
@@ -579,6 +606,11 @@ pub enum Control {
         /// Its placement.
         placement: Placement,
     },
+    /// Pulse every LED of the device and its children in this colour (`None`:
+    /// back to the canvas); see [`DeviceContext::set_alert`].
+    Alert(Option<Rgb>),
+    /// `battery.lowBatteryWarningLevel` (percent).
+    BatteryWarningLevel(u8),
 }
 
 /// A running session.
@@ -665,6 +697,7 @@ pub fn spawn(
         first_write_us: AtomicU64::new(0),
         endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
         channels: std::sync::Mutex::new(Arc::new(Vec::new())),
+        battery: std::sync::Mutex::new(None),
     });
     let key = device.key.clone();
     let started = Instant::now();
@@ -732,6 +765,7 @@ fn run(
     });
     ctx.set_subdevice_controller(meta.subdevice_controller || meta.supports_subdevices);
     ctx.set_system_info(opts.system_info.as_deref());
+    ctx.set_battery_warning_level(opts.battery_warning_level);
     if let Some(t) = &device.smbus {
         ctx.set_device_info([
             t.bus.descriptor().name.clone(),
@@ -991,6 +1025,7 @@ fn drive(
     {
         let dev = lock_device(shared);
         live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+        live.publish_battery(dev.battery());
     }
     let mut last_seq = 0;
     let mut consecutive_timeouts = 0u32;
@@ -1024,7 +1059,13 @@ fn drive(
             live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
         }
         let (_, frame, captured) = frames.latest_stamped();
-        lock_device(shared).set_frame_at(frame, captured);
+        {
+            let mut dev = lock_device(shared);
+            dev.set_frame_at(frame, captured);
+            if let Some(direct) = &opts.direct {
+                dev.apply_direct(direct, &device.key);
+            }
+        }
         let t = Instant::now();
         last_render = Some(t);
         let result = rt.call_export_until("Render", CallArgs::None, budgets.render_budget(), stop);
@@ -1081,6 +1122,7 @@ fn drive(
             .store(dev.stats().disconnects, Ordering::Relaxed);
         live.hid_disconnected
             .store(dev.stats().disconnected, Ordering::Relaxed);
+        live.publish_battery(dev.battery());
         if let Some(d) = dev.first_write() {
             live.first_write_us
                 .store((d.as_micros() as u64).max(1), Ordering::Relaxed);
@@ -1125,6 +1167,8 @@ fn apply_control(
             }
         }
         Control::Brightness(b) => lock_device(shared).set_brightness(b),
+        Control::Alert(color) => lock_device(shared).set_alert(color),
+        Control::BatteryWarningLevel(level) => lock_device(shared).set_battery_warning_level(level),
         Control::ChildPlacement { uid, placement } => {
             if !lock_device(shared).set_child_placement(&uid, placement) {
                 report.notes.push(format!("no endpoint {uid} to place"));
@@ -1159,6 +1203,7 @@ fn finish(
     report.canvas_to_wire = dev.canvas_to_wire();
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
+    report.battery = dev.battery();
     report.io_errors = match &report.smbus {
         Some(s) => s.errors + s.denied,
         None => report.io.errors(),

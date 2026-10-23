@@ -1,0 +1,154 @@
+{
+ "$comment": "SPDX-License-Identifier: GPL-3.0-or-later. Expected I/O worked out from OpenRGB's C++ (commit d4798c120659ec5ba2e664a9e87bedff8d36f880, Controllers/RoccatController/RoccatHordeAimoController and RoccatControllerDetect.cpp) by a separate reference model (openrgb-work/batch2/roccat/gen.py in the porting session's scratch space); plugin.js was never run to make them. Deviation (docs/hardware/roccat-horde-aimo.md): OpenRGB's GET_FEATURE after each colour report reads into an uninitialised buffer (its report id is undefined), so HueDeck does not send it; Shutdown sends black.",
+ "products": [
+  {
+   "pid": "0x303E",
+   "name": "Roccat Horde Aimo",
+   "validate": {
+    "interface": 1,
+    "usage_page": 11,
+    "usage": 0
+   }
+  }
+ ],
+ "size": [
+  6,
+  1
+ ],
+ "leds": [
+  {
+   "name": "LED 1",
+   "pos": [
+    0,
+    0
+   ]
+  },
+  {
+   "name": "LED 2",
+   "pos": [
+    1,
+    0
+   ]
+  },
+  {
+   "name": "LED 3",
+   "pos": [
+    2,
+    0
+   ]
+  },
+  {
+   "name": "LED 4",
+   "pos": [
+    3,
+    0
+   ]
+  },
+  {
+   "name": "LED 5",
+   "pos": [
+    4,
+    0
+   ]
+  },
+  {
+   "name": "LED 6",
+   "pos": [
+    5,
+    0
+   ]
+  }
+ ],
+ "colours_a": [
+  [
+   11,
+   3,
+   255
+  ],
+  [
+   48,
+   104,
+   248
+  ],
+  [
+   85,
+   205,
+   241
+  ],
+  [
+   122,
+   50,
+   234
+  ],
+  [
+   159,
+   151,
+   227
+  ],
+  [
+   196,
+   252,
+   220
+  ]
+ ],
+ "colours_b": [
+  [
+   200,
+   128,
+   7
+  ],
+  [
+   197,
+   181,
+   26
+  ],
+  [
+   194,
+   234,
+   45
+  ],
+  [
+   191,
+   31,
+   64
+  ],
+  [
+   188,
+   84,
+   83
+  ],
+  [
+   185,
+   137,
+   102
+  ]
+ ],
+ "initialize": [
+  {
+   "op": "send_report",
+   "len": 8,
+   "hex": "1308010000000000"
+  }
+ ],
+ "frame_a": [
+  {
+   "op": "send_report",
+   "len": 24,
+   "hex": "1818FFFF0B03FF3068F855CDF17A32EA9F97E3C4FCDC290D"
+  }
+ ],
+ "frame_b": [
+  {
+   "op": "send_report",
+   "len": 24,
+   "hex": "1818FFFFC88007C5B51AC2EA2DBF1F40BC5453B98966130B"
+  }
+ ],
+ "shutdown": [
+  {
+   "op": "send_report",
+   "len": 24,
+   "hex": "1818FFFF0000000000000000000000000000000000002E02"
+  }
+ ]
+}

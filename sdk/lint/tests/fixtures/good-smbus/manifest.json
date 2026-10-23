@@ -1,0 +1,19 @@
+{
+  "manifestVersion": 2,
+  "id": "tests.good-smbus",
+  "name": "Good SMBus",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "tests",
+  "entry": "plugin.js",
+  "deviceType": "ram",
+  "devices": [{
+    "smbus": {
+      "addresses": [57],
+      "buses": ["amd", "intel"],
+      "deniedRegisters": [255],
+      "spdManufacturers": [{ "bank": 1, "id": 44, "name": "Micron" }]
+    }
+  }],
+  "permissions": ["smbus"]
+}

@@ -2,11 +2,13 @@
 //! Input sources for lightscripts: audio spectrum (`engine.audio`), screen
 //! zones (`engine.zone`), vision meters (`engine.vision`) and sensors.
 //!
-//! Stub for M0: only the snapshot shapes pushed to the renderer are defined.
-//! The cpal + rustfft audio pipeline, xcap screen capture and the sensor
-//! facade arrive with M6.
+//! Audio: [`audio`] (WASAPI loopback + FFT, docs/audio.md). Screen capture
+//! and the sensor facade arrive with their work packages; only their snapshot
+//! shapes are defined here.
 
 #![forbid(unsafe_code)]
+
+pub mod audio;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,8 +30,8 @@ pub const ZONE_IMAGE_BYTES: usize = ZONE_IMAGE_WIDTH * ZONE_IMAGE_HEIGHT * 4;
 /// One `engine.audio` update.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioSnapshot {
-    /// 200 spectrum bins, `0..=1`.
-    pub freq: Vec<f32>,
+    /// 200 spectrum bands, integers `0..=127` (never wrap in an `Int8Array`).
+    pub freq: Vec<u8>,
     /// Level in dB.
     pub level: f32,
     /// Raw linear level.
@@ -43,7 +45,7 @@ pub struct AudioSnapshot {
 impl Default for AudioSnapshot {
     fn default() -> Self {
         Self {
-            freq: vec![0.0; AUDIO_FREQ_BINS],
+            freq: vec![0; AUDIO_FREQ_BINS],
             level: -100.0,
             rawlevel: 0.0,
             width: 0.0,

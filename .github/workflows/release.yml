@@ -148,7 +148,8 @@ jobs:
             cp "target/${{ matrix.target }}/release/$b" "$out/"
           done
           for f in LICENSE LICENSE-EXCEPTION.md README.md \
-            packaging/systemd/huedeckd.service packaging/udev/70-huedeck.rules.template; do
+            packaging/systemd/huedeckd.service packaging/udev/70-huedeck.rules \
+            packaging/sysusers.d/huedeck.conf; do
             if [ -f "$f" ]; then cp "$f" "$out/"; fi
           done
           # SBOMs ship inside the archive and beside it (everything uploaded lives under

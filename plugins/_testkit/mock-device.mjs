@@ -8,6 +8,9 @@
 //   * get_report/read return the report-id-prefixed byte array that was registered for that
 //     report id (or [] when none) and update getLastReadSize().
 //   * color(x, y) returns a fresh [r, g, b] array from the configured colour or sampler.
+//   * addFeature(name) records the name; `device.battery` is a recording `battery` global
+//     (installGlobals() installs it) with SignalRGB's numeric states 0 unknown, 1 draining,
+//     2 charging, 3 fullCharging, 4 full, 5 wirelessCharging.
 
 import { pathToFileURL } from "node:url";
 
@@ -47,6 +50,8 @@ export function createMockDevice(options = {}) {
     pauses: [],         // pause(ms)
     channels: [],       // addChannel(name, ledLimit, defaultLedCount)
     subdevices: [],     // createSubdevice(id): { id, name, size, leds }
+    features: [],       // addFeature(name)
+    battery: createMockBattery(),
 
     // --- test controls ------------------------------------------------------------------
     setColor(color) { colorSource = color; },
@@ -104,6 +109,10 @@ export function createMockDevice(options = {}) {
     setSize(size) { record("setSize", [size]); },
     setControllableLeds(names, positions) { record("setControllableLeds", [names, positions]); },
     SetLedLimit(limit) { record("SetLedLimit", [limit]); },
+    addFeature(name) {
+      record("addFeature", [name]);
+      if (!device.features.includes(name)) device.features.push(name);
+    },
     addChannel(name, ledLimit, defaultLedCount) {
       record("addChannel", [name, ledLimit, defaultLedCount]);
       device.channels.push({ name, ledLimit, defaultLedCount });
@@ -157,7 +166,28 @@ export function createMockDevice(options = {}) {
   return device;
 }
 
-/** Install `device` and ControllableParameters globals; returns a function that restores them. */
+/**
+ * A recording `battery` feature global: setBatteryLevel/setBatteryState store the value and
+ * append it to `levels` / `states`; batteryLevel / batteryState read the last one.
+ */
+export function createMockBattery() {
+  const battery = {
+    levels: [],
+    states: [],
+    batteryLevel: 0,
+    batteryState: 0,
+    unknown: 0, draining: 1, charging: 2, fullCharging: 3, full: 4, wirelessCharging: 5,
+    lowBatteryWarningLevel: 15,
+    setBatteryLevel(level) { battery.levels.push(level); battery.batteryLevel = level; },
+    setBatteryState(state) { battery.states.push(state); battery.batteryState = state; },
+  };
+  return battery;
+}
+
+/**
+ * Install `device`, its `battery` (when the mock has one) and ControllableParameters globals;
+ * returns a function that restores them.
+ */
 export function installGlobals(device, params = {}) {
   const previous = new Map();
   const set = (name, value) => {
@@ -165,6 +195,9 @@ export function installGlobals(device, params = {}) {
     globalThis[name] = value;
   };
   set("device", device);
+  if (device.battery) {
+    set("battery", device.battery);
+  }
   for (const [name, value] of Object.entries(params)) {
     set(name, value);
   }

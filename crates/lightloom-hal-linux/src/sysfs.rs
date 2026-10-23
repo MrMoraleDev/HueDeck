@@ -320,7 +320,10 @@ pub(crate) mod tests {
     #[test]
     fn names() {
         assert_eq!(parse_hid_dev_name("0003:1532:007C.0005"), Some((3, 0x1532, 0x7c)));
-        assert_eq!(parse_hid_dev_name("0005:054C:0CE6.000A"), Some((5, 0x054c, 0x0ce6)));
+        assert_eq!(
+            parse_hid_dev_name("0005:054C:0CE6.000A"),
+            Some((5, 0x054c, 0x0ce6))
+        );
         assert_eq!(parse_hid_dev_name("1-4:1.2"), None);
         assert!(is_usb_interface_name("1-4:1.2"));
         assert!(is_usb_interface_name("3-1.4.2:1.10"));
@@ -330,7 +333,9 @@ pub(crate) mod tests {
         assert!(!is_usb_device_name("usb1"));
         assert!(!is_usb_device_name("1-"));
         assert_eq!(
-            vid_pid_from_devpath("/devices/pci0000:00/0000:00:14.0/usb1/1-4/1-4:1.2/0003:1532:007C.0005/hidraw/hidraw3"),
+            vid_pid_from_devpath(
+                "/devices/pci0000:00/0000:00:14.0/usb1/1-4/1-4:1.2/0003:1532:007C.0005/hidraw/hidraw3"
+            ),
             Some((0x1532, 0x7c))
         );
         assert_eq!(vid_pid_from_devpath("/devices/virtual/misc/uhid"), None);
@@ -377,7 +382,15 @@ pub(crate) mod tests {
     #[test]
     fn reads_a_fake_tree() {
         let mut fs = MemFs::default();
-        let hid = fake_usb_hid(&mut fs, "1-4", 0x0a, (0x1532, 0x007c), Some("PM1234"), 5, &[0x06, 0x00, 0xff]);
+        let hid = fake_usb_hid(
+            &mut fs,
+            "1-4",
+            0x0a,
+            (0x1532, 0x007c),
+            Some("PM1234"),
+            5,
+            &[0x06, 0x00, 0xff],
+        );
         let node = read_node(&fs, "hidraw3", &hid).unwrap();
         assert_eq!(node.devnode, "/dev/hidraw3");
         assert!(node.is_usb());

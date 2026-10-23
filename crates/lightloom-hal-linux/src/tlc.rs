@@ -121,7 +121,10 @@ pub fn tlcs(desc: &ReportDescriptor) -> Vec<Tlc> {
 }
 
 /// The tuples `Validate(endpoint)` sees for an interface with this descriptor.
-pub fn tuples(descriptor: &[u8], interface: i32) -> Result<Vec<HidEndpointTuple>, lightloom_hid_desc::DescError> {
+pub fn tuples(
+    descriptor: &[u8],
+    interface: i32,
+) -> Result<Vec<HidEndpointTuple>, lightloom_hid_desc::DescError> {
     let desc = lightloom_hid_desc::parse(descriptor)?;
     Ok(tlcs(&desc)
         .into_iter()
@@ -227,7 +230,11 @@ pub fn group(nodes: &[HidrawNode]) -> Vec<DeviceGroup> {
                 let unique = !u.serial.is_empty()
                     && !u.serial.contains('\\')
                     && serial_count.get(&(u.vid, u.pid, u.serial.as_str())) == Some(&1);
-                let id = if unique { u.serial.as_str() } else { u.port.as_str() };
+                let id = if unique {
+                    u.serial.as_str()
+                } else {
+                    u.port.as_str()
+                };
                 Ok(format!("USB\\VID_{:04X}&PID_{:04X}\\{id}", u.vid, u.pid))
             }
             None => Err(format!("not a USB device (bus 0x{:04x})", node.hid.bus)),
@@ -289,9 +296,9 @@ mod tests {
     use crate::sysfs::{HidUevent, UsbParent, BUS_BLUETOOTH, BUS_USB};
 
     pub(crate) const VENDOR_64: &[u8] = &[
-        0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x02, 0x09, 0x02, 0x15, 0x00, 0x26, 0xFF, 0x00,
-        0x75, 0x08, 0x95, 0x40, 0x81, 0x02, 0x09, 0x03, 0x91, 0x02, 0x85, 0x03, 0x09, 0x04, 0x95, 0x20,
-        0xB1, 0x02, 0xC0,
+        0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x02, 0x09, 0x02, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75,
+        0x08, 0x95, 0x40, 0x81, 0x02, 0x09, 0x03, 0x91, 0x02, 0x85, 0x03, 0x09, 0x04, 0x95, 0x20, 0xB1, 0x02,
+        0xC0,
     ];
 
     fn node(name: &str, port: &str, iface: i32, serial: &str, desc: &[u8]) -> HidrawNode {
@@ -323,7 +330,10 @@ mod tests {
     #[test]
     fn paths_round_trip() {
         assert_eq!(endpoint_path("/dev/hidraw3", 2), "/dev/hidraw3#tlc2");
-        assert_eq!(parse_endpoint_path("/dev/hidraw3#tlc2"), Some(("/dev/hidraw3", 2)));
+        assert_eq!(
+            parse_endpoint_path("/dev/hidraw3#tlc2"),
+            Some(("/dev/hidraw3", 2))
+        );
         assert_eq!(parse_endpoint_path("/dev/hidraw3"), Some(("/dev/hidraw3", 0)));
         assert_eq!(parse_endpoint_path("/dev/hidraw3#tlcx"), None);
         assert_eq!(parse_endpoint_path(r"\\?\hid#vid_1"), None);
@@ -342,8 +352,18 @@ mod tests {
         assert_eq!(eps.len(), 1);
         let i = &eps[0].info;
         assert_eq!(i.path, "/dev/hidraw2#tlc0");
-        assert_eq!((i.interface_number, i.usage_page, i.usage, i.collection), (0, 0xff00, 1, 0));
-        assert_eq!(i.report_lengths, ReportLengths { input: 65, output: 65, feature: 33 });
+        assert_eq!(
+            (i.interface_number, i.usage_page, i.usage, i.collection),
+            (0, 0xff00, 1, 0)
+        );
+        assert_eq!(
+            i.report_lengths,
+            ReportLengths {
+                input: 65,
+                output: 65,
+                feature: 33
+            }
+        );
         assert_eq!(i.feature_reports, vec![ReportSpec { id: 3, len: 33 }]);
         assert_eq!(eps[0].collection_raw, None);
         assert_eq!(eps[0].caps, Ok(i.report_lengths));
@@ -366,7 +386,10 @@ mod tests {
         assert_eq!(groups.len(), 1);
         let g = &groups[0];
         assert_eq!(g.key.to_string(), "1e71:2007:00000000001A");
-        assert_eq!(g.usb_parent.as_deref(), Some(r"USB\VID_1E71&PID_2007\00000000001A"));
+        assert_eq!(
+            g.usb_parent.as_deref(),
+            Some(r"USB\VID_1E71&PID_2007\00000000001A")
+        );
         let ifaces: Vec<i32> = g.endpoints.iter().map(|e| e.info.interface_number).collect();
         assert_eq!(ifaces, vec![0, 1]);
     }

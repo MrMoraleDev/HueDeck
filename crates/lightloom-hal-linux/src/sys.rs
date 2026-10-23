@@ -61,7 +61,10 @@ pub fn report_descriptor(file: &File) -> io::Result<Vec<u8>> {
 
 fn report_ioctl(file: &File, nr: u32, buf: &mut [u8]) -> io::Result<usize> {
     if buf.is_empty() || buf.len() > HID_MAX_BUFFER_SIZE {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "report length out of range"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "report length out of range",
+        ));
     }
     let req = ioc(IOC_READ | IOC_WRITE, nr, buf.len());
     // SAFETY: the request encodes `buf.len()`, so the kernel reads/writes at

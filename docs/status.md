@@ -42,7 +42,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | M4 Dashboard, persistence, API, packaging | **Partial** | the MSI, winget and Authenticode signing; autostart and tray; the plugin sources manager; the logs page; compat API parts; the fresh-machine acceptance run |
 | M5 Privileged bus | **Partial** | only PIIX4 (no I801, no LpcIO); no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
 | M6 Inputs, network, extras | **Missing** (network in progress) | audio, screen, meters, LCD faces, macros, actions, LampArray HAL backend, OpenRGB SDK server, runtime parameters UI |
-| M7 Linux + 1.0 | **Missing** | `lightloom-hal-linux` is a 33-line stub; Linux packaging is placeholders; there is no cargo-dist |
+| M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; nusb/serial/i2c/hwmon, CEF, packaging and cargo-dist missing |
 
 ## M0 Bootstrap and risk retirement: Done
 
@@ -183,16 +183,17 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| hal-linux hidraw + hid-desc | Missing | `crates/lightloom-hal-linux/src/lib.rs`: `LinuxHidBackend` returns `Unsupported` |
-| nusb, serialport, udev hotplug, i2cdev SMBus, hwmon/pwm | Missing | none |
-| `tools/gen-udev` | Missing | `tools/gen-udev/README.md` only; template `packaging/udev/70-lightloom.rules.template` |
+| hal-linux hidraw + hid-desc | Done, untested on Linux | `crates/lightloom-hal-linux/src/{sysfs,tlc,hidraw,sys}.rs`: sysfs enumeration, TLC split, raw hidraw ioctls; `lightloom devices` and hardware runs wired through `lightloom-runtime`. Checked with `cargo clippy --target x86_64-unknown-linux-gnu` only |
+| udev hotplug | Done, untested on Linux | `crates/lightloom-hal-linux/src/{hotplug,uevent}.rs`: netlink udev monitor, pure Rust |
+| nusb, serialport, i2cdev SMBus, hwmon/pwm | Missing | WP-L3, WP-L4 |
+| `tools/gen-udev` | Done | `lightloom udev generate` (`crates/lightloom-cli/src/udev.rs`); generated `packaging/udev/70-lightloom.rules` with a drift test; `packaging/sysusers.d/lightloom.conf` |
 | CEF on Linux (X11/Wayland, headless CI) | Missing | `lightloom-renderer` builds with `cef` on Windows only (`ci.yml` `renderer-cef`) |
 | PipeWire audio + screen capture | Missing | |
 | `systemd --user` unit | Partial | `packaging/systemd/lightloomd.service` exists, untested |
 | AppImage, Flatpak | Missing | placeholders in `packaging/README.md` |
 | `docs/linux-porting.md` | Missing | design input in `docs/research/m7-linux-backend.md` |
 | Accept: same plugins light the same hardware on Ubuntu LTS | Missing | |
-| Accept: identical `Validate` tuples on both OSes (fixture) | Missing | |
+| Accept: identical `Validate` tuples on both OSes (fixture) | Partial | `crates/lightloom-hal-linux/src/fixtures.rs`: one descriptor through the Windows path logic and the Linux split; descriptors are synthetic, a captured Linux `report_descriptor` per reference device is still to record |
 | Accept: RAM via `/dev/i2c-*` without a helper | Missing | |
 | Accept: conformance suite on both OSes | Missing | there is no conformance suite yet (see M2) |
 | Accept: reproducible release via cargo-dist | Missing | `release.yml` is a hand-written placeholder (cargo-auditable + CycloneDX SBOM, unsigned) |
@@ -212,7 +213,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `sdk/` plugin lint | Partial | `plugins/_testkit/manifests.test.mjs` checks manifests; no lint tool for third-party authors |
 | `tests/conformance/` (corpus runner, HID fixtures, PSNR harness) | Partial | dry-run harness lives in the CLI; HID fixtures live per plugin; PSNR harness is `tools/effects-bench/psnr.py`. No `tests/conformance/` and no self-hosted workflow |
 | `tests/integration/` | Partial | crate integration tests (`crates/*/tests/`); no top-level directory |
-| `tools/gen-udev` | Missing | README only |
+| `tools/gen-udev` | Done | `lightloom udev generate` |
 | `tools/pawnio-hash-pin` | Missing (covered) | pins are compiled into `crates/lightloom-iobroker/src/pins.rs`; no tool to recompute them |
 | `tools/shm-dump` | Missing | |
 | `tools/effects-bench`, `tools/device-probe`, `tools/package` | Done | `tools/README.md` |

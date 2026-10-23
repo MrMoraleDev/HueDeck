@@ -375,7 +375,17 @@ mod tests {
 
     #[test]
     fn udev_flags_parse() {
-        let cli = Cli::try_parse_from(["lightloom", "udev", "generate", "--plugins", "p", "--out", "r", "--check"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "lightloom",
+            "udev",
+            "generate",
+            "--plugins",
+            "p",
+            "--out",
+            "r",
+            "--check",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Command::Udev {

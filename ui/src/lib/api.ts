@@ -54,7 +54,10 @@ export const api = {
   applyPreset: (id: string, name: string) => request("POST", `/v1/effects/${enc(id)}/presets/${enc(name)}/apply`),
   deletePreset: (id: string, name: string) => request("DELETE", `/v1/effects/${enc(id)}/presets/${enc(name)}`),
   setLighting: (patch: { brightness?: number; enabled?: boolean }) => request("PATCH", "/v1/lighting", patch),
-  setDevice: (key: string, patch: { enabled?: boolean; parameters?: Record<string, unknown> }) =>
+  setDevice: (
+    key: string,
+    patch: { enabled?: boolean; parameters?: Record<string, unknown>; blinkLowBattery?: boolean },
+  ) =>
     request("PATCH", `/v1/devices/${enc(key)}`, patch),
   setChannel: (key: string, channel: string, components: unknown[]) =>
     request("PUT", `/v1/devices/${enc(key)}/channels/${enc(channel)}`, components),
@@ -64,7 +67,14 @@ export const api = {
   deleteLayout: (name: string) => request("DELETE", `/v1/layouts/${enc(name)}`),
   setLayoutBrightness: (brightness: number) => request("PATCH", "/v1/layout", { brightness }),
   components: () => request<LibraryComponent[]>("GET", "/v1/components"),
-  setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean }) =>
+  setSettings: (patch: {
+    signalrgb?: boolean;
+    gpuCompositing?: boolean;
+    smbus?: boolean;
+    batteryLow?: number;
+    batteryCritical?: number;
+    batteryNotifications?: boolean;
+  }) =>
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */
   setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),

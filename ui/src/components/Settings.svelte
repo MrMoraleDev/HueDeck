@@ -25,6 +25,20 @@
     if (thresholdsValid) void daemon.run(() => api.setSettings({ batteryLow: low, batteryCritical: critical }));
   }
 
+  let port = $state<number | null>(null);
+  let moving = $state<string | null>(null);
+  const portValue = $derived(port ?? snapshot.settings.port);
+  const portValid = $derived(Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535);
+
+  async function changePort() {
+    if (!portValid || portValue === snapshot.settings.port) return;
+    const r = await daemon.run(() => api.setPort(portValue));
+    if (!r) return;
+    moving = r.url;
+    // lightloomd serves the page (with its token) on the new port; the old one closes in a few seconds.
+    setTimeout(() => location.assign(r.url), 300);
+  }
+
   async function exportState() {
     const state = await daemon.run(() => api.exportState());
     if (!state) return;
@@ -157,6 +171,39 @@
   </section>
 
   <section class="panel">
+    <h2>Port</h2>
+    <div class="row">
+      <input
+        type="number"
+        min="1024"
+        max="65535"
+        step="1"
+        aria-label="Port of the dashboard and the API"
+        value={portValue}
+        oninput={(e) => (port = (e.target as HTMLInputElement).valueAsNumber)}
+        onkeydown={(e) => e.key === "Enter" && changePort()}
+      />
+      <button disabled={!portValid || portValue === snapshot.settings.port || moving !== null} onclick={changePort}
+        >Change port</button
+      >
+    </div>
+    {#if moving}
+      <p class="message">Moving to {moving}…</p>
+    {:else if !portValid}
+      <p class="warn">Choose a port from 1024 to 65535.</p>
+    {/if}
+    {#if snapshot.settings.portNotice}
+      <p class="warn">{snapshot.settings.portNotice}</p>
+    {/if}
+    <p class="muted">
+      The dashboard and the API listen on http://127.0.0.1:{snapshot.settings.port} (default 53000). Only this
+      computer can connect: Lightloom listens on the loopback address, never on the network. A new port is used right
+      away and this page moves there; bookmarks need the new address. The port saved here wins over
+      <code>[api] port</code> in config.toml. The SignalRGB-compatible ports 16038 and 16034 do not change.
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>Daemon</h2>
     <p class="muted">Lightloom {snapshot.version} · {snapshot.state}{snapshot.settings.dryRun ? " · dry run (nothing is written to devices)" : ""}</p>
     <div class="row">
@@ -186,6 +233,12 @@
   }
   .bad {
     color: var(--bad);
+  }
+  .warn {
+    color: var(--warn);
+  }
+  input[type="number"] {
+    width: 9em;
   }
   .logs {
     margin-top: 16px;

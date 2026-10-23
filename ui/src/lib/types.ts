@@ -118,6 +118,10 @@ export interface Settings {
   signalrgbAvailable: boolean;
   gpuCompositing: boolean;
   smbus: boolean;
+  /** Port of the dashboard and the API (127.0.0.1 only). */
+  port: number;
+  /** Set when the configured port was busy at startup and the default one is used. */
+  portNotice: string | null;
   fps: number;
   dryRun: boolean;
   batteryLow: number;

@@ -94,6 +94,8 @@ fn the_engine_drives_a_device_and_follows_requests() {
         renderer: None,
         plugin_cache: None,
         notifier: Arc::new(MockNotifier::default()),
+        api_port: lightloom_api::NATIVE_PORT,
+        api_port_notice: None,
     })
     .unwrap();
     let shared = handle.shared();
@@ -114,6 +116,24 @@ fn the_engine_drives_a_device_and_follows_requests() {
         "{:?}",
         s.warnings
     );
+    assert_eq!(
+        (s.settings.port, s.settings.port_notice.as_deref()),
+        (53000, None)
+    );
+
+    // The port from the dashboard is saved and shown (the API side moves the listener).
+    let port = |p| Request::SetSettings {
+        signalrgb: None,
+        gpu_compositing: None,
+        smbus: None,
+        battery_low: None,
+        battery_critical: None,
+        battery_notifications: None,
+        port: Some(p),
+    };
+    assert_eq!(call(b, port(17000)).unwrap()["port"], 17000);
+    wait_for(b, "the new port in the settings", |s| s.settings.port == 17000);
+    assert_eq!(call(b, port(80)).unwrap_err().status, 400);
     assert!(mock.recorder().writes().iter().any(|w| w[0] == 0x01));
     let s = wait_for(b, "the channel", |s| {
         device(s).is_some_and(|d| !d.channels.is_empty())
@@ -387,6 +407,8 @@ fn fixed_smbus_device_runs_and_is_listed() {
         renderer: None,
         plugin_cache: None,
         notifier: Arc::new(MockNotifier::default()),
+        api_port: lightloom_api::NATIVE_PORT,
+        api_port_notice: None,
     })
     .unwrap();
     let shared = handle.shared();
@@ -432,6 +454,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
             battery_low: None,
             battery_critical: None,
             battery_notifications: None,
+            port: None,
         },
     )
     .unwrap();

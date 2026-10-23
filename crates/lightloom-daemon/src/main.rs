@@ -45,6 +45,11 @@ struct Args {
     /// Open the dashboard in the default browser once the daemon listens.
     #[arg(long)]
     open: bool,
+
+    /// Serve the API and the dashboard on this port for this run only
+    /// (1024-65535; wins over the dashboard setting and config.toml; not saved).
+    #[arg(long, value_name = "PORT", value_parser = clap::value_parser!(u16).range(1024..))]
+    port: Option<u16>,
 }
 
 fn init_tracing(default_filter: &str) {
@@ -75,6 +80,8 @@ fn main() -> anyhow::Result<()> {
         },
         ephemeral: args.ephemeral,
         open_dashboard: args.open,
+        config_file,
+        port: args.port,
     })
 }
 

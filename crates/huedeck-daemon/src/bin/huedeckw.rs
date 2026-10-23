@@ -9,6 +9,11 @@
 //! events and restores the devices), its output in `<data dir>\logs\
 //! huedeckd.log` (the previous run's in `huedeckd.old.log`), and exits.
 //! Other arguments go to `huedeckd` as they are.
+//!
+//! `huedeckw --stop` asks a running daemon to stop (`POST /v1/shutdown` with
+//! the token from the data directory, so every plugin restores its device)
+//! and waits up to 15 s for it to end: the installer runs it before it
+//! replaces or removes the files.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
@@ -16,23 +21,52 @@
 use huedeck_daemon::config::Config;
 use huedeck_daemon::paths::Paths;
 use std::ffi::OsString;
+use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// `--open` and the arguments for `huedeckd`.
-fn split_args(args: impl Iterator<Item = OsString>) -> (bool, Vec<OsString>) {
-    let mut open = false;
+/// `--open`, `--stop` and the arguments for `huedeckd`.
+fn split_args(args: impl Iterator<Item = OsString>) -> (bool, bool, Vec<OsString>) {
+    let (mut open, mut stop) = (false, false);
     let mut rest = Vec::new();
     for a in args {
         if a == "--open" {
             open = true;
+        } else if a == "--stop" {
+            stop = true;
         } else {
             rest.push(a);
         }
     }
-    (open, rest)
+    (open, stop, rest)
+}
+
+/// The shutdown request for the daemon on `port`.
+fn shutdown_request(port: u16, token: &str) -> String {
+    format!(
+        "POST /v1/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {}\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n",
+        token.trim()
+    )
+}
+
+/// Ask the daemon on `port` to stop and wait for it to go.
+fn stop_daemon(port: u16, token: &str) {
+    if let Ok(mut s) = TcpStream::connect_timeout(
+        &SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+        Duration::from_secs(1),
+    ) {
+        let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        if s.write_all(shutdown_request(port, token).as_bytes()).is_ok() {
+            let _ = s.read(&mut [0u8; 512]);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while daemon_listens(port) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 /// Keep the previous run's log as `*.old.log`; the new run's log files.
@@ -63,13 +97,20 @@ fn daemon_exe() -> Option<PathBuf> {
 }
 
 fn main() {
-    let (open, args) = split_args(std::env::args_os().skip(1));
+    let (open, stop, args) = split_args(std::env::args_os().skip(1));
     let paths = Paths::from_env();
     // A running daemon writes its port to `api-port`; else the port it would choose.
     let port = huedeck_runtime::dirs::read_api_port(&paths.data)
         .or_else(|| huedeck_daemon::port::saved_port(&paths.state_db()))
         .or_else(|| Config::load(&paths.config_file()).ok().and_then(|c| c.api.port))
         .unwrap_or(huedeck_api::NATIVE_PORT);
+    if stop {
+        if daemon_listens(port) {
+            let token = std::fs::read_to_string(paths.token_file()).unwrap_or_default();
+            stop_daemon(port, &token);
+        }
+        return;
+    }
     if daemon_listens(port) {
         if open {
             huedeck_daemon::open_in_browser(&huedeck_api::native_url(port));
@@ -108,11 +149,26 @@ mod tests {
 
     #[test]
     fn open_is_ours_the_rest_goes_on() {
-        let (open, rest) = split_args(["--open", "--log", "debug"].into_iter().map(OsString::from));
-        assert!(open);
+        let (open, stop, rest) = split_args(["--open", "--log", "debug"].into_iter().map(OsString::from));
+        assert!(open && !stop);
         assert_eq!(rest, ["--log", "debug"]);
-        let (open, rest) = split_args(std::iter::empty());
-        assert!(!open && rest.is_empty());
+        let (open, stop, rest) = split_args(std::iter::empty());
+        assert!(!open && !stop && rest.is_empty());
+        let (_, stop, _) = split_args(std::iter::once(OsString::from("--stop")));
+        assert!(stop);
+    }
+
+    #[test]
+    fn the_shutdown_request_passes_the_api_guard() {
+        let r = shutdown_request(53000, "abcd\r\n");
+        assert!(r.starts_with("POST /v1/shutdown HTTP/1.1\r\n"));
+        assert!(r.contains("\r\nHost: 127.0.0.1:53000\r\n"), "a loopback Host");
+        assert!(
+            r.contains("\r\nAuthorization: Bearer abcd\r\n"),
+            "the token, trimmed"
+        );
+        assert!(r.contains("\r\nContent-Length: 0\r\n"));
+        assert!(r.ends_with("\r\n\r\n") && !r.contains(" \r\n"));
     }
 
     #[test]

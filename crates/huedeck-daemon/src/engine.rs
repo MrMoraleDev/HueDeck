@@ -87,6 +87,8 @@ pub const DEFAULT_EFFECT: &str = "huedeck:rainbow-wave";
 const OTHER_HUEDECK: &str = "another HueDeck process";
 /// How often conflicting software is looked for again while it blocks the devices.
 const CONFLICT_RECHECK: Duration = Duration::from_secs(3);
+/// How often the I/O broker service's state is looked at.
+const BROKER_RECHECK: Duration = Duration::from_secs(5);
 /// How often counters refresh the snapshot.
 const STATS_EVERY: Duration = Duration::from_secs(1);
 
@@ -334,6 +336,10 @@ struct Engine {
     pawnio_facts: PawnIoFacts,
     /// The elevated helper run of the PawnIO / RAM lighting buttons.
     pawnio_jobs: crate::pawnio::Jobs,
+    /// The I/O broker service's state at the last look (it may come up
+    /// after the daemon started: the installer sets it up in parallel).
+    broker_service: huedeck_runtime::pawnio::ServiceState,
+    last_broker_check: Instant,
     conflicts: Vec<String>,
     warnings: Vec<String>,
     settle: Option<Instant>,
@@ -400,6 +406,8 @@ impl Engine {
             last_smbus_check: Instant::now(),
             pawnio_facts: huedeck_runtime::pawnio::facts(),
             pawnio_jobs: crate::pawnio::Jobs::default(),
+            broker_service: huedeck_runtime::pawnio::ServiceState::Unknown,
+            last_broker_check: Instant::now(),
             conflicts: Vec::new(),
             warnings: Vec::new(),
             settle: None,
@@ -995,6 +1003,7 @@ impl Engine {
                 self.check_smbus();
             }
             self.poll_pawnio_job();
+            self.check_broker_service();
             if self.last_stats.elapsed() >= STATS_EVERY {
                 self.last_stats = Instant::now();
                 self.dirty = true;
@@ -1126,7 +1135,8 @@ impl Engine {
             .filter(|_| self.pawnio_facts.windows && self.pawnio_can_run())
             .ok_or_else(|| {
                 ApiError::conflict(
-                    "RAM lighting is set up from here only on Windows, with huedeck-setup.exe next to huedeckd.exe                      and real hardware",
+                    "RAM lighting is set up from here only on Windows, with huedeck-setup.exe next to huedeckd.exe, \
+                     and real hardware",
                 )
             })?;
         let action = match action {
@@ -1160,6 +1170,33 @@ impl Engine {
         }
         self.pawnio_facts = huedeck_runtime::pawnio::facts();
         self.dirty = true;
+    }
+
+    /// When the I/O broker service starts while the buses are open without
+    /// it (set up by the installer or by hand after the daemon started),
+    /// open them again so RAM lighting comes on. Once per start of the
+    /// service, so an unreachable broker does not reopen the buses forever.
+    fn check_broker_service(&mut self) {
+        if !self.smbus
+            || !self.pawnio_can_run()
+            || self.pawnio_jobs.busy()
+            || self.last_broker_check.elapsed() < BROKER_RECHECK
+        {
+            return;
+        }
+        self.last_broker_check = Instant::now();
+        let now = huedeck_runtime::pawnio::broker_service_state();
+        let started = now == huedeck_runtime::pawnio::ServiceState::Running
+            && self.broker_service != huedeck_runtime::pawnio::ServiceState::Running;
+        let first_look = self.broker_service == huedeck_runtime::pawnio::ServiceState::Unknown;
+        self.broker_service = now;
+        if started && !first_look && self.smbus_hw.as_ref().is_some_and(|h| h.broker().is_none()) {
+            self.log("PawnIO / RAM lighting: the HueDeck I/O service started; looking for RAM modules");
+            self.release_smbus();
+            self.rescan();
+            self.pawnio_facts = huedeck_runtime::pawnio::facts();
+            self.dirty = true;
+        }
     }
 
     /// Stop the SMBus sessions and close the buses (the broker connection

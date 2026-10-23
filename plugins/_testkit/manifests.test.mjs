@@ -5,7 +5,9 @@
 // tested product ids are among the claimed ones, and the entry file exists. SMBus claims list valid
 // 7-bit addresses, which must equal the plugin's SmbusAddresses() export, and their deniedRegisters
 // equal its SmbusDeniedRegisters(), their spdManufacturers its SpdManufacturers(), and their
-// batchWrites its SmbusBatchWrites().
+// batchWrites its SmbusBatchWrites(). The Lightloom extensions `save` and `shutdownModes` equal the
+// plugin's SaveCapabilities() and ShutdownModes(), and a plugin that can save exports
+// SaveToDevice(request).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -41,6 +43,22 @@ for (const dir of dirs) {
       assert.ok(schema.$defs.permission.enum.includes(p), `unknown permission '${p}'`);
     }
     assert.ok(existsSync(join(plugins, dir, manifest.entry)), `entry '${manifest.entry}' exists`);
+    {
+      const plugin = await import(pathToFileURL(join(plugins, dir, manifest.entry)).href);
+      const effects = schema.properties.save.properties.effects.items.enum;
+      for (const e of manifest.save?.effects ?? []) {
+        assert.ok(effects.includes(e), `save effect '${e}'`);
+      }
+      assert.deepEqual(plugin.SaveCapabilities?.() ?? null, manifest.save ?? null, "SaveCapabilities() equals the manifest save");
+      if (manifest.save) {
+        assert.equal(typeof plugin.SaveToDevice, "function", "a plugin that can save exports SaveToDevice(request)");
+      }
+      const modes = schema.properties.shutdownModes.items.enum;
+      for (const m of manifest.shutdownModes ?? []) {
+        assert.ok(modes.includes(m), `shutdown mode '${m}'`);
+      }
+      assert.deepEqual(plugin.ShutdownModes?.() ?? [], manifest.shutdownModes ?? [], "ShutdownModes() equals the manifest shutdownModes");
+    }
     const usbId = new RegExp(schema.$defs.usbId.anyOf.find((form) => form.type === "string").pattern);
     for (const claim of manifest.devices) {
       if ("smbus" in claim) {

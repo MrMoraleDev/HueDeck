@@ -384,6 +384,11 @@ impl DeviceContext {
         self.mode
     }
 
+    /// Let writes reach the hardware or record them only (a save preview runs dry).
+    pub fn set_write_mode(&mut self, mode: WriteMode) {
+        self.mode = mode;
+    }
+
     /// I/O counters so far.
     pub fn stats(&self) -> &IoStats {
         &self.stats
@@ -556,6 +561,23 @@ impl DeviceContext {
             }
             _ => [0, 0, 0],
         }
+    }
+
+    /// The colour of every LED of the device (`LedPositions()` order; every
+    /// cell of the grid, row by row, when it lists none), as `device.color(x, y)`
+    /// returns it for the current frame.
+    pub fn led_colors(&self) -> Vec<[u8; 3]> {
+        if self.led_positions.is_empty() {
+            let [w, h] = self.size;
+            return (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .map(|(x, y)| self.color(x as i32, y as i32))
+                .collect();
+        }
+        self.led_positions
+            .iter()
+            .map(|&[x, y]| self.color(x as i32, y as i32))
+            .collect()
     }
 
     // ------------------------------------------------------------------ subdevices and channels

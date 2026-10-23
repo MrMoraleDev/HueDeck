@@ -20,8 +20,15 @@
 //!    Changes sent through [`SessionHandle::control`] apply before the next
 //!    `Render()`: parameter values (then `on<name>Changed()`), brightness,
 //!    placement (then `onBrightnessChanged()` for a new device brightness);
-//! 6. on stop calls `Shutdown(false)` (unless told not to), repeats the
-//!    feature-report reads and returns a [`SessionReport`].
+//! 6. on stop calls `Shutdown(false, mode)` (unless told not to; `mode` is the
+//!    [`ShutdownMode`], a Lightloom extension, with the `shutdownColor` fallback of
+//!    [`crate::save::shutdown_fallback`] for plugins that do not implement it),
+//!    repeats the feature-report reads and returns a [`SessionReport`].
+//!
+//! Between two `Render()` calls a [`Control::Save`] runs the plugin's
+//! `SaveToDevice(request)` (Lightloom extension, [`crate::save`]): a preview with
+//! every write recorded and never sent, or a save with the SMBus
+//! `SmbusDeniedRegisters()` writable for that one call.
 //!
 //! An SMBus device ([`SessionDevice::smbus`]) has no HID collections: steps 3
 //! and 4 are skipped, `bus` is the fixed-address bus of its address (through a
@@ -36,7 +43,9 @@ pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
+use crate::meta::PluginMeta;
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
+use crate::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode, ShutdownPlan};
 use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
 use crate::stats::LatencyHistogram;
 use lightloom_engine::{ComponentInstance, FrameStore, Placement, SamplerConfig};
@@ -121,6 +130,8 @@ pub struct Budgets {
     pub render: Duration,
     /// `Shutdown()`.
     pub shutdown: Duration,
+    /// `SaveToDevice(request)` (a save or a preview).
+    pub save: Duration,
     /// Wall-clock cap of one `Render()`, blocked time included (plugins set
     /// devices up lazily from `Render()`, taking seconds once).
     pub render_wall: Duration,
@@ -136,6 +147,7 @@ impl Default for Budgets {
             initialize: Duration::from_secs(10),
             render: Duration::from_millis(250),
             shutdown: Duration::from_secs(5),
+            save: Duration::from_secs(10),
             render_wall: Duration::from_secs(30),
             call_wall: Duration::from_secs(30),
         }
@@ -210,6 +222,9 @@ pub struct SessionOptions {
     pub placements: BTreeMap<String, Placement>,
     /// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
     pub system_info: Option<Arc<lightloom_hal::SystemInfo>>,
+    /// What `Shutdown(false, mode)` leaves the device showing (changed live by
+    /// [`Control::ShutdownMode`]).
+    pub shutdown_mode: ShutdownMode,
 }
 
 impl Default for SessionOptions {
@@ -227,6 +242,7 @@ impl Default for SessionOptions {
             channel_components: BTreeMap::new(),
             placements: BTreeMap::new(),
             system_info: None,
+            shutdown_mode: ShutdownMode::Restore,
         }
     }
 }
@@ -239,6 +255,7 @@ impl std::fmt::Debug for SessionOptions {
             .field("write_mode", &self.write_mode)
             .field("skip_shutdown", &self.skip_shutdown)
             .field("restore_check", &self.restore_check)
+            .field("shutdown_mode", &self.shutdown_mode)
             .field(
                 "channel_components",
                 &self.channel_components.keys().collect::<Vec<_>>(),
@@ -381,6 +398,10 @@ pub struct SessionReport {
     pub notes: Vec<String>,
     /// `Shutdown(false)` ran.
     pub shutdown_called: bool,
+    /// The mode it was given.
+    pub shutdown_mode: ShutdownMode,
+    /// `SaveToDevice(request)` calls that stored (not previews), successful or not.
+    pub saves: u64,
     /// Subdevices at the end of the session.
     pub subdevices: Vec<SubdeviceSummary>,
     /// Channels at the end of the session.
@@ -427,6 +448,8 @@ impl SessionReport {
             restore_notes: Vec::new(),
             notes: Vec::new(),
             shutdown_called: false,
+            shutdown_mode: ShutdownMode::Restore,
+            saves: 0,
             subdevices: Vec::new(),
             channels: Vec::new(),
             log_tail: Vec::new(),
@@ -579,6 +602,22 @@ pub enum Control {
         /// Its placement.
         placement: Placement,
     },
+    /// What `Shutdown()` leaves the device showing from now on.
+    ShutdownMode(ShutdownMode),
+    /// Run `SaveToDevice(request)` on the frame the device showed last (use
+    /// [`crate::manager::DeviceManager::save`], which applies the rate limit).
+    Save(SaveCall),
+}
+
+/// One `SaveToDevice(request)` call asked of a session.
+#[derive(Clone, Debug)]
+pub struct SaveCall {
+    /// Preview or save.
+    pub action: SaveAction,
+    /// What to store.
+    pub choice: SaveChoice,
+    /// Receives the outcome (also when the session stops first).
+    pub reply: Sender<SaveOutcome>,
 }
 
 /// A running session.
@@ -772,10 +811,14 @@ fn run(
 
     // Everything up to the end of the render loop runs under catch_unwind: a
     // panic (in a native, the engine or the host) must not skip Shutdown(false).
-    let mut lifecycle = Lifecycle::default();
+    let mut lifecycle = Lifecycle {
+        shutdown_mode: opts.shutdown_mode,
+        ..Lifecycle::default()
+    };
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         drive(
             &rt,
+            meta,
             &device,
             &shared,
             guard.as_ref(),
@@ -798,10 +841,52 @@ fn run(
     report.render = lifecycle.render.summary();
 
     live.set_state(SessionState::Stopping);
+    // Requests that came too late: a pending save is answered, a new shutdown mode applies.
+    while let Ok(control) = controls.try_recv() {
+        match control {
+            Control::ShutdownMode(m) => lifecycle.shutdown_mode = m,
+            Control::Save(call) => {
+                let _ = call.reply.send(SaveOutcome::failed(
+                    &device.key,
+                    call.action,
+                    "the device session is stopping",
+                ));
+            }
+            _ => {}
+        }
+    }
+    report.shutdown_mode = lifecycle.shutdown_mode;
     if lifecycle.initialize_called && !opts.skip_shutdown {
         if healthy {
+            let mode = lifecycle.shutdown_mode;
+            let last = save::average(&lock_device(&shared).led_colors());
+            match save::shutdown_fallback(meta, mode, last) {
+                ShutdownPlan::Native => {}
+                ShutdownPlan::Parameters(values) => {
+                    report.notes.push(format!(
+                        "shutdown mode {}: through the plugin's parameters {}",
+                        mode.as_str(),
+                        serde_json::Value::Object(values.clone())
+                    ));
+                    if let Err(e) = rt.set_globals(&serde_json::Value::Object(values), budgets.validate) {
+                        report.fail("parameters", e);
+                    }
+                }
+                ShutdownPlan::Unsupported => report.notes.push(format!(
+                    "shutdown mode {}: not supported by the plugin (neither ShutdownModes() nor shutdownColor); \
+                     it restores the device as usual",
+                    mode.as_str()
+                )),
+            }
             let shutdown = catch_unwind(AssertUnwindSafe(|| {
-                rt.call_export("Shutdown", CallArgs::Bool(false), budgets.call(budgets.shutdown))
+                rt.call_export(
+                    "Shutdown",
+                    CallArgs::Shutdown {
+                        suspending: false,
+                        mode,
+                    },
+                    budgets.call(budgets.shutdown),
+                )
             }));
             match shutdown {
                 Ok(Ok(called)) => report.shutdown_called = called,
@@ -857,12 +942,15 @@ struct Lifecycle {
     before: Vec<(RestoreProbe, Vec<u8>)>,
     /// `Render()` wall times.
     render: LatencyHistogram,
+    /// What `Shutdown()` leaves the device showing.
+    shutdown_mode: ShutdownMode,
 }
 
 /// Load → parameters → Validate → open → restore probes → Initialize → render loop.
 #[allow(clippy::too_many_arguments)]
 fn drive(
     rt: &PluginRuntime,
+    meta: &PluginMeta,
     device: &SessionDevice,
     shared: &SharedDevice,
     guard: Option<&SharedGuard>,
@@ -1016,7 +1104,37 @@ fn drive(
         last_seq = seq;
         let mut controlled = false;
         while let Ok(control) = controls.try_recv() {
-            apply_control(rt, shared, control, &budgets, stop, report);
+            match control {
+                Control::ShutdownMode(m) => lifecycle.shutdown_mode = m,
+                Control::Save(call) => {
+                    let SaveCall {
+                        action,
+                        choice,
+                        reply,
+                    } = call;
+                    let outcome = run_save(
+                        rt,
+                        meta,
+                        &device.key,
+                        shared,
+                        guard,
+                        action,
+                        &choice,
+                        &budgets,
+                        stop,
+                    );
+                    if action == SaveAction::Save {
+                        report.saves += 1;
+                    }
+                    if let Some(e) = &outcome.error {
+                        report
+                            .notes
+                            .push(format!("SaveToDevice ({}): {e}", action.as_str()));
+                    }
+                    let _ = reply.send(outcome);
+                }
+                other => apply_control(rt, shared, other, &budgets, stop, report),
+            }
             controlled = true;
         }
         if controlled || report.frames.is_multiple_of(30) {
@@ -1130,6 +1248,8 @@ fn apply_control(
                 report.notes.push(format!("no endpoint {uid} to place"));
             }
         }
+        // Handled by the render loop.
+        Control::ShutdownMode(_) | Control::Save(_) => {}
         Control::Placement(p) => {
             let changed = {
                 let mut dev = lock_device(shared);
@@ -1141,6 +1261,85 @@ fn apply_control(
                 hook("onBrightnessChanged", report);
             }
         }
+    }
+}
+
+/// One `SaveToDevice(request)` call (see the module docs): checks the plugin's
+/// capabilities, runs a preview dry, opens the SMBus save window for a save only,
+/// and puts the write mode and the window back whatever happens.
+#[allow(clippy::too_many_arguments)]
+fn run_save(
+    rt: &PluginRuntime,
+    meta: &PluginMeta,
+    key: &str,
+    shared: &SharedDevice,
+    guard: Option<&SharedGuard>,
+    action: SaveAction,
+    choice: &SaveChoice,
+    budgets: &Budgets,
+    stop: &Arc<AtomicBool>,
+) -> SaveOutcome {
+    let Some(caps) = meta.save_caps.as_ref().filter(|_| meta.lifecycle.save_to_device) else {
+        return SaveOutcome::failed(
+            key,
+            action,
+            "this device's plugin cannot store lighting in the device",
+        );
+    };
+    if !caps.allows(choice) {
+        let what = choice.effect.as_deref().map_or_else(
+            || "the current colours".to_string(),
+            |e| format!("the {e} effect"),
+        );
+        return SaveOutcome::failed(key, action, format!("this device's plugin cannot store {what}"));
+    }
+    let colors = lock_device(shared).led_colors();
+    let request = save::request_json(action, choice, &colors);
+    let device_mode = lock_device(shared).write_mode();
+    let bus_mode = guard.map(|g| lock_guard(g).write_mode());
+    let dry = action == SaveAction::Preview || device_mode == WriteMode::DryRun;
+    match action {
+        SaveAction::Preview => {
+            lock_device(shared).set_write_mode(WriteMode::DryRun);
+            if let Some(g) = guard {
+                lock_guard(g).set_write_mode(WriteMode::DryRun);
+            }
+        }
+        SaveAction::Save => {
+            if let Some(g) = guard {
+                lock_guard(g).set_save_window(true);
+            }
+            lock_device(shared).log(&format!(
+                "SaveToDevice: storing {} in the device (asked for by the user)",
+                choice.effect.as_deref().unwrap_or("the current colours")
+            ));
+        }
+    }
+    let called = catch_unwind(AssertUnwindSafe(|| {
+        rt.call_export_json("SaveToDevice", &request, budgets.call(budgets.save), stop)
+    }));
+    // Close the window and put the write modes back before anything else runs.
+    lock_device(shared).set_write_mode(device_mode);
+    if let Some(g) = guard {
+        let mut g = lock_guard(g);
+        g.set_save_window(false);
+        g.force_unlock();
+        if let Some(m) = bus_mode {
+            g.set_write_mode(m);
+        }
+    }
+    match called {
+        Ok(Ok(Some(result))) => SaveOutcome::from_result(key, action, dry, result),
+        Ok(Ok(None)) => SaveOutcome::failed(key, action, "the plugin has no SaveToDevice(request) export"),
+        Ok(Err(e)) => SaveOutcome {
+            dry_run: dry,
+            ..SaveOutcome::failed(key, action, format!("SaveToDevice failed: {e}"))
+        },
+        Err(panic) => SaveOutcome::failed(
+            key,
+            action,
+            format!("SaveToDevice panicked: {}", panic_text(panic.as_ref())),
+        ),
     }
 }
 

@@ -20,7 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createMockBus } from "../../plugins/_testkit/mock-bus.mjs";
-import { createSimDevice, importPlugin, installGlobals, readExports } from "../lib/plugin.mjs";
+import { createSimDevice, FEATURE_GLOBALS, importPlugin, installGlobals, readExports } from "../lib/plugin.mjs";
 import { deepEqual, validate } from "./schema.mjs";
 
 const schemas = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas");
@@ -112,7 +112,7 @@ export async function lintPlugin(dir) {
   for (const file of [entry, ...siblingModules(dir, entry)]) {
     const device = createSimDevice();
     const mockBus = createMockBus({ kind: "amd" });
-    const restore = installGlobals({ device, bus: mockBus.fixed });
+    const restore = installGlobals({ device, bus: mockBus.fixed, ...FEATURE_GLOBALS });
     const where = relative(dir, file).replace(/\\/g, "/");
     try {
       const ns = await importPlugin(file);

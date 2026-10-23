@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "lightloom-inputs"
-description = "Lightloom input sources feeding engine.audio / engine.zone / engine.vision / sensors (stub until M6)"
+description = "Lightloom input sources feeding engine.audio / engine.zone / engine.vision / sensors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,3 +13,12 @@ homepage.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+tracing = { workspace = true }
+# Windowed FFT for engine.audio (pure Rust, MIT/Apache-2.0).
+realfft = "3.5"
+
+[target.'cfg(windows)'.dependencies]
+# WASAPI loopback of the default output device (Apache-2.0). Linux capture is WP-L6.
+cpal = "0.18"
+# Lock-free single-producer ring from the audio callback (MIT/Apache-2.0).
+rtrb = "0.3"

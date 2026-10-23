@@ -28,6 +28,11 @@
 //! [smbus]
 //! enabled = true                # drive SMBus devices (GPU RGB; RAM RGB when the I/O broker is installed); false turns it off (the dashboard setting wins)
 //!
+//! [audio]
+//! enabled = true                # loopback capture while the active effect reads engine.audio (never a microphone)
+//! # device = "Speakers (Realtek(R) Audio)"   # output device to capture (default: the default output)
+//! scale = "log"                 # engine.audio.freq bands: "log" (20 Hz-20 kHz) or "linear" (0-fs/2)
+//!
 //! [network]
 //! enabled = false               # network lights: discovery and LAN devices (WLED, Hue, ...); the dashboard setting wins
 //! ```
@@ -54,8 +59,34 @@ pub struct Config {
     pub devices: DevicesConfig,
     /// SMBus devices.
     pub smbus: SmbusConfig,
+    /// `engine.audio` capture.
+    pub audio: AudioConfig,
     /// Network lights.
     pub network: NetworkConfig,
+}
+
+/// `[audio]`: loopback capture for `engine.audio` (docs/audio.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AudioConfig {
+    /// Capture while the active effect reads `engine.audio`; `false` never
+    /// captures (effects then see silence).
+    pub enabled: bool,
+    /// Output device to capture, by name (`None`: the default output). Only
+    /// output devices are ever captured (what the PC plays), never microphones.
+    pub device: Option<String>,
+    /// `freq` band spacing: `"log"` or `"linear"`.
+    pub scale: String,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            device: None,
+            scale: "log".into(),
+        }
+    }
 }
 
 /// `[network]`.

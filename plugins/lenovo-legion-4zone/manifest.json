@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.lenovo-legion-4zone",
+  "name": "Lenovo Legion 4-Zone Keyboard",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "The four-zone keyboard backlight of Lenovo Legion 5 (2020-2023) and IdeaPad Gaming laptops (ITE 048D, usage page 0xFF89 / usage 0xCC). Adapted from OpenRGB's Lenovo4ZoneUSBController (GPL-2.0-or-later); untested on hardware. Only the lighting report (CC 16) is ever sent. Protocol notes: docs/hardware/lenovo-legion-4zone.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x048D",
+      "pids": ["0xC963", "0xC985", "0xC984", "0xC975", "0xC973", "0xC965", "0xC955"],
+      "transport": "hid",
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["LegionSpace.exe", "LegionZone.exe", "LenovoVantage.exe", "LenovoVantageService.exe"],
+  "keywords": ["lenovo", "legion", "ideapad", "laptop", "keyboard", "4-zone", "openrgb"]
+}

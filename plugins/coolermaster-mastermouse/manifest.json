@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.coolermaster-mastermouse",
+  "name": "Cooler Master MasterMouse (MM530, MM711, MM720, MM730)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Per-LED lighting (scroll wheel, logo, MM530 buttons) of the Cooler Master MM530, MM711, MM720 and MM730 mice. Adapted from OpenRGB's CMMMController and CMMM711Controller (GPL-2.0-or-later); untested on hardware. The save command (50 55), DPI and polling rate are never touched. Protocol notes: docs/hardware/coolermaster-mastermouse.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x2516",
+      "pids": ["0x0065", "0x0101", "0x0141", "0x0165"],
+      "transport": "hid",
+      "interfaces": [1],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["MasterPlus.exe", "MasterPlusApp.exe"],
+  "keywords": ["cooler master", "mastermouse", "mouse", "openrgb"]
+}

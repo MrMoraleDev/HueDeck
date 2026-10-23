@@ -7,14 +7,18 @@
 //! * [`conflicts`]: other RGB software holding the same devices (reported, never killed);
 //! * [`signalrgb`]: a local SignalRGB installation's setup, read in place (channel
 //!   components, placements, effects);
+//! * [`notify`]: this OS's system notifications (Windows toasts);
+//! * [`dirs`]: Lightloom's data and config directories and the daemon's `api-port` file;
 //! * [`system`]: machine facts for `@SignalRGB/systeminfo` and the process's memory.
 
 #![forbid(unsafe_code)]
 
 pub mod conflicts;
+pub mod dirs;
 pub mod effects;
 pub mod hardware;
 pub mod hotplug;
+pub mod notify;
 pub mod signalrgb;
 pub mod smbus;
 pub mod system;

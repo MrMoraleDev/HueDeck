@@ -661,6 +661,18 @@ pub struct HostRecord {
     /// The first 20 of those lines.
     #[serde(rename = "logTail")]
     pub log_tail: Vec<String>,
+    /// What the plugin reported through the `battery` feature (when it added it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery: Option<StubBattery>,
+}
+
+/// The stub `battery` global's values after a run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StubBattery {
+    /// `setBatteryLevel` (`0..=100`), `None` when never called.
+    pub level: Option<u8>,
+    /// `setBatteryState` (0..=5).
+    pub state: i32,
 }
 
 /// One plugin loaded into its own runtime (lives on the plugin thread).
@@ -1093,7 +1105,7 @@ impl PluginRuntime {
                     None => f.call(())?,
                 };
                 while ctx.execute_pending_job() {}
-                Ok(ret.as_string().map(|s| s.to_string()).transpose()?)
+                ret.as_string().map(|s| s.to_string()).transpose()
             };
             match run().map_err(|e| failure(&ctx, e, deadline)) {
                 Ok(_) if deadline.fired() => Err(JsFailure::cut_off(deadline, function)),

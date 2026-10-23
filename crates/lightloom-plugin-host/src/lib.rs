@@ -18,6 +18,7 @@
 //!   compat host module (`js/host.js`: recording stubs, or device natives).
 //! * [`device`]: the native backing of `device.*` for a real device (HID I/O
 //!   through lightloom-hal, canvas sampling, I/O statistics, dry-run writes).
+//! * [`battery`]: what a plugin reports through the `battery` feature global.
 //! * [`children`]: subdevices and channels (with their component instances),
 //!   each placed and sampled on the canvas on its own.
 //! * [`session`]: one device session = one plugin thread running
@@ -36,6 +37,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod battery;
 pub mod bus;
 pub mod catalog;
 pub mod children;

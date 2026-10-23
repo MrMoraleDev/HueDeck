@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn plugin_settings_round_trip_and_travel_with_exports() {
-        let mut s = Store::in_memory().unwrap();
+        let s = Store::in_memory().unwrap();
         s.set_plugin_setting("Philips Hue", "001788fffe", "username", Some("abc"))
             .unwrap();
         s.set_plugin_setting("Philips Hue", "001788fffe", "username", Some("def"))

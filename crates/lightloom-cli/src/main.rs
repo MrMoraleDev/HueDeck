@@ -3,7 +3,9 @@
 //!
 //! Headless commands (no daemon yet): `devices` (read-only HID enumeration),
 //! `light` / `rainbow` / `bench` (null renderer → plugin sessions → hardware,
-//! see [`run`]) and `compat dry-run` (corpus harness).
+//! see [`run`]) and `compat dry-run` (corpus harness). `url` prints where the
+//! daemon serves (`--addr`, else the `api-port` file lightloomd writes, else
+//! 127.0.0.1:53000).
 //!
 //! Exit codes: `0` success; `1` a device session failed, faulted or saw I/O
 //! errors (HID or SMBus); `2` a setup error (no plugin or device, conflicting software, bad
@@ -26,9 +28,10 @@ mod run;
     propagate_version = true
 )]
 struct Cli {
-    /// Daemon address (host:port) when not the default loopback port.
-    #[arg(long, env = "LIGHTLOOM_ADDR", default_value = "127.0.0.1:16138")]
-    addr: String,
+    /// Daemon address (host:port). Default: the port lightloomd serves on (the
+    /// `api-port` file in its data directory), else 127.0.0.1:53000.
+    #[arg(long, env = "LIGHTLOOM_ADDR")]
+    addr: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -112,6 +115,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Print the address of the daemon's dashboard and API (--addr / LIGHTLOOM_ADDR, else the
+    /// port lightloomd serves on, else the default 127.0.0.1:53000).
+    Url,
     /// SignalRGB-compatibility tooling.
     Compat {
         #[command(subcommand)]
@@ -129,8 +135,23 @@ fn run_devices(json: bool, filters: &[devices::Filter]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The daemon's `host:port`: `explicit` (`--addr` / `LIGHTLOOM_ADDR`), else the
+/// port lightloomd wrote to `api-port` in `data_dir`, else the default port.
+fn daemon_addr(explicit: Option<&str>, data_dir: &std::path::Path) -> String {
+    if let Some(addr) = explicit.map(str::trim).filter(|a| !a.is_empty()) {
+        return addr.to_string();
+    }
+    let port = lightloom_runtime::dirs::read_api_port(data_dir).unwrap_or(lightloom_api::NATIVE_PORT);
+    format!("{}:{port}", lightloom_api::BIND_ADDRESS)
+}
+
 fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
     match cli.command {
+        Command::Url => {
+            let (data, _) = lightloom_runtime::dirs::from_env();
+            println!("http://{}/", daemon_addr(cli.addr.as_deref(), &data));
+            Ok(run::Outcome::Clean)
+        }
         Command::Devices { json, filters } => run_devices(json, &filters).map(|_| run::Outcome::Clean),
         Command::Light { color, run } => run::run(run::Mode::Light(color), &run),
         Command::Rainbow { fps, run } => run::run(run::Mode::Rainbow { fps }, &run),
@@ -292,6 +313,24 @@ mod tests {
             Command::Bench { mock_smbus: Some(ref p), mock: None, .. } if p == "msi-gpu"
         ));
         assert!(Cli::try_parse_from(["lightloom", "bench", "--mock-smbus", "x", "--mock", "1:2"]).is_err());
+    }
+
+    #[test]
+    fn the_daemon_address_comes_from_the_flag_then_the_port_file_then_the_default() {
+        let dir = std::env::temp_dir().join(format!("lightloom-cli-addr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(daemon_addr(None, &dir), "127.0.0.1:53000");
+        lightloom_runtime::dirs::write_api_port(&dir, 17000).unwrap();
+        assert_eq!(daemon_addr(None, &dir), "127.0.0.1:17000");
+        assert_eq!(daemon_addr(Some(" "), &dir), "127.0.0.1:17000");
+        assert_eq!(daemon_addr(Some("127.0.0.1:18000"), &dir), "127.0.0.1:18000");
+        lightloom_runtime::dirs::remove_api_port(&dir, 17000);
+        assert_eq!(daemon_addr(None, &dir), "127.0.0.1:53000");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let cli = Cli::try_parse_from(["lightloom", "--addr", "127.0.0.1:1234", "url"]).unwrap();
+        assert_eq!(cli.addr.as_deref(), Some("127.0.0.1:1234"));
+        assert!(matches!(cli.command, Command::Url));
     }
 
     #[test]

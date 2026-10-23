@@ -81,11 +81,31 @@ export function Render() {
   render(device, light);
 }
 
-export function Shutdown(SystemSuspending) {
-  // Normal exit and suspend alike: write the configuration read at start-up back (save byte 0).
-  if (light !== null) {
-    light.restore();
+// Lightloom extensions (docs/host-api/save-shutdown.md): "Save to devices" stores OpenRGB's Static or
+// Breathing mode with one colour per zone in the board's flash (185- and 162-byte boards); the exit
+// modes "keep" and "off" show the last colours or black in Static mode, never stored.
+export function SaveCapabilities() { return { static: true, effects: ["breathing"] }; }
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
+
+export function SaveToDevice(request) {
+  if (light === null) {
+    return { unsupported: "the board was not recognised" };
   }
+  const effect = request && request.effect ? String(request.effect) : null;
+  const colourOf = canvasColours(device);
+  return request && request.action === "save" ? light.save(colourOf, effect) : light.describeSave(colourOf, effect);
+}
+
+export function Shutdown(SystemSuspending, mode) {
+  if (light === null) {
+    return;
+  }
+  if (!SystemSuspending && (mode === "keep" || mode === "off")) {
+    light.showStatic(mode === "keep" ? canvasColours(device) : () => () => [0, 0, 0]);
+    return;
+  }
+  // Normal exit and suspend alike: write the configuration read at start-up back (save byte 0).
+  light.restore();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -133,13 +153,18 @@ function render(dev, ml) {
     }
   }
   ml.resize(counts);
-  ml.frame((zone) => {
+  ml.frame(canvasColours(dev));
+}
+
+// The frame's colours per zone, as frame() wants them: zone -> (index) -> [r, g, b].
+function canvasColours(dev) {
+  return (zone) => {
     if (zone.kind === "channel") {
       const flat = channelColours(dev, zone.name);
       return (i) => (3 * i + 2 < flat.length ? [flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]] : [0, 0, 0]);
     }
     return (i) => rgbOrBlack(dev.color(i, zone.row));
-  });
+  };
 }
 
 function ledCount(dev, name) {

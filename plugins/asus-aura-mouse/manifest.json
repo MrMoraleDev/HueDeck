@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.asus-aura-mouse",
+  "name": "ASUS Aura mice (direct mode)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-zone lighting of the ASUS ROG mice with a native direct mode: Gladius III Wireless AimPoint, Chakram X, Spatha X, Strix Impact III, Keris Wireless AimPoint (wired and 2.4 GHz). Adapted from OpenRGB's AsusAuraMouseController (GPL-2.0-or-later); untested on hardware. The older Aura mice without a direct mode are not claimed. The save command, hardware modes, DPI and polling rate are never touched. Protocol notes: docs/hardware/asus-aura-mouse.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x0B05",
+      "pids": ["0x1A70", "0x1A72", "0x1A18", "0x1A1A", "0x1977", "0x1979", "0x1A88", "0x1A66", "0x1A68"],
+      "transport": "hid",
+      "interfaces": [0],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["ArmouryCrate.exe", "ArmouryCrate.Service.exe", "LightingService.exe"],
+  "keywords": ["asus", "rog", "aura", "mouse", "openrgb"]
+}

@@ -19,8 +19,8 @@ use crate::children::{ChildSetup, Children};
 use crate::runtime::Deadline;
 use crate::stats::{LatencyHistogram, LatencySummary};
 use lightloom_engine::{
-    apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, Frame, OffsetTable, Placement,
-    Rgb, SamplerConfig,
+    apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, DirectLeds, Frame, OffsetTable,
+    Placement, Rgb, SamplerConfig,
 };
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportSpec};
 use rquickjs::{Ctx, Function, Object};
@@ -192,6 +192,9 @@ pub struct DeviceContext {
     grid: OffsetTable,
     /// `LightingMode::Forced` colour of the placement.
     forced: Option<lightloom_engine::Rgb>,
+    /// Direct colours per grid cell (row-major), from [`DirectLeds`]; win
+    /// over the canvas and the forced colour.
+    direct: Option<Vec<lightloom_engine::Rgb>>,
     brightness: Brightness,
     factor: f32,
     stats: IoStats,
@@ -301,6 +304,7 @@ impl DeviceContext {
             sampler,
             grid,
             forced: None,
+            direct: None,
             brightness: Brightness::default(),
             factor: 1.0,
             stats: IoStats::default(),
@@ -640,11 +644,15 @@ impl DeviceContext {
         if let Some(c) = self.alert_now {
             return c;
         }
+        let index = (y * self.size[0] + x) as usize;
+        if let Some(cells) = &self.direct {
+            let c = apply_brightness(cells.get(index).copied().unwrap_or_default(), self.factor);
+            return [c.r, c.g, c.b];
+        }
         if let Some(c) = self.forced {
             let c = apply_brightness(c, self.factor);
             return [c.r, c.g, c.b];
         }
-        let index = (y * self.size[0] + x) as usize;
         let ok = self.frame.width() == self.sampler.canvas_width
             && self.frame.height() == self.sampler.canvas_height;
         match self.grid.offsets().get(index) {
@@ -671,6 +679,23 @@ impl DeviceContext {
             .iter()
             .map(|&[x, y]| self.color(x as i32, y as i32))
             .collect()
+    }
+
+    /// Take this frame's direct colours from `direct` for the device (uid
+    /// `key`, colours in `LedPositions()` order) and its children. Endpoints
+    /// without an entry sample the canvas again.
+    pub fn apply_direct(&mut self, direct: &DirectLeds, key: &str) {
+        self.direct = direct.get(key).map(|colors| {
+            let [w, h] = self.size;
+            let mut cells = vec![lightloom_engine::Rgb::BLACK; (w * h) as usize];
+            for (p, c) in self.led_positions.iter().zip(colors.iter()) {
+                if p[0] < w && p[1] < h {
+                    cells[(p[1] * w + p[0]) as usize] = *c;
+                }
+            }
+            cells
+        });
+        self.children.apply_direct(direct);
     }
 
     // ------------------------------------------------------------------ subdevices and channels
@@ -1584,6 +1609,39 @@ mod tests {
         assert_eq!(ctx.color(2, 0), [0, 0, 0], "outside the grid");
         ctx.set_placement(Placement::default());
         assert_eq!(ctx.color(0, 0), [1, 2, 3]);
+    }
+
+    #[test]
+    fn direct_colours_win_over_canvas_and_forced_colour() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        // Two LEDs, listed right to left.
+        ctx.set_geometry([3, 1], vec![[2, 0], [0, 0]]).unwrap();
+        ctx.set_frame(Arc::new(Frame::solid(320, 200, Rgb::new(1, 2, 3))));
+        ctx.set_placement(Placement {
+            lighting_mode: lightloom_engine::LightingMode::Forced,
+            forced_color: "#ff8000".into(),
+            ..Placement::default()
+        });
+        let direct = DirectLeds::new();
+        let owner = direct.new_owner();
+        direct.write(
+            owner,
+            "dev",
+            2,
+            0,
+            &[Rgb::new(10, 20, 30), Rgb::new(40, 50, 60)],
+            Duration::from_secs(60),
+        );
+        ctx.apply_direct(&direct, "other");
+        assert_eq!(ctx.color(2, 0), [255, 128, 0], "another endpoint's colours");
+        ctx.apply_direct(&direct, "dev");
+        assert_eq!(ctx.color(2, 0), [10, 20, 30], "LED 0 sits at cell (2, 0)");
+        assert_eq!(ctx.color(0, 0), [40, 50, 60]);
+        assert_eq!(ctx.color(1, 0), [0, 0, 0], "no LED there");
+        direct.release(owner);
+        ctx.apply_direct(&direct, "dev");
+        assert_eq!(ctx.color(2, 0), [255, 128, 0], "back to the forced colour");
     }
 
     #[test]

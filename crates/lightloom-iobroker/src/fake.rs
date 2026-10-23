@@ -45,6 +45,31 @@ impl FakePiix4 {
         self
     }
 
+    /// From now on every transfer fails with `status` (`None`: none fails).
+    pub fn set_failing(&self, status: Option<NtStatus>) {
+        self.state().fail = status;
+    }
+
+    /// The port the handle (mux) is on.
+    pub fn port(&self) -> u8 {
+        self.state().port
+    }
+
+    /// Every device's registers.
+    pub fn devices(&self) -> BTreeMap<u8, BTreeMap<u8, u8>> {
+        self.state().devices.clone()
+    }
+
+    /// How many calls so far.
+    pub fn call_count(&self) -> usize {
+        self.state().calls.len()
+    }
+
+    /// The calls from the `from`-th on.
+    pub fn calls_from(&self, from: usize) -> Vec<(String, Vec<u64>)> {
+        self.state().calls.get(from..).unwrap_or_default().to_vec()
+    }
+
     /// The handle (mux) starts on `port`.
     pub fn on_port(self, port: u8) -> Self {
         self.state().port = port;

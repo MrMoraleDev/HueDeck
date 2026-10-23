@@ -94,6 +94,7 @@ fn settings(
             battery_critical: critical,
             battery_notifications: notify,
             port: None,
+            openrgb_sdk: None,
         },
     )
 }

@@ -1,0 +1,17 @@
+{
+  "//": "SPDX-License-Identifier: GPL-3.0-or-later. Type-checks lightloom.d.ts, the example plugin (checkJs) and types-test/. Run: ui/node_modules/.bin/tsc -p sdk",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": [],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false
+  },
+  "files": ["lightloom.d.ts"],
+  "include": ["examples/**/*.js", "examples/**/*.d.ts", "types-test/*.ts"]
+}

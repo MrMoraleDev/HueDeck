@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audio;
 pub mod battery;
 pub mod config;
 pub mod engine;
@@ -145,6 +146,13 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
                 stop_rx.clone(),
             )));
         }
+        // The OpenRGB SDK server follows its setting (off by default).
+        tasks.push(tokio::spawn(lightloom_api::openrgb::serve_when_enabled(
+            ctx.backend.clone(),
+            lightloom_api::OPENRGB_SDK_PORT,
+            stop_rx.clone(),
+            Arc::new(port_taken_elsewhere),
+        )));
         if opts.open_dashboard {
             open_in_browser(&lightloom_api::native_url(native.port()));
         }

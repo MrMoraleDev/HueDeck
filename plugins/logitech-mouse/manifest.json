@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.logitech-mouse",
+  "name": "Logitech G mice (fixed-feature)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Lighting of the older wired Logitech G mice OpenRGB drives with fixed HID++ feature indices: G203 Prodigy, G Pro and G Pro HERO (one zone), G303 Daedalus Apex and G403 HERO (two zones, in software control with saving to flash off, as OpenRGB does), the G203 LIGHTSYNC (three LEDs, per-key frames) and the G600 (feature report 0xF1). Adapted from OpenRGB's LogitechGLightsyncController, LogitechG203LController and LogitechG600Controller (GPL-2.0-or-later); untested on hardware. No hardware effect, DPI, report rate or onboard-profile command is ever sent. Protocol notes: docs/hardware/logitech-mouse.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x046D",
+      "pids": ["0xC084", "0xC092", "0xC09D", "0xC080", "0xC08F", "0xC24A", "0xC085", "0xC08C"],
+      "transport": "hid",
+      "interfaces": [1],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["lghub.exe", "lghub_agent.exe", "lghub_updater.exe", "LCore.exe"],
+  "keywords": ["logitech", "g203", "g303", "g403", "g600", "gpro", "mouse", "lightsync", "openrgb"]
+}

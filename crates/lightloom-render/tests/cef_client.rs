@@ -52,6 +52,13 @@ fn frames_flow_and_controls_reach_the_renderer() {
         r.set_properties(json!({"speed": 3}).as_object().unwrap().clone())
     });
     assert!(r.push_engine_data(json!({"audio": {"level": -20}}).as_object().unwrap().clone()));
+    // An input source pushes from its own thread through a sink.
+    let sink = r.engine_sink();
+    let pushed =
+        std::thread::spawn(move || sink.push(json!({"audio": {"width": 0.25}}).as_object().unwrap().clone()))
+            .join()
+            .unwrap();
+    assert!(pushed);
     r.stop();
     let log = std::fs::read_to_string(dir.join("frames-1.shm.control.log")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
@@ -60,6 +67,7 @@ fn frames_flow_and_controls_reach_the_renderer() {
         log.contains("\"engine\"") && log.contains("\"level\":-20"),
         "{log}"
     );
+    assert!(log.contains("\"width\":0.25"), "{log}");
     assert!(log.contains("\"quit\""), "stop sends quit: {log}");
     let st = r.status();
     assert_eq!((st.starts, st.running), (1, false));

@@ -65,6 +65,8 @@ fn dry_run_over_fixtures() {
     assert_eq!(calls("device.read"), 1);
     assert_eq!(calls("device.productId"), 2);
     assert_eq!(calls("battery.setBatteryLevel"), 1);
+    let battery = mouse.battery.expect("battery feature recorded");
+    assert_eq!((battery.level, battery.state), (Some(100), 0));
     assert_eq!(calls("device.log"), 1);
 
     let kb = by_file(&reports, "vendor/class_keyboard.js");

@@ -65,6 +65,20 @@ export interface DeviceView {
   parameters: Parameter[];
   endpoints: Endpoint[];
   channels: ChannelView[];
+  /** The plugin's last battery report (devices with a battery only). */
+  battery?: BatteryView | null;
+  /** Pulse red while the battery is low. */
+  blinkLowBattery: boolean;
+}
+
+export interface BatteryView {
+  /** Percent; null until the plugin reported one. */
+  level?: number | null;
+  state: "unknown" | "discharging" | "charging" | "fullCharging" | "full" | "wirelessCharging";
+  charging: boolean;
+  status: "ok" | "low" | "critical";
+  /** Unix time of the report, milliseconds. */
+  updatedMs: number;
 }
 
 export interface EffectControl {
@@ -113,6 +127,10 @@ export interface Settings {
   portNotice: string | null;
   fps: number;
   dryRun: boolean;
+  batteryLow: number;
+  batteryCritical: number;
+  batteryNotifications: boolean;
+  notificationsAvailable: boolean;
 }
 
 export interface Snapshot {

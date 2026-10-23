@@ -313,3 +313,183 @@ test("an unknown product id is left alone", async () => {
     restore();
   }
 });
+
+// --- battery ------------------------------------------------------------------------------------
+
+/** A USB input report 0x01 of 64 bytes with `status` at `offset` (report id = byte 0). */
+function batteryInput(offset, status) {
+  const report = usbInput(0x01);
+  report[offset] = status;
+  return report;
+}
+
+/** Make the mock's read() answer from a queue (empty: nothing waiting, size 0). */
+function queueReads(device) {
+  const queue = [];
+  let size = 0;
+  device.read = (ids, length, timeout) => {
+    device.calls.push({ method: "read", args: [ids, length, timeout] });
+    const next = queue.shift();
+    size = next ? next.length : 0;
+    return next ? next.slice() : [];
+  };
+  device.getLastReadSize = () => size;
+  return queue;
+}
+
+const DUALSENSE_CASES = [
+  { status: 0x08, level: 85, state: 1, note: "discharging, 8 -> 85 %" },
+  { status: 0x0A, level: 100, state: 1, note: "discharging, 10 -> 100 % (clamped)" },
+  { status: 0x13, level: 35, state: 2, note: "charging, 3 -> 35 %" },
+  { status: 0x20, level: 100, state: 4, note: "full" },
+  { status: 0x00, level: 5, state: 1, note: "discharging, empty" },
+];
+
+for (const id of DUALSENSE_PIDS) {
+  test(`DualSense ${pid(id)} battery: byte 53 of input report 0x01, level and charging state`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+    for (const c of DUALSENSE_CASES) {
+      const { device, plugin, restore } = await setup({ productId: id });
+      try {
+        const queue = queueReads(device);
+        plugin.Initialize();
+        assert.deepEqual(device.features, ["battery"]);
+        queue.push(batteryInput(53, 0x05), batteryInput(53, c.status));
+        plugin.Render();
+        assert.deepEqual([device.battery.levels, device.battery.states], [[c.level], [c.state]], c.note);
+        const reads = callsTo(device, "read");
+        assert.equal(reads.length, 3, "drained until nothing waits; the newest report counts");
+        assert.ok(reads.every(([, length, timeout]) => length === 64 && timeout === 0), "non-blocking reads");
+        assert.equal(device.sent.length, 0, "nothing is sent for the battery");
+        assert.equal(device.written.length, 1, "only the frame");
+      } finally {
+        restore();
+      }
+    }
+  });
+}
+
+test("DualSense battery: error states are unknown and keep the last level", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { device, plugin, restore } = await setup({ productId: 0x0CE6 });
+  try {
+    const queue = queueReads(device);
+    plugin.Initialize();
+    queue.push(batteryInput(53, 0x06));
+    plugin.Render();
+    t.mock.timers.tick(5000);
+    queue.push(batteryInput(53, 0xB3));
+    plugin.Render();
+    assert.deepEqual([device.battery.levels, device.battery.states], [[65], [1, 0]]);
+  } finally {
+    restore();
+  }
+});
+
+test("DualSense battery: polled every 5 s, changes reported only, nothing waiting changes nothing", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { device, plugin, restore } = await setup({ productId: 0x0CE6 });
+  try {
+    const queue = queueReads(device);
+    plugin.Initialize();
+    queue.push(batteryInput(53, 0x07));
+    plugin.Render();
+    assert.equal(callsTo(device, "read").length, 2);
+    queue.push(batteryInput(53, 0x17));
+    t.mock.timers.tick(4999);
+    plugin.Render();
+    assert.equal(callsTo(device, "read").length, 2, "no read before 5 s");
+    t.mock.timers.tick(1);
+    plugin.Render();
+    assert.deepEqual([device.battery.levels, device.battery.states], [[75], [1, 2]], "same level, new state");
+    t.mock.timers.tick(5000);
+    plugin.Render();
+    assert.deepEqual([device.battery.levels, device.battery.states], [[75], [1, 2]], "nothing read: unchanged");
+    queue.push(...new Array(100).fill(batteryInput(53, 0x17)));
+    t.mock.timers.tick(5000);
+    const before = callsTo(device, "read").length;
+    plugin.Render();
+    assert.equal(callsTo(device, "read").length - before, 64, "at most 64 reads per poll");
+  } finally {
+    restore();
+  }
+});
+
+const DS4_CASES = [
+  { status: 0x15, level: 55, state: 2, note: "cable, 5 -> charging 55 %" },
+  { status: 0x1A, level: 100, state: 2, note: "cable, 10 -> 100 %, still charging" },
+  { status: 0x1B, level: 100, state: 4, note: "cable, 11 -> full" },
+  { status: 0x04, level: 45, state: 1, note: "no cable, 4 -> discharging 45 %" },
+  { status: 0x0B, level: 100, state: 1, note: "no cable, 11 -> clamped to 100 %" },
+];
+
+for (const id of DS4_PIDS) {
+  test(`DualShock 4 ${pid(id)} battery: byte 30 of input report 0x01, bit 4 = cable`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+    for (const c of DS4_CASES) {
+      const { device, plugin, restore } = await setup({ productId: id });
+      try {
+        const queue = queueReads(device);
+        plugin.Initialize();
+        assert.deepEqual(device.features, ["battery"]);
+        queue.push(batteryInput(30, c.status));
+        plugin.Render();
+        assert.deepEqual([device.battery.levels, device.battery.states], [[c.level], [c.state]], c.note);
+      } finally {
+        restore();
+      }
+    }
+  });
+}
+
+test("DualShock 4 battery: a charging error (cable, 14/15) is unknown", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { device, plugin, restore } = await setup({ productId: 0x09CC });
+  try {
+    const queue = queueReads(device);
+    plugin.Initialize();
+    queue.push(batteryInput(30, 0x1E));
+    plugin.Render();
+    assert.deepEqual([device.battery.levels, device.battery.states], [[], [0]]);
+  } finally {
+    restore();
+  }
+});
+
+test("DualShock 4 USB wireless adapter battery: byte 31 bit 2 = no controller connected (state unknown)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { device, plugin, restore } = await setup({ productId: 0x0BA0 });
+  try {
+    const queue = queueReads(device);
+    plugin.Initialize();
+    queue.push(batteryInput(30, 0x07));
+    plugin.Render();
+    const gone = batteryInput(30, 0x00);
+    gone[31] = 0x04;
+    queue.push(gone);
+    t.mock.timers.tick(5000);
+    plugin.Render();
+    assert.deepEqual([device.battery.levels, device.battery.states], [[75], [1, 0]], "level kept, state unknown");
+  } finally {
+    restore();
+  }
+});
+
+test("battery: not on a Bluetooth DualShock 4", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  for (const [productId, inputReports] of [[0x09CC, { 0: usbInput(0x11) }]]) {
+    const { device, plugin, restore } = await setup({ productId, inputReports });
+    try {
+      plugin.Initialize();
+      const reads = callsTo(device, "read").length;
+      plugin.Render();
+      t.mock.timers.tick(10_000);
+      plugin.Render();
+      assert.deepEqual(device.features, []);
+      assert.equal(callsTo(device, "read").length, reads, "no battery reads");
+      assert.deepEqual(device.battery.states, []);
+    } finally {
+      restore();
+    }
+  }
+});

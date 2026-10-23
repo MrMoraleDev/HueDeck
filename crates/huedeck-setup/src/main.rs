@@ -35,6 +35,9 @@
 //! `--uninstall` stops and deletes the service and removes those files. It
 //! never uninstalls PawnIO. `--plan` prints the steps and changes nothing.
 
+// Windows-only tool: elsewhere it only builds (CI), so its steps go unused.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use huedeck_iobroker::detect::PawnIoStatus;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

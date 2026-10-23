@@ -46,7 +46,8 @@ impl HidrawHotplug {
 impl HotplugSource for HidrawHotplug {
     fn subscribe(&mut self) -> HalResult<Receiver<DeviceEvent>> {
         self.stop();
-        let socket = sys::uevent_socket(UDEV_GROUP).map_err(|e| HalError::Backend(format!("udev monitor: {e}")))?;
+        let socket =
+            sys::uevent_socket(UDEV_GROUP).map_err(|e| HalError::Backend(format!("udev monitor: {e}")))?;
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
         self.stop = Arc::clone(&stop);
@@ -69,7 +70,9 @@ impl HotplugSource for HidrawHotplug {
                         let Some(ev) = uevent::parse(&buf[..n]) else {
                             continue;
                         };
-                        if let Some(event) = uevent::device_event(&ev, &crate::sysfs::RealFs, Path::new("/sys")) {
+                        if let Some(event) =
+                            uevent::device_event(&ev, &crate::sysfs::RealFs, Path::new("/sys"))
+                        {
                             tracing::debug!(?event, "hidraw hotplug");
                             if tx.send(event).is_err() {
                                 return;

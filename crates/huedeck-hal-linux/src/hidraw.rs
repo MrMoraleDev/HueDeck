@@ -32,7 +32,9 @@ const KERNEL_TIMEOUT_MS: u32 = 5000;
 /// Map an I/O error of a hidraw node onto the HAL vocabulary.
 pub(crate) fn map_io(e: io::Error, what: &str) -> HalError {
     match e.raw_os_error() {
-        Some(libc::ENODEV) | Some(libc::EIO) | Some(libc::ENXIO) | Some(libc::ESHUTDOWN) => HalError::Disconnected,
+        Some(libc::ENODEV) | Some(libc::EIO) | Some(libc::ENXIO) | Some(libc::ESHUTDOWN) => {
+            HalError::Disconnected
+        }
         Some(libc::EACCES) | Some(libc::EPERM) => HalError::PermissionDenied(format!(
             "{what}: {e} (install the udev rules: `huedeck udev generate --out 70-huedeck.rules`, \
              see packaging/udev/README.md)"
@@ -99,7 +101,8 @@ impl LinuxHidBackend {
         let name = devnode.trim_start_matches("/dev/");
         let link = self.class_dir.join(name).join("device");
         let hid_dir = std::fs::canonicalize(&link).map_err(|e| map_io(e, devnode))?;
-        sysfs::read_node(&sysfs::RealFs, name, &hid_dir).ok_or_else(|| HalError::NotFound(devnode.to_string()))
+        sysfs::read_node(&sysfs::RealFs, name, &hid_dir)
+            .ok_or_else(|| HalError::NotFound(devnode.to_string()))
     }
 }
 
@@ -114,8 +117,8 @@ impl HidBackend for LinuxHidBackend {
     }
 
     fn open(&self, path: &str) -> HalResult<Box<dyn HidHandle>> {
-        let (devnode, index) =
-            tlc::parse_endpoint_path(path).ok_or_else(|| HalError::InvalidArgument(format!("not a hidraw path: {path}")))?;
+        let (devnode, index) = tlc::parse_endpoint_path(path)
+            .ok_or_else(|| HalError::InvalidArgument(format!("not a hidraw path: {path}")))?;
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -156,7 +159,9 @@ pub struct LinuxHidHandle {
 
 impl std::fmt::Debug for LinuxHidHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LinuxHidHandle").field("path", &self.info.path).finish()
+        f.debug_struct("LinuxHidHandle")
+            .field("path", &self.info.path)
+            .finish()
     }
 }
 
@@ -176,9 +181,7 @@ impl HidHandle for LinuxHidHandle {
             return Err(HalError::InvalidArgument("empty output report".into()));
         }
         let report = tlc::fit_report(data, self.info.report_lengths.output);
-        self.file
-            .write(&report)
-            .map_err(|e| map_io(e, &self.info.path))?;
+        self.file.write(&report).map_err(|e| map_io(e, &self.info.path))?;
         Ok(data.len())
     }
 

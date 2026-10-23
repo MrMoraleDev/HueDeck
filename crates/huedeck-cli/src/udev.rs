@@ -195,7 +195,9 @@ pub fn generate(dirs: &[PathBuf], out: Option<&Path>, check: bool) -> anyhow::Re
     let rules = render(&load(dirs)?);
     match (out, check) {
         (Some(path), true) => {
-            let current = std::fs::read_to_string(path).unwrap_or_default().replace("\r\n", "\n");
+            let current = std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .replace("\r\n", "\n");
             if current == rules {
                 Ok(true)
             } else {
@@ -263,7 +265,8 @@ mod tests {
                 {"vid":"0x0403","pids":["0x6001"],"transport":"serial"}]}"#,
         )
         .unwrap();
-        let dup = parse_manifest(r#"{"id":"c.c","name":"C","devices":[{"vid":"0x1e71","pids":["0x2001"]}]}"#).unwrap();
+        let dup = parse_manifest(r#"{"id":"c.c","name":"C","devices":[{"vid":"0x1e71","pids":["0x2001"]}]}"#)
+            .unwrap();
         let r = render(&[c, dup]);
         let rules: Vec<&str> = r.lines().filter(|l| l.starts_with("ACTION")).collect();
         assert_eq!(
@@ -277,7 +280,10 @@ mod tests {
             ]
         );
         assert!(r.contains("# b.b: B\n"));
-        assert!(!r.contains("# c.c"), "a plugin whose ids are all emitted already adds nothing");
+        assert!(
+            !r.contains("# c.c"),
+            "a plugin whose ids are all emitted already adds nothing"
+        );
     }
 
     #[test]
@@ -318,7 +324,7 @@ mod tests {
         assert!(!generate(std::slice::from_ref(&dir), Some(&out), true).unwrap());
         assert!(generate(std::slice::from_ref(&dir), Some(&out), false).unwrap());
         assert!(generate(std::slice::from_ref(&plugin), Some(&out), true).unwrap());
-        assert!(generate(&[dir.clone()], None, true).is_err());
+        assert!(generate(std::slice::from_ref(&dir), None, true).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

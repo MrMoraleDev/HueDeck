@@ -103,8 +103,14 @@ pub struct DeviceView {
     pub default_scale: f32,
     /// `ImageUrl()` or a `data:` URL of `Image()`.
     pub image: Option<String>,
-    /// `ControllableParameters()` entries, each with its current `value`.
+    /// The plugin's parameters, each with its current `value`: the
+    /// `ControllableParameters()` entries, then as changed at run time by
+    /// `device.addProperty` / `removeProperty` while the device runs.
     pub parameters: Vec<Value>,
+    /// Messages on the device card: `DeviceMessages()`, then as changed at run
+    /// time by `device.addMessage` / `removeMessage` / `notify` / `denotify`.
+    #[serde(default)]
+    pub messages: Vec<DeviceMessageView>,
     /// The device and its children as canvas endpoints.
     pub endpoints: Vec<Endpoint>,
     /// Channel names (component editor).
@@ -114,6 +120,22 @@ pub struct DeviceView {
     pub battery: Option<BatteryView>,
     /// Pulse the device red while its battery is low (user setting).
     pub blink_low_battery: bool,
+}
+
+/// A message a device plugin shows on its card.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceMessageView {
+    /// `DeviceMessages()` `property`, `addMessage` id, or the alert id `notify` returned.
+    pub id: String,
+    /// `notify` title.
+    pub title: Option<String>,
+    /// The text.
+    pub message: String,
+    /// Hover text.
+    pub tooltip: Option<String>,
+    /// `notify` priority: 0 info, 1 important, 2 and 3 errors; `None` for plain messages.
+    pub priority: Option<i32>,
 }
 
 /// A device's battery, as its plugin last reported it.

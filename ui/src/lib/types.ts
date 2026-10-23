@@ -41,7 +41,23 @@ export interface Parameter {
   max?: number | null;
   step?: number | null;
   default?: unknown;
+  /** false: apply when the control is released / committed, not while it moves. */
+  live?: boolean;
+  /** Display order (lower first; unordered ones keep their place after). */
+  order?: number | null;
+  /** Textfield regex the whole value must match. */
+  filter?: string | null;
   value?: unknown;
+}
+
+/** A message a device plugin shows on its card (DeviceMessages, addMessage, notify). */
+export interface DeviceMessage {
+  id: string;
+  title?: string | null;
+  message: string;
+  tooltip?: string | null;
+  /** notify priority: 0 info, 1 important, 2 and 3 errors; absent for plain messages. */
+  priority?: number | null;
 }
 
 export interface DeviceView {
@@ -63,6 +79,8 @@ export interface DeviceView {
   defaultScale: number;
   image?: string | null;
   parameters: Parameter[];
+  /** Plugin messages (may change while the device runs). */
+  messages?: DeviceMessage[];
   endpoints: Endpoint[];
   channels: ChannelView[];
   /** The plugin's last battery report (devices with a battery only). */

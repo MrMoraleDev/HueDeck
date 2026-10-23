@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createMockDevice, installGlobals, loadPlugin, hexToBytes, bytesToHex } from "../../_testkit/mock-device.mjs";
-import { DETECTORS, DEVICES } from "../devices.js";
+import { DETECTORS, DEVICES, LED_ID_ZERO, MAX_BRIGHTNESS_100, STANDARD, EXTENDED } from "../devices.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginPath = join(here, "..", "plugin.js");
@@ -638,6 +638,144 @@ test("battery: an answer 'not supported' stops the polling", async (t) => {
     }
     assert.deepEqual(batteryRequests(device), []);
     assert.deepEqual(device.battery.states, []);
+  } finally {
+    restore();
+  }
+});
+
+// --- Lightloom extensions: "Save to devices" and the exit modes ------------------------------------
+
+/** A 91-byte Razer report built here (report id 0, transaction id, size, class, id, args, XOR crc of bytes 3..88). */
+function razerReport(tid, cls, id, size, args) {
+  const b = new Array(91).fill(0);
+  b[2] = tid;
+  b[6] = size;
+  b[7] = cls;
+  b[8] = id;
+  args.forEach((v, i) => { b[9 + i] = v; });
+  for (let i = 3; i < 89; i++) b[89] ^= b[i];
+  return bytesToHex(b);
+}
+
+/** Whether a report sets a lighting effect or brightness with the "save" storage byte. */
+function storesSomething(spaced) {
+  const b = spaced.split(" ").map((h) => parseInt(h, 16));
+  if (b.length !== 91) return false;
+  const effectOrBrightness = (b[7] === 0x0F && (b[8] === 0x02 || b[8] === 0x04)) || (b[7] === 0x03 && [0x01, 0x02, 0x03].includes(b[8]));
+  return effectOrBrightness && b[9] === 0x01;
+}
+
+const DOCK = 0x007E;
+
+test("save: the Mouse Dock Chroma (extended matrix) stores the static colour, then brightness, with storage 0x01", async () => {
+  const entry = DEVICES[DOCK];
+  assert.equal(entry.matrix, EXTENDED);
+  const { device, plugin, restore } = await setup({ productId: DOCK, color: [0x12, 0x34, 0x56] });
+  try {
+    plugin.Initialize();
+    plugin.Render();
+    drain(device);
+    const preview = plugin.SaveToDevice({ action: "preview", effect: null, colors: [] });
+    assert.deepEqual(drain(device), [], "a preview sends nothing");
+    assert.deepEqual(preview.zones.map((z) => z.color), ["#123456"]);
+    plugin.SaveToDevice({ action: "save", effect: null, colors: [] });
+    const led = LED_ID_ZERO.includes(DOCK) ? 0x00 : 0x05;
+    const max = MAX_BRIGHTNESS_100.includes(DOCK) ? 100 : 255;
+    const tid = entry.transactionId;
+    assert.deepEqual(drain(device), [
+      razerReport(tid, 0x0F, 0x02, 0x09, [0x01, led, 0x01, 0x00, 0x00, 0x01, 0x12, 0x34, 0x56]),
+      razerReport(tid, 0x0F, 0x04, 0x03, [0x01, led, max]),
+    ]);
+    plugin.SaveToDevice({ action: "save", effect: "spectrum", colors: [] });
+    assert.deepEqual(drain(device), [
+      razerReport(tid, 0x0F, 0x02, 0x06, [0x01, led, 0x03]),
+      razerReport(tid, 0x0F, 0x04, 0x03, [0x01, led, max]),
+    ]);
+    // The next frame goes out again (custom frame + custom effect, no storage).
+    plugin.Render();
+    const frame = drain(device);
+    assert.ok(frame.length > 0 && frame.every((r) => !storesSomething(r)));
+  } finally {
+    restore();
+  }
+});
+
+test("save: standard-matrix devices and other effects are refused without a packet", async () => {
+  const standard = fixtures.razer.map((c) => Number(c.pid)).find((pid) => DEVICES[pid]?.matrix === STANDARD);
+  assert.ok(standard, "a standard-matrix product in the fixtures");
+  const { device, plugin, restore } = await setup({ productId: standard, color: [1, 2, 3] });
+  try {
+    plugin.Initialize();
+    drain(device);
+    assert.ok(plugin.SaveToDevice({ action: "save", effect: null, colors: [] }).unsupported);
+    assert.deepEqual(drain(device), []);
+  } finally {
+    restore();
+  }
+  const dock = await setup({ productId: DOCK, color: [1, 2, 3] });
+  try {
+    dock.plugin.Initialize();
+    drain(dock.device);
+    assert.ok(dock.plugin.SaveToDevice({ action: "save", effect: "breathing", colors: [] }).unsupported);
+    assert.deepEqual(drain(dock.device), []);
+  } finally {
+    dock.restore();
+  }
+});
+
+test("exit modes keep and off: the last (or a black) frame, no spectrum cycle, nothing stored", async () => {
+  for (const mode of ["keep", "off"]) {
+    const { device, plugin, restore } = await setup({ productId: DOCK, color: [0x12, 0x34, 0x56] });
+    try {
+      plugin.Initialize();
+      drain(device);
+      plugin.Render();
+      const frame = drain(device);
+      plugin.Shutdown(false, mode);
+      const sent = drain(device);
+      if (mode === "keep") {
+        assert.deepEqual(sent, frame, "the last frame again");
+      } else {
+        assert.equal(sent.length, frame.length);
+        assert.ok(sent[0].includes("00 00 00 00 00 00"));
+      }
+      assert.ok(sent.every((r) => !storesSomething(r)));
+      assert.ok(sent.every((r) => !(r.split(" ")[7] === "0F" && r.split(" ")[8] === "02" && r.split(" ")[11] === "03")), "no spectrum");
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("the storage byte 0x01 appears only in SaveToDevice({action: 'save'})", async () => {
+  for (const c of [...fixtures.razer, { pid: "0x007C" }]) {
+    for (const mode of [undefined, "restore", "keep", "off"]) {
+      const { device, plugin, restore } = await setup({ productId: Number(c.pid), color: canvas });
+      try {
+        plugin.Initialize();
+        plugin.Render();
+        plugin.SaveToDevice({ action: "preview", effect: null, colors: [] });
+        plugin.SaveToDevice({ action: "preview", effect: "spectrum", colors: [] });
+        plugin.Shutdown(false, mode);
+        plugin.Shutdown(true);
+        assert.ok(drain(device).every((r) => !storesSomething(r)), `${c.pid} ${mode}`);
+      } finally {
+        restore();
+      }
+    }
+  }
+});
+
+test("save: the DeathAdder V2 Pro (recorded profile) stores on LED 0x00, then asks for frame mode again", async () => {
+  const { device, plugin, restore } = await setup({ productId: 0x007C, color: [9, 8, 7] });
+  try {
+    plugin.Initialize();
+    drain(device);
+    plugin.SaveToDevice({ action: "save", effect: null, colors: [] });
+    const sent = drain(device).map((r) => r.split(" ").map((h) => parseInt(h, 16)));
+    assert.deepEqual(sent[0].slice(7, 18), [0x0F, 0x02, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 9, 8, 7]);
+    assert.deepEqual(sent[1].slice(7, 12), [0x0F, 0x04, 0x01, 0x00, 255]);
+    assert.deepEqual(sent[2].slice(7, 15), [0x0F, 0x02, 0x00, 0x00, 0x08, 0x00, 0x01, 0x00]);
   } finally {
     restore();
   }

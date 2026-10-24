@@ -12,6 +12,7 @@
   "devices": [
     { "network": { "udpPorts": [4048] } }
   ],
+  "shutdownModes": ["restore"],
   "permissions": ["network-udp", "settings"],
   "keywords": ["ddp", "distributed display protocol", "wled", "xlights", "espixelstick", "pixel controller", "led strip"]
 }

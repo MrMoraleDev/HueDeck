@@ -12,6 +12,7 @@
   "devices": [
     { "network": { "mdns": ["_nanoleafapi._tcp"], "udpPorts": [60222, 60221], "tcpPorts": [16021] } }
   ],
+  "shutdownModes": ["restore"],
   "permissions": ["network-udp", "network-http", "mdns", "settings"],
   "keywords": ["nanoleaf", "light panels", "aurora", "canvas", "shapes", "elements", "lines", "network", "lan"]
 }

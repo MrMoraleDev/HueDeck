@@ -70,6 +70,7 @@ fn set(b: &dyn Backend, values: Value) {
             key: KEY.into(),
             enabled: None,
             parameters: Some(values.as_object().unwrap().clone()),
+            shutdown_mode: None,
             blink_low_battery: None,
         },
     )
@@ -88,6 +89,7 @@ fn settings(
             signalrgb: None,
             gpu_compositing: None,
             smbus: None,
+            shutdown_mode: None,
             battery_low: low,
             battery_critical: critical,
             battery_notifications: notify,
@@ -158,6 +160,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
             key: KEY.into(),
             enabled: None,
             parameters: None,
+            shutdown_mode: None,
             blink_low_battery: Some(true),
         },
     )

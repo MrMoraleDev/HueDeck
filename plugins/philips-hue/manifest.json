@@ -12,6 +12,7 @@
   "devices": [
     { "network": { "mdns": ["_hue._tcp"], "tcpPorts": [80] } }
   ],
+  "shutdownModes": ["restore"],
   "permissions": ["network-http", "mdns", "settings"],
   "keywords": ["philips", "hue", "bridge", "smart lights", "network", "lan"]
 }

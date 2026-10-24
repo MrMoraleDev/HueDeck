@@ -26,6 +26,8 @@
 //! * [`manager`]: one session per present device, following hotplug
 //!   (stop on removal, restart behind a stale handle, start on arrival).
 //! * [`catalog`]: plugin discovery over plugin directories (VID:PID index).
+//! * [`save`]: storing lighting in a device (`SaveToDevice`) and the
+//!   shutdown modes (`Shutdown(SystemSuspending, mode)`), Lightloom extensions.
 //! * [`stats`]: fixed-memory latency histograms for long-running sessions.
 //! * [`exports`]: namespace JSON → [`PluginMeta`].
 //! * [`dryrun`]: the `lightloom compat dry-run` corpus harness.
@@ -51,6 +53,7 @@ pub mod meta;
 pub mod net;
 pub mod resolve;
 pub mod runtime;
+pub mod save;
 pub mod service;
 pub mod session;
 pub mod smbus;

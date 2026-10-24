@@ -762,6 +762,18 @@ declare namespace Lightloom {
     SpdManufacturers?: Exported<SpdManufacturer[]>;
     /** Writes inside TransactionLock are queued and sent as one batch. @lightloom */
     SmbusBatchWrites?: Exported<boolean>;
+    /**
+     * What `SaveToDevice(request)` can store in the device's own memory ("Save to devices";
+     * docs/host-api/save-shutdown.md). Repeated as `save` in manifest.json.
+     * @lightloom
+     */
+    SaveCapabilities?: Exported<SaveCapabilities>;
+    /**
+     * The exit modes `Shutdown(systemSuspending, mode)` carries out itself; the others fall back
+     * to `shutdownColor`. Repeated as `shutdownModes` in manifest.json.
+     * @lightloom
+     */
+    ShutdownModes?: Exported<ShutdownMode[]>;
 
     // --- lifecycle (@signalrgb) ----------------------------------------------------------
     /** Accept one HID collection of the matched device; `device` is already bound. @signalrgb */
@@ -772,13 +784,48 @@ declare namespace Lightloom {
     Initialize?(): void;
     /** Every frame (SMBus sessions: at most every 33 ms). @signalrgb */
     Render?(): void;
-    /** On stop, removal and suspend; `systemSuspending` true: show black. @signalrgb */
-    Shutdown?(systemSuspending?: boolean): void;
+    /**
+     * On stop, removal and suspend; `systemSuspending` true: show black. Lightloom passes the exit
+     * mode as a second argument (`undefined` elsewhere: treat as "restore"). @signalrgb
+     */
+    Shutdown?(systemSuspending?: boolean, mode?: ShutdownMode): void;
+    /**
+     * "Save to devices": store the frame's colours (`effect` null) or a built-in effect in the
+     * device's own memory. Called only after the user confirmed it, at most once a minute per
+     * device; a "preview" must not write (the host runs it dry anyway). Throw on a failed write.
+     * @lightloom
+     */
+    SaveToDevice?(request: SaveRequest): SaveResult;
     /** Network plugins: the discovery service class/object. @signalrgb @unimplemented */
     DiscoveryService?: unknown;
     /** Called when the device brightness changes. @signalrgb */
     onBrightnessChanged?(): void;
   }
+
+  /** What happens to the lights when Lightloom closes. @lightloom */
+  type ShutdownMode = "restore" | "keep" | "off";
+
+  /** `SaveCapabilities()`. @lightloom */
+  interface SaveCapabilities {
+    /** The frame's colours (one per zone or LED, as the device stores them). */
+    static: boolean;
+    /** Built-in effects the device can store. */
+    effects: Array<"spectrum" | "breathing" | "wave" | "rainbow">;
+  }
+
+  /** The argument of `SaveToDevice()`. @lightloom */
+  interface SaveRequest {
+    action: "preview" | "save";
+    /** One of `SaveCapabilities().effects`, or null for the frame's colours. */
+    effect: string | null;
+    /** The device's LEDs on the frame shown last, `LedPositions()` order. */
+    colors: Array<[number, number, number]>;
+  }
+
+  /** What `SaveToDevice()` returns. @lightloom */
+  type SaveResult =
+    | { effect: string; zones: Array<{ name: string; color: string }>; note?: string }
+    | { unsupported: string };
 
   // ------------------------------------------------------------------ host modules
 

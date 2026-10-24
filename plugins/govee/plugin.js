@@ -29,6 +29,9 @@ export function Publisher() { return "Lightloom"; }
 export function Version() { return "0.1.0"; }
 export function Documentation() { return "hardware/govee"; }
 export function Type() { return "network"; }
+// Lightloom extension (docs/host-api/save-shutdown.md): Shutdown() hands the light back to its
+// own state ("restore"); for "keep" and "off" the host falls back to that too.
+export function ShutdownModes() { return ["restore"]; }
 export function DeviceType() { return "lightingcontroller"; }
 export function Size() { return [1, 1]; }
 export function DefaultPosition() { return [0, 0]; }

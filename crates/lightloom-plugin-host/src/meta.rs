@@ -70,6 +70,8 @@ pub const METADATA_EXPORTS: &[&str] = &[
     "SmbusDeniedRegisters",
     "SpdManufacturers",
     "SmbusBatchWrites",
+    "SaveCapabilities",
+    "ShutdownModes",
 ];
 
 /// Exports the host calls during the device lifecycle (never at scan time).
@@ -320,6 +322,9 @@ pub struct LifecycleExports {
     pub discovery_service: bool,
     /// Every `on<Prop>Changed` export, including the built-in `onBrightnessChanged`, in module-namespace (sorted) order.
     pub change_hooks: Vec<String>,
+    /// `SaveToDevice(request)` (Lightloom extension, [`crate::save`]).
+    #[serde(default)]
+    pub save_to_device: bool,
 }
 
 impl LifecycleExports {
@@ -545,6 +550,14 @@ pub struct PluginMeta {
     /// as one batch (crate::smbus); `TransactionUnlock()` reports a failure.
     #[serde(default)]
     pub smbus_batch_writes: bool,
+    /// `SaveCapabilities()` (Lightloom extension): what `SaveToDevice(request)` can
+    /// store in the device's own memory ([`crate::save`]).
+    #[serde(default)]
+    pub save_caps: Option<crate::save::SaveCaps>,
+    /// `ShutdownModes()` (Lightloom extension): the [`crate::save::ShutdownMode`]s
+    /// the plugin's `Shutdown(SystemSuspending, mode)` carries out itself.
+    #[serde(default)]
+    pub shutdown_modes: Vec<crate::save::ShutdownMode>,
     /// Lifecycle exports the module declares.
     #[serde(default)]
     pub lifecycle: LifecycleExports,
@@ -593,6 +606,8 @@ impl PluginMeta {
             smbus_denied_registers: Vec::new(),
             spd_manufacturers: Vec::new(),
             smbus_batch_writes: false,
+            save_caps: None,
+            shutdown_modes: Vec::new(),
             lifecycle: LifecycleExports::default(),
         }
     }

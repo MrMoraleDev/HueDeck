@@ -4,6 +4,7 @@
   import { daemon } from "../lib/store.svelte";
   import type { DeviceView, LibraryComponent, Snapshot } from "../lib/types";
   import ControlInput from "./ControlInput.svelte";
+  import SaveDialog from "./SaveDialog.svelte";
   import BatteryBadge from "./BatteryBadge.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
@@ -12,6 +13,12 @@
   let open = $state<string | null>(null);
   let pick = $state<Record<string, string>>({});
   let strip = $state<Record<string, number>>({});
+  let saving = $state(false);
+  const MODE_NAMES: Record<string, string> = {
+    restore: "Its own lighting",
+    keep: "Keep the last colours",
+    off: "Lights off",
+  };
 
   async function loadLibrary() {
     try {
@@ -38,6 +45,14 @@
   }
 </script>
 
+<div class="row toolbar">
+  <button onclick={() => (saving = true)} disabled={!snapshot.devices.some((d) => d.connected)}>Save to devices…</button>
+  <span class="muted">Stores the current lighting in each device's own memory, so it shows at boot without Lightloom.</span>
+</div>
+{#if saving}
+  <SaveDialog {snapshot} onclose={() => (saving = false)} />
+{/if}
+
 <div class="list">
   {#each snapshot.devices as d (d.key)}
     <section class="panel device">
@@ -45,13 +60,13 @@
         {#if d.image}<img src={d.image} alt="" />{/if}
         <div class="title">
           <strong>{d.name}</strong>
-          <span class="muted key">{d.bus ? `SMBus · ${d.bus}` : d.key}</span>
+          <span class="muted key">{d.bus ? (d.bus.startsWith("network") ? d.bus : `SMBus · ${d.bus}`) : d.key}</span>
         </div>
         <span class={`badge ${stateBadge(d)}`}>{d.state}</span>
         {#if d.battery}<BatteryBadge battery={d.battery} />{/if}
         {#if d.connected}
           <span class="muted stats"
-            >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? "bus" : "HID"} errors</span
+            >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? (d.bus.startsWith("network") ? "network" : "bus") : "HID"} errors</span
           >
         {/if}
         <label class="row"
@@ -98,6 +113,25 @@
               onchange={(v) => daemon.run(() => api.setDevice(d.key, { parameters: { [p.property]: v } }))}
             />
           {/each}
+        {/if}
+
+        <h3>When Lightloom closes</h3>
+        <label class="row"
+          ><select
+            value={d.shutdownMode ?? "default"}
+            onchange={(e) =>
+              daemon.run(() =>
+                api.setDevice(d.key, { shutdownMode: (e.target as HTMLSelectElement).value as "default" }),
+              )}
+          >
+            <option value="default">As in Settings ({MODE_NAMES[snapshot.settings.shutdownMode]})</option>
+            {#each d.shutdownModes as m (m)}
+              <option value={m}>{MODE_NAMES[m] ?? m}</option>
+            {/each}
+          </select></label
+        >
+        {#if d.shutdownModes.length < 3}
+          <p class="muted">This device's plugin can only give the lights back to the device's own lighting.</p>
         {/if}
 
         {#if d.channels.length}
@@ -160,6 +194,9 @@
 </div>
 
 <style>
+  .toolbar {
+    margin-bottom: 12px;
+  }
   .list {
     display: flex;
     flex-direction: column;

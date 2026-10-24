@@ -67,6 +67,11 @@ impl Paths {
         self.config.join("config.toml")
     }
 
+    /// One line per "Save to devices" attempt (what was stored in which device, when).
+    pub fn save_audit_log(&self) -> PathBuf {
+        self.data.join("save-audit.log")
+    }
+
     /// The user's own plugins.
     pub fn user_plugins(&self) -> PathBuf {
         self.config.join("plugins")

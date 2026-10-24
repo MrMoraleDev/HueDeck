@@ -2,7 +2,15 @@
 // The daemon's native API (crates/lightloom-api/src/server.rs). Requests that change
 // state carry the token lightloomd embeds in the page it serves.
 
-import type { EffectTimer, LibraryComponent, Placement, Playlist, Snapshot } from "./types";
+import type {
+  EffectTimer,
+  LibraryComponent,
+  Placement,
+  Playlist,
+  SaveResult,
+  ShutdownMode,
+  Snapshot,
+} from "./types";
 
 function token(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="lightloom-token"]')?.content ?? "";
@@ -63,7 +71,7 @@ export const api = {
   setLighting: (patch: { brightness?: number; enabled?: boolean }) => request("PATCH", "/v1/lighting", patch),
   setDevice: (
     key: string,
-    patch: { enabled?: boolean; parameters?: Record<string, unknown>; blinkLowBattery?: boolean },
+    patch: { enabled?: boolean; parameters?: Record<string, unknown>; blinkLowBattery?: boolean; shutdownMode?: ShutdownMode | "default" },
   ) =>
     request("PATCH", `/v1/devices/${enc(key)}`, patch),
   setChannel: (key: string, channel: string, components: unknown[]) =>
@@ -78,14 +86,19 @@ export const api = {
     signalrgb?: boolean;
     gpuCompositing?: boolean;
     smbus?: boolean;
+    network?: boolean;
     batteryLow?: number;
     batteryCritical?: number;
     batteryNotifications?: boolean;
+    shutdownMode?: ShutdownMode;
     openrgbSdk?: boolean;
   }) =>
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */
   setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),
+  networkAdd: (plugin: string, ip: string) => request("POST", `/v1/network/${enc(plugin)}/add`, { ip }),
+  networkAction: (plugin: string, id: string, action: "pair" | "forget") =>
+    request("POST", `/v1/network/${enc(plugin)}/controllers/${enc(id)}/${action}`),
   importSignalRgb: () => request<{ placements: number; channels: number; layout: string }>(
     "POST",
     "/v1/import/signalrgb",
@@ -94,6 +107,12 @@ export const api = {
   exportState: () => request<unknown>("GET", "/v1/export"),
   importState: (state: unknown) => request("POST", "/v1/import", state),
   rescan: () => request("POST", "/v1/rescan"),
+  /** What "Save to devices" would store (nothing is written); every device when `devices` is empty. */
+  savePreview: (devices: Record<string, { effect: string | null }> = {}) =>
+    request<{ devices: SaveResult[] }>("POST", "/v1/save/preview", { devices }),
+  /** Store lighting in the devices' own memory; only after the user confirmed it. */
+  saveToDevices: (devices: Record<string, { effect: string | null }>) =>
+    request<{ devices: SaveResult[] }>("POST", "/v1/save", { confirm: true, devices }),
   shutdown: () => request("POST", "/v1/shutdown"),
   tap: (x: number, y: number) => request("POST", "/v1/canvas/tap", { x, y }),
 };

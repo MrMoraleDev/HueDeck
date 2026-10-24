@@ -134,7 +134,7 @@ the plugin picks interface 0's 91-byte collection for the Razer reports and inte
 | 89 | crc | XOR of bytes 3..88 |
 | 90 | reserved | 0 |
 
-Commands the plugin sends (storage byte always `0x00`, "no save"; `led` = the product's LED id,
+Commands the plugin sends (storage byte `0x00`, "no save", except in "Save to devices" below; `led` = the product's LED id,
 `0x00` for the products of the `RAZER_LED_ID_ZERO` case list, else `0x05`):
 
 | Command | Class, id, size | Arguments | When |
@@ -217,6 +217,29 @@ back with OpenRGB's own reports: spectrum cycle (`SetModeSpectrumCycle()`, custo
 their per-LED effect 4), then brightness at the maximum (`DeviceUpdateMode()` applies the mode's
 brightness). The three products switched to software mode at start go back to hardware mode
 (`00 04 00 00`). Nothing is saved: the device's own stored effect returns at its next power-up.
+
+Exit modes (Lightloom extension, [docs/host-api/save-shutdown.md](../host-api/save-shutdown.md)):
+`Shutdown(false, "keep")` sends the last frame again and `"off"` a black frame, through the
+device's own frame reports, and leaves it in custom-frame (or software) mode: no spectrum cycle,
+no hardware mode, nothing stored.
+
+## Save to devices (Lightloom extension, untested on hardware)
+
+OpenRGB never sets the storage byte (`RAZER_STORAGE_SAVE = 0x01`, OpenRazer's `VARSTORE`; OpenRGB
+always sends `RAZER_STORAGE_NO_SAVE`). Effects set with it are the ones the device keeps across
+power cycles (OpenRazer sends its effects with `VARSTORE`). "Save to devices" sends, for the device
+and each extended-matrix device paired to it:
+
+* `0F 02`, size `09`, `[01, led, 01, 00, 00, 01, r, g, b]`: `razer_create_mode_static_extended_matrix_report()`
+  with storage `01` (static: one colour, the average of the device's LEDs on the frame shown), or
+  `0F 02`, size `06`, `[01, led, 03]`: the spectrum-cycle extended report with storage `01`;
+* `0F 04`, size `03`, `[01, led, max]`: the extended brightness report with storage `01`, full brightness.
+
+Only extended-matrix devices are offered: the standard-matrix effect reports
+(`razer_create_mode_*_standard_matrix_report()`) have no storage byte, and the ARGB controller and
+the Kraken V4 family use other reports. The DeathAdder V2 Pro (recorded profile) gets LED id `0x00`,
+the LED id of its recorded effect report (OpenRGB would use `0x05`), and the frame-mode request
+again afterwards; the other devices go back to custom frames with the next `Render()`.
 
 ## Chroma Addressable RGB Controller (`0F1F`, S5)
 
@@ -351,7 +374,7 @@ are unverified. The battery queries are untested on hardware for every product.
 
 - Hardware effects other than the exit's spectrum cycle / wave (static, breathing, wave,
   reactive, starlight, ripple, fire): Lightloom drives LEDs per frame.
-- Anything with the save storage flag: OpenRGB sends none; neither does Lightloom.
+- Anything with the save storage flag, outside "Save to devices" (above).
 - Firmware, serial, variant and supported-effect queries (see "Start").
 - The Bluetooth detector lines OpenRGB comments out (Blackwidow V3 Pro, Basilisk V3 Pro and
   Basilisk V3 Pro 35K Phantom Green over Bluetooth, vendor `068E`): not detectors at this commit.

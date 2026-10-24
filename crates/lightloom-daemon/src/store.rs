@@ -75,6 +75,15 @@ CREATE TABLE presets (
 );
 "#,
     r#"
+CREATE TABLE plugin_settings (
+    plugin TEXT NOT NULL,
+    id     TEXT NOT NULL,
+    key    TEXT NOT NULL,
+    value  TEXT NOT NULL,
+    PRIMARY KEY (plugin, id, key)
+);
+"#,
+    r#"
 CREATE TABLE playlists (
     id         TEXT PRIMARY KEY NOT NULL,
     name       TEXT NOT NULL,
@@ -147,6 +156,10 @@ pub struct StateExport {
     /// Effect playlists, by id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub playlists: Vec<Playlist>,
+    /// Network plugin settings (`service.saveSetting`): plugin -> id -> key -> value.
+    /// They may hold pairing keys (Hue user names, Nanoleaf tokens).
+    #[serde(default, rename = "pluginSettings")]
+    pub plugin_settings: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 /// The database.
@@ -607,7 +620,51 @@ impl Store {
             channels,
             effects,
             playlists: self.playlists()?,
+            plugin_settings: {
+                let mut all: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>> = BTreeMap::new();
+                for (plugin, id, key, value) in self.plugin_settings()? {
+                    all.entry(plugin)
+                        .or_default()
+                        .entry(id)
+                        .or_default()
+                        .insert(key, value);
+                }
+                all
+            },
         })
+    }
+
+    /// Every network plugin setting as `(plugin, id, key, value)`.
+    pub fn plugin_settings(&self) -> anyhow::Result<Vec<(String, String, String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT plugin, id, key, value FROM plugin_settings ORDER BY plugin, id, key")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Store (`Some`) or delete (`None`) one network plugin setting.
+    pub fn set_plugin_setting(
+        &self,
+        plugin: &str,
+        id: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> anyhow::Result<()> {
+        match value {
+            Some(v) => self.conn.execute(
+                "INSERT INTO plugin_settings (plugin, id, key, value) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(plugin, id, key) DO UPDATE SET value = excluded.value",
+                params![plugin, id, key, v],
+            )?,
+            None => self.conn.execute(
+                "DELETE FROM plugin_settings WHERE plugin = ?1 AND id = ?2 AND key = ?3",
+                params![plugin, id, key],
+            )?,
+        };
+        Ok(())
     }
 
     /// Replace everything with `state` in one transaction.
@@ -632,8 +689,19 @@ impl Store {
             "presets",
             "playlists",
             "kv",
+            "plugin_settings",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        for (plugin, ids) in &state.plugin_settings {
+            for (id, keys) in ids {
+                for (key, value) in keys {
+                    tx.execute(
+                        "INSERT INTO plugin_settings (plugin, id, key, value) VALUES (?1, ?2, ?3, ?4)",
+                        params![plugin, id, key, value],
+                    )?;
+                }
+            }
         }
         for (key, value) in &state.settings {
             tx.execute(
@@ -798,6 +866,35 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn plugin_settings_round_trip_and_travel_with_exports() {
+        let s = Store::in_memory().unwrap();
+        s.set_plugin_setting("Philips Hue", "001788fffe", "username", Some("abc"))
+            .unwrap();
+        s.set_plugin_setting("Philips Hue", "001788fffe", "username", Some("def"))
+            .unwrap();
+        s.set_plugin_setting("WLED", "forced", "list", Some("[]"))
+            .unwrap();
+        s.set_plugin_setting("WLED", "forced", "list", None).unwrap();
+        assert_eq!(
+            s.plugin_settings().unwrap(),
+            vec![(
+                "Philips Hue".into(),
+                "001788fffe".into(),
+                "username".into(),
+                "def".into()
+            )]
+        );
+        let export = s.export().unwrap();
+        assert_eq!(
+            export.plugin_settings["Philips Hue"]["001788fffe"]["username"],
+            "def"
+        );
+        let mut t = Store::in_memory().unwrap();
+        t.import(&export).unwrap();
+        assert_eq!(t.plugin_settings().unwrap(), s.plugin_settings().unwrap());
     }
 
     #[test]

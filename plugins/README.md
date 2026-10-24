@@ -47,6 +47,14 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 | `asus-aura-mouse` | ASUS ROG mice with a direct mode: Gladius III AimPoint, Chakram X, Spatha X, Strix Impact III, Keris AimPoint (from OpenRGB) | none yet |
 | `asus-aura-mousemat` | ASUS ROG Balteus / Balteus Qi mousemats (from OpenRGB) | none yet |
 | `asus-aura-headset-stand` | ASUS ROG Throne / Throne Qi / Throne Qi Gundam headset stands (from OpenRGB) | none yet |
+| `wled` | WLED controllers (network: mDNS, UDP realtime DRGB/DNRGB) | none yet |
+| `ddp` | any DDP receiver added by IP (network: UDP 4048) | none yet |
+| `e131` | any E1.31 / sACN receiver added by IP (network: UDP 5568, unicast) | none yet |
+| `philips-hue` | Philips Hue bridges (network: mDNS, link-button pairing, CLIP v1 REST over HTTP) | none yet |
+| `nanoleaf` | Nanoleaf panels (network: mDNS, token pairing, extControl UDP streaming) | none yet |
+| `govee` | Govee lights with LAN control enabled (network: UDP 4001/4002/4003) | none yet |
+| `lifx` | LIFX bulbs (network: LAN protocol, UDP 56700) | none yet |
+| `yeelight` | Yeelight lights with LAN control enabled (network: SSDP discovery, TCP 55443, music mode) | none yet |
 
 ## A plugin directory
 
@@ -107,7 +115,8 @@ instead of USB ids, and Lightloom runs them only when they declare where they ma
   and the devices may live at. Nothing else on the bus is reachable.
 - `SmbusBuses()` (optional): bus kinds to be offered (`"nvidia"`, `"amd"`, `"intel"`, ...).
 - `SmbusDeniedRegisters()` (optional, Lightloom extension): registers the host never lets the
-  plugin write (save-to-flash and the like; MSI GPU: `0x3F`). The manifest lists them as
+  plugin write (save-to-flash and the like; MSI GPU: `0x3F`), except inside the user's
+  "Save to devices" call (`SaveToDevice`). The manifest lists them as
   `smbus.deniedRegisters` (checked against the export).
 - GPU plugins export `BrandGPUList()`; a GPU bus is offered only to the plugins that list
   that card's four PCI ids.
@@ -136,6 +145,33 @@ the reviewed addresses of the first-party RAM plugins; GPU buses need neither. T
 `plugins/_testkit/mock-bus.mjs` (the `bus` objects, both shapes) next to `mock-device.mjs`,
 and in Lightloom's host with `lightloom bench --mock-smbus <plugin>`. Details:
 [docs/host-api/smbus.md](../docs/host-api/smbus.md), Lightloom section.
+
+## Network plugins
+
+`Type()` `"network"` plugins drive lights on the local network. They run only while the
+dashboard setting *Network lights* is on (off by default), in two contexts: a discovery
+service (`DiscoveryService`, `service.*`, mDNS / broadcast discovery, pairing, settings) and
+one device session per controller the service announces (`controller` = the announced data).
+Everything they may reach is on the LAN; there is no proxy and no `https`. The contract,
+Lightloom's extensions (`socket.listen(port, peerIp)`) and the dashboard conventions (`name`,
+`ip`, `status`, `paired`, `startLink()`, `discovery.forceDiscover(ip)`,
+`discovery.forgetController(id)`) are in
+[docs/host-api/network-lightloom.md](../docs/host-api/network-lightloom.md). The manifest has a
+`network` claim (`mdns` = the `MDns` types without `.local.`, `udpPorts`, `tcpPorts`). Test
+with `plugins/_testkit/mock-net.mjs` (sockets, XHR routes, the `service` object, and the
+`@SignalRGB/udp|tcp|base64` imports); `crates/lightloom-plugin-host/tests/network_plugins.rs`
+also runs every first-party network plugin in Lightloom's real host on the loopback interface.
+
+## Saving to the device and exit modes (Lightloom extensions)
+
+A plugin whose device keeps lighting in its own flash or EEPROM can offer "Save to devices":
+export `SaveCapabilities()` and `SaveToDevice(request)`, repeat the capabilities as `save` in
+`manifest.json`, keep every write of the save flag or register inside `SaveToDevice` with
+`action: "save"`, and test that no other path (frames, previews, every exit mode, suspend) sends
+it. `Shutdown(SystemSuspending, mode)` gets the exit mode (`"restore"`, `"keep"`, `"off"`) as a
+second argument; list the ones you implement in `ShutdownModes()` and `shutdownModes`. "Keep" and
+"off" must never store anything. Contract and host guarantees:
+[docs/host-api/save-shutdown.md](../docs/host-api/save-shutdown.md).
 
 ## Adapting a device from OpenRGB
 

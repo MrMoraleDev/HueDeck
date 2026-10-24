@@ -26,6 +26,7 @@
 use crate::bus::SharedGuard;
 use crate::device::SharedDevice;
 use crate::exports::{read_exports, ExportsReading};
+use crate::net::SharedNet;
 use crate::resolve::{ModuleResolver, ResolveError, ResolvedModule};
 use lightloom_hal::hid::HidEndpointTuple;
 use rquickjs::loader::{ImportAttributes, Loader as JsLoader, Resolver};
@@ -130,7 +131,7 @@ const NATIVE_MODULES: &[&str] = &[
 
 /// Rust-backed modules a device session implements (`js/host.js` `nativeModules`);
 /// the others keep their throwing facade there.
-const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo"];
+const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo", "udp", "tcp"];
 
 /// Prefix of the generated modules that pick a device-session implementation.
 const NATIVE_PREFIX: &str = "lightloom:native/";
@@ -172,6 +173,13 @@ pub struct RuntimeOptions {
     /// SMBus plugin: back `bus.*` (and the `Scan(bus)` argument) with this
     /// guarded bus. Without [`RuntimeOptions::device`] the runtime is in scan mode.
     pub smbus: Option<SharedGuard>,
+    /// Network plugin: real sockets and `XMLHttpRequest` over this context
+    /// (a network device session, or a service).
+    pub net: Option<SharedNet>,
+    /// Network service context (`service`, `discovery`): the natives behind `service.*`.
+    pub service: Option<crate::service::ServiceNatives>,
+    /// Network device session: the announced controller data (JSON) bound to `controller`.
+    pub controller: Option<String>,
 }
 
 impl Default for RuntimeOptions {
@@ -183,6 +191,9 @@ impl Default for RuntimeOptions {
             module_stubs: true,
             device: None,
             smbus: None,
+            net: None,
+            service: None,
+            controller: None,
         }
     }
 }
@@ -742,6 +753,26 @@ impl PluginRuntime {
                 cfg.set("mode", "device").map_err(|e| failure(&ctx, e, d))?;
                 crate::device::install(&ctx, device, d).map_err(|e| failure(&ctx, e, d))?;
             }
+            if let Some(service) = &opts.service {
+                let install = || -> rquickjs::Result<()> {
+                    cfg.set("mode", "service")?;
+                    let natives = Object::new(ctx.clone())?;
+                    crate::service::install(&ctx, &natives, service)?;
+                    ctx.globals().set("__lightloomNative", natives)
+                };
+                install().map_err(|e| failure(&ctx, e, d))?;
+            }
+            if let Some(net) = &opts.net {
+                let install = || -> rquickjs::Result<()> {
+                    let natives: Object = ctx.globals().get("__lightloomNative")?;
+                    crate::net::install(&ctx, &natives, net, d)
+                };
+                install().map_err(|e| failure(&ctx, e, d))?;
+            }
+            if let Some(controller) = &opts.controller {
+                cfg.set("controller", controller.as_str())
+                    .map_err(|e| failure(&ctx, e, d))?;
+            }
             if let Some(guard) = &opts.smbus {
                 let install = || -> rquickjs::Result<()> {
                     if opts.device.is_none() {
@@ -919,6 +950,7 @@ impl PluginRuntime {
                 let ret: Value = match args {
                     CallArgs::None => f.call(())?,
                     CallArgs::Bool(b) => f.call((b,))?,
+                    CallArgs::Shutdown { suspending, mode } => f.call((suspending, mode.as_str()))?,
                     CallArgs::FreeBus => {
                         let bus: Value = host_object(&ctx)?.get::<_, Function>("freeBus")?.call(())?;
                         f.call((bus,))?
@@ -940,6 +972,51 @@ impl PluginRuntime {
         });
         deadline.clear();
         r
+    }
+
+    /// Call `export(arg)` with a JSON argument, cut off by `stop` like
+    /// [`PluginRuntime::call_export_until`], and return its (awaited) value as
+    /// JSON (`Null` for `undefined` or a value JSON cannot carry). `Ok(None)`
+    /// when the plugin has no such export.
+    pub fn call_export_json(
+        &self,
+        export: &str,
+        arg: &serde_json::Value,
+        budget: impl Into<Budget>,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<Option<serde_json::Value>, JsFailure> {
+        let json = arg.to_string();
+        let deadline = &self.deadline;
+        deadline.arm_until(budget.into(), Arc::clone(stop));
+        let r = self.context.with(|ctx| {
+            let run = || -> rquickjs::Result<Option<String>> {
+                let ns = plugin_namespace(&ctx)?;
+                let Some(f) = ns.get::<_, Value>(export)?.into_function() else {
+                    return Ok(None);
+                };
+                let arg = ctx.json_parse(json)?;
+                let mut ret: Value = f.call((arg,))?;
+                if let Some(p) = ret.as_promise() {
+                    ret = p.finish::<Value>()?;
+                }
+                while ctx.execute_pending_job() {}
+                if ret.is_undefined() || ret.is_function() {
+                    return Ok(Some("null".into()));
+                }
+                let text = ctx
+                    .json_stringify(ret)?
+                    .map(|s| s.to_string())
+                    .transpose()?
+                    .unwrap_or_else(|| "null".into());
+                Ok(Some(text))
+            };
+            match run().map_err(|e| failure(&ctx, e, deadline)) {
+                Ok(_) if deadline.fired() => Err(JsFailure::cut_off(deadline, export)),
+                r => r,
+            }
+        });
+        deadline.clear();
+        r.map(|o| o.map(|t| serde_json::from_str(&t).unwrap_or(serde_json::Value::Null)))
     }
 
     /// `Scan(bus)` with the free-address bus under `budget`: the addresses it
@@ -1050,6 +1127,41 @@ impl PluginRuntime {
         r
     }
 
+    /// Call the host module's `__lightloomHost[function](arg)` (network event
+    /// delivery, service calls) under `budget`, cut off when `stop` is set.
+    /// Promise jobs the call queued run inside the same budget. Returns the
+    /// function's result when it is a string.
+    pub fn call_host(
+        &self,
+        function: &str,
+        arg: Option<&str>,
+        budget: impl Into<Budget>,
+        stop: Option<&Arc<AtomicBool>>,
+    ) -> Result<Option<String>, JsFailure> {
+        let deadline = &self.deadline;
+        match stop {
+            Some(stop) => deadline.arm_until(budget, Arc::clone(stop)),
+            None => deadline.arm(budget),
+        }
+        let r = self.context.with(|ctx| {
+            let run = || -> rquickjs::Result<Option<String>> {
+                let f: Function = host_object(&ctx)?.get(function)?;
+                let ret: Value = match arg {
+                    Some(a) => f.call((a,))?,
+                    None => f.call(())?,
+                };
+                while ctx.execute_pending_job() {}
+                ret.as_string().map(|s| s.to_string()).transpose()
+            };
+            match run().map_err(|e| failure(&ctx, e, deadline)) {
+                Ok(_) if deadline.fired() => Err(JsFailure::cut_off(deadline, function)),
+                r => r,
+            }
+        });
+        deadline.clear();
+        r
+    }
+
     /// Stub-host record plus specifiers the resolver refused.
     pub fn record(&self) -> HostRecord {
         // Host code only, but it iterates Maps whose prototype a plugin could patch.
@@ -1084,6 +1196,14 @@ pub enum CallArgs {
     Bool(bool),
     /// `(bus)` — `Scan(FreeAddressBus)`.
     FreeBus,
+    /// `(bool, mode)` — `Shutdown(SystemSuspending, mode)`: the second
+    /// argument is a Lightloom extension SignalRGB plugins ignore.
+    Shutdown {
+        /// `SystemSuspending`.
+        suspending: bool,
+        /// What to leave the device showing.
+        mode: crate::save::ShutdownMode,
+    },
 }
 
 /// Run `f` on a fresh OS thread (scoped, large stack) and return its result.
@@ -1185,9 +1305,14 @@ mod tests {
             r.resolve_name(base, "@SignalRGB/base64").unwrap(),
             "lightloom:prelude/base64.js"
         );
+        // Sockets: the device host's implementation when it has one, else the facade.
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/udp").unwrap(),
-            "lightloom:prelude/modules/udp.js"
+            "lightloom:native/udp.js"
+        );
+        assert_eq!(
+            r.resolve_name(base, "@SignalRGB/serial").unwrap(),
+            "lightloom:prelude/modules/serial.js"
         );
         assert_eq!(
             r.resolve_name("lightloom:prelude/modules/udp.js", "../HostApiMissing.js")

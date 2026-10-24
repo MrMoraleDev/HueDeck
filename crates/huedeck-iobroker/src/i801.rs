@@ -212,11 +212,21 @@ mod tests {
         };
         assert_eq!(b.transfer(&word), Ok(BrokerPayload::Ack));
         let calls = fake.calls();
-        assert_eq!(calls[0], ("ioctl_smbus_xfer".into(), xfer_input(&read).unwrap().to_vec()));
+        assert_eq!(
+            calls[0],
+            ("ioctl_smbus_xfer".into(), xfer_input(&read).unwrap().to_vec())
+        );
         assert_eq!(calls[1].1, xfer_input(&block).unwrap().to_vec());
-        assert_eq!(fake.register(0x39, 0x05), Some(0x12), "block bytes from the register on");
+        assert_eq!(
+            fake.register(0x39, 0x05),
+            Some(0x12),
+            "block bytes from the register on"
+        );
         assert_eq!(fake.register(0x39, 0x20), Some(0xEF), "low byte first");
-        assert!(calls.iter().all(|(f, _)| f == "ioctl_smbus_xfer"), "no port select");
+        assert!(
+            calls.iter().all(|(f, _)| f == "ioctl_smbus_xfer"),
+            "no port select"
+        );
     }
 
     #[test]
@@ -274,7 +284,10 @@ mod tests {
         assert_eq!((id.sub_vendor, id.sub_device), (0x1462, 0x7D25));
         assert_eq!(bus_name(&id), "Intel ICH8 Bus - 0xefa0");
         assert!(check_identity(&id).is_ok());
-        assert_eq!(known_device(id.vendor, id.device), Some("700 Series (Raptor Lake-S)"));
+        assert_eq!(
+            known_device(id.vendor, id.device),
+            Some("700 Series (Raptor Lake-S)")
+        );
         assert_eq!(b.write_protection(), Ok(true));
         assert!(b.set_sleep_mode(0).is_ok());
         assert!(b.set_sleep_mode(3).is_err());

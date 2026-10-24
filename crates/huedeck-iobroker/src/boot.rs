@@ -169,9 +169,9 @@ pub use win::bootstrap;
 mod win {
     use super::*;
     use crate::detect;
+    use crate::i801::{self, I801Bus};
     use crate::mutex::{GlobalMutex, SmbusMutex};
     use crate::pawnio::{NtStatus, PawnIoDevice, PawnIoModule};
-    use crate::i801::{self, I801Bus};
     use crate::piix4::{Piix4Bus, BLOCK_MAX};
     use crate::pins;
     use crate::server::{BrokerBus, HealthInfo, Server};
@@ -217,9 +217,7 @@ mod win {
             ),
             Err(e) => tracing::warn!("Intel SMBus: SPD write protection unknown: {e}"),
         }
-        let identity = bus
-            .identity()
-            .map_err(|e| format!("Intel SMBus identity: {e}"))?;
+        let identity = bus.identity().map_err(|e| format!("Intel SMBus identity: {e}"))?;
         i801::check_identity(&identity)?;
         match i801::known_device(identity.vendor, identity.device) {
             Some(chipset) => tracing::info!(?identity, chipset, "Intel SMBus ready"),
@@ -363,7 +361,10 @@ mod tests {
     fn chipset_failures_stop_or_explain() {
         use crate::pins::CHIPSET_MODULES;
         let err = first_chipset(CHIPSET_MODULES, |pin| {
-            Err::<(), _>(LoadFailure::NotThisChipset(format!("{} is not installed", pin.file)))
+            Err::<(), _>(LoadFailure::NotThisChipset(format!(
+                "{} is not installed",
+                pin.file
+            )))
         })
         .unwrap_err();
         assert!(err.contains("no supported chipset SMBus"), "{err}");

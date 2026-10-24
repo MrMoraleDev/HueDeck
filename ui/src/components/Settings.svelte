@@ -157,6 +157,22 @@
   </section>
 
   <section class="panel">
+    <h2>Network lights</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.network}
+        onchange={(e) => daemon.run(() => api.setSettings({ network: (e.target as HTMLInputElement).checked }))}
+      /> Look for lights on my network</label
+    >
+    <p class="muted">
+      Off by default. When on, HueDeck's network plugins look for WLED, Philips Hue, Nanoleaf, LIFX, Govee and Yeelight
+      lights on your local network (mDNS and broadcasts; nothing is sent outside it). Found lights, pairing and "add by
+      IP" are on the Devices tab.
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>Graphics card and RAM lighting</h2>
     <label class="check"
       ><input

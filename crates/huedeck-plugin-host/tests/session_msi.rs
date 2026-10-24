@@ -101,6 +101,7 @@ fn rig_with(info: HidEndpointInfo) -> Rig {
         vid: 0x1462,
         pid: 0x7C91,
         endpoints: mock.enumerate().unwrap(),
+        network: None,
     };
     Rig {
         mock,

@@ -40,6 +40,7 @@ fn start(opts: SessionOptions) -> (SessionHandle, Arc<MockHid>, Arc<FrameStore>)
             vid: 0x1234,
             pid: 0x2222,
             endpoints: vec![info],
+            network: None,
         },
         plugin,
         backend,

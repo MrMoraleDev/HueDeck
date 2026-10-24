@@ -106,6 +106,7 @@ fn the_signalrgb_import_previews_then_brings_in_the_whole_setup() {
             backend,
             devices: vec![SessionDevice {
                 smbus: None,
+                network: None,
                 key: KEY.into(),
                 vid: 0x1234,
                 pid: 0x4D4D,

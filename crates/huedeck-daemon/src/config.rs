@@ -32,6 +32,9 @@
 //! enabled = true                # loopback capture while the active effect reads engine.audio (never a microphone)
 //! # device = "Speakers (Realtek(R) Audio)"   # output device to capture (default: the default output)
 //! scale = "log"                 # engine.audio.freq bands: "log" (20 Hz-20 kHz) or "linear" (0-fs/2)
+//!
+//! [network]
+//! enabled = false               # network lights: discovery and LAN devices (WLED, Hue, ...); the dashboard setting wins
 //! ```
 
 use anyhow::Context;
@@ -58,6 +61,8 @@ pub struct Config {
     pub smbus: SmbusConfig,
     /// `engine.audio` capture.
     pub audio: AudioConfig,
+    /// Network lights.
+    pub network: NetworkConfig,
 }
 
 /// `[audio]`: loopback capture for `engine.audio` (docs/audio.md).
@@ -82,6 +87,16 @@ impl Default for AudioConfig {
             scale: "log".into(),
         }
     }
+}
+
+/// `[network]`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NetworkConfig {
+    /// Run the network plugins' discovery and drive the LAN devices they
+    /// announce, unless the dashboard setting says otherwise. Off by default
+    /// (opt-in): it sends discovery traffic (mDNS, broadcasts) on the LAN.
+    pub enabled: bool,
 }
 
 /// `[smbus]`.

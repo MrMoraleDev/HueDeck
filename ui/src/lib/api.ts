@@ -71,6 +71,7 @@ export const api = {
     signalrgb?: boolean;
     gpuCompositing?: boolean;
     smbus?: boolean;
+    network?: boolean;
     batteryLow?: number;
     batteryCritical?: number;
     batteryNotifications?: boolean;
@@ -80,6 +81,9 @@ export const api = {
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */
   setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),
+  networkAdd: (plugin: string, ip: string) => request("POST", `/v1/network/${enc(plugin)}/add`, { ip }),
+  networkAction: (plugin: string, id: string, action: "pair" | "forget") =>
+    request("POST", `/v1/network/${enc(plugin)}/controllers/${enc(id)}/${action}`),
   /** What the SignalRGB import would bring in (read-only). */
   previewSignalRgb: () => request<SignalRgbImport>("GET", "/v1/import/signalrgb"),
   importSignalRgb: () => request<SignalRgbImport>("POST", "/v1/import/signalrgb", {}),

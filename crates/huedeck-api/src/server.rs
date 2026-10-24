@@ -14,7 +14,7 @@
 //!   `Authorization: Bearer <token>`, the token from the user's data directory.
 //!   The dashboard page gets it embedded when it is served (same-origin only).
 
-use crate::model::{ApiError, Event, Request, Snapshot};
+use crate::model::{ApiError, Event, Playlist, Request, Snapshot};
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -186,6 +186,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/effects", get(effects))
         .route("/v1/effects/next", post(next_effect))
         .route("/v1/effects/previous", post(previous_effect))
+        .route("/v1/effects/shuffle", post(shuffle_effect))
         .route("/v1/effects/{id}", get(effect))
         .route("/v1/effects/{id}/apply", post(apply_effect))
         .route("/v1/effects/{id}/values", axum::routing::patch(set_effect_values))
@@ -195,6 +196,14 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         )
         .route("/v1/effects/{id}/presets/{name}/apply", post(apply_preset))
         .route("/v1/lighting", get(lighting).patch(patch_lighting))
+        .route("/v1/lighting/timer", axum::routing::patch(patch_timer))
+        .route("/v1/playlists", get(playlists).post(create_playlist))
+        .route("/v1/playlists/stop", post(stop_playlist))
+        .route(
+            "/v1/playlists/{id}",
+            get(get_playlist).put(put_playlist).delete(delete_playlist),
+        )
+        .route("/v1/playlists/{id}/play", post(play_playlist))
         .route("/v1/layouts", get(layouts))
         .route(
             "/v1/layouts/{name}",
@@ -388,6 +397,10 @@ async fn previous_effect(State(ctx): State<ApiContext>) -> Response {
     reply(ctx.call(Request::StepEffect { previous: true }).await)
 }
 
+async fn shuffle_effect(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::ShuffleEffect).await)
+}
+
 async fn lighting(State(ctx): State<ApiContext>) -> Response {
     Json(&ctx.backend.snapshot().lighting).into_response()
 }
@@ -406,6 +419,74 @@ async fn patch_lighting(State(ctx): State<ApiContext>, Json(p): Json<LightingPat
         })
         .await,
     )
+}
+
+#[derive(Deserialize)]
+struct TimerPatch {
+    enabled: Option<bool>,
+    interval: Option<u32>,
+}
+
+async fn patch_timer(State(ctx): State<ApiContext>, Json(p): Json<TimerPatch>) -> Response {
+    reply(
+        ctx.call(Request::SetEffectTimer {
+            enabled: p.enabled,
+            interval: p.interval,
+        })
+        .await,
+    )
+}
+
+async fn playlists(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().playlists).into_response()
+}
+
+async fn get_playlist(State(ctx): State<ApiContext>, Path(id): Path<String>) -> Response {
+    let s = ctx.backend.snapshot();
+    match s.playlists.iter().find(|p| p.id == id) {
+        Some(p) => Json(p).into_response(),
+        None => error_response(&ApiError::not_found(format!("no playlist {id}"))),
+    }
+}
+
+async fn create_playlist(State(ctx): State<ApiContext>, Json(playlist): Json<Playlist>) -> Response {
+    reply(ctx.call(Request::SavePlaylist { id: None, playlist }).await)
+}
+
+async fn put_playlist(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<String>,
+    Json(playlist): Json<Playlist>,
+) -> Response {
+    reply(
+        ctx.call(Request::SavePlaylist {
+            id: Some(id),
+            playlist,
+        })
+        .await,
+    )
+}
+
+async fn delete_playlist(State(ctx): State<ApiContext>, Path(id): Path<String>) -> Response {
+    reply(ctx.call(Request::DeletePlaylist { id }).await)
+}
+
+#[derive(Deserialize, Default)]
+struct PlayBody {
+    start: Option<String>,
+}
+
+async fn play_playlist(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<String>,
+    body: Option<Json<PlayBody>>,
+) -> Response {
+    let start = body.and_then(|Json(b)| b.start);
+    reply(ctx.call(Request::PlayPlaylist { id, start }).await)
+}
+
+async fn stop_playlist(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::StopPlaylist).await)
 }
 
 async fn layouts(State(ctx): State<ApiContext>) -> Response {
@@ -814,6 +895,11 @@ static COMPAT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// SignalRGB's envelope: `{api_version, id, method, params, status, data | errors}`.
 fn envelope(method: &Method, path: &str, result: Result<Value, ApiError>) -> Response {
+    envelope_with(method, path, json!({}), result)
+}
+
+/// [`envelope`] with the request's parameters (path parameters, the body's fields).
+fn envelope_with(method: &Method, path: &str, params: Value, result: Result<Value, ApiError>) -> Response {
     let id = COMPAT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let method = format!("{method} {path}");
     match result {
@@ -821,7 +907,7 @@ fn envelope(method: &Method, path: &str, result: Result<Value, ApiError>) -> Res
             "api_version": crate::COMPAT_API_VERSION,
             "id": id,
             "method": method,
-            "params": {},
+            "params": params,
             "status": "ok",
             "data": data,
         }))
@@ -832,7 +918,7 @@ fn envelope(method: &Method, path: &str, result: Result<Value, ApiError>) -> Res
                 "api_version": crate::COMPAT_API_VERSION,
                 "id": id,
                 "method": method,
-                "params": {},
+                "params": params,
                 "status": "error",
                 "errors": [{ "code": e.code, "title": e.code, "detail": e.message }],
             })),
@@ -846,6 +932,8 @@ pub fn compat_router(ctx: ApiContext, port: u16) -> Router {
     let g = Guard::new(port, Arc::clone(&ctx.token), !ctx.open_compat_mutations);
     Router::new()
         .route("/api/v1/app", get(compat_app))
+        .route("/api/v1/new", get(compat_new))
+        .route("/api/v1/partners/{id}", get(compat_partner))
         .route("/api/v1/lighting", get(compat_lighting))
         .route(
             "/api/v1/lighting/global_brightness",
@@ -854,6 +942,7 @@ pub fn compat_router(ctx: ApiContext, port: u16) -> Router {
         .route("/api/v1/lighting/enabled", axum::routing::patch(compat_enabled))
         .route("/api/v1/lighting/effects", get(compat_effects))
         .route("/api/v1/lighting/effects/{id}", get(compat_effect))
+        .route("/api/v1/lighting/effects/{id}/image", get(compat_effect_image))
         .route("/api/v1/lighting/effects/{id}/apply", post(compat_apply))
         .route(
             "/api/v1/lighting/effects/{id}/presets",
@@ -864,7 +953,14 @@ pub fn compat_router(ctx: ApiContext, port: u16) -> Router {
             "/api/v1/lighting/previous",
             get(compat_previous).post(compat_previous),
         )
+        .route(
+            "/api/v1/lighting/shuffle",
+            get(compat_shuffle).post(compat_shuffle),
+        )
+        .route("/api/v1/lighting/loadEffect", post(compat_load_effect))
         .route("/api/v1/lighting/playlists", get(compat_playlists))
+        .route("/api/v1/lighting/playlists/{id}", get(compat_playlist))
+        .route("/api/v1/lighting/playlists/{id}/play", post(compat_play_playlist))
         .route(
             "/api/v1/scenes/current_layout",
             get(compat_current_layout).patch(compat_set_layout),
@@ -886,11 +982,41 @@ async fn compat_not_found(method: Method, uri: axum::http::Uri) -> Response {
     )
 }
 
-async fn compat_app(method: Method) -> Response {
+async fn compat_app(State(ctx): State<ApiContext>, method: Method) -> Response {
+    let s = ctx.backend.snapshot();
     envelope(
         &method,
         "/api/v1/app",
-        Ok(json!({ "name": "HueDeck", "version": env!("CARGO_PKG_VERSION") })),
+        Ok(json!({
+            "name": "HueDeck",
+            "version": env!("CARGO_PKG_VERSION"),
+            "api_version": crate::COMPAT_API_VERSION,
+            "compatible_with": "SignalRGB local API",
+            "platform": std::env::consts::OS,
+            "state": s.state,
+            "links": {
+                "self": "/api/v1/app",
+                "lighting": "/api/v1/lighting",
+                "effects": "/api/v1/lighting/effects",
+                "playlists": "/api/v1/lighting/playlists",
+                "layouts": "/api/v1/scenes/layouts",
+            },
+        })),
+    )
+}
+
+/// SignalRGB's "what's new" feed: HueDeck has none.
+async fn compat_new(method: Method) -> Response {
+    envelope(&method, "/api/v1/new", Ok(json!({ "items": [], "type": "new" })))
+}
+
+/// SignalRGB's partner permission grants: HueDeck grants none.
+async fn compat_partner(method: Method, Path(id): Path<String>) -> Response {
+    envelope_with(
+        &method,
+        &format!("/api/v1/partners/{id}"),
+        json!({ "id": id }),
+        Ok(json!({ "id": id, "permissions": {}, "type": "partner" })),
     )
 }
 
@@ -900,6 +1026,7 @@ fn compat_lighting_data(s: &Snapshot) -> Value {
         "global_brightness": s.lighting.brightness,
         "name": s.lighting.effect_name.clone().unwrap_or_default(),
         "id": s.lighting.effect.clone().unwrap_or_default(),
+        "playlist": s.lighting.playlist.as_ref().map(|p| json!({ "id": p.id, "name": p.name })),
         "links": { "self": "/api/v1/lighting" },
     })
 }
@@ -929,7 +1056,12 @@ async fn compat_brightness(
         })
         .await
         .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
-    envelope(&method, "/api/v1/lighting/global_brightness", r)
+    envelope_with(
+        &method,
+        "/api/v1/lighting/global_brightness",
+        json!({ "global_brightness": b.global_brightness }),
+        r,
+    )
 }
 
 #[derive(Deserialize)]
@@ -949,7 +1081,12 @@ async fn compat_enabled(
         })
         .await
         .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
-    envelope(&method, "/api/v1/lighting/enabled", r)
+    envelope_with(
+        &method,
+        "/api/v1/lighting/enabled",
+        json!({ "enabled": b.enabled }),
+        r,
+    )
 }
 
 async fn compat_effects(State(ctx): State<ApiContext>, method: Method) -> Response {
@@ -975,15 +1112,16 @@ async fn compat_effects(State(ctx): State<ApiContext>, method: Method) -> Respon
     )
 }
 
+fn effect_not_found() -> ApiError {
+    ApiError::not_found("The requested effect was not found")
+}
+
 async fn compat_effect(State(ctx): State<ApiContext>, method: Method, Path(id): Path<String>) -> Response {
     let s = ctx.backend.snapshot();
     let path = format!("/api/v1/lighting/effects/{id}");
+    let params = json!({ "id": id });
     let Some(e) = s.effects.iter().find(|e| e.id == id) else {
-        return envelope(
-            &method,
-            &path,
-            Err(ApiError::not_found("The requested effect was not found")),
-        );
+        return envelope_with(&method, &path, params, Err(effect_not_found()));
     };
     let mut parameters = Map::new();
     for c in &e.controls {
@@ -1001,21 +1139,73 @@ async fn compat_effect(State(ctx): State<ApiContext>, method: Method, Path(id): 
             json!({ "label": c.get("label"), "type": c.get("type"), "value": value }),
         );
     }
-    envelope(
+    let uses = |what: &str| e.uses.iter().any(|u| u == what);
+    envelope_with(
         &method,
         &path,
+        params,
         Ok(json!({
             "id": e.id,
             "name": e.title,
             "description": e.description,
             "publisher": e.publisher,
-            "developer_effect": false,
+            "image": format!("{path}/image"),
+            "developer_effect": e.source == "developer",
             "favorite": false,
+            "uses_audio": uses("audio"),
+            "uses_input": uses("input"),
+            "uses_video": uses("video"),
+            "uses_meters": uses("meters"),
+            "uses_webgl": uses("webgl"),
             "parameters": parameters,
             "presets": e.presets,
-            "links": { "apply": format!("{path}/apply"), "self": path },
+            "links": { "apply": format!("{path}/apply"), "image": format!("{path}/image"), "self": path },
         })),
     )
+}
+
+/// Largest effect picture served.
+const MAX_IMAGE_BYTES: u64 = 8 << 20;
+
+/// The effect's picture itself (not an envelope); errors come in the envelope.
+async fn compat_effect_image(
+    State(ctx): State<ApiContext>,
+    method: Method,
+    Path(id): Path<String>,
+) -> Response {
+    let path = format!("/api/v1/lighting/effects/{id}/image");
+    let params = json!({ "id": id });
+    let found = match ctx.call(Request::EffectImage { id: id.clone() }).await {
+        Ok(v) => v,
+        Err(e) => return envelope_with(&method, &path, params, Err(e)),
+    };
+    let (Some(file), Some(mime)) = (
+        found.get("path").and_then(Value::as_str),
+        found.get("contentType").and_then(Value::as_str),
+    ) else {
+        return envelope_with(
+            &method,
+            &path,
+            params,
+            Err(ApiError::not_found("The requested effect has no image")),
+        );
+    };
+    let small = tokio::fs::metadata(file)
+        .await
+        .is_ok_and(|m| m.len() <= MAX_IMAGE_BYTES);
+    match tokio::fs::read(file).await {
+        Ok(bytes) if small => {
+            let mime =
+                HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream"));
+            ([(header::CONTENT_TYPE, mime)], Body::from(bytes)).into_response()
+        }
+        _ => envelope_with(
+            &method,
+            &path,
+            params,
+            Err(ApiError::not_found("The requested effect has no image")),
+        ),
+    }
 }
 
 async fn compat_apply(State(ctx): State<ApiContext>, method: Method, Path(id): Path<String>) -> Response {
@@ -1026,19 +1216,21 @@ async fn compat_apply(State(ctx): State<ApiContext>, method: Method, Path(id): P
         })
         .await
         .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
-    envelope(&method, &format!("/api/v1/lighting/effects/{id}/apply"), r)
+    envelope_with(
+        &method,
+        &format!("/api/v1/lighting/effects/{id}/apply"),
+        json!({ "id": id }),
+        r,
+    )
 }
 
 async fn compat_presets(State(ctx): State<ApiContext>, method: Method, Path(id): Path<String>) -> Response {
     let s = ctx.backend.snapshot();
     let path = format!("/api/v1/lighting/effects/{id}/presets");
+    let params = json!({ "id": id });
     match s.effects.iter().find(|e| e.id == id) {
-        Some(e) => envelope(&method, &path, Ok(json!({ "items": e.presets }))),
-        None => envelope(
-            &method,
-            &path,
-            Err(ApiError::not_found("The requested effect was not found")),
-        ),
+        Some(e) => envelope_with(&method, &path, params, Ok(json!({ "items": e.presets }))),
+        None => envelope_with(&method, &path, params, Err(effect_not_found())),
     }
 }
 
@@ -1053,13 +1245,19 @@ async fn compat_apply_preset(
     Path(id): Path<String>,
     Json(p): Json<CompatPreset>,
 ) -> Response {
+    let params = json!({ "id": id, "preset": p.preset });
     let r = ctx
         .call(Request::ApplyPreset {
             effect: id.clone(),
             name: p.preset,
         })
         .await;
-    envelope(&method, &format!("/api/v1/lighting/effects/{id}/presets"), r)
+    envelope_with(
+        &method,
+        &format!("/api/v1/lighting/effects/{id}/presets"),
+        params,
+        r,
+    )
 }
 
 async fn compat_next(State(ctx): State<ApiContext>, method: Method) -> Response {
@@ -1078,11 +1276,143 @@ async fn compat_previous(State(ctx): State<ApiContext>, method: Method) -> Respo
     envelope(&method, "/api/v1/lighting/previous", r)
 }
 
-async fn compat_playlists(method: Method) -> Response {
+/// A random effect, game integrations and developer effects excluded.
+async fn compat_shuffle(State(ctx): State<ApiContext>, method: Method) -> Response {
+    let r = ctx
+        .call(Request::ShuffleEffect)
+        .await
+        .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
+    envelope(&method, "/api/v1/lighting/shuffle", r)
+}
+
+#[derive(Deserialize)]
+struct CompatLoadEffect {
+    uid: String,
+    html: String,
+}
+
+/// SignalRGB's developer endpoint: always needs the token (it runs a page the
+/// caller wrote), even when the compatible API's other changes are open.
+async fn compat_load_effect(
+    State(ctx): State<ApiContext>,
+    method: Method,
+    headers: HeaderMap,
+    body: Option<Json<CompatLoadEffect>>,
+) -> Response {
+    let path = "/api/v1/lighting/loadEffect";
+    if !has_token(&headers, &ctx.token) {
+        return envelope(
+            &method,
+            path,
+            Err(ApiError {
+                status: 401,
+                code: "unauthorized".into(),
+                message: "loadEffect is a developer endpoint: send Authorization: Bearer <token> (the \
+                          api-token file in HueDeck's data directory)"
+                    .into(),
+            }),
+        );
+    }
+    let Some(Json(b)) = body else {
+        return envelope(
+            &method,
+            path,
+            Err(ApiError::bad_request("send {\"uid\": <name>, \"html\": <page>}")),
+        );
+    };
+    let params = json!({ "uid": b.uid });
+    let r = ctx
+        .call(Request::LoadEffect {
+            uid: b.uid,
+            html: b.html,
+        })
+        .await
+        .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
+    envelope_with(&method, path, params, r)
+}
+
+fn compat_playlist_item(p: &Playlist) -> Value {
+    let path = format!("/api/v1/lighting/playlists/{}", p.id);
+    json!({
+        "id": p.id,
+        "name": p.name,
+        "effects_count": p.entries.len(),
+        "last_update_time": p.updated_at,
+        "image_url": Value::Null,
+        "shuffle": p.shuffle,
+        "type": "playlist",
+        "links": { "play": format!("{path}/play"), "self": path },
+    })
+}
+
+async fn compat_playlists(State(ctx): State<ApiContext>, method: Method) -> Response {
+    let s = ctx.backend.snapshot();
+    let items: Vec<Value> = s.playlists.iter().map(compat_playlist_item).collect();
     envelope(
         &method,
         "/api/v1/lighting/playlists",
-        Ok(json!({ "items": [], "type": "playlists" })),
+        Ok(json!({ "items": items, "type": "playlists" })),
+    )
+}
+
+fn playlist_not_found() -> ApiError {
+    ApiError::not_found("The requested playlist was not found")
+}
+
+async fn compat_playlist(State(ctx): State<ApiContext>, method: Method, Path(id): Path<String>) -> Response {
+    let s = ctx.backend.snapshot();
+    let path = format!("/api/v1/lighting/playlists/{id}");
+    let params = json!({ "id": id });
+    let Some(p) = s.playlists.iter().find(|p| p.id == id) else {
+        return envelope_with(&method, &path, params, Err(playlist_not_found()));
+    };
+    let mut data = compat_playlist_item(p);
+    data["playing"] = json!(s.lighting.playlist.as_ref().is_some_and(|now| now.id == p.id));
+    data["effects"] = p
+        .entries
+        .iter()
+        .map(|entry| {
+            let name = s
+                .effects
+                .iter()
+                .find(|e| e.id == entry.effect)
+                .map(|e| e.title.clone());
+            json!({
+                "id": entry.effect,
+                "name": name,
+                "preset": entry.preset,
+                "duration": entry.duration,
+            })
+        })
+        .collect();
+    envelope_with(&method, &path, params, Ok(data))
+}
+
+#[derive(Deserialize, Default)]
+struct CompatPlay {
+    starting_effect_id: Option<String>,
+}
+
+async fn compat_play_playlist(
+    State(ctx): State<ApiContext>,
+    method: Method,
+    Path(id): Path<String>,
+    body: Option<Json<CompatPlay>>,
+) -> Response {
+    let start = body.and_then(|Json(b)| b.starting_effect_id);
+    let params = json!({ "id": id, "starting_effect_id": start });
+    let r = ctx
+        .call(Request::PlayPlaylist {
+            id: id.clone(),
+            start,
+        })
+        .await
+        .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
+    envelope_with(
+        &method,
+        &format!("/api/v1/lighting/playlists/{id}/play"),
+        params,
+        r,
     )
 }
 
@@ -1108,11 +1438,12 @@ async fn compat_set_layout(
     method: Method,
     Json(l): Json<CompatLayout>,
 ) -> Response {
+    let params = json!({ "layout": l.layout });
     let r = ctx
         .call(Request::ApplyLayout { name: l.layout })
         .await
         .map(|_| compat_layout_data(&ctx.backend.snapshot()));
-    envelope(&method, "/api/v1/scenes/current_layout", r)
+    envelope_with(&method, "/api/v1/scenes/current_layout", params, r)
 }
 
 async fn compat_layouts(State(ctx): State<ApiContext>, method: Method) -> Response {

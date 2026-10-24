@@ -41,7 +41,7 @@ use std::time::{Duration, UNIX_EPOCH};
 const SKIP_DIRS: &[&str] = &["tests", "test", "fixtures", "_testkit", "node_modules", ".git"];
 
 /// Bumped whenever what the cache stores (or how metadata is read) changes.
-const INDEX_VERSION: u32 = 5;
+const INDEX_VERSION: u32 = 6;
 
 /// One discovered plugin.
 #[derive(Clone, Debug)]
@@ -246,7 +246,7 @@ impl Catalog {
         for ((root, file, _), loaded) in files.iter().zip(results) {
             match loaded.map(accept) {
                 Some(Ok(meta)) => {
-                    if meta.plugin_type != PluginType::Smbus {
+                    if !matches!(meta.plugin_type, PluginType::Smbus | PluginType::Network) {
                         catalog.index.insert(&meta);
                     }
                     catalog.entries.push(CatalogEntry {
@@ -296,6 +296,21 @@ impl Catalog {
     /// Counters of the scan that built this catalog.
     pub fn stats(&self) -> ScanStats {
         self.stats
+    }
+
+    /// The network plugins, in scan order; of two with the same `Name()` the
+    /// later scanned one is kept (its service and settings are keyed by name).
+    pub fn network_plugins(&self) -> Vec<&CatalogEntry> {
+        let all: Vec<&CatalogEntry> = self
+            .entries
+            .iter()
+            .filter(|e| e.meta.plugin_type == PluginType::Network)
+            .collect();
+        all.iter()
+            .enumerate()
+            .filter(|(i, e)| !all[i + 1..].iter().any(|l| l.meta.name == e.meta.name))
+            .map(|(_, e)| *e)
+            .collect()
     }
 
     /// The SMBus plugins, in scan order.
@@ -392,6 +407,14 @@ fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
             }
             if !meta.lifecycle.scan || !meta.lifecycle.is_device() {
                 return Err("SMBus plugin without Scan(bus), Initialize() and Render() exports".into());
+            }
+            Ok(meta)
+        }
+        PluginType::Network => {
+            if !meta.lifecycle.discovery_service || !meta.lifecycle.is_device() {
+                return Err(
+                    "network plugin without DiscoveryService, Initialize() and Render() exports".into(),
+                );
             }
             Ok(meta)
         }

@@ -58,17 +58,42 @@ export interface DeviceView {
   frames: number;
   renderErrors: number;
   ioErrors: number;
-  /** SMBus devices: "<bus name> · 0x<address>". */
+  /** SMBus devices: "<bus name> · 0x<address>"; network devices: "network · <ip>". */
   bus?: string | null;
   defaultScale: number;
   image?: string | null;
   parameters: Parameter[];
   endpoints: Endpoint[];
   channels: ChannelView[];
+  /** What "Save to devices" can store in the device (null: nothing). */
+  save?: SaveSupport | null;
+  /** Exit modes the device's plugin carries out ("restore" always). */
+  shutdownModes: ShutdownMode[];
+  /** This device's own exit mode (null: the setting's). */
+  shutdownMode?: ShutdownMode | null;
   /** The plugin's last battery report (devices with a battery only). */
   battery?: BatteryView | null;
   /** Pulse red while the battery is low. */
   blinkLowBattery: boolean;
+}
+
+export type ShutdownMode = "restore" | "keep" | "off";
+
+export interface SaveSupport {
+  static: boolean;
+  effects: string[];
+  /** Seconds before the device may be saved again. */
+  waitSecs: number;
+}
+
+/** One device in the answer of POST /v1/save or /v1/save/preview. */
+export interface SaveResult {
+  key: string;
+  name: string;
+  ok: boolean;
+  dryRun: boolean;
+  result: { effect?: string; zones?: { name: string; color: string }[]; note?: string } | null;
+  error?: string | null;
 }
 
 export interface BatteryView {
@@ -149,9 +174,12 @@ export interface Settings {
   signalrgbAvailable: boolean;
   gpuCompositing: boolean;
   smbus: boolean;
+  network: boolean;
   /** OpenRGB SDK server on 127.0.0.1:6742 (opt-in). */
   openrgbSdk: boolean;
   /** Port of the dashboard and the API (127.0.0.1 only). */
+  /** What devices show when HueDeck closes. */
+  shutdownMode: ShutdownMode;
   port: number;
   /** Set when the configured port was busy at startup and the default one is used. */
   portNotice: string | null;
@@ -172,8 +200,29 @@ export interface Snapshot {
   layouts: string[];
   playlists: Playlist[];
   settings: Settings;
+  network: NetworkService[];
   conflicts: string[];
   warnings: string[];
+}
+
+export interface NetworkController {
+  id: string;
+  name: string;
+  ip?: string | null;
+  status?: string | null;
+  paired?: boolean | null;
+  canPair: boolean;
+  /** The device key once the plugin announced it. */
+  device?: string | null;
+}
+
+export interface NetworkService {
+  plugin: string;
+  running: boolean;
+  error?: string | null;
+  canForget: boolean;
+  controllers: NetworkController[];
+  log: string[];
 }
 
 export interface LibraryComponent {

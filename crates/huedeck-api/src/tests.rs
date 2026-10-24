@@ -714,11 +714,13 @@ async fn a_bad_port_is_refused_before_anything_changes() {
             signalrgb: None,
             gpu_compositing: None,
             smbus: Some(false),
+            shutdown_mode: None,
             battery_low: None,
             battery_critical: None,
             battery_notifications: None,
             port: None,
             openrgb_sdk: None,
+            network: None
         }
     );
 }
@@ -782,11 +784,13 @@ async fn the_port_moves_and_the_old_listener_closes_after_the_grace_period() {
             signalrgb: None,
             gpu_compositing: None,
             smbus: None,
+            shutdown_mode: None,
             battery_low: None,
             battery_critical: None,
             battery_notifications: None,
             port: Some(new),
             openrgb_sdk: None,
+            network: None
         }
     );
     // Both answer during the grace period; the dashboard page comes from the new one.

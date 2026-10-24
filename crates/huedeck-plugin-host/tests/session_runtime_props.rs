@@ -11,7 +11,9 @@ use huedeck_hal::mock::MockHid;
 use huedeck_hal::{HidBackend, ReportLengths};
 use huedeck_plugin_host::catalog::Catalog;
 use huedeck_plugin_host::meta::{ParamType, ParamValue};
-use huedeck_plugin_host::session::{self, Control, SessionDevice, SessionEvent, SessionHandle, SessionOptions};
+use huedeck_plugin_host::session::{
+    self, Control, SessionDevice, SessionEvent, SessionHandle, SessionOptions,
+};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -65,7 +67,9 @@ fn message_ids(handle: &SessionHandle) -> Vec<String> {
 fn properties_and_messages_change_at_run_time() {
     let (handle, mock, frames) = start();
     let deadline = Instant::now() + Duration::from_secs(20);
-    wait_until(deadline, &frames, || handle.live().frames >= 1 || handle.is_finished());
+    wait_until(deadline, &frames, || {
+        handle.live().frames >= 1 || handle.is_finished()
+    });
 
     // After Initialize: the export plus `dpi`, the exported message plus `hello`.
     let ui = handle.plugin_ui().expect("published after Initialize");
@@ -73,28 +77,45 @@ fn properties_and_messages_change_at_run_time() {
     let dpi = &ui.properties()[1];
     assert_eq!(dpi.param_type, ParamType::Number);
     assert_eq!(dpi.default, Some(ParamValue::Number(800.0)));
-    assert_eq!((dpi.min, dpi.max, dpi.step, dpi.order), (Some(100.0), Some(1600.0), Some(100.0), Some(1)));
+    assert_eq!(
+        (dpi.min, dpi.max, dpi.step, dpi.order),
+        (Some(100.0), Some(1600.0), Some(100.0), Some(1))
+    );
     assert!(!dpi.live);
     assert_eq!(dpi.group.as_deref(), Some("dpi"));
     assert_eq!(message_ids(&handle), ["fw", "hello"]);
-    assert_eq!(ui.messages()[0].tooltip.as_deref(), Some("Update in the vendor app"));
+    assert_eq!(
+        ui.messages()[0].tooltip.as_deref(),
+        Some("Update in the vendor app")
+    );
     assert_eq!(ui.messages()[1].tooltip, None);
     let events = handle.events();
     assert!(events.contains(&SessionEvent::Properties), "{events:?}");
     assert!(events.contains(&SessionEvent::Messages), "{events:?}");
     // The `dpi` global holds the coerced default.
-    assert_eq!(mock.recorder().writes()[0], vec![0x00, 8], "{:?}", mock.recorder().writes());
+    assert_eq!(
+        mock.recorder().writes()[0],
+        vec![0x00, 8],
+        "{:?}",
+        mock.recorder().writes()
+    );
 
     // A run-time property takes values like an exported one.
-    handle.control(Control::Parameters(json!({ "dpi": 1200 }).as_object().unwrap().clone()));
+    handle.control(Control::Parameters(
+        json!({ "dpi": 1200 }).as_object().unwrap().clone(),
+    ));
     wait_until(deadline, &frames, || {
         mock.recorder().writes().iter().any(|w| w[..] == [0x01, 12]) || handle.is_finished()
     });
 
     // Mode "b": dpi removed, mode relabelled in place, keycode added, the
     // exported message dropped, a notification raised.
-    handle.control(Control::Parameters(json!({ "mode": "b" }).as_object().unwrap().clone()));
-    wait_until(deadline, &frames, || names(&handle) == ["mode", "key"] || handle.is_finished());
+    handle.control(Control::Parameters(
+        json!({ "mode": "b" }).as_object().unwrap().clone(),
+    ));
+    wait_until(deadline, &frames, || {
+        names(&handle) == ["mode", "key"] || handle.is_finished()
+    });
     let ui = handle.plugin_ui().unwrap();
     assert_eq!(ui.properties()[0].label, "Mode B");
     assert_eq!(ui.properties()[0].values, ["a", "b"]);
@@ -111,13 +132,19 @@ fn properties_and_messages_change_at_run_time() {
     assert!(events.contains(&SessionEvent::Messages), "{events:?}");
 
     // Mode "a": denotify withdraws the notification; the properties stay.
-    handle.control(Control::Parameters(json!({ "mode": "a" }).as_object().unwrap().clone()));
-    wait_until(deadline, &frames, || message_ids(&handle) == ["hello"] || handle.is_finished());
+    handle.control(Control::Parameters(
+        json!({ "mode": "a" }).as_object().unwrap().clone(),
+    ));
+    wait_until(deadline, &frames, || {
+        message_ids(&handle) == ["hello"] || handle.is_finished()
+    });
     assert_eq!(handle.events(), [SessionEvent::Messages]);
 
     // Nothing changes from here on: no more events.
     let seen = handle.live().frames;
-    wait_until(deadline, &frames, || handle.live().frames >= seen + 3 || handle.is_finished());
+    wait_until(deadline, &frames, || {
+        handle.live().frames >= seen + 3 || handle.is_finished()
+    });
     assert_eq!(handle.events(), []);
 
     handle.stop();
@@ -125,7 +152,13 @@ fn properties_and_messages_change_at_run_time() {
     assert!(report.is_clean(), "{report:#?}");
     let log = report.log_tail.join("\n");
     assert!(log.contains("names mode,dpi dpi number 800"), "{log}");
-    assert!(log.contains("addProperty(): parameter must be an object!"), "{log}");
-    assert!(log.contains("addProperty(): object requires a 'property' parameter!"), "{log}");
+    assert!(
+        log.contains("addProperty(): parameter must be an object!"),
+        "{log}"
+    );
+    assert!(
+        log.contains("addProperty(): object requires a 'property' parameter!"),
+        "{log}"
+    );
     assert!(log.contains("notify: Heads up: Mode b is on"), "{log}");
 }

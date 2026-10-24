@@ -72,6 +72,7 @@ fn set(b: &dyn Backend, values: Value) {
             key: KEY.into(),
             enabled: None,
             parameters: Some(values.as_object().unwrap().clone()),
+            shutdown_mode: None,
             blink_low_battery: None,
         },
     )
@@ -82,7 +83,12 @@ fn names(s: &Snapshot) -> Vec<String> {
     s.devices
         .iter()
         .find(|d| d.key == KEY)
-        .map(|d| d.parameters.iter().map(|p| p["property"].as_str().unwrap_or("").to_string()).collect())
+        .map(|d| {
+            d.parameters
+                .iter()
+                .map(|p| p["property"].as_str().unwrap_or("").to_string())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -134,7 +140,11 @@ fn runtime_properties_and_messages_reach_the_device_view() {
     assert_eq!(names(&s), ["extra"]);
     assert_eq!(messages(&s), ["fw"]);
     let d = s.devices.iter().find(|d| d.key == KEY).unwrap();
-    assert_eq!(d.parameters[0]["default"], json!(false), "the boolean string is coerced");
+    assert_eq!(
+        d.parameters[0]["default"],
+        json!(false),
+        "the boolean string is coerced"
+    );
     assert_eq!(d.messages[0].message, "Old firmware");
     assert_eq!(d.messages[0].tooltip, None);
 
@@ -145,15 +155,36 @@ fn runtime_properties_and_messages_reach_the_device_view() {
     assert_eq!(d.parameters[0]["value"], json!(true));
     let speed = &d.parameters[1];
     assert_eq!(
-        (&speed["type"], &speed["min"], &speed["max"], &speed["default"], &speed["live"], &speed["order"], &speed["value"]),
-        (&json!("number"), &json!(1.0), &json!(10.0), &json!(5.0), &json!(false), &json!(2), &json!(5.0))
+        (
+            &speed["type"],
+            &speed["min"],
+            &speed["max"],
+            &speed["default"],
+            &speed["live"],
+            &speed["order"],
+            &speed["value"]
+        ),
+        (
+            &json!("number"),
+            &json!(1.0),
+            &json!(10.0),
+            &json!(5.0),
+            &json!(false),
+            &json!(2),
+            &json!(5.0)
+        )
     );
     let s = wait_for(b, "the notification", |s| messages(s).len() == 2);
     let d = s.devices.iter().find(|d| d.key == KEY).unwrap();
     let n = &d.messages[1];
     assert_eq!(
         (n.id.as_str(), n.title.as_deref(), n.message.as_str(), n.priority),
-        ("huedeck-alert-1", Some("Extra on"), "The extra setting is on", Some(1))
+        (
+            "huedeck-alert-1",
+            Some("Extra on"),
+            "The extra setting is on",
+            Some(1)
+        )
     );
 
     // A value for the run-time property: coerced, stored, applied.
@@ -173,7 +204,9 @@ fn runtime_properties_and_messages_reach_the_device_view() {
 
     // Off again: the property and the notification go away.
     set(b, json!({ "extra": false }));
-    wait_for(b, "the property removed", |s| names(s) == ["extra"] && messages(s) == ["fw"]);
+    wait_for(b, "the property removed", |s| {
+        names(s) == ["extra"] && messages(s) == ["fw"]
+    });
 
     // Disabled: no session, the exports' lists.
     call(
@@ -182,6 +215,7 @@ fn runtime_properties_and_messages_reach_the_device_view() {
             key: KEY.into(),
             enabled: Some(false),
             parameters: None,
+            shutdown_mode: None,
             blink_low_battery: None,
         },
     )
@@ -189,7 +223,10 @@ fn runtime_properties_and_messages_reach_the_device_view() {
     let s = wait_for(b, "the device disabled", |s| {
         s.devices.iter().any(|d| d.key == KEY && d.state == "disabled")
     });
-    assert_eq!((names(&s), messages(&s)), (vec!["extra".to_string()], vec!["fw".to_string()]));
+    assert_eq!(
+        (names(&s), messages(&s)),
+        (vec!["extra".to_string()], vec!["fw".to_string()])
+    );
 
     handle.shutdown();
     let _ = std::fs::remove_dir_all(&home);

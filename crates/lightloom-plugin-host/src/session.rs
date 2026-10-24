@@ -23,8 +23,15 @@
 //!    the alert override and `battery.lowBatteryWarningLevel`. What the plugin
 //!    reports through the `battery` feature is readable meanwhile
 //!    ([`LiveSnapshot::battery`]);
-//! 6. on stop calls `Shutdown(false)` (unless told not to), repeats the
-//!    feature-report reads and returns a [`SessionReport`].
+//! 6. on stop calls `Shutdown(false, mode)` (unless told not to; `mode` is the
+//!    [`ShutdownMode`], a Lightloom extension, with the `shutdownColor` fallback of
+//!    [`crate::save::shutdown_fallback`] for plugins that do not implement it),
+//!    repeats the feature-report reads and returns a [`SessionReport`].
+//!
+//! Between two `Render()` calls a [`Control::Save`] runs the plugin's
+//! `SaveToDevice(request)` (Lightloom extension, [`crate::save`]): a preview with
+//! every write recorded and never sent, or a save with the SMBus
+//! `SmbusDeniedRegisters()` writable for that one call.
 //!
 //! A LampArray of the OS backend ([`SessionDevice::lamparray`]) runs the
 //! built-in session of [`crate::lamparray`] instead of a plugin.
@@ -34,6 +41,12 @@
 //! [`GuardedBus`]), a `TransactionLock` still held when `Render()` returns is
 //! released by the host, and `Render()` runs at most once per
 //! [`SMBUS_FRAME_INTERVAL`] whatever the canvas rate.
+//!
+//! A network device ([`SessionDevice::network`], announced by a network
+//! service) has no HID collections either: `controller` is the announced data,
+//! sockets and `XMLHttpRequest` go through its own [`NetContext`] (closed when
+//! the session ends), socket events are delivered before each `Render()`, and
+//! `Render()` runs at most once per [`NETWORK_FRAME_INTERVAL`].
 
 use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::bus::{lock_guard, SharedGuard};
@@ -43,7 +56,10 @@ pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
+use crate::meta::PluginMeta;
+use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
+use crate::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode, ShutdownPlan};
 use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
 use crate::stats::LatencyHistogram;
 use lightloom_engine::{ComponentInstance, FrameStore, Placement, Rgb, SamplerConfig};
@@ -62,6 +78,9 @@ use std::time::{Duration, Instant};
 /// (`RGBController_MSIGPU::TimeToSend`, 33 ms). The latest frame is rendered
 /// when the time comes, so nothing is lost but the frames in between.
 pub const SMBUS_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// Shortest time between two `Render()` calls of a network device (about 30
+/// fps); plugins pace their protocol further themselves.
+pub const NETWORK_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 /// One physical device: every HID collection that belongs to it, or the
 /// SMBus address it answers at.
@@ -80,6 +99,39 @@ pub struct SessionDevice {
     /// A LampArray of the OS backend, driven by the built-in session
     /// ([`crate::lamparray`]) instead of a plugin.
     pub lamparray: Option<crate::lamparray::LampArrayTarget>,
+    /// A network device: the controller a network service announced.
+    pub network: Option<NetworkTarget>,
+}
+
+/// A network device: what its service announced.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetworkTarget {
+    /// The plugin's `Name()`.
+    pub service: String,
+    /// The controller's id.
+    pub id: String,
+    /// The controller's data (bound to `controller` in the device context).
+    pub controller: serde_json::Value,
+}
+
+impl NetworkTarget {
+    /// The controller's `ip`, when it has one.
+    pub fn ip(&self) -> Option<&str> {
+        self.controller.get("ip").and_then(serde_json::Value::as_str)
+    }
+}
+
+/// `text` as a key segment: lowercase letters, digits, `-` and `.`.
+pub fn key_slug(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() || c == '.' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').chars().take(64).collect()
 }
 
 /// Where an SMBus device lives.
@@ -101,6 +153,7 @@ impl SessionDevice {
             endpoints,
             smbus: None,
             lamparray: None,
+            network: None,
         }
     }
 
@@ -115,6 +168,21 @@ impl SessionDevice {
             endpoints: Vec::new(),
             smbus: Some(SmbusTarget { bus, addr }),
             lamparray: None,
+            network: None,
+        }
+    }
+
+    /// The network device `target`: key `net:<plugin slug>:<controller id>`, VID:PID 0.
+    pub fn network(target: NetworkTarget) -> Self {
+        let id: String = target.id.chars().filter(|c| !c.is_control()).take(128).collect();
+        Self {
+            key: format!("net:{}:{id}", key_slug(&target.service)),
+            vid: 0,
+            pid: 0,
+            endpoints: Vec::new(),
+            smbus: None,
+            lamparray: None,
+            network: Some(target),
         }
     }
 }
@@ -133,6 +201,8 @@ pub struct Budgets {
     pub render: Duration,
     /// `Shutdown()`.
     pub shutdown: Duration,
+    /// `SaveToDevice(request)` (a save or a preview).
+    pub save: Duration,
     /// Wall-clock cap of one `Render()`, blocked time included (plugins set
     /// devices up lazily from `Render()`, taking seconds once).
     pub render_wall: Duration,
@@ -148,6 +218,7 @@ impl Default for Budgets {
             initialize: Duration::from_secs(10),
             render: Duration::from_millis(250),
             shutdown: Duration::from_secs(5),
+            save: Duration::from_secs(10),
             render_wall: Duration::from_secs(30),
             call_wall: Duration::from_secs(30),
         }
@@ -222,6 +293,9 @@ pub struct SessionOptions {
     pub placements: BTreeMap<String, Placement>,
     /// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
     pub system_info: Option<Arc<lightloom_hal::SystemInfo>>,
+    /// What `Shutdown(false, mode)` leaves the device showing (changed live by
+    /// [`Control::ShutdownMode`]).
+    pub shutdown_mode: ShutdownMode,
     /// Direct LED colours (OpenRGB SDK clients), read once per frame; they
     /// win over the canvas for the endpoints they name.
     pub direct: Option<Arc<lightloom_engine::DirectLeds>>,
@@ -244,6 +318,7 @@ impl Default for SessionOptions {
             channel_components: BTreeMap::new(),
             placements: BTreeMap::new(),
             system_info: None,
+            shutdown_mode: ShutdownMode::Restore,
             direct: None,
             battery_warning_level: DEFAULT_WARNING_LEVEL,
         }
@@ -258,6 +333,7 @@ impl std::fmt::Debug for SessionOptions {
             .field("write_mode", &self.write_mode)
             .field("skip_shutdown", &self.skip_shutdown)
             .field("restore_check", &self.restore_check)
+            .field("shutdown_mode", &self.shutdown_mode)
             .field(
                 "channel_components",
                 &self.channel_components.keys().collect::<Vec<_>>(),
@@ -400,6 +476,10 @@ pub struct SessionReport {
     pub notes: Vec<String>,
     /// `Shutdown(false)` ran.
     pub shutdown_called: bool,
+    /// The mode it was given.
+    pub shutdown_mode: ShutdownMode,
+    /// `SaveToDevice(request)` calls that stored (not previews), successful or not.
+    pub saves: u64,
     /// Subdevices at the end of the session.
     pub subdevices: Vec<SubdeviceSummary>,
     /// Channels at the end of the session.
@@ -415,6 +495,8 @@ pub struct SessionReport {
     pub device_removed: bool,
     /// SMBus counters (SMBus devices only).
     pub smbus: Option<SmbusStats>,
+    /// Network counters (network devices only).
+    pub network: Option<NetStats>,
     /// The last battery report (plugins with the `battery` feature only).
     pub battery: Option<BatteryStatus>,
     /// Session wall time.
@@ -448,6 +530,8 @@ impl SessionReport {
             restore_notes: Vec::new(),
             notes: Vec::new(),
             shutdown_called: false,
+            shutdown_mode: ShutdownMode::Restore,
+            saves: 0,
             subdevices: Vec::new(),
             channels: Vec::new(),
             log_tail: Vec::new(),
@@ -455,6 +539,7 @@ impl SessionReport {
             memory_bytes: 0,
             device_removed: false,
             smbus: None,
+            network: None,
             battery: None,
             elapsed_ms: 0.0,
         }
@@ -620,11 +705,27 @@ pub enum Control {
         /// Its placement.
         placement: Placement,
     },
+    /// What `Shutdown()` leaves the device showing from now on.
+    ShutdownMode(ShutdownMode),
+    /// Run `SaveToDevice(request)` on the frame the device showed last (use
+    /// [`crate::manager::DeviceManager::save`], which applies the rate limit).
+    Save(SaveCall),
     /// Pulse every LED of the device and its children in this colour (`None`:
     /// back to the canvas); see [`DeviceContext::set_alert`].
     Alert(Option<Rgb>),
     /// `battery.lowBatteryWarningLevel` (percent).
     BatteryWarningLevel(u8),
+}
+
+/// One `SaveToDevice(request)` call asked of a session.
+#[derive(Clone, Debug)]
+pub struct SaveCall {
+    /// Preview or save.
+    pub action: SaveAction,
+    /// What to store.
+    pub choice: SaveChoice,
+    /// Receives the outcome (also when the session stops first).
+    pub reply: Sender<SaveOutcome>,
 }
 
 /// A running session.
@@ -757,8 +858,8 @@ fn run(
     let meta = &plugin.meta;
     let mut report = SessionReport::new(&device, &plugin);
 
-    // SMBus devices never open a HID collection.
-    let backend: Arc<dyn HidBackend> = if device.smbus.is_some() {
+    // SMBus and network devices never open a HID collection.
+    let backend: Arc<dyn HidBackend> = if device.smbus.is_some() || device.network.is_some() {
         Arc::new(NoHid)
     } else {
         backend
@@ -784,6 +885,13 @@ fn run(
     });
     ctx.set_subdevice_controller(meta.subdevice_controller || meta.supports_subdevices);
     ctx.set_system_info(opts.system_info.as_deref());
+    if let Some(t) = &device.network {
+        ctx.set_device_info([
+            t.service.clone(),
+            meta.name.clone(),
+            t.ip().unwrap_or_default().to_string(),
+        ]);
+    }
     ctx.set_battery_warning_level(opts.battery_warning_level);
     if let Some(t) = &device.smbus {
         ctx.set_device_info([
@@ -793,6 +901,12 @@ fn run(
         ]);
     }
     let shared = ctx.shared();
+    let net: Option<SharedNet> = device.network.as_ref().map(|_| {
+        let mut n = NetContext::new(NetRole::Device, opts.write_mode);
+        let dev = Arc::clone(&shared);
+        n.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
+        n.shared()
+    });
     let guard: Option<SharedGuard> = device.smbus.as_ref().map(|t| {
         let mut g = GuardedBus::new(t.bus.clone(), Phase::Run { addr: t.addr }, opts.write_mode);
         g.deny_registers(meta.smbus_denied_registers.iter().copied());
@@ -813,6 +927,8 @@ fn run(
         device: Some(Arc::clone(&shared)),
         smbus: guard.clone(),
         module_stubs: false,
+        net: net.clone(),
+        controller: device.network.as_ref().map(|t| t.controller.to_string()),
         ..RuntimeOptions::default()
     };
     let rt = match PluginRuntime::new(&meta.source_path, &ropts) {
@@ -825,15 +941,20 @@ fn run(
 
     // Everything up to the end of the render loop runs under catch_unwind: a
     // panic (in a native, the engine or the host) must not skip Shutdown(false).
-    let mut lifecycle = Lifecycle::default();
+    let mut lifecycle = Lifecycle {
+        shutdown_mode: opts.shutdown_mode,
+        ..Lifecycle::default()
+    };
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         drive(
             &rt,
+            meta,
             &device,
             &shared,
             guard.as_ref(),
             &frames,
             &opts,
+            net.as_ref(),
             stop,
             live,
             controls,
@@ -851,10 +972,52 @@ fn run(
     report.render = lifecycle.render.summary();
 
     live.set_state(SessionState::Stopping);
+    // Requests that came too late: a pending save is answered, a new shutdown mode applies.
+    while let Ok(control) = controls.try_recv() {
+        match control {
+            Control::ShutdownMode(m) => lifecycle.shutdown_mode = m,
+            Control::Save(call) => {
+                let _ = call.reply.send(SaveOutcome::failed(
+                    &device.key,
+                    call.action,
+                    "the device session is stopping",
+                ));
+            }
+            _ => {}
+        }
+    }
+    report.shutdown_mode = lifecycle.shutdown_mode;
     if lifecycle.initialize_called && !opts.skip_shutdown {
         if healthy {
+            let mode = lifecycle.shutdown_mode;
+            let last = save::average(&lock_device(&shared).led_colors());
+            match save::shutdown_fallback(meta, mode, last) {
+                ShutdownPlan::Native => {}
+                ShutdownPlan::Parameters(values) => {
+                    report.notes.push(format!(
+                        "shutdown mode {}: through the plugin's parameters {}",
+                        mode.as_str(),
+                        serde_json::Value::Object(values.clone())
+                    ));
+                    if let Err(e) = rt.set_globals(&serde_json::Value::Object(values), budgets.validate) {
+                        report.fail("parameters", e);
+                    }
+                }
+                ShutdownPlan::Unsupported => report.notes.push(format!(
+                    "shutdown mode {}: not supported by the plugin (neither ShutdownModes() nor shutdownColor); \
+                     it restores the device as usual",
+                    mode.as_str()
+                )),
+            }
             let shutdown = catch_unwind(AssertUnwindSafe(|| {
-                rt.call_export("Shutdown", CallArgs::Bool(false), budgets.call(budgets.shutdown))
+                rt.call_export(
+                    "Shutdown",
+                    CallArgs::Shutdown {
+                        suspending: false,
+                        mode,
+                    },
+                    budgets.call(budgets.shutdown),
+                )
             }));
             match shutdown {
                 Ok(Ok(called)) => report.shutdown_called = called,
@@ -885,6 +1048,9 @@ fn run(
         g.force_unlock();
         report.smbus = Some(g.stats().clone());
     }
+    if let Some(n) = &net {
+        report.network = Some(lock_net(n).stats().clone());
+    }
     for (probe, bytes) in lifecycle.before {
         let after = lock_device(&shared)
             .probe_feature(probe.report_id, probe.len)
@@ -910,17 +1076,21 @@ struct Lifecycle {
     before: Vec<(RestoreProbe, Vec<u8>)>,
     /// `Render()` wall times.
     render: LatencyHistogram,
+    /// What `Shutdown()` leaves the device showing.
+    shutdown_mode: ShutdownMode,
 }
 
 /// Load → parameters → Validate → open → restore probes → Initialize → render loop.
 #[allow(clippy::too_many_arguments)]
 fn drive(
     rt: &PluginRuntime,
+    meta: &PluginMeta,
     device: &SessionDevice,
     shared: &SharedDevice,
     guard: Option<&SharedGuard>,
     frames: &FrameStore,
     opts: &SessionOptions,
+    net: Option<&SharedNet>,
     stop: &Arc<AtomicBool>,
     live: &LiveStats,
     controls: &Receiver<Control>,
@@ -945,7 +1115,14 @@ fn drive(
         }
     }
 
-    if let Some(target) = &device.smbus {
+    if let Some(target) = &device.network {
+        // A network device has nothing to validate: its service announced it.
+        report.endpoint_path = Some(format!(
+            "{} (network, {})",
+            target.ip().unwrap_or("no address"),
+            target.service
+        ));
+    } else if let Some(target) = &device.smbus {
         // An SMBus device has no collections to validate or reports to probe:
         // the scan found it, the guard binds the session to its address.
         report.endpoint_path = Some(format!("{} @0x{:02x}", target.bus.descriptor().name, target.addr));
@@ -1051,10 +1228,15 @@ fn drive(
     let mut lock_warned = false;
     let mut last_render: Option<Instant> = None;
     while !stop.load(Ordering::Acquire) {
-        if device.smbus.is_some() {
-            let left = last_render.map_or(Duration::ZERO, |t| {
-                SMBUS_FRAME_INTERVAL.saturating_sub(t.elapsed())
-            });
+        let min_interval = if device.smbus.is_some() {
+            Some(SMBUS_FRAME_INTERVAL)
+        } else if device.network.is_some() {
+            Some(NETWORK_FRAME_INTERVAL)
+        } else {
+            None
+        };
+        if let Some(interval) = min_interval {
+            let left = last_render.map_or(Duration::ZERO, |t| interval.saturating_sub(t.elapsed()));
             if !left.is_zero() {
                 std::thread::sleep(left);
                 continue;
@@ -1070,12 +1252,55 @@ fn drive(
         last_seq = seq;
         let mut controlled = false;
         while let Ok(control) = controls.try_recv() {
-            apply_control(rt, shared, control, &budgets, stop, report);
+            match control {
+                Control::ShutdownMode(m) => lifecycle.shutdown_mode = m,
+                Control::Save(call) => {
+                    let SaveCall {
+                        action,
+                        choice,
+                        reply,
+                    } = call;
+                    let outcome = run_save(
+                        rt,
+                        meta,
+                        &device.key,
+                        shared,
+                        guard,
+                        action,
+                        &choice,
+                        &budgets,
+                        stop,
+                    );
+                    if action == SaveAction::Save {
+                        report.saves += 1;
+                    }
+                    if let Some(e) = &outcome.error {
+                        report
+                            .notes
+                            .push(format!("SaveToDevice ({}): {e}", action.as_str()));
+                    }
+                    let _ = reply.send(outcome);
+                }
+                other => apply_control(rt, shared, other, &budgets, stop, report),
+            }
             controlled = true;
         }
         if controlled || report.frames.is_multiple_of(30) {
             let dev = lock_device(shared);
             live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+        }
+        if net.is_some() {
+            // Socket events and finished requests first, so Render() sees them.
+            match rt.call_host("pumpNet", None, budgets.render_budget(), Some(stop)) {
+                Ok(_) => {}
+                Err(e) if e.is_stop() => break,
+                Err(e) => {
+                    report.render_errors += 1;
+                    if report.render_errors <= 5 {
+                        report.fail("events", e);
+                    }
+                }
+            }
         }
         let (_, frame, captured) = frames.latest_stamped();
         {
@@ -1133,8 +1358,12 @@ fn drive(
             }
         }
         let dev = lock_device(shared);
+        let net_errors = net.map(|n| {
+            let n = lock_net(n);
+            n.stats().errors + n.stats().refused + n.stats().http_errors
+        });
         live.io_errors.store(
-            bus_errors.unwrap_or_else(|| dev.stats().errors()),
+            bus_errors.or(net_errors).unwrap_or_else(|| dev.stats().errors()),
             Ordering::Relaxed,
         );
         live.hid_disconnects
@@ -1193,6 +1422,8 @@ fn apply_control(
                 report.notes.push(format!("no endpoint {uid} to place"));
             }
         }
+        // Handled by the render loop.
+        Control::ShutdownMode(_) | Control::Save(_) => {}
         Control::Placement(p) => {
             let changed = {
                 let mut dev = lock_device(shared);
@@ -1204,6 +1435,85 @@ fn apply_control(
                 hook("onBrightnessChanged", report);
             }
         }
+    }
+}
+
+/// One `SaveToDevice(request)` call (see the module docs): checks the plugin's
+/// capabilities, runs a preview dry, opens the SMBus save window for a save only,
+/// and puts the write mode and the window back whatever happens.
+#[allow(clippy::too_many_arguments)]
+fn run_save(
+    rt: &PluginRuntime,
+    meta: &PluginMeta,
+    key: &str,
+    shared: &SharedDevice,
+    guard: Option<&SharedGuard>,
+    action: SaveAction,
+    choice: &SaveChoice,
+    budgets: &Budgets,
+    stop: &Arc<AtomicBool>,
+) -> SaveOutcome {
+    let Some(caps) = meta.save_caps.as_ref().filter(|_| meta.lifecycle.save_to_device) else {
+        return SaveOutcome::failed(
+            key,
+            action,
+            "this device's plugin cannot store lighting in the device",
+        );
+    };
+    if !caps.allows(choice) {
+        let what = choice.effect.as_deref().map_or_else(
+            || "the current colours".to_string(),
+            |e| format!("the {e} effect"),
+        );
+        return SaveOutcome::failed(key, action, format!("this device's plugin cannot store {what}"));
+    }
+    let colors = lock_device(shared).led_colors();
+    let request = save::request_json(action, choice, &colors);
+    let device_mode = lock_device(shared).write_mode();
+    let bus_mode = guard.map(|g| lock_guard(g).write_mode());
+    let dry = action == SaveAction::Preview || device_mode == WriteMode::DryRun;
+    match action {
+        SaveAction::Preview => {
+            lock_device(shared).set_write_mode(WriteMode::DryRun);
+            if let Some(g) = guard {
+                lock_guard(g).set_write_mode(WriteMode::DryRun);
+            }
+        }
+        SaveAction::Save => {
+            if let Some(g) = guard {
+                lock_guard(g).set_save_window(true);
+            }
+            lock_device(shared).log(&format!(
+                "SaveToDevice: storing {} in the device (asked for by the user)",
+                choice.effect.as_deref().unwrap_or("the current colours")
+            ));
+        }
+    }
+    let called = catch_unwind(AssertUnwindSafe(|| {
+        rt.call_export_json("SaveToDevice", &request, budgets.call(budgets.save), stop)
+    }));
+    // Close the window and put the write modes back before anything else runs.
+    lock_device(shared).set_write_mode(device_mode);
+    if let Some(g) = guard {
+        let mut g = lock_guard(g);
+        g.set_save_window(false);
+        g.force_unlock();
+        if let Some(m) = bus_mode {
+            g.set_write_mode(m);
+        }
+    }
+    match called {
+        Ok(Ok(Some(result))) => SaveOutcome::from_result(key, action, dry, result),
+        Ok(Ok(None)) => SaveOutcome::failed(key, action, "the plugin has no SaveToDevice(request) export"),
+        Ok(Err(e)) => SaveOutcome {
+            dry_run: dry,
+            ..SaveOutcome::failed(key, action, format!("SaveToDevice failed: {e}"))
+        },
+        Err(panic) => SaveOutcome::failed(
+            key,
+            action,
+            format!("SaveToDevice panicked: {}", panic_text(panic.as_ref())),
+        ),
     }
 }
 
@@ -1223,9 +1533,10 @@ fn finish(
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
     report.battery = dev.battery();
-    report.io_errors = match &report.smbus {
-        Some(s) => s.errors + s.denied,
-        None => report.io.errors(),
+    report.io_errors = match (&report.smbus, &report.network) {
+        (Some(s), _) => s.errors + s.denied,
+        (None, Some(n)) => n.errors + n.refused,
+        (None, None) => report.io.errors(),
     };
     let (tail, lines) = dev.log_tail();
     report.log_tail = tail;

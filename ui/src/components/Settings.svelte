@@ -95,6 +95,22 @@
   </section>
 
   <section class="panel">
+    <h2>Network lights</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.network}
+        onchange={(e) => daemon.run(() => api.setSettings({ network: (e.target as HTMLInputElement).checked }))}
+      /> Look for lights on my network</label
+    >
+    <p class="muted">
+      Off by default. When on, Lightloom's network plugins look for WLED, Philips Hue, Nanoleaf, LIFX, Govee and Yeelight
+      lights on your local network (mDNS and broadcasts; nothing is sent outside it). Found lights, pairing and "add by
+      IP" are on the Devices tab.
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>Graphics card and RAM lighting</h2>
     <label class="check"
       ><input
@@ -108,6 +124,26 @@
       driver and the Lightloom I/O service are installed, supported RAM modules, and drives their lighting. It never
       does so while SignalRGB, OpenRGB or a vendor lighting service is running. Turn it off to leave these devices
       alone.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>When Lightloom closes</h2>
+    {#each [["restore", "Give each device its own lighting back (its built-in effect, or what it showed before Lightloom)"], ["keep", "Keep the last colours Lightloom showed (until the device is switched off)"], ["off", "Turn the lights off"]] as [mode, label] (mode)}
+      <label class="check"
+        ><input
+          type="radio"
+          name="shutdown-mode"
+          value={mode}
+          checked={snapshot.settings.shutdownMode === mode}
+          onchange={() => daemon.run(() => api.setSettings({ shutdownMode: mode as "restore" | "keep" | "off" }))}
+        /> {label}</label
+      >
+    {/each}
+    <p class="muted">
+      Nothing is stored in the devices: after a power cycle they show what they keep in their own memory (see Devices →
+      Save to devices). A device can have its own choice in its settings; devices whose plugin cannot do it fall back to
+      their own lighting.
     </p>
   </section>
 

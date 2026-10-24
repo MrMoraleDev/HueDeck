@@ -114,7 +114,7 @@ pub fn thumbnail(frame: &Frame<'_>, out: &mut [u8]) {
                 .collect()
         })
         .collect();
-    let mut px = out.chunks_exact_mut(4);
+    let mut px = out.as_chunks_mut::<4>().0.iter_mut();
     for y in 0..th {
         let rows: Vec<usize> = strata(y * h / th, (y + 1) * h / th, h)
             .map(|dy| frame.row_offset(dy))
@@ -266,7 +266,11 @@ pub(crate) mod tests {
             let want = (mean / 255.0 * 100.0).round() as i8;
             for c in 0..ZONE_COLS {
                 let i = r * ZONE_COLS + c;
-                assert!((z.lightness[i] - want).abs() <= 1, "row {r}: {} vs {want}", z.lightness[i]);
+                assert!(
+                    (z.lightness[i] - want).abs() <= 1,
+                    "row {r}: {} vs {want}",
+                    z.lightness[i]
+                );
                 assert_eq!((z.hue[i], z.saturation[i]), (0, 0));
             }
         }
@@ -284,7 +288,11 @@ pub(crate) mod tests {
             for c in (0..13).chain(15..ZONE_COLS) {
                 let i = r * ZONE_COLS + c;
                 let want = if c < 14 { 0 } else { 240 };
-                assert_eq!((z.hue[i], z.saturation[i], z.lightness[i]), (want, 100, 50), "cell {r},{c}");
+                assert_eq!(
+                    (z.hue[i], z.saturation[i], z.lightness[i]),
+                    (want, 100, 50),
+                    "cell {r},{c}"
+                );
             }
         }
     }
@@ -336,7 +344,10 @@ pub(crate) mod tests {
     fn small_displays_still_fill_the_thumbnail() {
         let data = surface(8, 8, |_, _| [10, 20, 30]);
         let mut out = vec![0; ZONE_IMAGE_BYTES];
-        thumbnail(&Frame::new(&data, 8, 8, 32, Rotation::Identity).unwrap(), &mut out);
-        assert!(out.chunks_exact(4).all(|p| p == [10, 20, 30, 255]));
+        thumbnail(
+            &Frame::new(&data, 8, 8, 32, Rotation::Identity).unwrap(),
+            &mut out,
+        );
+        assert!(out.as_chunks::<4>().0.iter().all(|p| p == &[10, 20, 30, 255]));
     }
 }

@@ -1054,7 +1054,11 @@ impl Engine {
             Canvas::Cef(c) => Some(c.engine_sink()),
             Canvas::Null(_) => None,
         };
-        let meta = self.effect.as_deref().and_then(|id| self.effects.get(id)).map(|e| &e.meta);
+        let meta = self
+            .effect
+            .as_deref()
+            .and_then(|id| self.effects.get(id))
+            .map(|e| &e.meta);
         self.screen = crate::screen::feed(&self.opts.config.screen, meta, sink.clone());
         self.audio = crate::audio::feed(&self.opts.config.audio, fps, uses_audio, sink);
         self.canvas = canvas;

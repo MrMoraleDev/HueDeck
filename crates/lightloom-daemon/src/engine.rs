@@ -412,6 +412,12 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
     ApiError::internal(e.to_string())
 }
 
+/// A rawusb device without WinUSB: no session starts, the device list says why.
+fn needs_driver(p: &Present) -> bool {
+    p.plugin.meta.plugin_type == lightloom_plugin_host::PluginType::RawUsb
+        && p.device.driver_problem().is_some()
+}
+
 fn state_name(s: SessionState) -> &'static str {
     match s {
         SessionState::Starting => "starting",
@@ -939,6 +945,7 @@ impl Engine {
             self.present
                 .iter()
                 .filter(|p| self.store.device_enabled(&p.device.key).unwrap_or(true))
+                .filter(|p| !needs_driver(p))
                 .cloned()
                 .collect()
         } else {
@@ -1386,8 +1393,16 @@ impl Engine {
                     .map(|m| m.as_str().to_string()),
                 battery: self.battery_view(key),
                 blink_low_battery: self.blink.contains(key),
+                driver_problem: p.device.driver_problem(),
+                help_url: p
+                    .device
+                    .driver_problem()
+                    .map(|_| lightloom_hal::usb::WINUSB_HELP_URL.to_string()),
                 ..DeviceView::default()
             };
+            if enabled && needs_driver(p) {
+                view.state = "needs-driver".into();
+            }
             if let Some(h) = sessions.get(key) {
                 let live = h.live();
                 view.state = state_name(live.state).into();

@@ -86,6 +86,13 @@
         {/if}
       </div>
       <p class="muted plugin">Plugin: {d.plugin} <span class="path">({d.pluginPath})</span></p>
+      {#if d.driverProblem}
+        <p class="driver-problem">
+          <span class="badge bad">needs WinUSB driver</span>
+          {d.driverProblem}
+          {#if d.helpUrl}<a href={d.helpUrl} target="_blank" rel="noreferrer">Why, and what to check</a>{/if}
+        </p>
+      {/if}
       {#if d.battery}
         <label class="check blink"
           ><input
@@ -221,6 +228,11 @@
   .plugin {
     margin: 6px 0 0;
     font-size: 12px;
+  }
+  .driver-problem {
+    margin: 6px 0 0;
+    font-size: 12px;
+    overflow-wrap: anywhere;
   }
   .path {
     opacity: 0.6;

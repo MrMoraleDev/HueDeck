@@ -934,11 +934,16 @@ impl MockUsb {
 
     /// Shared state of the device at `path`, for scripting from tests.
     pub fn device(&self, path: &str) -> Option<SharedUsbDevice> {
-        self.devices.iter().find(|d| lock_usb(d).info.path == path).cloned()
+        self.devices
+            .iter()
+            .find(|d| lock_usb(d).info.path == path)
+            .cloned()
     }
 
     fn with_device<T>(&self, path: &str, f: impl FnOnce(&mut MockUsbDeviceState) -> T) -> HalResult<T> {
-        let d = self.device(path).ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let d = self
+            .device(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
         let mut s = lock_usb(&d);
         Ok(f(&mut s))
     }
@@ -982,7 +987,9 @@ impl UsbBackend for MockUsb {
     }
 
     fn open(&self, path: &str) -> HalResult<Box<dyn UsbHandle>> {
-        let state = self.device(path).ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let state = self
+            .device(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
         let (info, generation) = {
             let mut s = lock_usb(&state);
             if s.unplugged {
@@ -1110,10 +1117,7 @@ impl UsbHandle for MockUsbHandle {
         data: &mut [u8],
         timeout_ms: u32,
     ) -> HalResult<usize> {
-        let iface = self
-            .info
-            .claimable_for_control(bm_request_type, w_index)?
-            .number;
+        let iface = self.info.claimable_for_control(bm_request_type, w_index)?.number;
         self.claim(iface)?;
         if bm_request_type & crate::usb::ENDPOINT_IN == 0 {
             self.out_allowed(timeout_ms)?;
@@ -1131,7 +1135,14 @@ impl UsbHandle for MockUsbHandle {
         };
         let n = next.len().min(data.len());
         data[..n].copy_from_slice(&next[..n]);
-        let bytes = setup_packet(bm_request_type, b_request, w_value, w_index, data.len(), &data[..n]);
+        let bytes = setup_packet(
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            data.len(),
+            &data[..n],
+        );
         self.recorder
             .record(TransactionKind::ControlIn, &*self.info.path, bytes);
         Ok(n)
@@ -1406,9 +1417,16 @@ mod tests {
         let mut buf = [0u8; 64];
         assert_eq!(h.bulk_transfer(0x82, &mut buf, 100).unwrap(), 3);
         assert_eq!(buf[..3], [9, 8, 7]);
-        assert_eq!(h.control_transfer(0x40, 0x80, 0, 0x0010, &mut [0xAA], 1000).unwrap(), 1);
+        assert_eq!(
+            h.control_transfer(0x40, 0x80, 0, 0x0010, &mut [0xAA], 1000)
+                .unwrap(),
+            1
+        );
         let mut buf = [0u8; 4];
-        assert_eq!(h.control_transfer(0xC0, 0x81, 0, 0xD800, &mut buf, 1000).unwrap(), 2);
+        assert_eq!(
+            h.control_transfer(0xC0, 0x81, 0, 0xD800, &mut buf, 1000).unwrap(),
+            2
+        );
         drop(h);
         let kinds: Vec<TransactionKind> = rec.snapshot().iter().map(|t| t.kind).collect();
         assert_eq!(
@@ -1441,15 +1459,30 @@ mod tests {
         let (mock, path) = usb();
         let mut h = mock.open(&path).unwrap();
         let mut buf = [0u8; 8];
-        assert!(matches!(h.bulk_transfer(0x82, &mut buf, 250), Err(HalError::Timeout(250))));
-        assert!(matches!(h.control_transfer(0xC0, 1, 0, 0, &mut buf, 30), Err(HalError::Timeout(30))));
+        assert!(matches!(
+            h.bulk_transfer(0x82, &mut buf, 250),
+            Err(HalError::Timeout(250))
+        ));
+        assert!(matches!(
+            h.control_transfer(0xC0, 1, 0, 0, &mut buf, 30),
+            Err(HalError::Timeout(30))
+        ));
         // The HID interface's endpoint and a class request to it: refused, never claimed.
-        assert!(matches!(h.bulk_transfer(0x81, &mut buf, 10), Err(HalError::NeedsDriver(_))));
-        assert!(matches!(h.control_transfer(0x21, 9, 0x0200, 0, &mut buf, 10), Err(HalError::NeedsDriver(_))));
+        assert!(matches!(
+            h.bulk_transfer(0x81, &mut buf, 10),
+            Err(HalError::NeedsDriver(_))
+        ));
+        assert!(matches!(
+            h.control_transfer(0x21, 9, 0x0200, 0, &mut buf, 10),
+            Err(HalError::NeedsDriver(_))
+        ));
         assert!(matches!(h.claim_interface(0), Err(HalError::NeedsDriver(_))));
         assert_eq!(mock.recorder().payloads(TransactionKind::UsbClaim), vec![vec![1]]);
         lock_usb(&mock.device(&path).unwrap()).out_timeout = true;
-        assert!(matches!(h.bulk_transfer(0x02, &mut [1], 40), Err(HalError::Timeout(40))));
+        assert!(matches!(
+            h.bulk_transfer(0x02, &mut [1], 40),
+            Err(HalError::Timeout(40))
+        ));
     }
 
     #[test]
@@ -1459,10 +1492,25 @@ mod tests {
         mock.unplug(&path).unwrap();
         assert!(mock.enumerate().unwrap().is_empty());
         assert!(matches!(mock.open(&path), Err(HalError::NotFound(_))));
-        assert!(matches!(old.bulk_transfer(0x02, &mut [1], 10), Err(HalError::Disconnected)));
+        assert!(matches!(
+            old.bulk_transfer(0x02, &mut [1], 10),
+            Err(HalError::Disconnected)
+        ));
         mock.replug(&path).unwrap();
-        assert!(matches!(old.bulk_transfer(0x02, &mut [1], 10), Err(HalError::Disconnected)));
-        assert_eq!(mock.open(&path).unwrap().bulk_transfer(0x02, &mut [1], 10).unwrap(), 1);
-        assert_eq!(mock.enumerate().unwrap()[0].instance_id, "USB\\VID_0CF2&PID_A103\\S1");
+        assert!(matches!(
+            old.bulk_transfer(0x02, &mut [1], 10),
+            Err(HalError::Disconnected)
+        ));
+        assert_eq!(
+            mock.open(&path)
+                .unwrap()
+                .bulk_transfer(0x02, &mut [1], 10)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            mock.enumerate().unwrap()[0].instance_id,
+            "USB\\VID_0CF2&PID_A103\\S1"
+        );
     }
 }

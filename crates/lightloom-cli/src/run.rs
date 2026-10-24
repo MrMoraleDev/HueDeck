@@ -483,6 +483,7 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
         mock.set_feature_report(&info.path, report)?;
     }
     let device = SessionDevice {
+        usb: None,
         smbus: None,
         key: format!("{vid:04x}:{pid:04x}:MOCK"),
         vid,

@@ -15,13 +15,13 @@ use lightloom_hal::hotplug::{DeviceClass, DeviceEvent, HotplugSource};
 use lightloom_hal::{DeviceKey, HalError, HalResult};
 use std::ffi::c_void;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use windows::core::GUID;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Register_Notification, CM_Unregister_Notification, CM_NOTIFY_ACTION,
     CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL, CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL, CM_NOTIFY_EVENT_DATA,
     CM_NOTIFY_FILTER, CM_NOTIFY_FILTER_0, CM_NOTIFY_FILTER_0_0, CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
     CR_SUCCESS, HCMNOTIFICATION,
 };
-use windows::core::GUID;
 use windows::Win32::Devices::HumanInterfaceDevice::HidD_GetHidGuid;
 
 /// `GUID_DEVINTERFACE_USB_DEVICE` (usbiodef.h): every USB device node.

@@ -38,7 +38,11 @@ pub fn composite_interface(instance_id: &str) -> Option<u8> {
 /// Driver of each interface: `device_driver` for a non-composite device,
 /// else the service of the child that owns the interface (the child with the
 /// highest `MI_xx` not above it). `children` are `(instance id, service)`.
-pub fn interface_drivers(device_driver: &str, children: &[(String, String)], numbers: &[u8]) -> Vec<(u8, String)> {
+pub fn interface_drivers(
+    device_driver: &str,
+    children: &[(String, String)],
+    numbers: &[u8],
+) -> Vec<(u8, String)> {
     let composite = device_driver.eq_ignore_ascii_case(COMPOSITE_SERVICE);
     let owned: Vec<(u8, &str)> = children
         .iter()
@@ -80,11 +84,13 @@ pub use imp::{WinUsbBackend, WinUsbHandle};
 #[cfg(windows)]
 mod imp {
     use super::{interface_drivers, interface_info, WINUSB_SERVICE};
-    use crate::probe::{devnode_strings, device_id, wide};
+    use crate::probe::{device_id, devnode_strings, wide};
     use lightloom_hal::usb::{UsbBackend, UsbDeviceInfo, UsbHandle, ENDPOINT_IN};
     use lightloom_hal::{HalError, HalResult};
     use nusb::descriptors::TransferType;
-    use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Interrupt, Out, Recipient, TransferError};
+    use nusb::transfer::{
+        Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Interrupt, Out, Recipient, TransferError,
+    };
     use nusb::{Device, Endpoint, Interface, MaybeFuture};
     use std::collections::BTreeMap;
     use std::time::Duration;
@@ -102,7 +108,9 @@ mod imp {
         let wid = wide(instance_id);
         let mut inst = 0u32;
         // SAFETY: `wid` is NUL-terminated and outlives the call; `inst` is a valid out pointer.
-        if unsafe { CM_Locate_DevNodeW(&mut inst, PCWSTR(wid.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) } != CR_SUCCESS {
+        if unsafe { CM_Locate_DevNodeW(&mut inst, PCWSTR(wid.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) }
+            != CR_SUCCESS
+        {
             return Vec::new();
         }
         let mut out = Vec::new();
@@ -156,7 +164,13 @@ mod imp {
             .collect();
         if interfaces.is_empty() && device_driver.eq_ignore_ascii_case(WINUSB_SERVICE) {
             // The configuration descriptor was not readable; WinUSB owns the device.
-            interfaces.push(interface_info(0, d.class(), d.subclass(), d.protocol(), device_driver.clone()));
+            interfaces.push(interface_info(
+                0,
+                d.class(),
+                d.subclass(),
+                d.protocol(),
+                device_driver.clone(),
+            ));
         }
         UsbDeviceInfo {
             vid: d.vendor_id(),
@@ -237,7 +251,11 @@ mod imp {
                     for e in alt.endpoints() {
                         pipes.insert(e.address(), (e.transfer_type(), e.max_packet_size().max(1)));
                     }
-                    if let Some(i) = info.interfaces.iter_mut().find(|i| i.number == group.interface_number()) {
+                    if let Some(i) = info
+                        .interfaces
+                        .iter_mut()
+                        .find(|i| i.number == group.interface_number())
+                    {
                         i.endpoints = endpoints;
                     }
                 }
@@ -437,7 +455,10 @@ mod tests {
 
     #[test]
     fn composite_children_own_their_interfaces() {
-        assert_eq!(composite_interface(r"USB\VID_0CF2&PID_A103&MI_01\7&2f1d&0&0001"), Some(1));
+        assert_eq!(
+            composite_interface(r"USB\VID_0CF2&PID_A103&MI_01\7&2f1d&0&0001"),
+            Some(1)
+        );
         assert_eq!(composite_interface(r"usb\vid_0b05&pid_1aa2&mi_0a\x"), Some(10));
         assert_eq!(composite_interface(r"USB\VID_0CF2&PID_A103\SERIAL"), None);
         let children = kids(&[

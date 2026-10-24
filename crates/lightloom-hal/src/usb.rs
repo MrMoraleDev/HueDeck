@@ -25,7 +25,8 @@ pub const DEFAULT_TIMEOUT_MS: u32 = 1000;
 pub const MAX_TIMEOUT_MS: u32 = 5000;
 
 /// Where the user learns why a device needs WinUSB and how to check it.
-pub const WINUSB_HELP_URL: &str = "https://github.com/MrMoraleDev/Lightloom/blob/develop/docs/hardware/winusb.md";
+pub const WINUSB_HELP_URL: &str =
+    "https://github.com/MrMoraleDev/Lightloom/blob/develop/docs/hardware/winusb.md";
 
 /// `bmRequestType` recipient field (bits 0..=4).
 const RECIPIENT_MASK: u8 = 0x1F;
@@ -106,7 +107,11 @@ impl UsbDeviceInfo {
             .interfaces
             .iter()
             .map(|i| {
-                let driver = if i.driver.is_empty() { "no driver" } else { &i.driver };
+                let driver = if i.driver.is_empty() {
+                    "no driver"
+                } else {
+                    &i.driver
+                };
                 format!("interface {} ({driver})", i.number)
             })
             .collect();
@@ -190,7 +195,11 @@ impl UsbDeviceInfo {
         if iface.accessible {
             return Ok(iface);
         }
-        let driver = if iface.driver.is_empty() { "no driver" } else { &iface.driver };
+        let driver = if iface.driver.is_empty() {
+            "no driver"
+        } else {
+            &iface.driver
+        };
         Err(HalError::NeedsDriver(format!(
             "needs WinUSB driver: interface {} of {:04x}:{:04x} is bound to {driver}, not WinUSB; Lightloom never \
              claims it or swaps its driver, see {WINUSB_HELP_URL}",
@@ -270,8 +279,14 @@ mod tests {
         assert_eq!(d.claimable_for_endpoint(0x02).unwrap().number, 1);
         assert_eq!(d.claimable_for_endpoint(0x82).unwrap().number, 1);
         let err = d.claimable_for_endpoint(0x81).unwrap_err();
-        assert!(matches!(&err, HalError::NeedsDriver(m) if m.contains("HidUsb")), "{err}");
-        assert!(matches!(d.claimable_for_endpoint(0x03), Err(HalError::NotFound(_))));
+        assert!(
+            matches!(&err, HalError::NeedsDriver(m) if m.contains("HidUsb")),
+            "{err}"
+        );
+        assert!(matches!(
+            d.claimable_for_endpoint(0x03),
+            Err(HalError::NotFound(_))
+        ));
         assert!(matches!(d.claimable_interface(0), Err(HalError::NeedsDriver(_))));
         assert_eq!(d.claimable_interface(1).unwrap().number, 1);
     }
@@ -282,7 +297,10 @@ mod tests {
         // Vendor request to the device: any WinUSB interface carries it.
         assert_eq!(d.claimable_for_control(0xC0, 0xD800).unwrap().number, 1);
         // Class request to interface 0 (HID): refused, never claimed.
-        assert!(matches!(d.claimable_for_control(0x21, 0x0000), Err(HalError::NeedsDriver(_))));
+        assert!(matches!(
+            d.claimable_for_control(0x21, 0x0000),
+            Err(HalError::NeedsDriver(_))
+        ));
         assert_eq!(d.claimable_for_control(0x41, 0x0001).unwrap().number, 1);
         // Endpoint recipient: the endpoint's interface.
         assert_eq!(d.claimable_for_control(0x02, 0x0082).unwrap().number, 1);
@@ -300,7 +318,10 @@ mod tests {
         assert!(problem.starts_with("needs WinUSB driver"), "{problem}");
         assert!(problem.contains("interface 0 (HidUsb)") && problem.contains("interface 1 (no driver)"));
         assert!(problem.contains(WINUSB_HELP_URL));
-        assert!(matches!(d.claimable_for_control(0x40, 0), Err(HalError::NeedsDriver(_))));
+        assert!(matches!(
+            d.claimable_for_control(0x40, 0),
+            Err(HalError::NeedsDriver(_))
+        ));
         assert!(hybrid().driver_problem().is_none());
     }
 

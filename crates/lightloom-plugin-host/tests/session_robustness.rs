@@ -129,6 +129,7 @@ fn msi_rig() -> MsiRig {
     MsiRig {
         mock: Arc::new(mock),
         device: SessionDevice {
+            usb: None,
             smbus: None,
             key: "1462:7c91:A00000000001".into(),
             vid: 0x1462,
@@ -222,14 +223,6 @@ fn a_panic_after_a_write_still_restores_the_device() {
 fn gap_probe_plugin() -> CatalogEntry {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/device");
     let catalog = Catalog::scan(&[dir], Duration::from_secs(10));
-    assert!(
-        catalog.lookup(0x1234, 0x9999).is_none(),
-        "hybrid plugins are refused"
-    );
-    assert!(catalog
-        .skipped()
-        .iter()
-        .any(|(p, why)| p.ends_with("hybrid.js") && why.contains("Hybrid")));
     catalog.lookup(0x1234, 0x5678).expect("gap probe").clone()
 }
 
@@ -243,6 +236,7 @@ fn run_probe(probe: &str) -> (SessionReport, Arc<MockHid>) {
     let backend: Arc<dyn HidBackend> = mock.clone();
     let handle = session::spawn(
         SessionDevice {
+            usb: None,
             smbus: None,
             key: "1234:5678:P".into(),
             vid: 0x1234,
@@ -266,17 +260,27 @@ fn run_probe(probe: &str) -> (SessionReport, Arc<MockHid>) {
 }
 
 #[test]
+fn raw_usb_calls_without_a_usb_device_fail_softly() {
+    // A HID session has no raw USB side: transfers fail (-1 / empty) and
+    // setProtocol("hybrid") is refused, logged once, never thrown.
+    for probe in ["bulk", "control", "setProtocol"] {
+        let (report, mock) = run_probe(probe);
+        assert!(report.failures.is_empty(), "{probe}: {:#?}", report.failures);
+        assert_eq!(mock.recorder().writes(), vec![vec![0x00, 0x01]], "{probe}");
+        let logged = report.log_tail.join(
+            "
+",
+        );
+        assert!(
+            logged.contains("rawusb") || logged.contains("no raw USB side"),
+            "{probe}: {logged}"
+        );
+    }
+}
+
+#[test]
 fn unimplemented_host_members_throw_instead_of_faking_io() {
-    for probe in [
-        "bulk",
-        "control",
-        "setProtocol",
-        "fan",
-        "board",
-        "bus",
-        "udp",
-        "unknown",
-    ] {
+    for probe in ["fan", "board", "bus", "udp", "unknown"] {
         let (report, mock) = run_probe(probe);
         let init = report
             .failures
@@ -314,6 +318,7 @@ fn long_blocking_renders_survive_the_watchdog_and_stop_promptly() {
     let backend: Arc<dyn HidBackend> = mock.clone();
     let handle = session::spawn(
         SessionDevice {
+            usb: None,
             smbus: None,
             key: "1234:6666:S".into(),
             vid: 0x1234,
@@ -363,6 +368,7 @@ fn slow_session(mode: &str, opts: SessionOptions) -> (session::SessionHandle, Ar
     opts.parameters.insert("mode".into(), mode.into());
     let handle = session::spawn(
         SessionDevice {
+            usb: None,
             smbus: None,
             key: "1234:6666:S".into(),
             vid: 0x1234,

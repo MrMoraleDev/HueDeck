@@ -121,6 +121,14 @@ pub struct DeviceView {
     pub battery: Option<BatteryView>,
     /// Pulse the device red while its battery is low (user setting).
     pub blink_low_battery: bool,
+    /// Why the device cannot be driven (or only partly) as it is plugged in:
+    /// "needs WinUSB driver: ..." for a raw USB device Windows bound no
+    /// WinUSB driver to. Lightloom never installs one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_problem: Option<String>,
+    /// Where to read about [`DeviceView::driver_problem`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help_url: Option<String>,
 }
 
 /// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).

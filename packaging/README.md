@@ -28,7 +28,7 @@ embedded in every Windows executable by `crates/lightloom-winres`.
 - `tools/package/stage-windows.ps1` stages one directory: `lightloomd.exe`, `lightloomw.exe`
   (starts the daemon without a window), `lightloom.exe`, `lightloom-renderer.exe` and its CEF
   runtime, `lightloom-setup.exe` and `lightloom-iobroker.exe` (RAM lighting), `pawnio-modules/`
-  (PawnIO.Modules 0.2.11: `SmbusPIIX4.bin`, `Echo.bin`, `COPYING` and their sources, every
+  (PawnIO.Modules 0.2.11: `SmbusPIIX4.bin`, `SmbusI801.bin`, `Echo.bin`, `COPYING` and their sources, every
   file SHA-256 pinned, fetched by `tools/package/fetch-pawnio-modules.ps1`), `ui/`,
   `plugins/`, `effects/`, the licence texts, `privacy.md` and
   `THIRD-PARTY/CEF-Chromium-CREDITS.html`. About 400 MB, most of it Chromium.

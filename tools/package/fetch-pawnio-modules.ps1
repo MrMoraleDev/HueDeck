@@ -6,11 +6,11 @@
   pinned SHA-256, into one directory (the `pawnio-modules` folder of the staged build).
 
 .DESCRIPTION
-  - SmbusPIIX4.bin, Echo.bin and COPYING come from the release archive
+  - SmbusPIIX4.bin (AMD), SmbusI801.bin (Intel), Echo.bin and COPYING come from the release archive
     https://github.com/namazso/PawnIO.Modules/releases/download/0.2.11/release_0_2_11.zip
-    (the archive and each file pinned). The two .bin pins are the ones in
+    (the archive and each file pinned). The .bin pins are the ones in
     crates/lightloom-iobroker/src/pins.rs; lightloom-setup checks them again before use.
-  - The corresponding sources (SmbusPIIX4.p, Echo.p, sleepmode.inc, include/*.inc) come from
+  - The corresponding sources (SmbusPIIX4.p, SmbusI801.p, Echo.p, sleepmode.inc, include/*.inc) come from
     the repository at the 0.2.11 tag's commit, so the LGPL "source next to the object code"
     requirement is met by the installer itself. SOURCE.txt says where they came from.
 
@@ -35,11 +35,13 @@ $zipSha = "43608cb89bc84247fef1368a139013f7d043e17db6d6c8dfc9b46bf0905a81f4"
 $fromZip = [ordered]@{
   "SmbusPIIX4.bin" = "91f9b4b1c39e3d399ce48477a89d8f6bd3e58a2241064a4daec3a1513dff56e5"
   "Echo.bin"       = "96cb194cbbf1bd3ced0c0d5e2ac8ec55a5f8964b305dac005a30ac9b72787696"
+  "SmbusI801.bin"  = "a0f7d066e7efda28c0e754c1f52dbd8dc280d388ba8575b514a80cb67490530c"
   "COPYING"        = "1e7e6bae5a5bde32f1ae5a7c37a082d1ab03cf89354f7f936ac40be9e39a6531"
 }
 $sources = [ordered]@{
   "SmbusPIIX4.p"         = "59fd3e6eef8c00904459cd314ded061bb15f4a7dda74b334d194ccde38787378"
   "Echo.p"               = "5f1aa25c8aad697976cb77709f78e283651ef977353bfbfc153a5d0a847132be"
+  "SmbusI801.p"          = "fb4e3575fb27f3a5ce0c607ac4e1558f948ab08fd98b8a63cf5072da9e8d6c41"
   "sleepmode.inc"        = "77b022c2c1ad79d8aeb940dccfe28a5f5cb4384400cef3634f30cf827344e0cd"
   "include/core.inc"     = "3c3fdb0bb54d48792e5fadf4a17607023a35f25f1c006893a114342bac9d6aff"
   "include/extra.inc"    = "4780c6ba2489264ff5982f2f9a5e2b7f4e8ec8951adfe8ef88e728592f1b2e94"
@@ -82,15 +84,15 @@ $note = @"
 PawnIO.Modules $release (https://github.com/namazso/PawnIO.Modules), by namazso,
 licensed under the GNU Lesser General Public License 2.1 or later (COPYING).
 
-SmbusPIIX4.bin, Echo.bin and COPYING are unmodified files of the signed release archive
+SmbusPIIX4.bin, SmbusI801.bin, Echo.bin and COPYING are unmodified files of the signed release archive
 $zipUrl
 SHA-256 $zipSha
 
-The sources in this folder (SmbusPIIX4.p, Echo.p, sleepmode.inc, include/) are the files of
+The sources in this folder (SmbusPIIX4.p, SmbusI801.p, Echo.p, sleepmode.inc, include/) are the files of
 commit $commit (tag $release) of that repository, the source of these modules.
 The whole repository: https://github.com/namazso/PawnIO.Modules/tree/$commit
 
-Lightloom's I/O broker loads only these two modules, checked against SHA-256 pins
+Lightloom's I/O broker loads only these modules, checked against SHA-256 pins
 (crates/lightloom-iobroker/src/pins.rs in the Lightloom sources).
 "@
 [System.IO.File]::WriteAllText((Join-Path $Out "SOURCE.txt"), ($note -replace "`r`n", "`n"))

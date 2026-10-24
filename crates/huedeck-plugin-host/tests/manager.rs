@@ -41,6 +41,7 @@ fn present(mock: &MockHid, plugin: &CatalogEntry) -> Vec<Present> {
         .map(|e| Present {
             device: SessionDevice {
                 smbus: None,
+                lamparray: None,
                 key: format!("1234:5555:{}", e.serial),
                 vid: e.vid,
                 pid: e.pid,
@@ -154,6 +155,7 @@ fn a_session_that_failed_before_removal_stays_failed() {
     let device = Present {
         device: SessionDevice {
             smbus: None,
+            lamparray: None,
             key: "1234:3333:F".into(),
             vid: 0x1234,
             pid: 0x3333,

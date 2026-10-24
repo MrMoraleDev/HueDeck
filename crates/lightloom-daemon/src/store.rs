@@ -464,6 +464,38 @@ impl Store {
         Ok(())
     }
 
+    /// The SignalRGB import's effect mapping: each effect's control values are
+    /// merged into the stored ones and its presets created or replaced, all in
+    /// one transaction (nothing is written when one fails). Returns how many
+    /// control values and presets were written.
+    pub fn merge_effects(
+        &mut self,
+        effects: &BTreeMap<String, EffectState>,
+    ) -> anyhow::Result<(usize, usize)> {
+        let tx = self.conn.transaction()?;
+        let (mut values, mut presets) = (0, 0);
+        for (effect, state) in effects {
+            for (name, value) in &state.params {
+                tx.execute(
+                    "INSERT INTO effect_params (effect, name, value) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(effect, name) DO UPDATE SET value = excluded.value",
+                    params![effect, name, to_json(value)?],
+                )?;
+                values += 1;
+            }
+            for (name, preset) in &state.presets {
+                tx.execute(
+                    "INSERT INTO presets (effect, name, params) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(effect, name) DO UPDATE SET params = excluded.params",
+                    params![effect, name, to_json(preset)?],
+                )?;
+                presets += 1;
+            }
+        }
+        tx.commit()?;
+        Ok((values, presets))
+    }
+
     /// Delete a preset; `false` when there was none.
     pub fn delete_preset(&self, effect: &str, name: &str) -> anyhow::Result<bool> {
         Ok(self.conn.execute(
@@ -735,6 +767,35 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM placements", [], |r| r.get(0))
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn merged_effects_keep_other_values_and_replace_presets() {
+        let mut s = Store::in_memory().unwrap();
+        let mut keep = Map::new();
+        keep.insert("speed".into(), json!(5));
+        keep.insert("mine".into(), json!("kept"));
+        s.set_effect_params("signalrgb:Rainbow", &keep).unwrap();
+        s.save_preset("signalrgb:Rainbow", "A", &keep).unwrap();
+
+        let mut params = Map::new();
+        params.insert("speed".into(), json!(2));
+        params.insert("color".into(), json!("#ff0000"));
+        let mut preset = Map::new();
+        preset.insert("speed".into(), json!(9));
+        let state = EffectState {
+            params,
+            presets: BTreeMap::from([("A".to_string(), preset.clone())]),
+        };
+        let written = s
+            .merge_effects(&BTreeMap::from([("signalrgb:Rainbow".to_string(), state)]))
+            .unwrap();
+        assert_eq!(written, (2, 1));
+        let values = s.effect_params("signalrgb:Rainbow").unwrap();
+        assert_eq!(values["speed"], 2);
+        assert_eq!(values["color"], "#ff0000");
+        assert_eq!(values["mine"], "kept");
+        assert_eq!(s.presets("signalrgb:Rainbow").unwrap()["A"], preset);
     }
 
     #[test]

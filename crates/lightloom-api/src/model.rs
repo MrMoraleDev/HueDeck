@@ -121,6 +121,10 @@ pub struct DeviceView {
     pub battery: Option<BatteryView>,
     /// Pulse the device red while its battery is low (user setting).
     pub blink_low_battery: bool,
+    /// Driven by a third-party plugin read in place (a local SignalRGB
+    /// installation's), not by one Lightloom ships or the user wrote.
+    #[serde(default)]
+    pub third_party: bool,
 }
 
 /// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).
@@ -213,6 +217,9 @@ pub struct EffectView {
     pub values: Map<String, Value>,
     /// Preset names.
     pub presets: Vec<String>,
+    /// A third-party effect read in place (`source` `signalrgb`).
+    #[serde(default)]
+    pub third_party: bool,
 }
 
 /// User settings.
@@ -426,8 +433,15 @@ pub enum Request {
         openrgb_sdk: Option<bool>,
     },
     /// Import the local SignalRGB setup (read in place): its canvas placements
-    /// as a layout, and the component arrays of its channels.
+    /// as a layout (with the layout and per-device brightness and enable), the
+    /// component arrays of its channels, effect control values and presets, the
+    /// selected effect, the global brightness and per-device enable.
     ImportSignalRgb {
+        /// Layout name (default `SignalRGB`).
+        name: Option<String>,
+    },
+    /// What [`Request::ImportSignalRgb`] would import, without changing anything.
+    PreviewSignalRgb {
         /// Layout name (default `SignalRGB`).
         name: Option<String>,
     },
@@ -474,6 +488,7 @@ impl Request {
             Request::CanvasTap { .. } => "canvasTap",
             Request::SetSettings { .. } => "setSettings",
             Request::ImportSignalRgb { .. } => "importSignalRgb",
+            Request::PreviewSignalRgb { .. } => "previewSignalRgb",
             Request::GetLayout { .. } => "getLayout",
             Request::ListComponents => "listComponents",
             Request::Export => "export",

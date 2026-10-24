@@ -2,7 +2,7 @@
 // The daemon's native API (crates/lightloom-api/src/server.rs). Requests that change
 // state carry the token lightloomd embeds in the page it serves.
 
-import type { LibraryComponent, Placement, SaveResult, ShutdownMode, Snapshot } from "./types";
+import type { LibraryComponent, Placement, SaveResult, ShutdownMode, SignalRgbImport, Snapshot } from "./types";
 
 function token(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="lightloom-token"]')?.content ?? "";
@@ -80,11 +80,9 @@ export const api = {
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */
   setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),
-  importSignalRgb: () => request<{ placements: number; channels: number; layout: string }>(
-    "POST",
-    "/v1/import/signalrgb",
-    {},
-  ),
+  /** What the SignalRGB import would bring in (read-only). */
+  previewSignalRgb: () => request<SignalRgbImport>("GET", "/v1/import/signalrgb"),
+  importSignalRgb: () => request<SignalRgbImport>("POST", "/v1/import/signalrgb", {}),
   exportState: () => request<unknown>("GET", "/v1/export"),
   importState: (state: unknown) => request("POST", "/v1/import", state),
   rescan: () => request("POST", "/v1/rescan"),

@@ -1,0 +1,18 @@
+{
+  "$comment": "LIFX LAN messages worked out by hand from https://lan.developer.lifx.com/docs (header: size u16, protocol 1024 | addressable 0x1000 | tagged 0x2000 as u16, source u32, target 8 bytes = MAC + 00 00, 6 reserved, flags (res/ack) = 00, sequence, 8 reserved, type u16, 2 reserved; little endian), not by running the plugin. Source 0x6B656468 -> 68 64 65 6B. Untagged byte 3 = 0x14, tagged = 0x34. Bulb MAC d0:73:d5:01:02:03. SetColor (102 = 0x66) payload: reserved 00, hue, saturation, brightness, kelvin (u16 each), duration u32; kelvin 3500 = 0x0DAC -> AC 0D; duration 50 ms = 32 00 00 00. Hue: degrees * 65535 / 360: red 0 -> 0000, green 120 -> 21845 = 0x5555, blue 240 -> 43690 = 0xAAAA. Brightness max/255 * 65535: 255 -> FFFF, 128 -> 32896 = 0x8080. SetLightPower (117 = 0x75) payload: level u16, duration u32. Sizes: 36 + payload (Get 0 -> 0x24, SetLightPower 6 -> 0x2A, SetColor 13 -> 0x31). Device sequence starts at 0 (Get), 1 (SetLightPower), 2 (first SetColor). Service sequence starts at 1 (first GetService), then 2 (GetLabel) and 3 (GetVersion).",
+  "get_service_broadcast": "24 00 00 34 68 64 65 6B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 00 02 00 00 00",
+  "state_service_reply": "29 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 00 03 00 00 00 01 7C DD 00 00",
+  "get_label": "24 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 00 17 00 00 00",
+  "get_version": "24 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 20 00 00 00",
+  "state_label_reply_kitchen": "44 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 00 19 00 00 00 4B 69 74 63 68 65 6E 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+  "state_version_reply": "30 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 21 00 00 00 01 00 00 00 1B 00 00 00 00 00 00 00",
+  "light_get": "24 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 65 00 00 00",
+  "set_power_on": "2A 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 00 75 00 00 00 FF FF 00 00 00 00",
+  "set_color_red_seq2": "31 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 00 66 00 00 00 00 00 00 FF FF FF FF AC 0D 32 00 00 00",
+  "payload_blue": "00 AA AA FF FF FF FF AC 0D 32 00 00 00",
+  "payload_dim_green_008000": "00 55 55 FF FF 80 80 AC 0D 32 00 00 00",
+  "payload_black": "00 00 00 00 00 00 00 AC 0D 32 00 00 00",
+  "light_state_reply": "58 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 6B 00 00 00 34 12 78 56 BC 9A A0 0F 00 00 00 00 44 65 73 6B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+  "restore_color_seq3": "31 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 66 00 00 00 00 34 12 78 56 BC 9A A0 0F 00 00 00 00",
+  "restore_power_off_seq4": "2A 00 00 14 68 64 65 6B D0 73 D5 01 02 03 00 00 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00 00 75 00 00 00 00 00 00 00 00 00"
+}

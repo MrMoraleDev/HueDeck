@@ -118,10 +118,10 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| SQLite + migrations | Done | `crates/lightloom-daemon/src/store.rs` (`rusqlite` + `rusqlite_migration`; tables kv, devices, device_parameters, layouts, placements, channel_components, effect_params, presets); export/import round-trip test |
+| SQLite + migrations | Done | `crates/lightloom-daemon/src/store.rs` (`rusqlite` + `rusqlite_migration`; tables kv, devices, device_parameters, layouts, placements, channel_components, effect_params, presets, playlists); export/import round-trip test |
 | Native API 16138 (REST + WS, token, Host check) | Done | `crates/lightloom-api/src/server.rs` (`/v1/*`, `/v1/events`, `/v1/preview`); `docs/hardware/daemon-m4.md` |
 | Configurable API port | In progress (`feature/api-port`) | today: fixed 16138 |
-| Compat REST 16038 | Partial | `compat_router()`: app, lighting, global_brightness, enabled, effects, effect, apply, presets, next, previous, playlists (empty), scenes/current_layout, scenes/layouts. Missing: `lighting/shuffle`, `lighting/loadEffect`, `effects/{id}/image`, `playlists/{id}/play`, `partners/{id}`, `new` |
+| Compat REST 16038 | Done | `compat_router()`: every route of SignalRGB's local API (app, new, partners, lighting, global_brightness, enabled, effects, effect, image, apply, presets, next, previous, shuffle, loadEffect, playlists, playlist, play, scenes/current_layout, scenes/layouts); envelope contract test for every route; `docs/integrations/signalrgb-api.md` |
 | Compat canvas events 16034 | Done | `server.rs` `compat_canvas_event`; listeners wait while SignalRGB owns the ports |
 | Dashboard: devices, layout editor (drag, scale, rotate, flip), effects + controls + presets, channels/components, settings | Done | `ui/src/components/{Devices,Layout,Effects,Preview,Settings,ControlInput}.svelte` |
 | Dashboard: logs page | Missing | no log view in `ui/src` |
@@ -129,7 +129,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Own export/import of the whole setup | Done | `/v1/export`, `/v1/import`, `store.rs` test `export_import_round_trips_byte_for_byte` |
 | Plugin sources manager (pre-listed community repos, licence acknowledgement, hash pinning) | Missing | `schemas/plugin-source.schema.json` exists; no code. Lower priority under the standalone direction |
 | Tray shell, autostart | Missing | no Tauri crate, no Run-key entry |
-| Effect playlists / auto-next timer | Missing | compat `playlists` answers an empty list |
+| Effect playlists / auto-next timer | Done | `crates/lightloom-daemon/src/engine/playlists.rs`, `store.rs` table `playlists`, `/v1/playlists*`, `/v1/lighting/timer`, `ui/src/components/Playlists.svelte`; test `tests/playlists.rs` |
 | Suspend/resume (`Shutdown(true)` and re-`Initialize`) | Missing | `LifecycleState::Suspending/Resuming` exist in `crates/lightloom-daemon/src/lifecycle.rs`, nothing listens for power events |
 | On-exit behaviour, bake to device | In progress (`feature/bake`) | today: `Shutdown(false)` restore on exit |
 | Portable build | Done | `tools/package/stage-windows.ps1`, `release.yml` |
@@ -312,6 +312,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
     - Touches: `lightloom-api/src/server.rs` `compat_router` only.
     - Adds `lighting/shuffle`, `lighting/loadEffect`, `effects/{id}/image`, `playlists/{id}/play`, `app` fields, `partners`/`new` as documented empty answers, and contract tests for the envelope.
     - Coordinate with `feature/api-port`, which also touches `server.rs`.
+    - **Done** on `feature/compat-rest-playlists` (with WP-PLAYLISTS).
 16. **WP-IMPORT: import wizard completeness. Size S.**
     - Touches: `lightloom-runtime/src/signalrgb.rs`, `lightloom-daemon/src/store.rs` (import mapping), the `/v1/import/signalrgb` reply, `Settings.svelte`.
     - Imports effect parameters and presets, the selected effect, global and layout brightness, and per-device enable and brightness, from HKCU.
@@ -319,6 +320,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
 17. **WP-PLAYLISTS: effect playlists and the auto-next timer. Size S.**
     - Touches: `store.rs` (a table), `engine.rs`, the API, `Effects.svelte`.
     - Also fills compat `playlists`.
+    - **Done** on `feature/compat-rest-playlists`: ordered entries with a preset, values and a duration each, shuffle, the auto-next timer (off, 300 s by default), next/previous within the playlist, resume after restart, dashboard panel.
 
 ### Priority 3: M5 remainder and hardening
 

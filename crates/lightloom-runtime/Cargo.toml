@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "lightloom-runtime"
-description = "Lightloom device runtime shared by lightloom and lightloomd: HID enumeration for the plugin catalog, SMBus/GPU I2C buses, hotplug, conflicting software, SignalRGB setup read in place"
+description = "Lightloom device runtime shared by lightloom and lightloomd: HID enumeration for the plugin catalog, SMBus/GPU I2C buses (NvAPI, AMD ADL), hotplug, conflicting software, SignalRGB setup read in place"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,6 +21,7 @@ lightloom-hal-windows = { path = "../lightloom-hal-windows" }
 # hidraw backend and udev hotplug (its pure parts build everywhere).
 lightloom-hal-linux = { path = "../lightloom-hal-linux" }
 lightloom-nvapi = { path = "../lightloom-nvapi" }
+lightloom-adl = { path = "../lightloom-adl" }
 lightloom-plugin-host = { path = "../lightloom-plugin-host" }
 lightloom-engine = { path = "../lightloom-engine" }
 lightloom-effects = { path = "../lightloom-effects" }

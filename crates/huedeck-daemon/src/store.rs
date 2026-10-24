@@ -9,6 +9,7 @@
 //! byte (everything is ordered by key).
 
 use anyhow::{bail, Context};
+use huedeck_api::model::Playlist;
 use huedeck_engine::{Layout, Placement};
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
@@ -19,7 +20,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Schema, oldest first. Never edit a released migration; append a new one.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE kv (
     key   TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
@@ -71,7 +73,17 @@ CREATE TABLE presets (
     params   TEXT NOT NULL,
     PRIMARY KEY (effect, name)
 );
-"#];
+"#,
+    r#"
+CREATE TABLE playlists (
+    id         TEXT PRIMARY KEY NOT NULL,
+    name       TEXT NOT NULL,
+    shuffle    INTEGER NOT NULL DEFAULT 0,
+    entries    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"#,
+];
 
 /// `format` of an export document.
 pub const EXPORT_FORMAT: &str = "huedeck-state";
@@ -132,6 +144,9 @@ pub struct StateExport {
     pub channels: BTreeMap<String, BTreeMap<String, Value>>,
     /// Effect state by effect id.
     pub effects: BTreeMap<String, EffectState>,
+    /// Effect playlists, by id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub playlists: Vec<Playlist>,
 }
 
 /// The database.
@@ -472,6 +487,69 @@ impl Store {
         )? > 0)
     }
 
+    // ----------------------------------------------------------------- playlists
+
+    /// Every playlist, by id.
+    pub fn playlists(&self) -> anyhow::Result<Vec<Playlist>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, shuffle, entries, updated_at FROM playlists ORDER BY id")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, name, shuffle, entries, updated_at)| {
+                Ok(Playlist {
+                    entries: serde_json::from_str(&entries)
+                        .with_context(|| format!("entries of playlist {id}"))?,
+                    id,
+                    name,
+                    shuffle: shuffle != 0,
+                    updated_at,
+                })
+            })
+            .collect()
+    }
+
+    /// The playlist `id`.
+    pub fn playlist(&self, id: &str) -> anyhow::Result<Option<Playlist>> {
+        Ok(self.playlists()?.into_iter().find(|p| p.id == id))
+    }
+
+    /// Create or replace a playlist (`updated_at` is set now); answers with it.
+    pub fn save_playlist(&self, playlist: &Playlist) -> anyhow::Result<Playlist> {
+        let mut p = playlist.clone();
+        p.updated_at = now();
+        Self::insert_playlist(&self.conn, &p)?;
+        Ok(p)
+    }
+
+    fn insert_playlist(conn: &Connection, p: &Playlist) -> anyhow::Result<()> {
+        if p.id.is_empty() {
+            bail!("a playlist needs an id");
+        }
+        conn.execute(
+            "INSERT INTO playlists (id, name, shuffle, entries, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, shuffle = excluded.shuffle,
+                 entries = excluded.entries, updated_at = excluded.updated_at",
+            params![p.id, p.name, p.shuffle as i64, to_json(&p.entries)?, p.updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a playlist; `false` when there was none.
+    pub fn delete_playlist(&self, id: &str) -> anyhow::Result<bool> {
+        Ok(self.conn.execute("DELETE FROM playlists WHERE id = ?1", [id])? > 0)
+    }
+
     // ------------------------------------------------------------ export/import
 
     /// Everything, as one document ordered by key.
@@ -528,6 +606,7 @@ impl Store {
             layouts,
             channels,
             effects,
+            playlists: self.playlists()?,
         })
     }
 
@@ -551,6 +630,7 @@ impl Store {
             "channel_components",
             "effect_params",
             "presets",
+            "playlists",
             "kv",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
@@ -627,6 +707,9 @@ impl Store {
                 )?;
             }
         }
+        for p in &state.playlists {
+            Self::insert_playlist(&tx, p)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -701,6 +784,20 @@ mod tests {
                 json!({"speed": 9}).as_object().unwrap(),
             )
             .unwrap();
+        store
+            .save_playlist(
+                &serde_json::from_value(json!({
+                    "id": "evening",
+                    "name": "Evening",
+                    "shuffle": true,
+                    "entries": [
+                        {"effect": "huedeck:plasma", "preset": "Calm", "duration": 60},
+                        {"effect": "signalrgb:Rainbow", "values": {"speed": 2}}
+                    ]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
     }
 
     #[test]
@@ -728,6 +825,22 @@ mod tests {
         assert_eq!(s.presets("huedeck:plasma").unwrap()["Calm"]["speed"], 5);
         assert!(s.delete_preset("huedeck:plasma", "Calm").unwrap());
         assert!(!s.delete_preset("huedeck:plasma", "Calm").unwrap());
+        let evening = s.playlist("evening").unwrap().unwrap();
+        assert_eq!(
+            (evening.name.as_str(), evening.shuffle, evening.entries.len()),
+            ("Evening", true, 2)
+        );
+        assert_eq!(evening.entries[0].preset.as_deref(), Some("Calm"));
+        assert_eq!(
+            (evening.entries[0].duration, evening.entries[1].duration),
+            (Some(60), None)
+        );
+        assert_eq!(evening.entries[1].values["speed"], 2);
+        assert!(!evening.updated_at.is_empty());
+        assert!(s.save_playlist(&Playlist::default()).is_err());
+        assert!(s.delete_playlist("evening").unwrap());
+        assert!(!s.delete_playlist("evening").unwrap());
+        assert!(s.playlists().unwrap().is_empty());
         assert!(s.delete_layout("Desk").unwrap());
         // Placements go with their layout.
         let left: i64 = s

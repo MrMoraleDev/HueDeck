@@ -35,6 +35,10 @@
 //!
 //! [network]
 //! enabled = false               # network lights: discovery and LAN devices (WLED, Hue, ...); the dashboard setting wins
+//! [screen]
+//! enabled = true                # capture while the active effect reads engine.zone or declares meters
+//! # display = "DISPLAY2"        # display to capture (default: the primary display)
+//! fps = 30                      # capture rate, 10-60
 //! ```
 
 use anyhow::Context;
@@ -63,6 +67,32 @@ pub struct Config {
     pub audio: AudioConfig,
     /// Network lights.
     pub network: NetworkConfig,
+    /// `engine.zone` / `engine.vision` capture.
+    pub screen: ScreenConfig,
+}
+
+/// `[screen]`: display capture for `engine.zone` and `engine.vision` (docs/screen.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScreenConfig {
+    /// Capture while the active effect reads `engine.zone` or declares
+    /// meters; `false` never captures (effects then see a black screen).
+    pub enabled: bool,
+    /// Display to capture, by device name (`DISPLAY2` or `\\.\DISPLAY2`;
+    /// `None`: the primary display).
+    pub display: Option<String>,
+    /// Capture rate, clamped to 10..=60.
+    pub fps: u32,
+}
+
+impl Default for ScreenConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            display: None,
+            fps: 30,
+        }
+    }
 }
 
 /// `[audio]`: loopback capture for `engine.audio` (docs/audio.md).
@@ -223,6 +253,15 @@ mod tests {
         assert!(c.smbus.enabled, "SMBus is on unless turned off");
         let c: Config = toml::from_str("[smbus]\nenabled = false\n").unwrap();
         assert!(!c.smbus.enabled);
+        assert_eq!(
+            (c.screen.enabled, c.screen.fps, c.screen.display),
+            (true, 30, None)
+        );
+        let c: Config = toml::from_str("[screen]\nfps = 60\ndisplay = 'DISPLAY2'\n").unwrap();
+        assert_eq!(
+            (c.screen.fps, c.screen.display.as_deref()),
+            (60, Some("DISPLAY2"))
+        );
         assert!(
             toml::from_str::<Config>("[api]\nprot = 1\n").is_err(),
             "typos are reported"

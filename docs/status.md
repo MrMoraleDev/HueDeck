@@ -281,10 +281,12 @@ packages that touch the same one in parallel, and merge the smaller one first:
 8. **WP-SCREEN: screen zones into `engine.zone`. Size M.**
    - Touches: `huedeck-inputs` (DXGI duplication, `windows-capture` or `xcap` per §2.4; 28x20 HSL + 160x100 RGBA at 10-60 fps; display picker); the daemon push; one settings field in `Settings.svelte`.
    - Same crate as WP-AUDIO: run them one after the other, or split the module files.
+   - Status: implemented on `feature/screen-input` (`docs/screen.md`); DXGI duplication checked on the dev PC; ambience latency still to be measured. No dashboard picker (`[screen] display` in `config.toml`).
 9. **WP-METERS: area/linear meters (`engine.vision`). Size S.**
    - Needs WP-SCREEN's frames.
    - Touches: `huedeck-inputs` (meter evaluation from the parsed `<meta meter>`), the daemon push.
    - OCR stays out of scope.
+   - Status: implemented on `feature/screen-input` (area, linear, colormean; `docs/screen.md`).
 10. **WP-SDK-SERVER: OpenRGB SDK server on :6742. Size M.**
     - New module `huedeck-api/src/openrgb.rs`, clean-room from `docs/research/m6-windows-integrations.md` §2.
     - Maps sessions to RGBControllers through a new daemon request (`engine.rs`: "set LEDs of device X, direct").

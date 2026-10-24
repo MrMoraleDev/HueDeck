@@ -34,6 +34,7 @@ arc-swap = { workspace = true }
 uuid = { workspace = true }
 toml = { workspace = true }
 huedeck-api = { path = "../huedeck-api" }
+huedeck-effects = { path = "../huedeck-effects" }
 huedeck-engine = { path = "../huedeck-engine" }
 huedeck-hal = { path = "../huedeck-hal" }
 huedeck-inputs = { path = "../huedeck-inputs" }

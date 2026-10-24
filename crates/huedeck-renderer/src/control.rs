@@ -120,6 +120,10 @@ const ENGINE_MERGE_JS: &str = r#"(function (d) {
       if (k === "__proto__") return;
       var v = src[k], cur = dst[k];
       if (cur && ArrayBuffer.isView(cur) && Array.isArray(v)) { cur.set(v.slice(0, cur.length)); }
+      else if (cur && ArrayBuffer.isView(cur) && typeof v === "string" && v.lastIndexOf("base64:", 0) === 0) {
+        var b = atob(v.slice(7)), n = Math.min(b.length, cur.length);
+        for (var i = 0; i < n; i++) cur[i] = b.charCodeAt(i);
+      }
       else if (cur && typeof cur === "object" && !ArrayBuffer.isView(cur) && v && typeof v === "object" && !Array.isArray(v)) { merge(cur, v); }
       else { dst[k] = v; }
     });
@@ -129,7 +133,8 @@ const ENGINE_MERGE_JS: &str = r#"(function (d) {
 
 /// JS merging `data` into `window.engine`: objects merge recursively, arrays
 /// fill the existing typed arrays in place (effects keep references to them),
-/// other values replace. Keys outside [`ENGINE_KEYS`] are dropped and returned.
+/// a `"base64:…"` string fills a typed array with its decoded bytes (the
+/// 64,000-byte `zone.imagedata`), other values replace. Keys outside [`ENGINE_KEYS`] are dropped and returned.
 pub fn engine_script(data: &Map<String, Value>) -> (String, Vec<String>) {
     let mut kept = Map::new();
     let mut skipped = Vec::new();
@@ -228,6 +233,7 @@ mod tests {
         assert_eq!(skipped, vec!["getSensorValue"]);
         assert!(js.contains("\"level\":-20") && js.contains("cur.set("), "{js}");
         assert!(!js.contains("getSensorValue"));
+        assert!(js.contains(r#"v.lastIndexOf("base64:", 0) === 0"#));
         assert!(matches!(
             parse_line(r#"{"cmd":"engine","data":{"zone":{"hue":[1]}}}"#).unwrap(),
             Some(Command::Engine { .. })

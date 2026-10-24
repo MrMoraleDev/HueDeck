@@ -407,6 +407,8 @@ struct Engine {
     canvas: Canvas,
     /// `engine.audio` capture, while the effect reads it.
     audio: Option<huedeck_inputs::audio::AudioInput>,
+    /// `engine.zone` / `engine.vision` capture, while the effect reads them.
+    screen: Option<huedeck_inputs::screen::ScreenInput>,
     effect: Option<String>,
     brightness: u8,
     enabled: bool,
@@ -504,6 +506,7 @@ impl Engine {
             components: ComponentLibrary::default(),
             canvas: Canvas::Null(NullRenderer::new(Pattern::Solid(Rgb::new(0, 0, 0)), 30.0)),
             audio: None,
+            screen: None,
             effect: None,
             brightness: 100,
             enabled: true,
@@ -1246,6 +1249,7 @@ impl Engine {
 
     fn start_canvas(&mut self) {
         self.audio = None;
+        self.screen = None;
         self.canvas.client().stop();
         if self
             .effect
@@ -1294,6 +1298,12 @@ impl Engine {
             Canvas::Cef(c) => Some(c.engine_sink()),
             Canvas::Null(_) => None,
         };
+        let meta = self
+            .effect
+            .as_deref()
+            .and_then(|id| self.effects.get(id))
+            .map(|e| &e.meta);
+        self.screen = crate::screen::feed(&self.opts.config.screen, meta, sink.clone());
         self.audio = crate::audio::feed(&self.opts.config.audio, fps, uses_audio, sink);
         self.canvas = canvas;
         self.dirty = true;
@@ -1361,6 +1371,7 @@ impl Engine {
             }
         }
         self.audio = None;
+        self.screen = None;
         self.canvas.client().stop();
     }
 

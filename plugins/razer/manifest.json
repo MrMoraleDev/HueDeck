@@ -205,6 +205,8 @@
       "tested": ["0x007C", "0x007D", "0x007E"]
     }
   ],
+  "save": { "static": true, "effects": ["spectrum"] },
+  "shutdownModes": ["restore", "keep", "off"],
   "permissions": [
     "hid"
   ],

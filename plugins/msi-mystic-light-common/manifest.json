@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "license": "GPL-3.0-or-later",
   "publisher": "HueDeck",
-  "description": "Direct mode of MSI Mystic Light motherboard RGB controllers that enumerate as 0DB0:0076 (OpenRGB's \"MSI Mystic Light Common\" and \"X870\" detectors), adapted from OpenRGB's MSIMotherboardController: the board is looked up by the first four hex digits of the USB serial number (for example 7E12, MAG X670E TOMAHAWK WIFI). Same protocol code as msi-mystic-light: the configuration read at start is written back on exit and the save-to-flash byte is never set. Protocol notes: docs/hardware/msi-mystic-light.md.",
+  "description": "Direct mode of MSI Mystic Light motherboard RGB controllers that enumerate as 0DB0:0076 (OpenRGB's \"MSI Mystic Light Common\" and \"X870\" detectors), adapted from OpenRGB's MSIMotherboardController: the board is looked up by the first four hex digits of the USB serial number (for example 7E12, MAG X670E TOMAHAWK WIFI). Same protocol code as msi-mystic-light: the configuration read at start is written back on exit and the save-to-flash byte is set only by \"Save to devices\" (SaveToDevice, after the user confirmed it; 185- and 162-byte boards). Protocol notes: docs/hardware/msi-mystic-light.md.",
   "entry": "plugin.js",
   "compat": "signalrgb-2.5",
   "deviceType": "motherboard",
@@ -13,5 +13,7 @@
     { "vid": "0x0DB0", "pids": ["0x0076"], "transport": "hid", "tested": [] }
   ],
   "permissions": ["hid"],
+  "save": { "static": true, "effects": ["breathing"] },
+  "shutdownModes": ["restore", "keep", "off"],
   "keywords": ["msi", "mystic-light", "motherboard", "argb", "jrainbow", "jrgb", "x670e", "x870", "openrgb"]
 }

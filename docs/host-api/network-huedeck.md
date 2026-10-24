@@ -89,7 +89,9 @@ plugin, `service.controllers` with these plain fields of `obj` when present: `na
 ### Device context (one per announced controller, a device session)
 
 The normal device session ([hid-usb.md](hid-usb.md), [components-channels.md](components-channels.md))
-without HID: no `Validate`, `Initialize()`, `Render()` at most every 33 ms, `Shutdown(false)`.
+without HID: no `Validate`, `Initialize()`, `Render()` at most every 33 ms, `Shutdown(false, mode)`
+(exit modes: [save-shutdown.md](save-shutdown.md); the first-party network plugins implement
+`"restore"` only, so "keep" and "off" hand the light back to its own state as well).
 Globals: `device`, `controller` (the announced data), the `ControllableParameters` globals
 (stored per device key like any device), `XMLHttpRequest`. `device.addFeature("udp")` installs
 `udp.send(ip, port, bytes, endianness)` (8192 bytes at most; `endianness` ignored for byte

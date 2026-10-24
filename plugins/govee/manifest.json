@@ -12,6 +12,7 @@
   "devices": [
     { "network": { "udpPorts": [4001, 4002, 4003] } }
   ],
+  "shutdownModes": ["restore"],
   "permissions": ["network-udp", "settings"],
   "keywords": ["govee", "wifi", "lan", "light", "network"]
 }

@@ -12,6 +12,7 @@
   "devices": [
     { "network": { "mdns": ["_wled._tcp"], "udpPorts": [21324], "tcpPorts": [80] } }
   ],
+  "shutdownModes": ["restore"],
   "permissions": ["network-udp", "network-http", "mdns", "settings"],
   "keywords": ["wled", "esp32", "esp8266", "led strip", "addressable", "udp realtime", "drgb", "dnrgb"]
 }

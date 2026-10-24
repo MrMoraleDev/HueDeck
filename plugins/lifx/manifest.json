@@ -12,6 +12,7 @@
   "devices": [
     { "network": { "udpPorts": [56700] } }
   ],
+  "shutdownModes": ["restore"],
   "permissions": ["network-udp", "settings"],
   "keywords": ["lifx", "wifi", "lan", "bulb", "light", "network"]
 }

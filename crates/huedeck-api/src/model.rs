@@ -150,11 +150,40 @@ pub struct DeviceView {
     pub endpoints: Vec<Endpoint>,
     /// Channel names (component editor).
     pub channels: Vec<ChannelView>,
+    /// What "Save to devices" can store in this device (`None`: nothing).
+    pub save: Option<SaveSupport>,
+    /// Exit modes ("When HueDeck closes") this device's plugin carries out,
+    /// natively or through its `shutdownColor` parameter (`restore` always).
+    pub shutdown_modes: Vec<String>,
+    /// This device's own exit mode (`None`: the setting's).
+    pub shutdown_mode: Option<String>,
     /// The last battery report (devices whose plugin has the `battery` feature),
     /// kept after the device goes away.
     pub battery: Option<BatteryView>,
     /// Pulse the device red while its battery is low (user setting).
     pub blink_low_battery: bool,
+}
+
+/// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSupport {
+    /// The colours of the current frame.
+    #[serde(rename = "static")]
+    pub static_colors: bool,
+    /// Built-in effects (`spectrum`, `breathing`, ...).
+    pub effects: Vec<String>,
+    /// Seconds before the device may be saved again (one save per minute).
+    pub wait_secs: u64,
+}
+
+/// What to store in one device.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceSaveChoice {
+    /// A built-in effect the device advertises; `None`: the current colours.
+    #[serde(default)]
+    pub effect: Option<String>,
 }
 
 /// A device's battery, as its plugin last reported it.
@@ -259,6 +288,9 @@ pub struct Settings {
     pub fps: u32,
     /// Never write to devices.
     pub dry_run: bool,
+    /// What devices show when HueDeck closes: `restore` (their own lighting),
+    /// `keep` (the last colours, not stored) or `off`.
+    pub shutdown_mode: String,
     /// Low-battery threshold, percent (warnings, `battery.lowBatteryWarningLevel`).
     pub battery_low: u8,
     /// Critical battery threshold, percent.
@@ -333,9 +365,29 @@ pub enum Request {
         enabled: Option<bool>,
         /// `ControllableParameters` values (applied live, stored).
         parameters: Option<Map<String, Value>>,
+        /// This device's exit mode (`restore`, `keep`, `off`; `default` or an
+        /// empty string: the setting's).
+        #[serde(default)]
+        shutdown_mode: Option<String>,
         /// Pulse the device red while its battery is low.
         #[serde(default)]
         blink_low_battery: Option<bool>,
+    },
+    /// "Save to devices": store lighting in the devices' own memory (flash or
+    /// EEPROM), so it shows at boot without HueDeck. A preview says what would be
+    /// stored and writes nothing; a save needs `confirm` (the user said yes) and
+    /// is refused for a device saved less than a minute ago.
+    #[serde(rename_all = "camelCase")]
+    SaveToDevices {
+        /// Only say what would be stored.
+        #[serde(default)]
+        preview: bool,
+        /// The user confirmed the save.
+        #[serde(default)]
+        confirm: bool,
+        /// Device key -> what to store. A preview of every device when empty.
+        #[serde(default)]
+        devices: std::collections::BTreeMap<String, DeviceSaveChoice>,
     },
     /// Assign component instances to a channel (the device session restarts).
     SetChannel {
@@ -398,6 +450,9 @@ pub enum Request {
         /// Drive SMBus devices (scans the buses when turned on).
         #[serde(default)]
         smbus: Option<bool>,
+        /// What devices show when HueDeck closes (`restore`, `keep`, `off`).
+        #[serde(default)]
+        shutdown_mode: Option<String>,
         /// Low-battery threshold, percent (`1..=95`, above the critical one).
         #[serde(default)]
         battery_low: Option<u8>,
@@ -472,6 +527,7 @@ impl Request {
             Request::StepEffect { .. } => "stepEffect",
             Request::SetLighting { .. } => "setLighting",
             Request::SetDevice { .. } => "setDevice",
+            Request::SaveToDevices { .. } => "saveToDevices",
             Request::SetChannel { .. } => "setChannel",
             Request::SetPlacement { .. } => "setPlacement",
             Request::ApplyLayout { .. } => "applyLayout",

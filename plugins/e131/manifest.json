@@ -12,6 +12,7 @@
   "devices": [
     { "network": { "udpPorts": [5568] } }
   ],
+  "shutdownModes": ["restore"],
   "permissions": ["network-udp", "settings"],
   "keywords": ["e1.31", "e131", "sacn", "streaming acn", "dmx", "pixel controller", "wled", "falcon", "espixelstick"]
 }

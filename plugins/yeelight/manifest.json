@@ -12,6 +12,7 @@
   "devices": [
     { "network": { "udpPorts": [1982], "tcpPorts": [55443] } }
   ],
+  "shutdownModes": ["restore"],
   "permissions": ["network-udp", "network-tcp", "settings"],
   "keywords": ["yeelight", "xiaomi", "wifi", "lan", "bulb", "light", "network"]
 }

@@ -121,6 +121,8 @@ pub const NATIVE_ROUTES: &[Route] = &[
     r("GET", "/devices/{key}", false),
     r("PATCH", "/devices/{key}", true),
     r("PUT", "/devices/{key}/channels/{channel}", true),
+    r("POST", "/save/preview", true),
+    r("POST", "/save", true),
     r("GET", "/effects", false),
     r("POST", "/effects/next", true),
     r("POST", "/effects/previous", true),

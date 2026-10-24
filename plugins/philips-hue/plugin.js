@@ -22,6 +22,9 @@ export function Publisher() { return "HueDeck"; }
 export function Version() { return "0.1.0"; }
 export function Documentation() { return "hardware/philips-hue"; }
 export function Type() { return "network"; }
+// HueDeck extension (docs/host-api/save-shutdown.md): Shutdown() hands the light back to its
+// own state ("restore"); for "keep" and "off" the host falls back to that too.
+export function ShutdownModes() { return ["restore"]; }
 export function DeviceType() { return "lightingcontroller"; }
 // The bridge has no LEDs of its own: only its lamps (subdevices) are placed on the canvas.
 export function SubdeviceController() { return true; }

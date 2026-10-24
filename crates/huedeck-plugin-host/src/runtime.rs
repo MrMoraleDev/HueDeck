@@ -950,6 +950,7 @@ impl PluginRuntime {
                 let ret: Value = match args {
                     CallArgs::None => f.call(())?,
                     CallArgs::Bool(b) => f.call((b,))?,
+                    CallArgs::Shutdown { suspending, mode } => f.call((suspending, mode.as_str()))?,
                     CallArgs::FreeBus => {
                         let bus: Value = host_object(&ctx)?.get::<_, Function>("freeBus")?.call(())?;
                         f.call((bus,))?
@@ -971,6 +972,51 @@ impl PluginRuntime {
         });
         deadline.clear();
         r
+    }
+
+    /// Call `export(arg)` with a JSON argument, cut off by `stop` like
+    /// [`PluginRuntime::call_export_until`], and return its (awaited) value as
+    /// JSON (`Null` for `undefined` or a value JSON cannot carry). `Ok(None)`
+    /// when the plugin has no such export.
+    pub fn call_export_json(
+        &self,
+        export: &str,
+        arg: &serde_json::Value,
+        budget: impl Into<Budget>,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<Option<serde_json::Value>, JsFailure> {
+        let json = arg.to_string();
+        let deadline = &self.deadline;
+        deadline.arm_until(budget.into(), Arc::clone(stop));
+        let r = self.context.with(|ctx| {
+            let run = || -> rquickjs::Result<Option<String>> {
+                let ns = plugin_namespace(&ctx)?;
+                let Some(f) = ns.get::<_, Value>(export)?.into_function() else {
+                    return Ok(None);
+                };
+                let arg = ctx.json_parse(json)?;
+                let mut ret: Value = f.call((arg,))?;
+                if let Some(p) = ret.as_promise() {
+                    ret = p.finish::<Value>()?;
+                }
+                while ctx.execute_pending_job() {}
+                if ret.is_undefined() || ret.is_function() {
+                    return Ok(Some("null".into()));
+                }
+                let text = ctx
+                    .json_stringify(ret)?
+                    .map(|s| s.to_string())
+                    .transpose()?
+                    .unwrap_or_else(|| "null".into());
+                Ok(Some(text))
+            };
+            match run().map_err(|e| failure(&ctx, e, deadline)) {
+                Ok(_) if deadline.fired() => Err(JsFailure::cut_off(deadline, export)),
+                r => r,
+            }
+        });
+        deadline.clear();
+        r.map(|o| o.map(|t| serde_json::from_str(&t).unwrap_or(serde_json::Value::Null)))
     }
 
     /// `Scan(bus)` with the free-address bus under `budget`: the addresses it
@@ -1150,6 +1196,14 @@ pub enum CallArgs {
     Bool(bool),
     /// `(bus)` — `Scan(FreeAddressBus)`.
     FreeBus,
+    /// `(bool, mode)` — `Shutdown(SystemSuspending, mode)`: the second
+    /// argument is a HueDeck extension SignalRGB plugins ignore.
+    Shutdown {
+        /// `SystemSuspending`.
+        suspending: bool,
+        /// What to leave the device showing.
+        mode: crate::save::ShutdownMode,
+    },
 }
 
 /// Run `f` on a fresh OS thread (scoped, large stack) and return its result.

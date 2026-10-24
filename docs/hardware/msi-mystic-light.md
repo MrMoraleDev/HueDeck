@@ -82,7 +82,8 @@ One 10-byte record per zone: `+0` effect, `+1..+3` colour 1 (R, G, B), `+4` spee
 brightness (bits 2-6) / "sync JRGB" (bit 7), `+5..+7` colour 2, `+8` sync flags (bits 0-5) / custom
 colour (bit 7), `+9` padding. JRAINBOW records add `+10` LED count; the 185-byte JCORSAIR record is
 `effect, R, G, B, fan_flags, quantity, padding[4], is_individual` (its `+10` doubles as the JRAINBOW3
-LED count). The **last byte is the save-to-flash flag; every 0x52 report Lightloom sends has it 0.**
+LED count). The **last byte is the save-to-flash flag; every 0x52 report Lightloom sends has it 0, except the
+"Save to devices" reports (see below).**
 
 | Variant | Records (offset) |
 |---|---|
@@ -191,11 +192,31 @@ sent if the session never wrote.
   and the board shows the last streamed colours after exit; the plugin logs it at start-up. There is
   no stored hardware effect to fall back to that would not be invented.
 
+## Save to devices and exit modes (Lightloom extensions, untested on hardware)
+
+"Save to devices" ([docs/host-api/save-shutdown.md](../host-api/save-shutdown.md)) is OpenRGB's
+`DeviceSaveMode()` for its Static or Breathing mode: `protocol.js` `save()` builds the 0x52 report
+on the restore image with `SetMode()` + `SetZoneColor()` for every zone of the board (one colour
+per zone, the average of its LEDs; colour 2 = colour 1; brightness 100 %; speed medium for
+breathing; custom-colour flag; on 185-byte boards the onboard zone copied to the `numof_onboard_leds`
+onboard records and its JRGB / pipe sync cleared, as `SetMode()` does for modes up to Lightning,
+JRAINBOW LED counts from the channels), then sends it as OpenRGB's `Update(true)` does:
+
+* 185 bytes (`MSIMotherboard185Controller::Update(true)`): GET 0x52, SET it back with the save byte
+  set, SET the new report with the save byte set; then GET 0x52 again (the new restore image) and
+  back to Direct (the enable-per-LED report on per-LED boards).
+* 162 bytes (`MSIMotherboard162Controller::Update(true)`): one SET with the save byte set.
+* 112 bytes: not offered (refused at preview).
+
+Exit modes: `"keep"` / `"off"` send the same Static report with the last colours or black and the
+save byte 0 (112-byte boards: a Direct frame). Tests: `tests/plugin.test.mjs` ("save", "exit
+modes", "the save byte is set only by SaveToDevice").
+
 ## Not ported
 
-* The hardware effects (Static, Breathing, ... Fire) with their speed and brightness,
-  `DeviceSaveMode()` and the automatic-save flag: nothing that sets the save byte exists here.
-* OpenRGB's non-direct `Update()` (re-read, then send the old and the new state).
+* The hardware effects other than Static and Breathing (Flashing ... Fire), and the automatic-save
+  flag. Static and Breathing exist only as "Save to devices" choices (above).
+* OpenRGB's non-direct `Update()` outside the save.
 * The 761-byte controller (see Sources).
 * The DMI board name (OpenRGB names the device "MSI " + DMI mainboard; Lightloom uses the table name).
 * Nothing in these reports touches fans, pumps or other non-lighting settings (the JCORSAIR

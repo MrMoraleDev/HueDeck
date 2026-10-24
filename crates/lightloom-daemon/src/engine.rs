@@ -30,6 +30,13 @@
 //! ([`lightloom_runtime::conflicts::claim_smbus`]): with a `lightloom` run on
 //! the buses, the daemon leaves them alone (and a `lightloom` run started
 //! while the daemon drives them leaves its SMBus devices out).
+//!
+//! Network lights are off unless turned on (`[network] enabled`, the
+//! dashboard setting). While on, every network plugin runs its discovery
+//! service ([`lightloom_plugin_host::service`]); the controllers a service
+//! announces become devices (`net:<plugin>:<id>`) driven like the others, and
+//! a controller it suppresses (or a service that stops) ends its session.
+//! Plugin settings (`service.saveSetting`) live in the database.
 
 use crate::battery::{self, BatteryMonitor, Severity, Thresholds};
 use crate::config::Config;
@@ -38,8 +45,8 @@ use crate::paths::{self, Paths};
 use crate::store::{EffectState, StateExport, Store};
 use arc_swap::ArcSwap;
 use lightloom_api::model::{
-    BatteryView, ChannelView, DeviceSaveChoice, DeviceView, EffectView, Endpoint, Lighting, RendererView,
-    SaveSupport, Settings,
+    BatteryView, ChannelView, DeviceSaveChoice, DeviceView, EffectView, Endpoint, Lighting,
+    NetworkControllerView, NetworkServiceView, RendererView, SaveSupport, Settings,
 };
 use lightloom_api::{ApiError, Backend, Event, Request, Snapshot};
 use lightloom_engine::{
@@ -55,8 +62,9 @@ use lightloom_plugin_host::discover::ScanBudget;
 use lightloom_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
 use lightloom_plugin_host::meta::{ControllableParameter, ParamValue};
 use lightloom_plugin_host::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode};
+use lightloom_plugin_host::service::{PluginSettings, ServiceCommand, ServiceHandle, ServiceOptions};
 use lightloom_plugin_host::session::{
-    Control, EndpointKind, SessionDevice, SessionHandle, SessionOptions, SessionState,
+    Control, EndpointKind, NetworkTarget, SessionDevice, SessionHandle, SessionOptions, SessionState,
 };
 use lightloom_plugin_host::smbus::BusHandle;
 use lightloom_render::{CefRenderer, CefRendererConfig, NullRenderer, Pattern, RendererClient};
@@ -95,6 +103,44 @@ mod keys {
     /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
     pub const PORT: &str = "settings.port";
     pub const OPENRGB_SDK: &str = "settings.openrgbSdk";
+    pub const NETWORK: &str = "settings.network";
+}
+
+/// How long a stopping network service may take.
+const SERVICE_STOP: Duration = Duration::from_secs(3);
+
+/// Network plugin settings: read from memory by the service threads, written
+/// through to the database by the engine thread (which owns the connection).
+#[derive(Default)]
+struct DbSettings {
+    cache: Mutex<BTreeMap<(String, String, String), String>>,
+    pending: Mutex<Vec<(String, String, String, Option<String>)>>,
+}
+
+impl PluginSettings for DbSettings {
+    fn get(&self, plugin: &str, id: &str, key: &str) -> Option<String> {
+        lock(&self.cache)
+            .get(&(plugin.to_string(), id.to_string(), key.to_string()))
+            .cloned()
+    }
+
+    fn set(&self, plugin: &str, id: &str, key: &str, value: Option<&str>) {
+        let k = (plugin.to_string(), id.to_string(), key.to_string());
+        let mut cache = lock(&self.cache);
+        let changed = match value {
+            Some(v) => cache.insert(k, v.to_string()).as_deref() != Some(v),
+            None => cache.remove(&k).is_some(),
+        };
+        drop(cache);
+        if changed {
+            lock(&self.pending).push((
+                plugin.to_string(),
+                id.to_string(),
+                key.to_string(),
+                value.map(String::from),
+            ));
+        }
+    }
 }
 
 /// The database key of the port saved from the dashboard.
@@ -381,6 +427,16 @@ struct Engine {
     smbus_hw: Option<SmbusHardware>,
     /// SMBus devices found by the last scan.
     smbus_present: Vec<Present>,
+    /// Network lights are on.
+    network: bool,
+    /// One discovery service per network plugin (while network lights are on).
+    services: Vec<ServiceHandle>,
+    /// The services' state generations at the last look.
+    service_generations: Vec<u64>,
+    /// Devices the services announced.
+    net_present: Vec<Present>,
+    /// Network plugin settings.
+    plugin_settings: Arc<DbSettings>,
     /// A scan is wanted at the next rescan (start, request, setting turned on,
     /// SMBus devices stopped for a blocking program).
     smbus_scan_due: bool,
@@ -465,6 +521,11 @@ impl Engine {
             openrgb_sdk: false,
             smbus_hw: None,
             smbus_present: Vec::new(),
+            network: false,
+            services: Vec::new(),
+            service_generations: Vec::new(),
+            net_present: Vec::new(),
+            plugin_settings: Arc::new(DbSettings::default()),
             smbus_scan_due: true,
             smbus_blockers: Vec::new(),
             smbus_claim: None,
@@ -499,6 +560,7 @@ impl Engine {
         e.enter(LifecycleState::ScanningHardware);
         e.open_hardware();
         e.rescan();
+        e.start_services();
         e.enter(LifecycleState::Running);
         e
     }
@@ -530,6 +592,16 @@ impl Engine {
         self.smbus = get(keys::SMBUS)
             .and_then(|v| v.as_bool())
             .unwrap_or(self.opts.config.smbus.enabled);
+        self.network = get(keys::NETWORK)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(self.opts.config.network.enabled);
+        *lock(&self.plugin_settings.cache) = self
+            .store
+            .plugin_settings()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(p, i, k, v)| ((p, i, k), v))
+            .collect();
         let percent = |k: &str| get(k).and_then(|v| v.as_u64()).and_then(|v| u8::try_from(v).ok());
         self.thresholds = Thresholds::new(
             percent(keys::BATTERY_LOW).unwrap_or(battery::DEFAULT_LOW),
@@ -674,18 +746,19 @@ impl Engine {
                 }
                 Err(e) => {
                     self.warnings.push(format!("{e:#}"));
-                    self.opts.hardware = mode;
-                    return;
+                    // Network devices still get sessions.
+                    Arc::new(lightloom_hal::hid::NoHid)
                 }
             },
-            HardwareMode::None => {
-                self.opts.hardware = mode;
-                return;
-            }
+            HardwareMode::None => Arc::new(lightloom_hal::hid::NoHid),
             HardwareMode::Fixed { backend, .. } => Arc::clone(backend),
         };
+        let hid = !matches!(mode, HardwareMode::None)
+            && (self.hardware.is_some() || !matches!(mode, HardwareMode::Real));
         self.opts.hardware = mode;
-        self.backend = Some(Arc::clone(&backend));
+        if hid {
+            self.backend = Some(Arc::clone(&backend));
+        }
         let defaults = Arc::clone(&self.defaults);
         let events = self.shared.events.clone();
         let direct = Arc::clone(&self.shared.direct);
@@ -773,6 +846,7 @@ impl Engine {
         self.last_conflict_check = Instant::now();
         self.scan_smbus();
         self.merge_smbus();
+        self.merge_network();
         self.reconcile();
         if !self.smbus {
             // Sessions stopped: another Lightloom process may drive the buses now.
@@ -804,6 +878,176 @@ impl Engine {
                 tracing::warn!("recording {}: {e:#}", p.device.key);
             }
         }
+    }
+
+    // ---------------------------------------------------------------- network
+
+    /// Start a discovery service per network plugin (network lights on, none running).
+    fn start_services(&mut self) {
+        if !self.network || !self.services.is_empty() {
+            return;
+        }
+        let plugins: Vec<CatalogEntry> = self.catalog.network_plugins().into_iter().cloned().collect();
+        for plugin in plugins {
+            let name = plugin.meta.name.clone();
+            let events = self.shared.events.clone();
+            let label = name.clone();
+            let opts = ServiceOptions {
+                settings: Arc::clone(&self.plugin_settings) as Arc<dyn PluginSettings>,
+                log_sink: Some(Arc::new(move |line: &str| {
+                    let line: String = line.chars().take(300).collect();
+                    tracing::debug!(target: "plugin", service = %label, "{line}");
+                    let _ = events.send(Event::log(format!("[{label}] {line}")));
+                })),
+                ..ServiceOptions::default()
+            };
+            match lightloom_plugin_host::service::spawn(plugin, opts) {
+                Ok(h) => {
+                    self.log(format!("network: {name} discovery started"));
+                    self.services.push(h);
+                }
+                Err(e) => self.log(format!("network: {name} discovery did not start: {e}")),
+            }
+        }
+        self.service_generations = vec![u64::MAX; self.services.len()];
+    }
+
+    /// Stop every discovery service; their devices go with them.
+    fn stop_services(&mut self) {
+        for h in self.services.drain(..) {
+            h.shutdown(SERVICE_STOP);
+        }
+        self.service_generations.clear();
+        if !self.net_present.is_empty() {
+            self.net_present.clear();
+            self.merge_network();
+            self.reconcile();
+        }
+    }
+
+    /// Write the settings the services saved; follow what they announced.
+    fn poll_services(&mut self) {
+        let pending: Vec<_> = std::mem::take(&mut *lock(&self.plugin_settings.pending));
+        for (plugin, id, key, value) in pending {
+            if let Err(e) = self
+                .store
+                .set_plugin_setting(&plugin, &id, &key, value.as_deref())
+            {
+                tracing::warn!("saving a {plugin} setting: {e:#}");
+            }
+        }
+        let generations: Vec<u64> = self.services.iter().map(ServiceHandle::generation).collect();
+        if generations == self.service_generations {
+            return;
+        }
+        self.service_generations = generations;
+        self.dirty = true;
+        let mut present = Vec::new();
+        for h in &self.services {
+            for (id, data) in h.state().announced {
+                present.push(Present {
+                    device: SessionDevice::network(NetworkTarget {
+                        service: h.name().to_string(),
+                        id,
+                        controller: data,
+                    }),
+                    plugin: h.plugin().clone(),
+                });
+            }
+        }
+        // Announced again with other data: its session starts over with the new data.
+        let changed: Vec<String> = present
+            .iter()
+            .filter(|p| {
+                self.net_present
+                    .iter()
+                    .any(|o| o.device.key == p.device.key && o.device.network != p.device.network)
+            })
+            .map(|p| p.device.key.clone())
+            .collect();
+        let same_keys = present.len() == self.net_present.len()
+            && present
+                .iter()
+                .all(|p| self.net_present.iter().any(|o| o.device.key == p.device.key));
+        self.net_present = present;
+        if same_keys && changed.is_empty() {
+            return;
+        }
+        self.merge_network();
+        self.reconcile();
+        for key in changed {
+            self.restart_device(&key);
+        }
+    }
+
+    /// Put the announced network devices (after `[devices] ignore`) into the
+    /// devices present, in place of the earlier ones, and record them.
+    fn merge_network(&mut self) {
+        self.present.retain(|p| p.device.network.is_none());
+        let ignore = &self.opts.config.devices.ignore;
+        let added: Vec<Present> = self
+            .net_present
+            .iter()
+            .filter(|p| {
+                ignore.is_empty() || !lightloom_runtime::hardware::matches_filter(&p.device.key, ignore)
+            })
+            .cloned()
+            .collect();
+        for p in &added {
+            let name = p
+                .device
+                .network
+                .as_ref()
+                .and_then(|t| t.controller.get("name").and_then(Value::as_str))
+                .unwrap_or(&p.plugin.meta.name);
+            if let Err(e) = self.store.device_seen(
+                &p.device.key,
+                0,
+                0,
+                name,
+                &p.plugin.meta.source_path.to_string_lossy(),
+            ) {
+                tracing::warn!("recording {}: {e:#}", p.device.key);
+            }
+        }
+        self.present.extend(added);
+    }
+
+    fn network_views(&self) -> Vec<NetworkServiceView> {
+        self.services
+            .iter()
+            .map(|h| {
+                let st = h.state();
+                let slug = lightloom_plugin_host::session::key_slug(h.name());
+                let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
+                NetworkServiceView {
+                    plugin: h.name().to_string(),
+                    running: st.running,
+                    error: st.error.clone(),
+                    can_forget: st.can_forget,
+                    controllers: st
+                        .controllers
+                        .iter()
+                        .map(|c| {
+                            let paired = c.data.get("paired").and_then(Value::as_bool);
+                            NetworkControllerView {
+                                id: c.id.clone(),
+                                name: text(&c.data, "name").unwrap_or_else(|| c.id.clone()),
+                                ip: text(&c.data, "ip"),
+                                status: text(&c.data, "status"),
+                                paired,
+                                can_pair: c.can_pair && paired != Some(true),
+                                device: st
+                                    .announced
+                                    .contains_key(&c.id)
+                                    .then(|| format!("net:{slug}:{}", c.id)),
+                            }
+                        })
+                        .collect(),
+                    log: st.log_tail.iter().cloned().collect(),
+                }
+            })
+            .collect()
     }
 
     /// Whether an SMBus device session is running.
@@ -1110,6 +1354,7 @@ impl Engine {
                 self.dirty = true;
                 self.check_batteries();
             }
+            self.poll_services();
             if self.dirty {
                 self.publish();
             }
@@ -1118,6 +1363,9 @@ impl Engine {
 
     fn shut_down(&mut self) {
         self.enter(LifecycleState::ShuttingDown);
+        for h in self.services.drain(..) {
+            h.stop();
+        }
         if let Some(manager) = self.manager.take() {
             let (_, failed) = manager.finish();
             for f in failed {
@@ -1189,6 +1437,7 @@ impl Engine {
                 signalrgb_available: lightloom_plugin_host::catalog::signalrgb_app_dir().is_some(),
                 gpu_compositing: self.gpu,
                 smbus: self.smbus,
+                network: self.network,
                 port: self.opts.api_port,
                 port_notice: self.opts.api_port_notice.clone(),
                 openrgb_sdk: self.openrgb_sdk,
@@ -1210,6 +1459,7 @@ impl Engine {
                 );
                 all
             },
+            network: self.network_views(),
             warnings: {
                 let mut all = self.warnings.clone();
                 all.extend(self.battery_warnings());
@@ -1363,8 +1613,19 @@ impl Engine {
                     .device
                     .smbus
                     .as_ref()
-                    .map(|t| format!("{} · 0x{:02x}", t.bus.descriptor().name, t.addr)),
-                name: meta.name.clone(),
+                    .map(|t| format!("{} · 0x{:02x}", t.bus.descriptor().name, t.addr))
+                    .or_else(|| {
+                        p.device
+                            .network
+                            .as_ref()
+                            .map(|t| format!("network · {}", t.ip().unwrap_or("?")))
+                    }),
+                name: p
+                    .device
+                    .network
+                    .as_ref()
+                    .and_then(|t| t.controller.get("name").and_then(Value::as_str))
+                    .map_or_else(|| meta.name.clone(), String::from),
                 plugin: meta.name.clone(),
                 device_type: format!("{:?}", meta.device_type).to_ascii_lowercase(),
                 plugin_path: meta.source_path.to_string_lossy().into_owned(),
@@ -1762,6 +2023,7 @@ impl Engine {
                 battery_notifications,
                 port,
                 openrgb_sdk,
+                network,
             } => {
                 if let Some(on) = openrgb_sdk {
                     if on != self.openrgb_sdk {
@@ -1811,6 +2073,18 @@ impl Engine {
                     self.opts.api_port_notice = None;
                     self.dirty = true;
                 }
+                if let Some(on) = network {
+                    if on != self.network {
+                        self.network = on;
+                        self.store.set(keys::NETWORK, &on).map_err(internal)?;
+                        if on {
+                            self.start_services();
+                        } else {
+                            self.stop_services();
+                        }
+                        self.log(format!("network lights {}", if on { "on" } else { "off" }));
+                    }
+                }
                 if let Some(mode) = shutdown_mode {
                     let mode = ShutdownMode::parse(&mode).ok_or_else(|| {
                         ApiError::bad_request(format!("unknown exit mode {mode:?} (restore, keep, off)"))
@@ -1854,6 +2128,7 @@ impl Engine {
                     "signalrgb": self.signalrgb,
                     "gpuCompositing": self.gpu,
                     "smbus": self.smbus,
+                    "network": self.network,
                     "shutdownMode": lock(&self.defaults).shutdown_mode.as_str(),
                     "batteryLow": self.thresholds.low,
                     "batteryCritical": self.thresholds.critical,
@@ -1861,6 +2136,28 @@ impl Engine {
                     "port": self.opts.api_port,
                     "openrgbSdk": self.openrgb_sdk,
                 }))
+            }
+            Request::NetworkAdd { plugin, ip } => {
+                let ip = ip.trim().to_string();
+                match ip.parse::<std::net::IpAddr>() {
+                    Ok(addr) if lightloom_plugin_host::net::policy::lan_allowed(addr) => {}
+                    _ => {
+                        return Err(ApiError::bad_request(format!(
+                            "{ip} is not a local network address"
+                        )))
+                    }
+                }
+                self.service(&plugin)?.command(ServiceCommand::Add(ip.clone()));
+                Ok(json!({ "plugin": plugin, "ip": ip }))
+            }
+            Request::NetworkAction { plugin, id, action } => {
+                let command = match action.as_str() {
+                    "pair" => ServiceCommand::Pair(id.clone()),
+                    "forget" => ServiceCommand::Forget(id.clone()),
+                    other => return Err(ApiError::bad_request(format!("unknown action {other:?}"))),
+                };
+                self.service(&plugin)?.command(command);
+                Ok(json!({ "plugin": plugin, "id": id, "action": action }))
             }
             Request::ImportSignalRgb { name } => {
                 self.import_signalrgb(name.unwrap_or_else(|| "SignalRGB".into()))
@@ -1913,6 +2210,17 @@ impl Engine {
                 Ok(json!({ "stopping": true }))
             }
         }
+    }
+
+    /// The running service of network plugin `plugin`.
+    fn service(&self, plugin: &str) -> Result<&ServiceHandle, ApiError> {
+        if !self.network {
+            return Err(ApiError::conflict("network lights are off"));
+        }
+        self.services
+            .iter()
+            .find(|h| h.name() == plugin)
+            .ok_or_else(|| ApiError::not_found(format!("no network plugin {plugin}")))
     }
 
     /// "Save to devices": a preview (every device, or the ones named) or a save of
@@ -2397,14 +2705,17 @@ impl Engine {
 
     /// The plugin, effect and component libraries changed (SignalRGB on/off).
     fn reload_libraries(&mut self) {
+        self.stop_services();
         self.reconcile_with(Vec::new());
         self.load_libraries();
         self.start_canvas();
         self.rescan();
+        self.start_services();
     }
 
     /// The whole database was replaced.
     fn reload_everything(&mut self) {
+        self.stop_services();
         self.reconcile_with(Vec::new());
         self.warnings.clear();
         self.load_state();
@@ -2412,6 +2723,7 @@ impl Engine {
         self.load_libraries();
         self.start_canvas();
         self.rescan();
+        self.start_services();
     }
 }
 

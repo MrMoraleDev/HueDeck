@@ -1,0 +1,28 @@
+{
+  "_about": "extControl datagrams and the layout grid worked out by hand from the Nanoleaf OpenAPI documentation (External Control, streaming protocol versions 1 and 2) and docs/hardware/nanoleaf.md. Transition time is 0 (jump to the colour), W is 0.",
+  "layout": {
+    "derivation": "Canvas squares (shapeType 2) centred at (50,50), (150,50), (150,150), plus a Shapes Controller (12) and a Power Supply (5), which carry no LEDs and are left out. Nearest panels are 100 units apart -> unit 100 / 2 = 50. Cells: x = (x - 50) / 50, y = (150 - y) / 50 (layout y points up, the canvas down) -> (0,2), (2,2), (2,0); size 3 x 3.",
+    "positionData": [
+      { "panelId": 101, "x": 50, "y": 50, "o": 0, "shapeType": 2 },
+      { "panelId": 7, "x": 100, "y": 0, "o": 0, "shapeType": 12 },
+      { "panelId": 300, "x": 150, "y": 50, "o": 90, "shapeType": 2 },
+      { "panelId": 4660, "x": 150, "y": 150, "o": 0, "shapeType": 2 },
+      { "panelId": 0, "x": 0, "y": 0, "o": 0, "shapeType": 5 }
+    ],
+    "size": [3, 3],
+    "names": ["Panel 101", "Panel 300", "Panel 4660"],
+    "cells": [[0, 2], [2, 2], [2, 0]]
+  },
+  "v2": {
+    "derivation": "nPanels 3 = 00 03; panel 101 = 00 65, FF 00 00, W 00, transition 00 00; panel 300 = 01 2C, 00 80 FF, 00, 00 00; panel 4660 = 12 34, 01 02 03, 00, 00 00. To <ip>:60222.",
+    "ids": [101, 300, 4660],
+    "colors": [[255, 0, 0], [0, 128, 255], [1, 2, 3]],
+    "bytes": "00 03 00 65 FF 00 00 00 00 00 01 2C 00 80 FF 00 00 00 12 34 01 02 03 00 00 00"
+  },
+  "v1": {
+    "derivation": "nPanels 2 = 02; panel 12 = 0C, nFrames 01, FF 00 00, W 00, transition 00; panel 200 = C8, 01, 00 80 FF, 00, 00. To the streamControlIpAddr:streamControlPort of the extControl reply.",
+    "ids": [12, 200],
+    "colors": [[255, 0, 0], [0, 128, 255]],
+    "bytes": "02 0C 01 FF 00 00 00 00 C8 01 00 80 FF 00 00"
+  }
+}

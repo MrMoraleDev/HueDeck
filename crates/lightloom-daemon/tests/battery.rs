@@ -94,6 +94,7 @@ fn settings(
             battery_critical: critical,
             battery_notifications: notify,
             port: None,
+            network: None,
             openrgb_sdk: None,
         },
     )
@@ -123,6 +124,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
                 vid: 0x1234,
                 pid: 0x4E4E,
                 endpoints: vec![info],
+                network: None,
             }],
             smbus: Vec::new(),
         },

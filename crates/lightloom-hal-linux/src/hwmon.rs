@@ -174,7 +174,8 @@ mod tests {
 
     fn chip(fs: &mut MemFs, n: u32, name: &str, attrs: &[(&str, &str)]) {
         let dir = PathBuf::from(format!("/sys/devices/platform/chip{n}/hwmon/hwmon{n}"));
-        fs.links.insert(PathBuf::from(format!("{HWMON_CLASS}/hwmon{n}")), dir.clone());
+        fs.links
+            .insert(PathBuf::from(format!("{HWMON_CLASS}/hwmon{n}")), dir.clone());
         fs.file(dir.join("name"), format!("{name}\n"));
         for (a, v) in attrs {
             fs.file(dir.join(a), format!("{v}\n"));
@@ -214,19 +215,41 @@ mod tests {
         let names: Vec<&str> = r.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(
             names,
-            vec!["k10temp Tctl", "k10temp Tccd1", "nct6687 CPU Fan", "nct6687 fan2", "nct6687 temp1"]
+            vec![
+                "k10temp Tctl",
+                "k10temp Tccd1",
+                "nct6687 CPU Fan",
+                "nct6687 fan2",
+                "nct6687 temp1"
+            ]
         );
         assert_eq!(r[0].value, 45.25);
-        assert_eq!((r[0].kind, r[0].units.as_str(), r[0].max), (SensorKind::Temperature, "°C", 100.0));
-        assert_eq!((r[2].value, r[2].kind, r[2].units.as_str()), (1180.0, SensorKind::Fan, "RPM"));
+        assert_eq!(
+            (r[0].kind, r[0].units.as_str(), r[0].max),
+            (SensorKind::Temperature, "°C", 100.0)
+        );
+        assert_eq!(
+            (r[2].value, r[2].kind, r[2].units.as_str()),
+            (1180.0, SensorKind::Fan, "RPM")
+        );
         assert_eq!(r[4].max, 105.0);
     }
 
     #[test]
     fn duplicate_chips_get_numbered_and_unreadable_inputs_are_skipped() {
         let mut fs = MemFs::default();
-        chip(&mut fs, 2, "nvme", &[("temp1_input", "33850"), ("temp1_label", "Composite")]);
-        chip(&mut fs, 3, "nvme", &[("temp1_input", "36850"), ("temp1_label", "Composite")]);
+        chip(
+            &mut fs,
+            2,
+            "nvme",
+            &[("temp1_input", "33850"), ("temp1_label", "Composite")],
+        );
+        chip(
+            &mut fs,
+            3,
+            "nvme",
+            &[("temp1_input", "36850"), ("temp1_label", "Composite")],
+        );
         chip(&mut fs, 4, "acpitz", &[("temp1_input", "")]);
         let r = read_all(&fs, Path::new(HWMON_CLASS));
         let names: Vec<&str> = r.iter().map(|r| r.name.as_str()).collect();

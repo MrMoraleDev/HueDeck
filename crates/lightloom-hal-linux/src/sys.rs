@@ -256,7 +256,13 @@ pub fn i2c_smbus(
     };
     // SAFETY: `args.data` points at a full `union i2c_smbus_data` (34 bytes,
     // 2-aligned), the most the kernel copies in either direction.
-    check(unsafe { libc::ioctl(file.as_raw_fd(), I2C_SMBUS as _, &mut args as *mut I2cSmbusIoctlData) })
+    check(unsafe {
+        libc::ioctl(
+            file.as_raw_fd(),
+            I2C_SMBUS as _,
+            &mut args as *mut I2cSmbusIoctlData,
+        )
+    })
 }
 
 /// `I2C_RDWR` at `addr`: `write` then (repeated start) `read`; either may be
@@ -292,7 +298,13 @@ pub fn i2c_rdwr(file: &File, addr: u8, write: &[u8], read: &mut [u8]) -> io::Res
     };
     // SAFETY: every message's `buf` is valid for its `len` bytes (written
     // only for `I2C_M_RD`), and `msgs` outlives the call.
-    check(unsafe { libc::ioctl(file.as_raw_fd(), I2C_RDWR as _, &mut args as *mut I2cRdwrIoctlData) })
+    check(unsafe {
+        libc::ioctl(
+            file.as_raw_fd(),
+            I2C_RDWR as _,
+            &mut args as *mut I2cRdwrIoctlData,
+        )
+    })
 }
 
 #[cfg(test)]

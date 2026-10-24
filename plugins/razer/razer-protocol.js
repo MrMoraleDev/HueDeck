@@ -23,6 +23,9 @@ export const KRAKEN_V4_REPORT_LENGTH = 64;
 const ARGS = 9;
 
 export const STORAGE_NO_SAVE = 0x00;
+/** RAZER_STORAGE_SAVE (OpenRazer's VARSTORE): the device keeps the setting across power cycles.
+ * OpenRGB never sends it; HueDeck only from SaveToDevice() ("Save to devices"). */
+export const STORAGE_SAVE = 0x01;
 export const DEVICE_MODE_HARDWARE = 0x00;
 export const DEVICE_MODE_SOFTWARE = 0x03;
 
@@ -205,6 +208,11 @@ export function setLedRgb(ctx, storage, ledId, rgb) {
 /** razer_create_set_led_effect_report(): 0x03 0x02, [storage, led, min(effect, 5)]. */
 export function setLedEffect(ctx, storage, ledId, effect) {
   return report(ctx, 0x03, 0x02, 0x03, [storage, ledId, effect > 5 ? 5 : effect]);
+}
+
+/** razer_create_mode_static_extended_matrix_report(): 0x0F 0x02, size 0x09, [storage, led, 0x01, 0, 0, 0x01, r, g, b]. */
+export function staticExtended(ctx, storage, ledId, rgb) {
+  return report(ctx, 0x0F, 0x02, 0x09, [storage, ledId, 0x01, 0x00, 0x00, 0x01, rgb[0], rgb[1], rgb[2]]);
 }
 
 /** razer_create_mode_spectrum_cycle_standard_matrix_report(): 0x03 0x0A, size 0x01, [0x04]. */

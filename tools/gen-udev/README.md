@@ -50,16 +50,23 @@ Why this shape (docs/research/m7-linux-backend.md, section 0 finding 5 and secti
   `bInterfaceNumber` (USB interface): udev matches all `ATTRS` keys on one ancestor.
 
 `hidUsage` claims (HID LampArray on any device) have no VID:PID and get a comment only;
-`network` claims are skipped. SMBus claims add nothing per device; one rule always closes
-the file:
+`network` claims are skipped. SMBus claims add nothing per device; four rules always close
+the file, one per adapter family Lightloom uses, matched by the kernel's adapter name
+(the same names `lightloom_hal_linux::i2c::classify` accepts):
 
 ```
-ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="SMBus PIIX4 adapter port [01] at *|SMBus PIIX4 adapter at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="SMBus I801 adapter at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="NVIDIA i2c adapter 1 at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="AMDGPU DM i2c OEM bus|AMDGPU i2c bit bus OEM 0x97", GROUP="i2c", MODE="0660"
 ```
 
 The `i2c` group comes from `packaging/sysusers.d/lightloom.conf` (Debian's i2c-tools
-creates the same group). It grants every I2C bus, including SPD and DDC; restricting it by
-adapter (PCI class or vendor, as ddcutil does) is open work for WP-L4.
+creates the same group). DDC, DP AUX, touchpad and EC adapters, the PIIX4 ports 2-4, the
+i801 IDF function and the other NVIDIA ports stay root-only. The chipset adapters still
+reach the SPD EEPROMs; Lightloom refuses every write there in `lightloom_hal_linux::i2c`
+and in the plugin host. udev ignores trailing whitespace in attribute values, so the
+NVIDIA driver's trailing newline in its adapter names does not matter.
 
 ## Tests
 

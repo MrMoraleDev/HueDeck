@@ -1175,6 +1175,7 @@ dependencies = [
  "lightloom-hal",
  "lightloom-hal-windows",
  "lightloom-hid-desc",
+ "lightloom-protocol",
  "libc",
  "tracing",
 ]

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The only `unsafe` code of this crate: hidraw ioctls, `poll` and the
-//! netlink uevent socket, through `libc`. Each function is a thin wrapper
+//! The only `unsafe` code of this crate: hidraw and i2c-dev ioctls, `poll`
+//! and the netlink uevent socket, through `libc`. Each function is a thin wrapper
 //! that checks its buffer sizes before the call.
 //!
 //! ioctl numbers follow the asm-generic encoding (`dir << 30 | size << 16 |
 //! 'H' << 8 | nr`, READ = 2, WRITE = 1), which x86-64, arm64 and riscv64
-//! use (docs/research/m7-linux-backend.md §1.1).
+//! use (docs/research/m7-linux-backend.md §1.1). The i2c-dev ioctls are
+//! plain numbers (`linux/i2c-dev.h`, §3.3).
 
 #![allow(unsafe_code)]
 
@@ -179,6 +180,119 @@ pub fn recv(fd: &OwnedFd, buf: &mut [u8]) -> io::Result<usize> {
     } else {
         Ok(n as usize)
     }
+}
+
+/// `I2C_SLAVE`: the address of the following `I2C_SMBUS` transfers.
+const I2C_SLAVE: libc::c_ulong = 0x0703;
+/// `I2C_FUNCS`: the adapter's functionality mask (`unsigned long`).
+const I2C_FUNCS: libc::c_ulong = 0x0705;
+/// `I2C_RDWR`: combined I2C messages.
+const I2C_RDWR: libc::c_ulong = 0x0707;
+/// `I2C_SMBUS`: one SMBus transfer.
+const I2C_SMBUS: libc::c_ulong = 0x0720;
+/// `I2C_M_RD`.
+const I2C_M_RD: u16 = 0x0001;
+
+/// `struct i2c_smbus_ioctl_data`.
+#[repr(C)]
+struct I2cSmbusIoctlData {
+    read_write: u8,
+    command: u8,
+    size: u32,
+    data: *mut crate::i2c::SmbusData,
+}
+
+/// `struct i2c_msg`.
+#[repr(C)]
+struct I2cMsg {
+    addr: u16,
+    flags: u16,
+    len: u16,
+    buf: *mut u8,
+}
+
+/// `struct i2c_rdwr_ioctl_data`.
+#[repr(C)]
+struct I2cRdwrIoctlData {
+    msgs: *mut I2cMsg,
+    nmsgs: u32,
+}
+
+fn check(r: libc::c_int) -> io::Result<()> {
+    if r < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// `I2C_FUNCS`.
+pub fn i2c_funcs(file: &File) -> io::Result<u32> {
+    let mut funcs: libc::c_ulong = 0;
+    // SAFETY: the kernel writes one `unsigned long` into `funcs`.
+    check(unsafe { libc::ioctl(file.as_raw_fd(), I2C_FUNCS as _, &mut funcs as *mut libc::c_ulong) })?;
+    Ok(funcs as u32)
+}
+
+/// `I2C_SLAVE` (never `I2C_SLAVE_FORCE`): `EBUSY` when a kernel driver owns `addr`.
+pub fn i2c_slave(file: &File, addr: u8) -> io::Result<()> {
+    // SAFETY: the argument is passed by value.
+    check(unsafe { libc::ioctl(file.as_raw_fd(), I2C_SLAVE as _, libc::c_ulong::from(addr)) })
+}
+
+/// `I2C_SMBUS`: `read_write` 1 read / 0 write, `size` an `I2C_SMBUS_*` size.
+pub fn i2c_smbus(
+    file: &File,
+    read_write: u8,
+    command: u8,
+    size: u32,
+    data: &mut crate::i2c::SmbusData,
+) -> io::Result<()> {
+    let mut args = I2cSmbusIoctlData {
+        read_write,
+        command,
+        size,
+        data,
+    };
+    // SAFETY: `args.data` points at a full `union i2c_smbus_data` (34 bytes,
+    // 2-aligned), the most the kernel copies in either direction.
+    check(unsafe { libc::ioctl(file.as_raw_fd(), I2C_SMBUS as _, &mut args as *mut I2cSmbusIoctlData) })
+}
+
+/// `I2C_RDWR` at `addr`: `write` then (repeated start) `read`; either may be
+/// empty, not both. Each is at most 8192 bytes (callers send at most 32).
+pub fn i2c_rdwr(file: &File, addr: u8, write: &[u8], read: &mut [u8]) -> io::Result<()> {
+    if (write.is_empty() && read.is_empty()) || write.len() > 8192 || read.len() > 8192 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "I2C transfer length out of range",
+        ));
+    }
+    let mut msgs = Vec::with_capacity(2);
+    if !write.is_empty() {
+        msgs.push(I2cMsg {
+            addr: u16::from(addr),
+            flags: 0,
+            len: write.len() as u16,
+            // The kernel only reads from a message without I2C_M_RD.
+            buf: write.as_ptr() as *mut u8,
+        });
+    }
+    if !read.is_empty() {
+        msgs.push(I2cMsg {
+            addr: u16::from(addr),
+            flags: I2C_M_RD,
+            len: read.len() as u16,
+            buf: read.as_mut_ptr(),
+        });
+    }
+    let mut args = I2cRdwrIoctlData {
+        msgs: msgs.as_mut_ptr(),
+        nmsgs: msgs.len() as u32,
+    };
+    // SAFETY: every message's `buf` is valid for its `len` bytes (written
+    // only for `I2C_M_RD`), and `msgs` outlives the call.
+    check(unsafe { libc::ioctl(file.as_raw_fd(), I2C_RDWR as _, &mut args as *mut I2cRdwrIoctlData) })
 }
 
 #[cfg(test)]

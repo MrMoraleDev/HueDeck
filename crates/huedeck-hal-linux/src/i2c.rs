@@ -185,7 +185,10 @@ pub fn classify(name: &str) -> AdapterClass {
         let Some((_, at)) = rest.split_once(" adapter at ") else {
             return AdapterClass::Other;
         };
-        return AdapterClass::I801 { base: hex_u16(at), idf };
+        return AdapterClass::I801 {
+            base: hex_u16(at),
+            idf,
+        };
     }
     if let Some(rest) = name.strip_prefix("NVIDIA i2c adapter ") {
         return match rest.split_once(' ').map(|(p, _)| p.parse()) {
@@ -380,7 +383,10 @@ pub fn expose(fs: &impl Files, adapter: &I2cAdapter) -> Exposure {
                 return Exposure::Skipped(format!("{} ({}): no PCI device", adapter.devnode, adapter.name));
             };
             desc(
-                format!("NVIDIA GPU {}", p.dir.file_name().unwrap_or_default().to_string_lossy()),
+                format!(
+                    "NVIDIA GPU {}",
+                    p.dir.file_name().unwrap_or_default().to_string_lossy()
+                ),
                 SmbusBusKind::Nvidia,
                 p.ids,
                 format!("pci{bus:02x}"),
@@ -390,7 +396,12 @@ pub fn expose(fs: &impl Files, adapter: &I2cAdapter) -> Exposure {
             let Some((p, bus)) = pci.and_then(|p| Some((p, p.bus()?))) else {
                 return Exposure::Skipped(format!("{} ({}): no PCI device", adapter.devnode, adapter.name));
             };
-            desc(adapter.name.clone(), SmbusBusKind::AmdGpu, p.ids, format!("pci{bus:02x}-{what}"))
+            desc(
+                adapter.name.clone(),
+                SmbusBusKind::AmdGpu,
+                p.ids,
+                format!("pci{bus:02x}-{what}"),
+            )
         }
         AdapterClass::Other => Exposure::Ignored,
     }
@@ -506,7 +517,9 @@ impl<D: I2cDev, F: Files + Send> I2cSmbus<D, F> {
         if (1..=SMBUS_BLOCK_MAX).contains(&len) {
             Ok(())
         } else {
-            Err(HalError::InvalidArgument(format!("block of {len} bytes (1..=32)")))
+            Err(HalError::InvalidArgument(format!(
+                "block of {len} bytes (1..=32)"
+            )))
         }
     }
 
@@ -550,7 +563,10 @@ impl<D: I2cDev, F: Files + Send> I2cSmbus<D, F> {
     /// The SPD bytes from the kernel's EEPROM driver, when one owns `addr`
     /// (`<adapter>/N-00aa/eeprom`, read-only).
     fn spd_from_kernel(&self, addr: u8, offset: u16, buf: &mut [u8]) -> Option<usize> {
-        let path = self.dir.join(format!("{}-{:04x}", self.number, addr)).join("eeprom");
+        let path = self
+            .dir
+            .join(format!("{}-{:04x}", self.number, addr))
+            .join("eeprom");
         let bytes = self.fs.read(&path)?;
         let at = usize::from(offset);
         let src = bytes.get(at..at + buf.len())?;
@@ -794,7 +810,12 @@ mod linux {
                 Exposure::Ignored => continue,
             };
             if buses.iter().any(|b| b.descriptor().key() == descriptor.key()) {
-                tracing::info!("i2c: {} ({}): a second adapter for {}", adapter.devnode, adapter.name, descriptor.key());
+                tracing::info!(
+                    "i2c: {} ({}): a second adapter for {}",
+                    adapter.devnode,
+                    adapter.name,
+                    descriptor.key()
+                );
                 continue;
             }
             let opened = LinuxI2cDev::open(&adapter.devnode)
@@ -822,11 +843,23 @@ mod tests {
     #[test]
     fn names_classify() {
         let piix4 = |port, base| AdapterClass::Piix4 { port, base };
-        assert_eq!(classify("SMBus PIIX4 adapter port 0 at 0b00\n"), piix4(Some(0), 0x0b00));
-        assert_eq!(classify("SMBus PIIX4 adapter port 2 at 0b00"), piix4(Some(2), 0x0b00));
-        assert_eq!(classify("SMBus PIIX4 adapter port 1 at 0b20"), piix4(Some(1), 0x0b20));
+        assert_eq!(
+            classify("SMBus PIIX4 adapter port 0 at 0b00\n"),
+            piix4(Some(0), 0x0b00)
+        );
+        assert_eq!(
+            classify("SMBus PIIX4 adapter port 2 at 0b00"),
+            piix4(Some(2), 0x0b00)
+        );
+        assert_eq!(
+            classify("SMBus PIIX4 adapter port 1 at 0b20"),
+            piix4(Some(1), 0x0b20)
+        );
         assert_eq!(classify("SMBus PIIX4 adapter at 0b00"), piix4(None, 0x0b00));
-        assert_eq!(classify("SMBus PIIX4 adapter port x at 0b00"), AdapterClass::Other);
+        assert_eq!(
+            classify("SMBus PIIX4 adapter port x at 0b00"),
+            AdapterClass::Other
+        );
         assert_eq!(
             classify("SMBus I801 adapter at efa0"),
             AdapterClass::I801 {
@@ -843,14 +876,29 @@ mod tests {
         );
         assert_eq!(
             classify("SMBus I801 adapter at 0000:00:1f.4"),
-            AdapterClass::I801 { base: None, idf: false }
+            AdapterClass::I801 {
+                base: None,
+                idf: false
+            }
         );
-        assert_eq!(classify("NVIDIA i2c adapter 1 at 1:00.0\n"), AdapterClass::Nvidia { port: 1 });
-        assert_eq!(classify("NVIDIA i2c adapter 3 at 1:00.0"), AdapterClass::Nvidia { port: 3 });
+        assert_eq!(
+            classify("NVIDIA i2c adapter 1 at 1:00.0\n"),
+            AdapterClass::Nvidia { port: 1 }
+        );
+        assert_eq!(
+            classify("NVIDIA i2c adapter 3 at 1:00.0"),
+            AdapterClass::Nvidia { port: 3 }
+        );
         assert_eq!(classify("NVIDIA SOC i2c adapter 0"), AdapterClass::Other);
         assert_eq!(classify("NVIDIA GPU I2C adapter"), AdapterClass::Other);
-        assert_eq!(classify("AMDGPU DM i2c OEM bus"), AdapterClass::AmdGpu("oem".into()));
-        assert_eq!(classify("AMDGPU i2c bit bus OEM 0x97"), AdapterClass::AmdGpu("oem97".into()));
+        assert_eq!(
+            classify("AMDGPU DM i2c OEM bus"),
+            AdapterClass::AmdGpu("oem".into())
+        );
+        assert_eq!(
+            classify("AMDGPU i2c bit bus OEM 0x97"),
+            AdapterClass::AmdGpu("oem97".into())
+        );
         assert_eq!(classify("AMDGPU DM aux hw bus 2"), AdapterClass::Other);
         assert_eq!(classify("AMDGPU DM i2c hw bus 0"), AdapterClass::Other);
         assert_eq!(classify("AMD ASF adapter"), AdapterClass::Other);
@@ -888,9 +936,19 @@ mod tests {
         adapter(&mut fs, 1, FCH, "SMBus PIIX4 adapter port 2 at 0b00");
         adapter(&mut fs, 2, FCH, "SMBus PIIX4 adapter port 1 at 0b20");
         for port in 0..4 {
-            adapter(&mut fs, 3 + port, GPU, &format!("NVIDIA i2c adapter {port} at 1:00.0"));
+            adapter(
+                &mut fs,
+                3 + port,
+                GPU,
+                &format!("NVIDIA i2c adapter {port} at 1:00.0"),
+            );
         }
-        adapter(&mut fs, 12, "/sys/devices/platform/AMDI0010:00", "Synopsys DesignWare I2C adapter");
+        adapter(
+            &mut fs,
+            12,
+            "/sys/devices/platform/AMDI0010:00",
+            "Synopsys DesignWare I2C adapter",
+        );
         fs
     }
 
@@ -911,12 +969,19 @@ mod tests {
         let keys: Vec<String> = buses.iter().map(|b| b.key()).collect();
         assert_eq!(
             keys,
-            vec!["1022:790b:1462:7c56@0b00", "1022:790b:1462:7c56@0b20", "10de:2504:1462:3903@pci01"]
+            vec![
+                "1022:790b:1462:7c56@0b00",
+                "1022:790b:1462:7c56@0b20",
+                "10de:2504:1462:3903@pci01"
+            ]
         );
         assert_eq!(buses[0].name, "AMD PIIX4 Bus - 0x0b00");
         assert_eq!(buses[0].kind, SmbusBusKind::Amd);
         assert_eq!(buses[2].kind, SmbusBusKind::Nvidia);
-        assert!(matches!(expose(&fs, &adapters[1]), Exposure::Skipped(_)), "port 2");
+        assert!(
+            matches!(expose(&fs, &adapters[1]), Exposure::Skipped(_)),
+            "port 2"
+        );
         assert_eq!(expose(&fs, &adapters[7]), Exposure::Ignored);
     }
 
@@ -953,7 +1018,10 @@ mod tests {
         let Exposure::Bus(d) = expose(&fs, &adapters[0]) else {
             panic!("OEM bus not exposed");
         };
-        assert_eq!((d.kind, d.key().as_str()), (SmbusBusKind::AmdGpu, "1002:73bf:1da2:e438@pci03-oem"));
+        assert_eq!(
+            (d.kind, d.key().as_str()),
+            (SmbusBusKind::AmdGpu, "1002:73bf:1da2:e438@pci03-oem")
+        );
         assert_eq!(expose(&fs, &adapters[1]), Exposure::Ignored, "DDC");
     }
 
@@ -1012,7 +1080,11 @@ mod tests {
                     return Ok(());
                 }
                 // Read Page Address: ACK at 0x36 on page 0.
-                return if *self.page.lock().unwrap() == 0 && i == 0 { Ok(()) } else { Err(nack()) };
+                return if *self.page.lock().unwrap() == 0 && i == 0 {
+                    Ok(())
+                } else {
+                    Err(nack())
+                };
             }
             if a == 0x50 {
                 if let Some(spd) = &self.spd {
@@ -1098,23 +1170,50 @@ mod tests {
         // SPD, write-protect / page select, PMIC: denied before anything is sent.
         let before = log.lock().unwrap().len();
         for addr in [0x50, 0x57, 0x36, 0x37, 0x30, 0x48, 0x5F] {
-            assert!(matches!(b.write_byte(addr, 0, 0), Err(HalError::PermissionDenied(_))), "0x{addr:02x}");
-            assert!(matches!(b.write_quick(addr), Err(HalError::PermissionDenied(_))), "0x{addr:02x}");
+            assert!(
+                matches!(b.write_byte(addr, 0, 0), Err(HalError::PermissionDenied(_))),
+                "0x{addr:02x}"
+            );
+            assert!(
+                matches!(b.write_quick(addr), Err(HalError::PermissionDenied(_))),
+                "0x{addr:02x}"
+            );
         }
         // Outside the broker allowlist (a clock generator, a VRM part).
-        assert!(matches!(b.write_byte(0x69, 0, 0), Err(HalError::PermissionDenied(_))));
-        assert!(matches!(b.write_block(0x77, 0, &[1]), Err(HalError::PermissionDenied(_))));
+        assert!(matches!(
+            b.write_byte(0x69, 0, 0),
+            Err(HalError::PermissionDenied(_))
+        ));
+        assert!(matches!(
+            b.write_block(0x77, 0, &[1]),
+            Err(HalError::PermissionDenied(_))
+        ));
         assert_eq!(log.lock().unwrap().len(), before, "nothing sent");
         // Reads elsewhere stay allowed (the plugins' probes).
         assert_eq!(b.read_byte(0x77, 0).unwrap(), 0xFF);
         // No block reads or register-less transfers on chipset buses.
-        assert!(matches!(b.read_block(0x39, 0, &mut [0; 4]), Err(HalError::Unsupported(_))));
-        assert!(matches!(b.write_block_no_reg(0x39, &[1]), Err(HalError::Unsupported(_))));
-        assert!(matches!(b.read_block_no_reg(0x39, &mut [0; 1]), Err(HalError::Unsupported(_))));
+        assert!(matches!(
+            b.read_block(0x39, 0, &mut [0; 4]),
+            Err(HalError::Unsupported(_))
+        ));
+        assert!(matches!(
+            b.write_block_no_reg(0x39, &[1]),
+            Err(HalError::Unsupported(_))
+        ));
+        assert!(matches!(
+            b.read_block_no_reg(0x39, &mut [0; 1]),
+            Err(HalError::Unsupported(_))
+        ));
         // Blocks 1..=32.
         assert!(b.write_block(0x39, 3, &[0; 32]).is_ok());
-        assert!(matches!(b.write_block(0x39, 3, &[0; 33]), Err(HalError::InvalidArgument(_))));
-        assert!(matches!(b.write_block(0x39, 3, &[]), Err(HalError::InvalidArgument(_))));
+        assert!(matches!(
+            b.write_block(0x39, 3, &[0; 33]),
+            Err(HalError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            b.write_block(0x39, 3, &[]),
+            Err(HalError::InvalidArgument(_))
+        ));
         // Address range.
         assert!(matches!(b.read_byte(0x78, 0), Err(HalError::InvalidArgument(_))));
         // A NACK is a bus failure (-1 to plugins).
@@ -1156,7 +1255,10 @@ mod tests {
         };
         let mut b = bus(SmbusBusKind::Amd, dev, MemFs::default());
         assert!(matches!(b.write_quick(0x39), Err(HalError::Unsupported(_))));
-        assert!(matches!(b.write_block(0x39, 0, &[1]), Err(HalError::Unsupported(_))));
+        assert!(matches!(
+            b.write_block(0x39, 0, &[1]),
+            Err(HalError::Unsupported(_))
+        ));
         assert!(matches!(b.read_byte_no_reg(0x39), Err(HalError::Unsupported(_))));
     }
 
@@ -1181,15 +1283,27 @@ mod tests {
         };
         let log = dev.log.clone();
         let mut b = bus(SmbusBusKind::Nvidia, dev, MemFs::default());
-        assert!(matches!(b.write_quick(0x68), Err(HalError::Unsupported(_))), "NvAPI parity");
+        assert!(
+            matches!(b.write_quick(0x68), Err(HalError::Unsupported(_))),
+            "NvAPI parity"
+        );
         let mut buf = [0u8; 4];
         assert_eq!(b.read_block(0x68, 0x20, &mut buf).unwrap(), 4);
         assert_eq!(buf, [0xAB; 4]);
         b.write_block_no_reg(0x68, &[1, 2]).unwrap();
-        assert!(matches!(b.write_block_no_reg(0x50, &[1]), Err(HalError::PermissionDenied(_))));
+        assert!(matches!(
+            b.write_block_no_reg(0x50, &[1]),
+            Err(HalError::PermissionDenied(_))
+        ));
         // GPU buses keep 0x36 (ASRock GPU quick-writes it on AMD cards).
-        assert!(!matches!(b.write_byte(0x36, 0, 0), Err(HalError::PermissionDenied(_))));
-        assert!(matches!(b.spd_read(0x50, 0, &mut [0; 1]), Err(HalError::Unsupported(_))));
+        assert!(!matches!(
+            b.write_byte(0x36, 0, 0),
+            Err(HalError::PermissionDenied(_))
+        ));
+        assert!(matches!(
+            b.spd_read(0x50, 0, &mut [0; 1]),
+            Err(HalError::Unsupported(_))
+        ));
         let log = log.lock().unwrap();
         assert!(log.contains(&Sent::Rdwr {
             addr: 0x68,
@@ -1238,8 +1352,14 @@ mod tests {
             .collect();
         assert_eq!(slaves, vec![0x37, 0x50, 0x36, 0x50]);
         // Plugins still cannot select a page.
-        assert!(matches!(b.write_byte(0x37, 0, 0), Err(HalError::PermissionDenied(_))));
-        assert!(matches!(b.spd_read(0x58, 0, &mut ty), Err(HalError::InvalidArgument(_))));
+        assert!(matches!(
+            b.write_byte(0x37, 0, 0),
+            Err(HalError::PermissionDenied(_))
+        ));
+        assert!(matches!(
+            b.spd_read(0x58, 0, &mut ty),
+            Err(HalError::InvalidArgument(_))
+        ));
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub mod effects;
 pub mod hardware;
 pub mod hotplug;
 pub mod notify;
-pub mod signalrgb;
 pub mod sensors;
+pub mod signalrgb;
 pub mod smbus;
 pub mod system;

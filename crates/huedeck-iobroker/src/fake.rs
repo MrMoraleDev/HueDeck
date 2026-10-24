@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Test doubles: a scripted `SmbusPIIX4` module and a global mutex.
+//! Test doubles: a scripted `SmbusPIIX4` or `SmbusI801` module and a global mutex.
 
 use crate::mutex::GlobalMutex;
 use crate::pawnio::{NtStatus, PawnExec};
@@ -9,6 +9,10 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Default)]
 struct State {
+    /// `SmbusI801` instead of `SmbusPIIX4`.
+    i801: bool,
+    /// I801 SMBHSTCFG.SPD_WD.
+    spd_wd: bool,
     calls: Vec<(String, Vec<u64>)>,
     devices: BTreeMap<u8, BTreeMap<u8, u8>>,
     port: u8,
@@ -20,13 +24,32 @@ struct State {
     nack_page_select: bool,
 }
 
-/// A `SmbusPIIX4` module over a register map; clones share state.
+/// A `SmbusPIIX4` module (or, from [`FakePiix4::new_i801`], a `SmbusI801`
+/// one: no port select, its own identity, `ioctl_write_protection`) over a
+/// register map; clones share state.
 #[derive(Clone, Debug, Default)]
 pub struct FakePiix4(Arc<Mutex<State>>);
 
 impl FakePiix4 {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A `SmbusI801` module (Raptor Lake PCH, I/O base 0xEFA0, SPD_WD set).
+    pub fn new_i801() -> Self {
+        let fake = Self::default();
+        {
+            let mut s = fake.state();
+            s.i801 = true;
+            s.spd_wd = true;
+        }
+        fake
+    }
+
+    /// The I801's SMBHSTCFG.SPD_WD.
+    pub fn spd_write_protection(self, on: bool) -> Self {
+        self.state().spd_wd = on;
+        self
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -112,8 +135,19 @@ impl PawnExec for FakePiix4 {
         s.calls.push((function.to_string(), input.to_vec()));
         match function {
             "ioctl_piix4_port_sel" => {
+                assert!(!s.i801, "SmbusI801 has no ioctl_piix4_port_sel");
                 output[0] = u64::from(s.port);
                 s.port = input[0] as u8;
+                Ok(())
+            }
+            "ioctl_identity" if s.i801 => {
+                output[0] = u64::from_le_bytes(*b"i801\0\0\0\0");
+                output[1] = 0xEFA0;
+                output[2] = 0x7D25_1462_7A23_8086;
+                Ok(())
+            }
+            "ioctl_write_protection" if s.i801 => {
+                output[0] = u64::from(s.spd_wd);
                 Ok(())
             }
             "ioctl_identity" => {
@@ -148,6 +182,9 @@ impl PawnExec for FakePiix4 {
                 }
                 if let Some(spd) = s.spd.get(&addr) {
                     assert!(read, "the broker never writes an SPD: {input:?}");
+                    if s.i801 && s.spd_wd {
+                        assert!(read, "SPD_WD: the controller refuses SPD writes");
+                    }
                     if proto != 2 {
                         return Err(NtStatus::NOT_SUPPORTED);
                     }

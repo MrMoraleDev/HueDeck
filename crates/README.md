@@ -47,8 +47,8 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 
 | crate | kind | status | contents |
 |---|---|---|---|
-| `lightloom-hal` | lib | done | `HidBackend/HidHandle`, `Notifier`, `UsbBackend`, `SerialBackend`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend`, `HalError`, `DeviceKey`; feature `mock`: `MockHid`, `MockSmbus`, `TransactionRecorder` |
-| `lightloom-hal-windows` | lib | HID done; USB and serial missing | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `group`, `hotplug`, `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence, process and port probes, toast notifications |
+| `lightloom-hal` | lib | done | `HidBackend/HidHandle`, `Notifier`, `UsbBackend`, `SerialBackend`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend` (+ `plugin_owner`), `HalError`, `DeviceKey`; feature `mock`: `MockHid`, `MockSmbus`, `TransactionRecorder` |
+| `lightloom-hal-windows` | lib | HID done; USB and serial missing | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `group`, `hotplug`, `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence, process and port probes, toast notifications, `lamparray` (WinRT Windows Dynamic Lighting backend) |
 | `lightloom-hal-linux` | lib | stub (M7) | placeholder for hidraw, nusb, serialport, udev, `/dev/i2c-*`, hwmon |
 | `lightloom-hid-desc` | lib | done | HID 1.11 report-descriptor parser: items, top-level collections, report ids and sizes, report fields (LampArray) |
 | `lightloom-protocol` | lib | done | `shm` frame ring (`"HDFR"`, 3 slots, seqlock), `broker` operations (protocol 3: `BusLock`, `Batch`, `SpdRead`), postcard framing |

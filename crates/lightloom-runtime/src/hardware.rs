@@ -48,6 +48,7 @@ pub fn present(groups: Vec<DeviceGroup>, catalog: &Catalog, filters: &[String]) 
             targets.push(Present {
                 device: SessionDevice {
                     smbus: None,
+                    lamparray: None,
                     key,
                     vid: g.key.vid,
                     pid: g.key.pid,

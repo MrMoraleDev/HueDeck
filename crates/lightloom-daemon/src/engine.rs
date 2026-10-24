@@ -38,6 +38,7 @@ use lightloom_engine::{
     Component, ComponentInstance, ComponentLibrary, DirectLeds, FrameStore, Layout, Placement, Rgb,
     CANVAS_HEIGHT, CANVAS_WIDTH,
 };
+use lightloom_hal::lamparray::LampArrayBackend;
 use lightloom_hal::notify::{Notification, Notifier};
 use lightloom_hal::HidBackend;
 use lightloom_plugin_host::battery::BatteryStatus;
@@ -114,6 +115,8 @@ pub enum HardwareMode {
         devices: Vec<SessionDevice>,
         /// SMBus buses scanned when SMBus is enabled.
         smbus: Vec<BusHandle>,
+        /// LampArray backend (Windows Dynamic Lighting); `None`: none.
+        lamparrays: Option<Arc<dyn LampArrayBackend>>,
     },
 }
 
@@ -373,6 +376,14 @@ struct Engine {
     battery_monitor: BatteryMonitor,
     /// Devices pulsing red now, with the start time of the session told to.
     alerting: BTreeMap<String, Instant>,
+    /// The LampArray backend (Windows Dynamic Lighting), when there is one.
+    lamp_backend: Option<Arc<dyn LampArrayBackend>>,
+    /// Its generation at the last scan.
+    lamp_generation: u64,
+    /// LampArrays no plugin owns (driven by the built-in session).
+    lamp_present: Vec<Present>,
+    /// LampArrays left to a plugin, already logged.
+    lamp_owned: BTreeSet<String>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -445,6 +456,10 @@ impl Engine {
             batteries: BTreeMap::new(),
             battery_monitor: BatteryMonitor::default(),
             alerting: BTreeMap::new(),
+            lamp_backend: None,
+            lamp_generation: 0,
+            lamp_present: Vec::new(),
+            lamp_owned: BTreeSet::new(),
         };
         e.enter(LifecycleState::LoadingConfig);
         e.load_state();
@@ -617,6 +632,11 @@ impl Engine {
 
     fn open_hardware(&mut self) {
         let mode = std::mem::replace(&mut self.opts.hardware, HardwareMode::None);
+        self.lamp_backend = match &mode {
+            HardwareMode::Real => lightloom_runtime::lamparray::open(),
+            HardwareMode::None => None,
+            HardwareMode::Fixed { lamparrays, .. } => lamparrays.clone(),
+        };
         let backend: Arc<dyn HidBackend> = match &mode {
             HardwareMode::Real => match lightloom_runtime::hardware::Hardware::open() {
                 Ok(hw) => {
@@ -723,6 +743,7 @@ impl Engine {
             Vec::new()
         };
         self.last_conflict_check = Instant::now();
+        self.scan_lamparrays();
         self.scan_smbus();
         self.merge_smbus();
         self.reconcile();
@@ -732,10 +753,48 @@ impl Engine {
         }
     }
 
-    /// Put the SMBus devices of the last scan (after `[devices] ignore`) into
-    /// the devices present, in place of the earlier ones, and record them.
+    /// The LampArrays (Windows Dynamic Lighting) no plugin owns, from the
+    /// HID devices present now: a plugin always wins on the same device
+    /// (`lightloom_runtime::lamparray`).
+    fn scan_lamparrays(&mut self) {
+        let Some(backend) = &self.lamp_backend else {
+            return;
+        };
+        self.lamp_generation = backend.generation();
+        let hid: Vec<Present> = self
+            .present
+            .iter()
+            .filter(|p| p.device.smbus.is_none() && p.device.lamparray.is_none())
+            .cloned()
+            .collect();
+        match lightloom_runtime::lamparray::present(backend, &hid, &self.opts.config.devices.ignore) {
+            Ok(scan) => {
+                let mut lines = Vec::new();
+                for (lamp, owner, why) in &scan.owned {
+                    if self.lamp_owned.insert(lamp.clone()) {
+                        lines.push(format!(
+                            "{lamp}: Dynamic Lighting device left to the plugin of {owner} ({why:?})"
+                        ));
+                    }
+                }
+                self.lamp_owned
+                    .retain(|k| scan.owned.iter().any(|(l, _, _)| l == k));
+                self.lamp_present = scan.present;
+                for line in lines {
+                    self.log(line);
+                }
+            }
+            Err(e) => self.log(format!("Dynamic Lighting: enumerating LampArrays failed: {e}")),
+        }
+    }
+
+    /// Put the SMBus devices of the last scan (after `[devices] ignore`) and
+    /// the LampArrays of the last scan into the devices present, in place of
+    /// the earlier ones, and record them.
     fn merge_smbus(&mut self) {
-        self.present.retain(|p| p.device.smbus.is_none());
+        self.present
+            .retain(|p| p.device.smbus.is_none() && p.device.lamparray.is_none());
+        self.present.extend(self.lamp_present.iter().cloned());
         let ignore = &self.opts.config.devices.ignore;
         self.present.extend(
             self.smbus_present
@@ -1039,7 +1098,12 @@ impl Engine {
             }
             // A plug produces a burst of events: (re)start the settle timer. A
             // session that lost its device asks for an enumeration too.
-            let plugged = self.hotplug.changed();
+            let lamps = self.lamp_backend.as_ref().map(|b| b.generation());
+            let lamps_changed = lamps.is_some_and(|g| g != self.lamp_generation);
+            if let Some(g) = lamps {
+                self.lamp_generation = g;
+            }
+            let plugged = self.hotplug.changed() | lamps_changed;
             let lost =
                 self.settle.is_none() && self.manager.as_ref().is_some_and(DeviceManager::has_disconnected);
             if plugged || lost {
@@ -1163,9 +1227,19 @@ impl Engine {
             warnings: {
                 let mut all = self.warnings.clone();
                 all.extend(self.battery_warnings());
+                all.extend(self.lamparray_warning());
                 all
             },
         }
+    }
+
+    /// Why Windows Dynamic Lighting devices may stay dark: no package identity.
+    fn lamparray_warning(&self) -> Option<String> {
+        let backend = self.lamp_backend.as_ref()?;
+        (!self.lamp_present.is_empty() && !backend.has_identity()).then(|| {
+            "Windows Dynamic Lighting devices: Lightloom runs without its identity package, so Windows              gives them to Lightloom only while it would be the foreground app (never, for the daemon).              Register the identity package (packaging/msix-identity) and put Lightloom first under              Settings > Personalization > Dynamic Lighting > Background light control."
+                .into()
+        })
     }
 
     // ---------------------------------------------------------------- battery
@@ -1313,7 +1387,13 @@ impl Engine {
                     .device
                     .smbus
                     .as_ref()
-                    .map(|t| format!("{} · 0x{:02x}", t.bus.descriptor().name, t.addr)),
+                    .map(|t| format!("{} · 0x{:02x}", t.bus.descriptor().name, t.addr))
+                    .or_else(|| {
+                        p.device
+                            .lamparray
+                            .as_ref()
+                            .map(|_| "Windows Dynamic Lighting".into())
+                    }),
                 name: meta.name.clone(),
                 plugin: meta.name.clone(),
                 device_type: format!("{:?}", meta.device_type).to_ascii_lowercase(),
@@ -1336,7 +1416,11 @@ impl Engine {
             };
             if let Some(h) = sessions.get(key) {
                 let live = h.live();
-                view.state = state_name(live.state).into();
+                view.state = if live.paused && live.state == SessionState::Running {
+                    "paused".into()
+                } else {
+                    state_name(live.state).into()
+                };
                 view.frames = live.frames;
                 view.render_errors = live.render_errors;
                 view.io_errors = live.io_errors;

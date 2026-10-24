@@ -36,6 +36,7 @@ fn start(opts: SessionOptions) -> (SessionHandle, Arc<MockHid>, Arc<FrameStore>)
     let handle = session::spawn(
         SessionDevice {
             smbus: None,
+            lamparray: None,
             key: "1234:2222:B".into(),
             vid: 0x1234,
             pid: 0x2222,

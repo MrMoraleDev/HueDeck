@@ -171,13 +171,13 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | LCD faces (`@SignalRGB/lcd`, second browser per device) | Missing | dry-run stub only |
 | Macros (Inputs/Actions), key/mouse hooks, `system.*`, `signalrgb.*`, `keys` | Missing | spec in `docs/host-api/macros-system.md`; no code |
 | Action router (`lightloom://`, `signalrgb://`) | Missing | no URL handler |
-| LampArray HAL backend (WinRT `Windows.Devices.Lights`) | Missing | trait `crates/lightloom-hal/src/lamparray.rs`; no implementation. Partly covered another way: `plugins/hid-lamparray` drives HID LampArray devices directly (tested on the DeathAdder's LampArray collection) |
+| LampArray HAL backend (WinRT `Windows.Devices.Lights`) | Done, not run on hardware | `crates/lightloom-hal-windows/src/lamparray.rs` (DeviceWatcher, `IsAvailable`/`AvailabilityChanged`, identity check); built-in session `crates/lightloom-plugin-host/src/lamparray.rs`; ownership (a plugin wins: interface path, container id, VID:PID) `crates/lightloom-runtime/src/lamparray.rs`; identity package recipe `packaging/msix-identity/` (built, never registered). Design: `docs/windows-dynamic-lighting.md`. `plugins/hid-lamparray` still drives HID LampArrays first (tested on the DeathAdder's LampArray collection) |
 | OpenRGB SDK server :6742 | Missing | `OPENRGB_SDK_PORT` constant in `crates/lightloom-api/src/lib.rs` only |
 | Dynamic ControllableParameters UI | Partial | static `ControllableParameters` render in `Devices.svelte` and persist (`device_parameters` table); runtime `device.addProperty/removeProperty` changes stay inside the plugin (`host.js`) and never reach the API or UI; `DeviceMessages`/`addMessage` are not shown |
 | Accept: audio-reactive + screen effects track input < 100 ms | Missing | |
 | Accept: Govee/Yeelight/WLED-class plugin drives a LAN device | In progress (`feature/network-lights`) | |
 | Accept: OpenRGB SDK client sets a colour on the MSI board | Missing | |
-| Accept: a DL-certified keyboard lights with no plugin | Partial | the generic `hid-lamparray` plugin is that path for HID LampArray devices; not tested on a keyboard |
+| Accept: a DL-certified keyboard lights with no plugin | Partial | the generic `hid-lamparray` plugin is that path for HID LampArray devices, the WinRT backend for LampArrays no plugin owns (needs the identity package); not tested on a keyboard |
 
 ## M7 Linux backend + 1.0: Missing
 
@@ -290,7 +290,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
     - Maps sessions to RGBControllers through a new daemon request (`engine.rs`: "set LEDs of device X, direct").
     - Opt-in setting; binds to 127.0.0.1.
     - Accept: the OpenRGB client sets a colour on the MSI board.
-11. **WP-LAMPARRAY: WinRT LampArray HAL backend. Size L.**
+11. **WP-LAMPARRAY: WinRT LampArray HAL backend. Size L. Done (feature/lamparray), not run on hardware; see `docs/windows-dynamic-lighting.md`.**
     - Touches: new `lightloom-hal-windows/src/lamparray.rs` (`Windows.Devices.Lights`); a pseudo-session in the plugin host or the daemon that samples the layout like a plugin; the identity package (sparse MSIX) recipe in `packaging/` per §1.4.
     - Rule: a plugin wins over the backend on the same device.
     - Overlaps `plugins/hid-lamparray`: decide which owns which device first.

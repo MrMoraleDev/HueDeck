@@ -150,3 +150,27 @@ test("the CLI reports and exits 1 on errors, 0 on a clean plugin, 2 on bad argum
   // --strict: warnings fail too.
   assert.throws(() => execFileSync(process.execPath, [cli, "--strict", join(fixtures, "no-manifest")], { stdio: "pipe" }));
 });
+
+test("save and exit modes: the first-party MSI GPU plugin is clean, mismatches are errors", async () => {
+  const { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const gpu = join(sdk, "..", "plugins", "msi-gpu");
+  const clean = await lintPlugin(gpu);
+  assert.deepEqual(clean.findings.filter((f) => f.level === "error"), [], formatResult(clean));
+  const dir = mkdtempSync(join(tmpdir(), "lightloom-lint-save-"));
+  try {
+    cpSync(gpu, dir, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+    manifest.save = { static: true, effects: ["spectrum"] };
+    manifest.shutdownModes = ["restore"];
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+    const r = await lintPlugin(dir);
+    assert.ok(has(r, "save-mismatch"), formatResult(r));
+    assert.ok(has(r, "shutdown-modes-mismatch"), formatResult(r));
+    const source = readFileSync(join(dir, "plugin.js"), "utf8").replace("export function SaveToDevice(", "function SaveToDevice(");
+    writeFileSync(join(dir, "plugin.js"), source);
+    assert.ok(has(await lintPlugin(dir), "save-without-export"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

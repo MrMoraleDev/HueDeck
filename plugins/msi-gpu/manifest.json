@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "license": "GPL-3.0-or-later",
   "publisher": "Lightloom",
-  "description": "The RGB controller of MSI graphics cards at I2C address 0x68 on the GPU's bus (NVIDIA through NvAPI, port 1), adapted from OpenRGB's MSIGPUController (GPL-2.0-or-later). Card: MSI GeForce RTX 3060 Gaming X Trio LHR (10DE:2504, subsystem 1462:3903), tested 2026-10-19. Register 0x3F (save to flash) is never written: the host refuses it. Protocol notes: docs/hardware/msi-gpu.md.",
+  "description": "The RGB controller of MSI graphics cards at I2C address 0x68 on the GPU's bus (NVIDIA through NvAPI, port 1), adapted from OpenRGB's MSIGPUController (GPL-2.0-or-later). Card: MSI GeForce RTX 3060 Gaming X Trio LHR (10DE:2504, subsystem 1462:3903), tested 2026-10-19. Register 0x3F (save to flash) is written only by SaveToDevice, after the user asked for \"Save to devices\": the host refuses it at any other time. Protocol notes: docs/hardware/msi-gpu.md.",
   "entry": "plugin.js",
   "compat": "signalrgb-2.5",
   "deviceType": "gpu",
@@ -21,5 +21,7 @@
     }
   ],
   "permissions": ["gpu-i2c"],
+  "save": { "static": true, "effects": ["spectrum", "breathing"] },
+  "shutdownModes": ["restore", "keep", "off"],
   "keywords": ["msi", "gpu", "nvidia", "rtx", "mystic light", "i2c", "smbus"]
 }

@@ -119,6 +119,7 @@ fn runtime_properties_and_messages_reach_the_device_view() {
             backend,
             devices: vec![SessionDevice::hid(KEY, 0x1234, 0x5A5A, vec![info])],
             smbus: Vec::new(),
+            lamparrays: None,
         },
         ephemeral: true,
         plugins_dir: Some(plugins),

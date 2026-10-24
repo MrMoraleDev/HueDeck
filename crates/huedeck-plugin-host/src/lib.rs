@@ -19,6 +19,8 @@
 //! * [`device`]: the native backing of `device.*` for a real device (HID I/O
 //!   through huedeck-hal, canvas sampling, I/O statistics, dry-run writes).
 //! * [`battery`]: what a plugin reports through the `battery` feature global.
+//! * [`plugin_ui`]: a device plugin's parameters and messages as they change
+//!   at run time (`device.addProperty`, `device.addMessage`, `device.notify`).
 //! * [`children`]: subdevices and channels (with their component instances),
 //!   each placed and sampled on the canvas on its own.
 //! * [`session`]: one device session = one plugin thread running
@@ -51,6 +53,7 @@ pub mod loader;
 pub mod manager;
 pub mod meta;
 pub mod net;
+pub mod plugin_ui;
 pub mod resolve;
 pub mod runtime;
 pub mod save;

@@ -6,6 +6,7 @@
   import ControlInput from "./ControlInput.svelte";
   import SaveDialog from "./SaveDialog.svelte";
   import BatteryBadge from "./BatteryBadge.svelte";
+  import { groupParameters, groupTitle } from "../lib/params";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let library = $state<LibraryComponent[]>([]);
@@ -86,6 +87,12 @@
         {/if}
       </div>
       <p class="muted plugin">Plugin: {d.plugin} <span class="path">({d.pluginPath})</span></p>
+      {#each d.messages ?? [] as m (m.id)}
+        <p class={`message ${(m.priority ?? 0) >= 2 ? "bad" : m.priority === 1 ? "warn" : ""}`} title={m.tooltip ?? ""}>
+          {#if m.title}<strong>{m.title}:</strong>{/if}
+          {m.message}
+        </p>
+      {/each}
       {#if d.battery}
         <label class="check blink"
           ><input
@@ -100,18 +107,23 @@
       {#if open === d.key}
         {#if d.parameters.length}
           <h3>Plugin settings</h3>
-          {#each d.parameters as p (p.property)}
-            <ControlInput
-              kind={p.type}
-              label={p.label || p.property}
-              value={p.value}
-              min={p.min}
-              max={p.max}
-              step={p.step}
-              values={p.values}
-              tooltip={p.tooltip ?? p.description}
-              onchange={(v) => daemon.run(() => api.setDevice(d.key, { parameters: { [p.property]: v } }))}
-            />
+          {#each groupParameters(d.parameters) as g (g.name)}
+            {#if g.name}<h4>{groupTitle(g.name)}</h4>{/if}
+            {#each g.items as p (p.property)}
+              <ControlInput
+                kind={p.type}
+                label={p.label || p.property}
+                value={p.value}
+                min={p.min}
+                max={p.max}
+                step={p.step}
+                values={p.values}
+                tooltip={p.tooltip ?? p.description}
+                live={p.live !== false}
+                filter={p.filter}
+                onchange={(v) => daemon.run(() => api.setDevice(d.key, { parameters: { [p.property]: v } }))}
+              />
+            {/each}
           {/each}
         {/if}
 
@@ -224,6 +236,22 @@
   }
   .path {
     opacity: 0.6;
+  }
+  .message {
+    margin: 6px 0 0;
+    padding: 4px 8px;
+    border-left: 3px solid var(--accent);
+    font-size: 13px;
+  }
+  .message.warn {
+    border-color: var(--warn);
+  }
+  .message.bad {
+    border-color: var(--bad);
+  }
+  h4 {
+    margin: 8px 0 2px;
+    font-size: 13px;
   }
   .blink {
     font-size: 12px;

@@ -45,8 +45,8 @@ use crate::paths::{self, Paths};
 use crate::store::{StateExport, Store};
 use arc_swap::ArcSwap;
 use huedeck_api::model::{
-    BatteryView, ChannelView, DeviceSaveChoice, DeviceView, EffectView, Endpoint, Lighting,
-    NetworkControllerView, NetworkServiceView, RendererView, SaveSupport, Settings,
+    BatteryView, ChannelView, DeviceMessageView, DeviceSaveChoice, DeviceView, EffectView, Endpoint,
+    Lighting, NetworkControllerView, NetworkServiceView, RendererView, SaveSupport, Settings,
 };
 use huedeck_api::{ApiError, Backend, Event, Request, Snapshot};
 use huedeck_engine::{
@@ -60,7 +60,8 @@ use huedeck_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use huedeck_plugin_host::device::{Brightness, LogSink, WriteMode};
 use huedeck_plugin_host::discover::ScanBudget;
 use huedeck_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
-use huedeck_plugin_host::meta::{ControllableParameter, ParamValue};
+use huedeck_plugin_host::meta::{coerce_param_value, ControllableParameter, ParamValue};
+use huedeck_plugin_host::plugin_ui::{PluginMessage, PluginUi};
 use huedeck_plugin_host::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode};
 use huedeck_plugin_host::service::{PluginSettings, ServiceCommand, ServiceHandle, ServiceOptions};
 use huedeck_plugin_host::session::{
@@ -1347,6 +1348,12 @@ impl Engine {
             {
                 self.check_smbus();
             }
+            // A plugin changed its parameters or messages: show them now (every
+            // session's channel is drained).
+            let announced = self.sessions().map(|h| h.events().len()).sum::<usize>();
+            if announced > 0 {
+                self.dirty = true;
+            }
             if self.last_stats.elapsed() >= STATS_EVERY {
                 self.last_stats = Instant::now();
                 self.dirty = true;
@@ -1593,11 +1600,19 @@ impl Engine {
             let enabled = row.is_none_or(|r| r.enabled);
             let meta = &p.plugin.meta;
             let stored = defaults.parameters.get(key).cloned().unwrap_or_default();
-            let parameters = meta
-                .controllable_parameters
+            // A running session's lists (changed at run time), else the exports'.
+            let ui = sessions.get(key).and_then(|h| h.plugin_ui()).unwrap_or_else(|| {
+                Arc::new(PluginUi::new(
+                    &meta.controllable_parameters,
+                    &meta.device_messages,
+                ))
+            });
+            let parameters = ui
+                .properties()
                 .iter()
                 .map(|c| parameter_json(c, stored.get(&c.property)))
                 .collect();
+            let messages = ui.messages().iter().map(message_view).collect();
             let image = meta.image_url.clone().or_else(|| {
                 meta.image_base64
                     .as_ref()
@@ -1639,6 +1654,7 @@ impl Engine {
                 default_scale: meta.default_scale,
                 image,
                 parameters,
+                messages,
                 save: meta
                     .save_caps
                     .as_ref()
@@ -1889,7 +1905,8 @@ impl Engine {
                         h.control(Control::ShutdownMode(effective));
                     }
                 }
-                if let Some(values) = parameters {
+                if let Some(mut values) = parameters {
+                    self.coerce_parameters(&key, &mut values);
                     self.store
                         .set_device_parameters(&key, &values)
                         .map_err(internal)?;
@@ -2440,6 +2457,27 @@ impl Engine {
         }
     }
 
+    /// Parameter values as their control types expect them (`"800"` -> 800
+    /// for a number), by the device's current parameter list.
+    fn coerce_parameters(&self, key: &str, values: &mut Map<String, Value>) {
+        let ui = self
+            .sessions()
+            .find(|h| h.key() == key)
+            .and_then(|h| h.plugin_ui());
+        let exported = self
+            .present
+            .iter()
+            .find(|p| p.device.key == key)
+            .map(|p| p.plugin.meta.controllable_parameters.as_slice())
+            .unwrap_or_default();
+        let list = ui.as_deref().map_or(exported, PluginUi::properties);
+        for (name, value) in values.iter_mut() {
+            if let Some(c) = list.iter().find(|c| &c.property == name) {
+                *value = coerce_param_value(c.param_type, value);
+            }
+        }
+    }
+
     fn push_brightness(&self) {
         let b = Brightness {
             global: self.brightness,
@@ -2568,6 +2606,17 @@ fn parameter_json(c: &ControllableParameter, stored: Option<&Value>) -> Value {
         "filter": c.filter,
         "value": stored.cloned().or(default).unwrap_or(Value::Null),
     })
+}
+
+/// A plugin message for clients.
+fn message_view(m: &PluginMessage) -> DeviceMessageView {
+    DeviceMessageView {
+        id: m.id.clone(),
+        title: m.title.clone(),
+        message: m.message.clone(),
+        tooltip: m.tooltip.clone(),
+        priority: m.priority,
+    }
 }
 
 /// Where the shipped resources and the renderer are, from config and the

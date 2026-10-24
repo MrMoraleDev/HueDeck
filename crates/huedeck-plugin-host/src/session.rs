@@ -22,7 +22,10 @@
 //!    placement (then `onBrightnessChanged()` for a new device brightness),
 //!    the alert override and `battery.lowBatteryWarningLevel`. What the plugin
 //!    reports through the `battery` feature is readable meanwhile
-//!    ([`LiveSnapshot::battery`]);
+//!    ([`LiveSnapshot::battery`]), and so are its parameters and messages
+//!    ([`SessionHandle::plugin_ui`]): `device.addProperty` / `addMessage` /
+//!    `notify` change them at run time, and each change is announced on the
+//!    session's events channel ([`SessionHandle::events`]);
 //! 6. on stop calls `Shutdown(false, mode)` (unless told not to; `mode` is the
 //!    [`ShutdownMode`], a HueDeck extension, with the `shutdownColor` fallback of
 //!    [`crate::save::shutdown_fallback`] for plugins that do not implement it),
@@ -55,6 +58,7 @@ use crate::device::{
 };
 use crate::meta::PluginMeta;
 use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
+use crate::plugin_ui::PluginUi;
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
 use crate::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode, ShutdownPlan};
 use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
@@ -594,6 +598,22 @@ struct LiveStats {
     channels: std::sync::Mutex<Arc<Vec<ChannelInfo>>>,
     /// The plugin's last battery report.
     battery: std::sync::Mutex<Option<BatteryStatus>>,
+    /// The plugin's parameters and messages (`None` until `Initialize()` ran).
+    ui: std::sync::Mutex<Option<Arc<PluginUi>>>,
+    /// Announces changes to the session's owner.
+    events: Sender<SessionEvent>,
+}
+
+/// Something a running session announces on its events channel
+/// ([`SessionHandle::events`]); the new state is read from the handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionEvent {
+    /// The parameter list changed ([`SessionHandle::plugin_ui`]): exports
+    /// bound after `Initialize()`, or `device.addProperty` / `removeProperty`.
+    Properties,
+    /// The message list changed: `device.addMessage` / `removeMessage` /
+    /// `notify` / `denotify`.
+    Messages,
 }
 
 /// Counters readable while the session runs.
@@ -637,6 +657,28 @@ impl LiveStats {
         let mut slot = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         if **slot != channels {
             *slot = Arc::new(channels);
+        }
+    }
+
+    /// Publish the plugin's parameters and messages when they changed, and
+    /// announce what changed.
+    fn publish_ui(&self, ui: &PluginUi) {
+        let mut slot = self.ui.lock().unwrap_or_else(|e| e.into_inner());
+        let (properties, messages) = match slot.as_deref() {
+            Some(old) if old.revision() == ui.revision() => return,
+            Some(old) => (
+                old.properties() != ui.properties(),
+                old.messages() != ui.messages(),
+            ),
+            None => (true, true),
+        };
+        *slot = Some(Arc::new(ui.clone()));
+        drop(slot);
+        if properties {
+            let _ = self.events.send(SessionEvent::Properties);
+        }
+        if messages {
+            let _ = self.events.send(SessionEvent::Messages);
         }
     }
 
@@ -719,6 +761,7 @@ pub struct SessionHandle {
     key: String,
     started: Instant,
     control: Sender<Control>,
+    events: std::sync::Mutex<Receiver<SessionEvent>>,
     stop: Arc<AtomicBool>,
     live: Arc<LiveStats>,
     thread: JoinHandle<SessionReport>,
@@ -750,6 +793,18 @@ impl SessionHandle {
     /// The device's channels, updated with [`SessionHandle::endpoints`].
     pub fn channels(&self) -> Arc<Vec<ChannelInfo>> {
         Arc::clone(&self.live.channels.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// The plugin's parameters and messages as of the last change (`None`
+    /// until `Initialize()` ran: the exports' lists then).
+    pub fn plugin_ui(&self) -> Option<Arc<PluginUi>> {
+        self.live.ui.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The events announced since the last call, oldest first.
+    pub fn events(&self) -> Vec<SessionEvent> {
+        let rx = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        rx.try_iter().collect()
     }
 
     /// Ask the session to finish its current frame, shut down and return.
@@ -787,6 +842,7 @@ pub fn spawn(
     opts: SessionOptions,
 ) -> std::io::Result<SessionHandle> {
     let stop = Arc::new(AtomicBool::new(false));
+    let (events_tx, events) = channel();
     let live = Arc::new(LiveStats {
         state: AtomicU8::new(SessionState::Starting as u8),
         frames: AtomicU64::new(0),
@@ -798,6 +854,8 @@ pub fn spawn(
         endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
         channels: std::sync::Mutex::new(Arc::new(Vec::new())),
         battery: std::sync::Mutex::new(None),
+        ui: std::sync::Mutex::new(None),
+        events: events_tx,
     });
     let key = device.key.clone();
     let started = Instant::now();
@@ -816,6 +874,7 @@ pub fn spawn(
         key,
         started,
         control,
+        events: std::sync::Mutex::new(events),
         stop,
         live,
         thread,
@@ -873,6 +932,10 @@ fn run(
         ]);
     }
     ctx.set_battery_warning_level(opts.battery_warning_level);
+    ctx.set_plugin_ui(PluginUi::new(
+        &meta.controllable_parameters,
+        &meta.device_messages,
+    ));
     if let Some(t) = &device.smbus {
         ctx.set_device_info([
             t.bus.descriptor().name.clone(),
@@ -1202,6 +1265,7 @@ fn drive(
         let dev = lock_device(shared);
         live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
         live.publish_battery(dev.battery());
+        live.publish_ui(dev.plugin_ui());
     }
     let mut last_seq = 0;
     let mut consecutive_timeouts = 0u32;
@@ -1351,6 +1415,7 @@ fn drive(
         live.hid_disconnected
             .store(dev.stats().disconnected, Ordering::Relaxed);
         live.publish_battery(dev.battery());
+        live.publish_ui(dev.plugin_ui());
         if let Some(d) = dev.first_write() {
             live.first_write_us
                 .store((d.as_micros() as u64).max(1), Ordering::Relaxed);

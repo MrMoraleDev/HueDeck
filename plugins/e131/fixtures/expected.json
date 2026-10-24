@@ -1,0 +1,47 @@
+{
+  "$comment": "E1.31 data packets worked out by hand from ANSI E1.31-2018 (not by running the plugin). Offsets: Root layer 0-37 (preamble size 0x0010, post-amble 0x0000, ACN packet identifier 'ASC-E1.17' + three 0x00, flags+length at 16, vector 0x00000004 at 18, CID at 22-37); Framing layer 38-114 (flags+length at 38, vector 0x00000002 at 40, source name 44-107 (64 bytes, null padded), priority 108, sync address 109-110, sequence 111, options 112, universe 113-114); DMP layer 115-125 (flags+length 115, vector 0x02 at 117, address/data type 0xA1 at 118, first property address 0x0000 at 119, address increment 0x0001 at 121, property value count at 123 = slots + 1, start code 0x00 at 125), DMX slots from 126. Flags+length = 0x7000 | (bytes from that field to the end of the packet). Packet length = 126 + slots. 'HueDeck' = 48 75 65 44 65 63 6B. All multi-byte fields big-endian. UDP port 5568.",
+  "port": 5568,
+  "cid_hex": "2b3c4d5e6f70418293a4b5c6d7e8f901",
+  "two_leds_universe_1": {
+    "$comment": "LED 0 #FF0000, LED 1 #00FF00, universe 1, start channel 1, priority 100 (0x64), first packet (sequence 0), options 0. 6 slots -> 132 bytes: root flags+length 132-16 = 116 = 0x074 -> 70 74; framing 132-38 = 94 = 0x05E -> 70 5E; DMP 132-115 = 17 = 0x011 -> 70 11; property value count 7.",
+    "parts": [
+      "00 10 00 00",
+      "41 53 43 2D 45 31 2E 31 37 00 00 00",
+      "70 74",
+      "00 00 00 04",
+      "2B 3C 4D 5E 6F 70 41 82 93 A4 B5 C6 D7 E8 F9 01",
+      "70 5E",
+      "00 00 00 02",
+      "48 75 65 44 65 63 6B 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+      "64",
+      "00 00",
+      "00",
+      "00",
+      "00 01",
+      "70 11",
+      "02",
+      "A1",
+      "00 00",
+      "00 01",
+      "00 07",
+      "00",
+      "FF 00 00 00 FF 00"
+    ]
+  },
+  "two_leds_terminated": {
+    "$comment": "Shutdown after that one frame: the same packet three times with options 0x40 (Stream_Terminated, §6.2.6) and sequence 1, 2, 3. Only byte 111 (sequence) and byte 112 (options) differ from the frame.",
+    "sequences": [1, 2, 3],
+    "options": 64
+  },
+  "split_172_from_channel_4": {
+    "$comment": "172 LEDs all #123456 from universe 1, start channel 4. Universe 1: slots 4..510 hold floor((513-4)/3) = 169 LEDs, so 3 + 507 = 510 slots (the first three are 0): 636 bytes, root 620 = 0x26C -> 72 6C, framing 598 = 0x256 -> 72 56, DMP 521 = 0x209 -> 72 09, count 511 = 0x01FF. Universe 2: the remaining 3 LEDs at slots 1..9: 135 bytes, root 119 = 0x077 -> 70 77, framing 97 = 0x061 -> 70 61, DMP 20 = 0x014 -> 70 14, count 10 = 0x000A.",
+    "packets": [
+      { "universe": 1, "length": 636, "root_fl": "72 6C", "framing_fl": "72 56", "dmp_fl": "72 09", "count": "01 FF", "leading_zero_slots": 3, "leds": 169 },
+      { "universe": 2, "length": 135, "root_fl": "70 77", "framing_fl": "70 61", "dmp_fl": "70 14", "count": "00 0A", "leading_zero_slots": 0, "leds": 3 }
+    ],
+    "pixel_hex": "12 34 56"
+  },
+  "full_universe": {
+    "$comment": "170 LEDs from channel 1 fill 510 slots of universe 1 (a 171st LED goes to universe 2): 636 bytes, the same lengths as universe 1 above."
+  }
+}

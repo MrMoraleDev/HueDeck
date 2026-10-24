@@ -266,6 +266,7 @@ fn replay(
             vid: d.vid,
             pid: d.pid,
             endpoints,
+            network: None,
         };
         let mut channel_components = std::collections::BTreeMap::new();
         for (name, array) in &d.channels {

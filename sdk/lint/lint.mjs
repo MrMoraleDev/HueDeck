@@ -119,6 +119,15 @@ export async function lintPlugin(dir) {
     try {
       const ns = await importPlugin(file);
       const reading = readExports(ns);
+      // Network plugins: the DiscoveryService constructor only sets fields, so it runs here.
+      if (typeof ns.DiscoveryService === "function") {
+        try {
+          const d = new ns.DiscoveryService();
+          reading.mdns = Array.isArray(d.MDns) ? d.MDns.map((t) => String(t).replace(/\.local\.?$/, "")) : [];
+        } catch (e) {
+          add("error", "exports", "discovery-service", `new DiscoveryService() throws: ${e?.message ?? e}`, where);
+        }
+      }
       if (file === entry || isPluginModule(reading)) modules.push({ where, reading });
     } catch (e) {
       if (file === entry) add("error", "exports", "load", `the module does not load: ${e?.name ?? "Error"}: ${e?.message ?? e}`, where);
@@ -352,6 +361,7 @@ function checkExportsAgainstManifest(readings, manifest, add) {
   const usb = devices.filter((c) => "vid" in c);
   const usages = devices.filter((c) => "hidUsage" in c);
   const smbus = devices.filter((c) => "smbus" in c);
+  const network = devices.filter((c) => "network" in c);
   const type = ex.Type === undefined ? "hid" : String(ex.Type).toLowerCase();
 
   // USB: VendorId / ProductId of every plugin module against the claims.
@@ -439,6 +449,25 @@ function checkExportsAgainstManifest(readings, manifest, add) {
   }
   if (!deepEqual(ex.ShutdownModes ?? [], manifest.shutdownModes ?? [])) {
     add("error", "manifest", "shutdown-modes-mismatch", `ShutdownModes() ${show(ex.ShutdownModes ?? [])} differs from shutdownModes ${show(manifest.shutdownModes ?? [])}`, "/shutdownModes");
+  }
+
+  // Network.
+  if (type === "network" && network.length === 0) {
+    add("error", "manifest", "network-claim", "Type() is network but the manifest has no network claim", "/devices");
+  }
+  if (network.length > 0 && type !== "network") {
+    add("error", "manifest", "network-claim", `the manifest has a network claim but Type() returns ${show(ex.Type)}`, "/devices");
+  }
+  for (const c of network) {
+    const mdns = Array.isArray(c.network?.mdns) ? [...c.network.mdns].sort() : [];
+    const browsed = [...(readings[0].mdns ?? [])].sort();
+    if (!deepEqual(mdns, browsed)) {
+      add("error", "manifest", "network-mismatch", `DiscoveryService MDns ${show(browsed)} (without .local.) differ from network.mdns ${show(mdns)}`, "/devices");
+    }
+    const perms = Array.isArray(manifest.permissions) ? manifest.permissions : [];
+    if (mdns.length > 0 && !perms.includes("mdns")) {
+      add("error", "manifest", "permission", "a plugin that browses mDNS needs the 'mdns' permission", "/permissions");
+    }
   }
 
   // Informational fields.

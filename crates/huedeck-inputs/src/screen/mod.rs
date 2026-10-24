@@ -15,10 +15,10 @@
 //! * On Windows, [`desktop`] opens DXGI Desktop Duplication of a display
 //!   (`dxgi.rs`). Frames stay in memory in this process; nothing is stored.
 
-pub mod meters;
-pub mod sample;
 #[cfg(windows)]
 mod dxgi;
+pub mod meters;
+pub mod sample;
 
 use crate::ZoneSnapshot;
 pub use meters::{HslWindow, Meter, MeterKind, Rect, RectOverride, VisionValue};
@@ -182,7 +182,7 @@ fn blank(settings: &ScreenSettings) -> ScreenSnapshot {
     ScreenSnapshot {
         zone: settings.zone.then(|| {
             let mut z = ZoneSnapshot::default();
-            for px in z.imagedata.chunks_exact_mut(4) {
+            for px in z.imagedata.as_chunks_mut::<4>().0 {
                 px[3] = 255;
             }
             z
@@ -382,7 +382,12 @@ mod tests {
             ..settings(Vec::new())
         };
         let started = Instant::now();
-        let snaps = collect(s, Box::new(|| Err("no display".into())), 2, Duration::from_secs(4));
+        let snaps = collect(
+            s,
+            Box::new(|| Err("no display".into())),
+            2,
+            Duration::from_secs(4),
+        );
         // Black after 2 s, then again each second for a restarted renderer.
         assert_eq!(snaps.len(), 2);
         assert!(started.elapsed() >= BLANK_AFTER + KEEPALIVE - Duration::from_millis(50));

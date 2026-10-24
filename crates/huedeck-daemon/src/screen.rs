@@ -15,7 +15,11 @@ use serde_json::{json, Map, Value};
 
 /// Start capture for `effect` when it reads the screen, pushing into `sink`;
 /// `None` when it does not, capture is off, or there is no renderer to feed.
-pub fn feed(cfg: &ScreenConfig, effect: Option<&EffectMeta>, sink: Option<EngineDataSink>) -> Option<ScreenInput> {
+pub fn feed(
+    cfg: &ScreenConfig,
+    effect: Option<&EffectMeta>,
+    sink: Option<EngineDataSink>,
+) -> Option<ScreenInput> {
     let settings = settings(cfg, effect?)?;
     let sink = sink?;
     if settings.meters.iter().any(|m| m.kind == MeterKind::Unsupported) {
@@ -106,7 +110,9 @@ const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 fn base64(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for c in bytes.chunks(3) {
-        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+        let n = (u32::from(c[0]) << 16)
+            | (u32::from(*c.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*c.get(2).unwrap_or(&0));
         for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
             out.push(if i <= c.len() {
                 char::from(B64[(n >> shift) as usize & 63])
@@ -192,7 +198,10 @@ mod tests {
         let img = z["imagedata"].as_str().unwrap();
         assert!(img.starts_with("base64:AAAA"));
         assert_eq!(img.len(), 7 + 64_000_usize.div_ceil(3) * 4);
-        assert_eq!(data["vision"], json!({"health": 0.123, "tint": [210.0, 50.0, 50.0]}));
+        assert_eq!(
+            data["vision"],
+            json!({"health": 0.123, "tint": [210.0, 50.0, 50.0]})
+        );
         // Under the renderer's 512 KiB control-line limit with room to spare.
         assert!(serde_json::to_string(&data).unwrap().len() < 100_000);
         let only_meters = ScreenSnapshot {

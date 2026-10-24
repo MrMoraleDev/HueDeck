@@ -239,9 +239,15 @@ mod tests {
         assert!(c.smbus.enabled, "SMBus is on unless turned off");
         let c: Config = toml::from_str("[smbus]\nenabled = false\n").unwrap();
         assert!(!c.smbus.enabled);
-        assert_eq!((c.screen.enabled, c.screen.fps, c.screen.display), (true, 30, None));
+        assert_eq!(
+            (c.screen.enabled, c.screen.fps, c.screen.display),
+            (true, 30, None)
+        );
         let c: Config = toml::from_str("[screen]\nfps = 60\ndisplay = 'DISPLAY2'\n").unwrap();
-        assert_eq!((c.screen.fps, c.screen.display.as_deref()), (60, Some("DISPLAY2")));
+        assert_eq!(
+            (c.screen.fps, c.screen.display.as_deref()),
+            (60, Some("DISPLAY2"))
+        );
         assert!(
             toml::from_str::<Config>("[api]\nprot = 1\n").is_err(),
             "typos are reported"

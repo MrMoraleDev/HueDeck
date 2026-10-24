@@ -260,13 +260,22 @@ mod tests {
     #[test]
     fn a_region_of_the_matching_colour_reads_one() {
         let data = bar(200);
-        assert_eq!(eval(&meter(MeterKind::Area, BAR, red()), &data), VisionValue::Number(1.0));
-        assert_eq!(eval(&meter(MeterKind::Linear, BAR, red()), &data), VisionValue::Number(1.0));
+        assert_eq!(
+            eval(&meter(MeterKind::Area, BAR, red()), &data),
+            VisionValue::Number(1.0)
+        );
+        assert_eq!(
+            eval(&meter(MeterKind::Linear, BAR, red()), &data),
+            VisionValue::Number(1.0)
+        );
         let off = HslWindow {
             h: Some((100.0, 140.0)),
             ..red()
         };
-        assert_eq!(eval(&meter(MeterKind::Area, BAR, off), &data), VisionValue::Number(0.0));
+        assert_eq!(
+            eval(&meter(MeterKind::Area, BAR, off), &data),
+            VisionValue::Number(0.0)
+        );
     }
 
     #[test]
@@ -317,12 +326,18 @@ mod tests {
             width: 1.0,
             height: Some(1.0),
         };
-        assert_eq!(eval(&meter(MeterKind::Area, all, red()), &data), VisionValue::Number(1.0));
+        assert_eq!(
+            eval(&meter(MeterKind::Area, all, red()), &data),
+            VisionValue::Number(1.0)
+        );
         let only_350 = HslWindow {
             h: Some((345.0, 355.0)),
             ..HslWindow::default()
         };
-        assert_eq!(eval(&meter(MeterKind::Area, all, only_350), &data), VisionValue::Number(0.5));
+        assert_eq!(
+            eval(&meter(MeterKind::Area, all, only_350), &data),
+            VisionValue::Number(0.5)
+        );
     }
 
     #[test]

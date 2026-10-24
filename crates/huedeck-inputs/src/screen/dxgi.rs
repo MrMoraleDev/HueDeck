@@ -51,7 +51,10 @@ fn outputs() -> windows::core::Result<Vec<(IDXGIAdapter1, IDXGIOutput, DisplayIn
         let mut i = 0;
         while let Ok(adapter) = factory.EnumAdapters1(i) {
             i += 1;
-            let adapter_name = adapter.GetDesc1().map(|d| wide(&d.Description)).unwrap_or_default();
+            let adapter_name = adapter
+                .GetDesc1()
+                .map(|d| wide(&d.Description))
+                .unwrap_or_default();
             let mut j = 0;
             while let Ok(output) = adapter.EnumOutputs(j) {
                 j += 1;
@@ -145,7 +148,9 @@ impl Duplication {
                 Some(&mut context),
             )
             .map_err(|e| format!("creating a D3D11 device on {}: {e}", info.adapter))?;
-            let (device, context) = device.zip(context).ok_or("D3D11CreateDevice returned no device")?;
+            let (device, context) = device
+                .zip(context)
+                .ok_or("D3D11CreateDevice returned no device")?;
             let output1: IDXGIOutput1 = output.cast().map_err(|e| format!("IDXGIOutput1: {e}"))?;
             let dupl = output1
                 .DuplicateOutput(&device)
@@ -240,8 +245,11 @@ impl FrameSource for Duplication {
         drop(acquired);
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         // SAFETY: a staging texture with CPU read access, subresource 0.
-        unsafe { self.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }
-            .map_err(|e| format!("Map: {e}"))?;
+        unsafe {
+            self.context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+        }
+        .map_err(|e| format!("Map: {e}"))?;
         let pitch = mapped.RowPitch as usize;
         // SAFETY: a mapped 2D staging texture spans `RowPitch * Height` bytes
         // from `pData` until `Unmap` below; the slice does not outlive it.
@@ -302,6 +310,9 @@ mod tests {
                 .expect("capture");
             frames += usize::from(got);
         }
-        println!("{frames} new images of {size:?}; reduction {:?} per image", cpu / frames.max(1) as u32);
+        println!(
+            "{frames} new images of {size:?}; reduction {:?} per image",
+            cpu / frames.max(1) as u32
+        );
     }
 }

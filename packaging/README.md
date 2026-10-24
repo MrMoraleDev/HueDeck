@@ -6,13 +6,14 @@ Distribution artifacts for Lightloom. Release builds are produced by
 today). Nothing here is signed yet; Authenticode via SignPath OSS is the planned step
 for Windows (see the SIGNING block in the release workflow).
 
-Only `systemd/`, `udev/`, `sysusers.d/` and `wix/lightloom.ico` (the app icon, rendered from
+Only `systemd/`, `udev/`, `sysusers.d/`, `msix-identity/` and `wix/lightloom.ico` (the app icon, rendered from
 `docs/brand/lightloom-icon.svg`) are real files at the moment; everything else is
 a placeholder with the file names already decided so later milestones (M4 Windows
 packaging, M7 Linux packaging) drop files into known places.
 
 | Directory   | Target               | Planned files                                                                 | Milestone |
 |-------------|----------------------|-------------------------------------------------------------------------------|-----------|
+| `msix-identity/` | Windows identity package (sparse MSIX) | `AppxManifest.xml.in`, `lightloomd.exe.manifest.in`, `build.ps1`, `README.md` (present; never registered) | M6 |
 | `wix/`      | Windows MSI (WiX v4+) | `lightloom.wxs`, `Product.wxs` fragments, `License.rtf`, `lightloom.ico` (present), `build.ps1` | M4 |
 | `winget/`   | winget manifest       | `manifests/h/Lightloom/Lightloom/<version>/Lightloom.Lightloom.yaml`, `Lightloom.Lightloom.installer.yaml`, `Lightloom.Lightloom.locale.en-US.yaml` | M4 |
 | `systemd/`  | Linux user service    | `lightloomd.service` (present)                                                  | M7 |

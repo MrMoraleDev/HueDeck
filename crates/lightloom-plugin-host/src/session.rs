@@ -36,6 +36,9 @@
 //! every write recorded and never sent, or a save with the SMBus
 //! `SmbusDeniedRegisters()` writable for that one call.
 //!
+//! A LampArray of the OS backend ([`SessionDevice::lamparray`]) runs the
+//! built-in session of [`crate::lamparray`] instead of a plugin.
+//!
 //! An SMBus device ([`SessionDevice::smbus`]) has no HID collections: steps 3
 //! and 4 are skipped, `bus` is the fixed-address bus of its address (through a
 //! [`GuardedBus`]), a `TransactionLock` still held when `Render()` returns is
@@ -97,6 +100,9 @@ pub struct SessionDevice {
     pub endpoints: Vec<HidEndpointInfo>,
     /// An SMBus device: its bus and address.
     pub smbus: Option<SmbusTarget>,
+    /// A LampArray of the OS backend, driven by the built-in session
+    /// ([`crate::lamparray`]) instead of a plugin.
+    pub lamparray: Option<crate::lamparray::LampArrayTarget>,
     /// A network device: the controller a network service announced.
     pub network: Option<NetworkTarget>,
 }
@@ -150,6 +156,7 @@ impl SessionDevice {
             pid,
             endpoints,
             smbus: None,
+            lamparray: None,
             network: None,
         }
     }
@@ -164,6 +171,7 @@ impl SessionDevice {
             pid: d.pci.device,
             endpoints: Vec::new(),
             smbus: Some(SmbusTarget { bus, addr }),
+            lamparray: None,
             network: None,
         }
     }
@@ -177,6 +185,7 @@ impl SessionDevice {
             pid: 0,
             endpoints: Vec::new(),
             smbus: None,
+            lamparray: None,
             network: Some(target),
         }
     }
@@ -499,7 +508,7 @@ pub struct SessionReport {
 }
 
 impl SessionReport {
-    fn new(device: &SessionDevice, plugin: &CatalogEntry) -> Self {
+    pub(crate) fn new(device: &SessionDevice, plugin: &CatalogEntry) -> Self {
         Self {
             device: device.key.clone(),
             plugin: plugin.meta.source_path.clone(),
@@ -540,7 +549,7 @@ impl SessionReport {
         }
     }
 
-    fn fail(&mut self, phase: impl Into<String>, error: JsFailure) {
+    pub(crate) fn fail(&mut self, phase: impl Into<String>, error: JsFailure) {
         self.failures.push(PhaseFailure {
             phase: phase.into(),
             error,
@@ -583,15 +592,17 @@ pub enum SessionState {
 }
 
 #[derive(Debug)]
-struct LiveStats {
+pub(crate) struct LiveStats {
     state: AtomicU8,
-    frames: AtomicU64,
+    pub(crate) frames: AtomicU64,
     render_errors: AtomicU64,
-    io_errors: AtomicU64,
-    hid_disconnects: AtomicU64,
-    hid_disconnected: AtomicBool,
+    pub(crate) io_errors: AtomicU64,
+    pub(crate) hid_disconnects: AtomicU64,
+    pub(crate) hid_disconnected: AtomicBool,
+    /// The device does not take writes now (a LampArray Windows gives to another app).
+    pub(crate) paused: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
-    first_write_us: AtomicU64,
+    pub(crate) first_write_us: AtomicU64,
     /// The device and its children as canvas endpoints (empty until `Initialize()` ran).
     endpoints: std::sync::Mutex<Arc<Vec<EndpointView>>>,
     /// The device's channels (empty until `Initialize()` ran).
@@ -636,10 +647,13 @@ pub struct LiveSnapshot {
     pub first_write_ms: Option<f64>,
     /// What the plugin reports through the `battery` feature (`None`: no battery).
     pub battery: Option<BatteryStatus>,
+    /// The device does not take writes now: a LampArray that Windows gives
+    /// to another app ([`crate::lamparray`]).
+    pub paused: bool,
 }
 
 impl LiveStats {
-    fn set_state(&self, s: SessionState) {
+    pub(crate) fn set_state(&self, s: SessionState) {
         self.state.store(s as u8, Ordering::Release);
     }
 
@@ -648,7 +662,7 @@ impl LiveStats {
     }
 
     /// Replace the endpoint views and channel list when they changed.
-    fn publish_endpoints(&self, (views, channels): (Vec<EndpointView>, Vec<ChannelInfo>)) {
+    pub(crate) fn publish_endpoints(&self, (views, channels): (Vec<EndpointView>, Vec<ChannelInfo>)) {
         let mut slot = self.endpoints.lock().unwrap_or_else(|e| e.into_inner());
         if **slot != views {
             *slot = Arc::new(views);
@@ -709,6 +723,7 @@ impl LiveStats {
                 us => Some(us as f64 / 1000.0),
             },
             battery: *self.battery.lock().unwrap_or_else(|e| e.into_inner()),
+            paused: self.paused.load(Ordering::Relaxed),
         }
     }
 }
@@ -850,6 +865,7 @@ pub fn spawn(
         io_errors: AtomicU64::new(0),
         hid_disconnects: AtomicU64::new(0),
         hid_disconnected: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
         endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
         channels: std::sync::Mutex::new(Arc::new(Vec::new())),
@@ -865,7 +881,11 @@ pub fn spawn(
         .name(format!("lightloom-plugin {key}"))
         .stack_size(PLUGIN_THREAD_STACK)
         .spawn(move || {
-            let report = run(device, plugin, backend, frames, opts, &stop2, &live2, &controls);
+            let report = if device.lamparray.is_some() {
+                crate::lamparray::run(device, plugin, frames, opts, &stop2, &live2, &controls)
+            } else {
+                run(device, plugin, backend, frames, opts, &stop2, &live2, &controls)
+            };
             drop(stop2);
             live2.set_state(SessionState::Done);
             report

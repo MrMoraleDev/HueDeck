@@ -4,7 +4,8 @@
 //! A LocalSystem Windows service, registered once by `huedeck-setup --smbus`
 //! only when the user opts in. It talks to the PawnIO driver with raw IOCTLs
 //! ([`pawnio`]), runs the signed `SmbusPIIX4` module (hash-pinned, [`pins`])
-//! on one handle per PIIX4 port ([`piix4`]), and serves the closed operation
+//! on one handle per PIIX4 port ([`piix4`]) on AMD boards, or `SmbusI801`
+//! on the Intel PCH SMBus ([`i801`]; the two share [`chipset`]), and serves the closed operation
 //! set of `huedeck_protocol::broker` over a local named pipe ([`pipe`]) to the
 //! unprivileged `huedeck` / `huedeckd`. GPU I2C (NvAPI) does not go through
 //! here: it runs in the user process.
@@ -28,7 +29,9 @@
 #![deny(unsafe_op_in_unsafe_fn, clippy::undocumented_unsafe_blocks)]
 
 pub mod boot;
+pub mod chipset;
 pub mod detect;
+pub mod i801;
 pub mod mutex;
 pub mod pawnio;
 pub mod piix4;

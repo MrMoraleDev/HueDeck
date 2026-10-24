@@ -1608,6 +1608,14 @@ fn print_report(r: &RunReport) {
 mod tests {
     use super::*;
 
+    /// The bench tests run one at a time: each gives Initialize a few seconds,
+    /// which several QuickJS sessions starting at once on a loaded machine miss.
+    static BENCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn one_bench_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        BENCH.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn colors_parse() {
         assert_eq!(parse_color("#ff0000"), Ok(Rgb::new(255, 0, 0)));
@@ -1654,6 +1662,7 @@ mod tests {
 
     #[test]
     fn bench_mock_runs_the_first_party_plugin_end_to_end() {
+        let _bench = one_bench_at_a_time();
         let args = RunArgs {
             devices: Vec::new(),
             catalog: CatalogArgs {
@@ -1713,6 +1722,7 @@ mod tests {
 
     #[test]
     fn bench_mock_smbus_runs_msi_gpu_end_to_end() {
+        let _bench = one_bench_at_a_time();
         let out = std::env::temp_dir().join(format!("huedeck-bench-smbus-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
@@ -1741,7 +1751,30 @@ mod tests {
     }
 
     #[test]
+    fn bench_mock_smbus_offers_amd_gpu_plugins_an_amd_gpu_bus() {
+        let _bench = one_bench_at_a_time();
+        let out = std::env::temp_dir().join(format!("huedeck-bench-amdgpu-{}.json", std::process::id()));
+        let mode = Mode::Bench {
+            fps: 60.0,
+            // Long enough for Initialize on a loaded CI or dev machine.
+            seconds: 3.0,
+            mock: None,
+            mock_smbus: Some("sapphire-nitro-glow".into()),
+        };
+        assert_eq!(run(mode, &mock_args(Some(out.clone()))).unwrap(), Outcome::Clean);
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let s = &report["sessions"][0];
+        assert_eq!(s["name"], "Sapphire Nitro Glow");
+        assert_eq!(s["device"], "smbus:1002:7340:1da2:e423@pci01:28");
+        assert!(s["smbus"]["writes"].as_u64().unwrap() >= 5, "{s}");
+        assert_eq!(s["smbus"]["errors"], 0, "{s}");
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn bench_mock_smbus_runs_crucial_end_to_end() {
+        let _bench = one_bench_at_a_time();
         let out = std::env::temp_dir().join(format!("huedeck-bench-ram-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,

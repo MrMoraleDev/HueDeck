@@ -35,6 +35,7 @@ fn start(opts: SessionOptions) -> (SessionHandle, Arc<MockHid>, Arc<FrameStore>)
     frames.publish(Frame::solid(CANVAS_WIDTH, CANVAS_HEIGHT, Rgb::new(0, 80, 160)));
     let handle = session::spawn(
         SessionDevice {
+            usb: None,
             smbus: None,
             key: "1234:2222:B".into(),
             vid: 0x1234,

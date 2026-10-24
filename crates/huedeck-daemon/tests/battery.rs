@@ -118,6 +118,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
         hardware: HardwareMode::Fixed {
             backend,
             devices: vec![SessionDevice {
+                usb: None,
                 smbus: None,
                 key: KEY.into(),
                 vid: 0x1234,

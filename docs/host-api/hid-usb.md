@@ -344,3 +344,48 @@ assumptions above (interface -1 for MI-less paths, 0-based collection index).
 - **Linux (M7)**: hidraw tuples must follow the same rules: collection 0 for a single-TLC
   interface, otherwise the 1-based TLC index in report-descriptor order (`huedeck-hid-desc`);
   interface 0 for non-composite USB, -1 for Bluetooth.
+
+## Raw USB in HueDeck (`rawusb`, `hybrid`, `setProtocol`)
+
+Implemented on `feature/rawusb` (WP-USB). The SignalRGB contract of §2 and §4, with the open
+questions of the critic pass settled as follows.
+
+- **Transport.** Windows: WinUSB through `nusb` (`huedeck_hal_windows::WinUsbBackend`). HueDeck
+  ships no INF and never installs, generates or swaps a driver (`docs/research/drivers.md` §2.4).
+  Only interfaces whose driver is `WinUSB` are claimed; an interface bound to anything else (HID,
+  audio, mass storage, a vendor driver) is never touched. A device with no WinUSB interface is
+  listed as **needs-driver** in the device list, with the reason (`driverProblem`) and a link to
+  [`docs/hardware/winusb.md`](../hardware/winusb.md) (`helpUrl`); its `rawusb` plugin does not run.
+- **Devices.** USB devices are enumerated next to the HID collections and joined to them by USB
+  parent (the HID group's parent instance id is the USB device's instance id). A USB device with
+  no HID collection becomes a device of its own when a `rawusb` plugin owns its VID:PID, keyed
+  `vid:pid:<instance-id serial>` like HID groups. Hotplug also watches the USB device interface
+  class, so such devices arrive and leave like HID ones.
+- **Sessions.** `Type() == "rawusb"`: no `Validate`, no HID collection; the USB device opens
+  before `Initialize` (failure faults the session: "needs WinUSB driver: …"). `"hybrid"`: the
+  validated HID collection opens as for HID plugins, then the USB device; without it HID I/O
+  goes on and transfers fail (a session note says why). `setProtocol("hybrid")` opens the USB
+  side of any session whose device has one, `setProtocol("hid")` closes it (a `rawusb` plugin
+  ignores both).
+- **`device.bulk_transfer(endpoint, data, length[, timeout])`.** Bit 7 of `endpoint` decides.
+  IN (`>= 0x80`): `length` is the buffer size; returns the bytes received (`getLastReadSize()` of
+  them), `[]` on timeout or failure. OUT: sends `data` zero-padded or cut to `length`; returns the
+  bytes sent, `-1` on failure. Interrupt endpoints work the same way. The interface owning the
+  endpoint is claimed on first use.
+- **`device.control_transfer(bmRequestType, bRequest, wValue, wIndex, data, length, timeout)`.**
+  IN (`bmRequestType & 0x80`): returns the data stage, `[]` on timeout or failure. OUT: returns
+  the bytes sent or `-1`. The request goes through the addressed interface (recipient interface:
+  `wIndex` low byte; endpoint: the endpoint's interface) or, for device requests, the first
+  WinUSB interface. Standard OUT requests (`SET_ADDRESS`, `SET_CONFIGURATION`, `SET_FEATURE`, …)
+  are refused: they change the device's USB state, not its lighting.
+- **Timeouts.** Default 1000 ms when the argument is missing or negative, capped at 5000 ms (as
+  HID reads) so a stop request still leaves time for `Shutdown()`. Nothing throws: failures are
+  counted (`usb_write_errors`, `usb_read_errors`; IN timeouts in `usb_timeouts`, not errors) and
+  logged once per kind.
+- **Dry run.** OUT transfers are recorded in the session's I/O log (`BulkOut`: `[endpoint, data…]`,
+  `ControlOut`: the 8-byte setup packet then the data) and reported as sent; IN transfers still
+  reach the device.
+- **Tests.** `huedeck_hal::mock::MockUsb` scripts bulk IN data per endpoint and control IN
+  answers, times out IN transfers without data, refuses foreign interfaces and records every
+  transfer (`UsbClaim`, `BulkOut`, `BulkIn`, `ControlOut`, `ControlIn`). Session tests:
+  `crates/huedeck-plugin-host/tests/session_rawusb.rs` with `testdata/device/{rawusb,hybrid}.js`.

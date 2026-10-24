@@ -13,6 +13,12 @@
 //! I/O failures never throw into plugin code (hid-usb.md): writes return `-1`,
 //! reads return a zero-filled buffer with `getLastReadSize() == 0`. Failures
 //! are counted in [`IoStats`] and logged once per operation kind.
+//!
+//! `rawusb` and `hybrid` plugins (and HID plugins after
+//! `device.setProtocol("hybrid")`) also reach the device's raw USB side
+//! ([`DeviceContext::set_usb`]): bulk and control transfers through the
+//! interfaces WinUSB owns. OUT transfers return the bytes sent or `-1`, IN
+//! transfers the bytes received, empty on timeout or failure.
 
 use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::children::{ChildSetup, Children};
@@ -23,6 +29,10 @@ use huedeck_engine::{
     Placement, Rgb, SamplerConfig,
 };
 use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportSpec};
+use huedeck_hal::usb::{
+    UsbBackend, UsbDeviceInfo, UsbHandle, DEFAULT_TIMEOUT_MS, ENDPOINT_IN, MAX_TIMEOUT_MS,
+};
+use huedeck_hal::{HalError, HalResult};
 use rquickjs::{Ctx, Function, Object};
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -97,6 +107,61 @@ pub enum IoKind {
     GetInput,
     /// Interrupt IN read (`device.read`).
     Read,
+    /// Raw USB bulk OUT (`bytes` = `[endpoint, data…]`).
+    BulkOut,
+    /// Raw USB bulk IN (`bytes` = `[endpoint, data received…]`).
+    BulkIn,
+    /// Raw USB control OUT (`bytes` = the 8-byte setup packet, then the data).
+    ControlOut,
+    /// Raw USB control IN (`bytes` = the setup packet, then the data received).
+    ControlIn,
+}
+
+/// Which transport `device.*` I/O uses: the plugin's `Type()` at start,
+/// `device.setProtocol(...)` later.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Protocol {
+    /// HID reports only.
+    #[default]
+    Hid,
+    /// Raw USB transfers only (no HID endpoint).
+    RawUsb,
+    /// HID reports and raw USB transfers.
+    Hybrid,
+}
+
+/// A control transfer's setup fields (`wLength` comes from the data).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlSetup {
+    /// `bmRequestType`.
+    pub request_type: u8,
+    /// `bRequest`.
+    pub request: u8,
+    /// `wValue`.
+    pub value: u16,
+    /// `wIndex`.
+    pub index: u16,
+}
+
+impl ControlSetup {
+    /// The setup packet (little-endian, `wLength` = `length`) followed by `data`.
+    pub fn packet(&self, length: usize, data: &[u8]) -> Vec<u8> {
+        let length = u16::try_from(length).unwrap_or(u16::MAX);
+        let mut out = vec![self.request_type, self.request];
+        out.extend_from_slice(&self.value.to_le_bytes());
+        out.extend_from_slice(&self.index.to_le_bytes());
+        out.extend_from_slice(&length.to_le_bytes());
+        out.extend_from_slice(data);
+        out
+    }
+}
+
+/// The raw USB side of a device.
+struct UsbSide {
+    backend: Arc<dyn UsbBackend>,
+    info: UsbDeviceInfo,
+    handle: Option<Box<dyn UsbHandle>>,
 }
 
 /// One recorded I/O operation (payload includes the report id byte).
@@ -131,6 +196,16 @@ pub struct IoStats {
     pub read_errors: u64,
     /// Input reads that timed out without data.
     pub read_timeouts: u64,
+    /// Successful raw USB OUT transfers (bulk and control).
+    pub usb_writes: u64,
+    /// Failed raw USB OUT transfers (timeouts included).
+    pub usb_write_errors: u64,
+    /// Successful raw USB IN transfers.
+    pub usb_reads: u64,
+    /// Failed raw USB IN transfers.
+    pub usb_read_errors: u64,
+    /// Raw USB IN transfers that timed out without data.
+    pub usb_timeouts: u64,
     /// Calls that needed an open endpoint while none was open.
     pub no_endpoint: u64,
     /// Failed operations (also counted above) whose device is gone: unplugged,
@@ -143,9 +218,11 @@ pub struct IoStats {
 }
 
 impl IoStats {
-    /// Failed HID operations of any kind.
+    /// Failed HID and raw USB operations of any kind.
     pub fn errors(&self) -> u64 {
         self.write_errors
+            + self.usb_write_errors
+            + self.usb_read_errors
             + self.feature_send_errors
             + self.feature_get_errors
             + self.read_errors
@@ -227,6 +304,10 @@ pub struct DeviceContext {
     alert: Option<Rgb>,
     /// The alert colour at the current frame's pulse phase.
     alert_now: Option<[u8; 3]>,
+    /// The raw USB side (rawusb / hybrid devices).
+    usb: Option<UsbSide>,
+    /// Transport of `device.*` I/O.
+    protocol: Protocol,
 }
 
 impl std::fmt::Debug for DeviceContext {
@@ -257,6 +338,25 @@ fn clamp_len(len: i32) -> usize {
 
 fn to_bytes(values: &[i32]) -> Vec<u8> {
     values.iter().take(MAX_REPORT_LEN).map(|&v| v as u8).collect()
+}
+
+/// A plugin's transfer timeout: [`DEFAULT_TIMEOUT_MS`] when negative, at most [`MAX_TIMEOUT_MS`].
+fn usb_timeout(ms: i32) -> u32 {
+    u32::try_from(ms).map_or(DEFAULT_TIMEOUT_MS, |t| t.min(MAX_TIMEOUT_MS))
+}
+
+/// `[bmRequestType, bRequest, wValue, wIndex, timeout]` from the JS host.
+fn control_args(args: &[i32]) -> (ControlSetup, u32) {
+    let at = |i: usize| args.get(i).copied().unwrap_or(0);
+    (
+        ControlSetup {
+            request_type: at(0) as u8,
+            request: at(1) as u8,
+            value: at(2) as u16,
+            index: at(3) as u16,
+        },
+        usb_timeout(args.get(4).copied().unwrap_or(-1)),
+    )
 }
 
 fn pause_duration(ms: f64) -> Duration {
@@ -329,6 +429,8 @@ impl DeviceContext {
             battery_warning_level: DEFAULT_WARNING_LEVEL,
             alert: None,
             alert_now: None,
+            usb: None,
+            protocol: Protocol::Hid,
         };
         ctx.update_factor();
         ctx
@@ -386,10 +488,11 @@ impl DeviceContext {
         self.validated = indices;
     }
 
-    /// Close the open collection.
+    /// Close the open collection and the raw USB handle.
     pub fn close(&mut self) {
         self.handle = None;
         self.active = None;
+        self.close_usb();
     }
 
     /// Feature reports the open collection's report descriptor declares
@@ -1228,6 +1331,299 @@ impl DeviceContext {
         report_fields_json(tlc).to_string()
     }
 
+    // ------------------------------------------------------------------ raw USB I/O
+
+    /// The raw USB side of the device (its WinUSB-reachable interfaces); the
+    /// handle opens with [`DeviceContext::open_usb`].
+    pub fn set_usb(&mut self, backend: Arc<dyn UsbBackend>, info: UsbDeviceInfo) {
+        self.usb = Some(UsbSide {
+            backend,
+            info,
+            handle: None,
+        });
+    }
+
+    /// The raw USB device, if the device has one.
+    pub fn usb_info(&self) -> Option<&UsbDeviceInfo> {
+        self.usb.as_ref().map(|u| &u.info)
+    }
+
+    /// The transport `device.*` I/O uses now.
+    pub fn protocol(&self) -> Protocol {
+        self.protocol
+    }
+
+    /// The transport the plugin's `Type()` asks for (before `Initialize`).
+    pub fn set_protocol_kind(&mut self, protocol: Protocol) {
+        self.protocol = protocol;
+    }
+
+    /// Whether the raw USB handle is open.
+    pub fn usb_open(&self) -> bool {
+        self.usb.as_ref().is_some_and(|u| u.handle.is_some())
+    }
+
+    /// Open the raw USB device (claims nothing: transfers claim the WinUSB
+    /// interface they need). [`HalError::NeedsDriver`] when Windows bound no
+    /// user-mode driver to it.
+    pub fn open_usb(&mut self) -> HalResult<()> {
+        let usb = self
+            .usb
+            .as_mut()
+            .ok_or_else(|| HalError::NotFound("this device has no raw USB side".into()))?;
+        if usb.handle.is_some() {
+            return Ok(());
+        }
+        if let Some(problem) = usb.info.driver_problem() {
+            return Err(HalError::NeedsDriver(problem));
+        }
+        let handle = usb.backend.open(&usb.info.path)?;
+        // Keep what the backend learned at open time (endpoint lists).
+        usb.info = handle.info().clone();
+        usb.handle = Some(handle);
+        Ok(())
+    }
+
+    /// Close the raw USB handle (its interfaces are released).
+    pub fn close_usb(&mut self) {
+        if let Some(u) = self.usb.as_mut() {
+            u.handle = None;
+        }
+    }
+
+    /// `device.setProtocol(name)`: `"hid"` closes the raw USB handle of a
+    /// hybrid session, `"hybrid"` opens it (SignalRGB semantics: NZXT Kraken
+    /// LCD streaming). `false` when the switch did not happen.
+    pub fn set_protocol(&mut self, name: &str) -> bool {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "hid" => match self.protocol {
+                Protocol::RawUsb => {
+                    self.log_once("setProtocol(\"hid\") ignored: a rawusb plugin has no HID endpoint".into());
+                    false
+                }
+                _ => {
+                    self.close_usb();
+                    self.protocol = Protocol::Hid;
+                    true
+                }
+            },
+            "hybrid" => {
+                if self.protocol == Protocol::RawUsb {
+                    self.log_once(
+                        "setProtocol(\"hybrid\") ignored: a rawusb plugin has no HID endpoint".into(),
+                    );
+                    return false;
+                }
+                if self.usb.is_none() {
+                    self.log_once(
+                        "setProtocol(\"hybrid\"): this device has no raw USB side; bulk/control transfers fail"
+                            .into(),
+                    );
+                    return false;
+                }
+                self.protocol = Protocol::Hybrid;
+                match self.open_usb() {
+                    Ok(()) => true,
+                    Err(e) => {
+                        self.fail_usb("setProtocol", &e);
+                        false
+                    }
+                }
+            }
+            other => {
+                self.log_once(format!(
+                    "setProtocol(\"{other}\"): unknown protocol (hid or hybrid)"
+                ));
+                false
+            }
+        }
+    }
+
+    fn fail_usb(&mut self, key: &'static str, err: &HalError) {
+        if matches!(err, HalError::Disconnected) {
+            self.stats.disconnects += 1;
+            self.stats.disconnected = true;
+        }
+        self.stats.last_error = Some(format!("{key}: {err}"));
+        let text = match err {
+            HalError::NeedsDriver(problem) => format!("USB {key}: {problem}"),
+            _ => format!("USB {key} failed: {err} (further failures are counted, not logged)"),
+        };
+        self.warn_once(key, &text);
+    }
+
+    /// The open raw USB handle, or the reason there is none (counted and logged once).
+    fn usb_handle(&mut self, key: &'static str) -> Option<&mut Box<dyn UsbHandle>> {
+        if self.protocol == Protocol::Hid {
+            self.stats.no_endpoint += 1;
+            self.stats.last_error = Some(format!("{key}: no raw USB session"));
+            self.warn_once(
+                "no-usb",
+                &format!("device.{key} needs Type() \"rawusb\"/\"hybrid\" or device.setProtocol(\"hybrid\")"),
+            );
+            return None;
+        }
+        if !self.usb_open() {
+            self.stats.no_endpoint += 1;
+            let why = self
+                .usb_info()
+                .and_then(UsbDeviceInfo::driver_problem)
+                .unwrap_or_else(|| "the raw USB device is not open".into());
+            self.stats.last_error = Some(format!("{key}: {why}"));
+            self.warn_once("no-usb", &format!("device.{key}: {why}"));
+            return None;
+        }
+        self.usb.as_mut().and_then(|u| u.handle.as_mut())
+    }
+
+    /// `device.bulk_transfer(endpoint < 0x80, data, len[, timeout])`: bytes sent, or `-1`.
+    pub fn bulk_out(&mut self, endpoint: u8, data: &[u8], timeout_ms: u32) -> i32 {
+        let mut bytes = vec![endpoint & !ENDPOINT_IN];
+        bytes.extend_from_slice(data);
+        if self.mode == WriteMode::DryRun {
+            self.record(IoKind::BulkOut, &bytes, true);
+            self.stats.usb_writes += 1;
+            self.mark_write(None);
+            return data.len() as i32;
+        }
+        let Some(handle) = self.usb_handle("bulk_transfer") else {
+            return -1;
+        };
+        let started = Instant::now();
+        let mut buf = data.to_vec();
+        match handle.bulk_transfer(endpoint & !ENDPOINT_IN, &mut buf, timeout_ms) {
+            Ok(n) => {
+                self.stats.usb_writes += 1;
+                self.stats.disconnected = false;
+                self.mark_write(Some(started));
+                n as i32
+            }
+            Err(e) => {
+                self.stats.usb_write_errors += 1;
+                self.fail_usb("bulk_transfer", &e);
+                -1
+            }
+        }
+    }
+
+    /// `device.bulk_transfer(endpoint >= 0x80, buffer, len[, timeout])`: the
+    /// bytes received (`getLastReadSize()` of them); empty on timeout or failure.
+    pub fn bulk_in(&mut self, endpoint: u8, len: usize, timeout_ms: u32) -> Vec<u8> {
+        self.last_read_size = 0;
+        if len == 0 {
+            return Vec::new();
+        }
+        let Some(handle) = self.usb_handle("bulk_transfer") else {
+            return Vec::new();
+        };
+        let mut buf = vec![0u8; len];
+        let result = handle.bulk_transfer(endpoint | ENDPOINT_IN, &mut buf, timeout_ms);
+        self.usb_read_result("bulk_transfer", result, buf, |n, buf| {
+            let mut bytes = vec![endpoint | ENDPOINT_IN];
+            bytes.extend_from_slice(&buf[..n]);
+            (IoKind::BulkIn, bytes)
+        })
+    }
+
+    /// `device.control_transfer(bmRequestType without 0x80, …)`: bytes sent, or `-1`.
+    /// Standard requests (`SET_ADDRESS`, `SET_CONFIGURATION`, `SET_FEATURE`, …)
+    /// change the device's USB state, not its lighting: refused.
+    pub fn control_out(&mut self, setup: ControlSetup, data: &[u8], timeout_ms: u32) -> i32 {
+        let bytes = setup.packet(data.len(), data);
+        if setup.request_type & 0x60 == 0 {
+            self.stats.usb_write_errors += 1;
+            self.stats.last_error = Some("control_transfer: standard OUT request refused".into());
+            self.log_once(format!(
+                "control_transfer(0x{:02x}, 0x{:02x}, …): standard OUT requests change the device's USB state; refused",
+                setup.request_type, setup.request
+            ));
+            return -1;
+        }
+        if self.mode == WriteMode::DryRun {
+            self.record(IoKind::ControlOut, &bytes, true);
+            self.stats.usb_writes += 1;
+            self.mark_write(None);
+            return data.len() as i32;
+        }
+        let Some(handle) = self.usb_handle("control_transfer") else {
+            return -1;
+        };
+        let started = Instant::now();
+        let mut buf = data.to_vec();
+        match handle.control_transfer(
+            setup.request_type,
+            setup.request,
+            setup.value,
+            setup.index,
+            &mut buf,
+            timeout_ms,
+        ) {
+            Ok(n) => {
+                self.stats.usb_writes += 1;
+                self.stats.disconnected = false;
+                self.mark_write(Some(started));
+                n as i32
+            }
+            Err(e) => {
+                self.stats.usb_write_errors += 1;
+                self.fail_usb("control_transfer", &e);
+                -1
+            }
+        }
+    }
+
+    /// `device.control_transfer(bmRequestType with 0x80, …, len, timeout)`:
+    /// the bytes of the data stage; empty on timeout or failure.
+    pub fn control_in(&mut self, setup: ControlSetup, len: usize, timeout_ms: u32) -> Vec<u8> {
+        self.last_read_size = 0;
+        let Some(handle) = self.usb_handle("control_transfer") else {
+            return Vec::new();
+        };
+        let mut buf = vec![0u8; len];
+        let result = handle.control_transfer(
+            setup.request_type | ENDPOINT_IN,
+            setup.request,
+            setup.value,
+            setup.index,
+            &mut buf,
+            timeout_ms,
+        );
+        self.usb_read_result("control_transfer", result, buf, |n, buf| {
+            (IoKind::ControlIn, setup.packet(len, &buf[..n]))
+        })
+    }
+
+    fn usb_read_result(
+        &mut self,
+        key: &'static str,
+        result: HalResult<usize>,
+        mut buf: Vec<u8>,
+        record: impl FnOnce(usize, &[u8]) -> (IoKind, Vec<u8>),
+    ) -> Vec<u8> {
+        match result {
+            Ok(n) => {
+                let n = n.min(buf.len());
+                self.stats.usb_reads += 1;
+                self.stats.disconnected = false;
+                self.last_read_size = n;
+                let (kind, bytes) = record(n, &buf);
+                self.record(kind, &bytes, false);
+                buf.truncate(n);
+                buf
+            }
+            Err(HalError::Timeout(_)) => {
+                self.stats.usb_timeouts += 1;
+                self.stats.disconnected = false;
+                Vec::new()
+            }
+            Err(e) => {
+                self.stats.usb_read_errors += 1;
+                self.fail_usb(key, &e);
+                Vec::new()
+            }
+        }
+    }
+
     /// What `device.getDeviceInfo()` reports for a device without HID
     /// endpoints: `[manufacturer, product, serial]`.
     pub fn set_device_info(&mut self, info: [String; 3]) {
@@ -1241,6 +1637,10 @@ impl DeviceContext {
         }
         let info = self.active_endpoint().or_else(|| self.endpoints.first());
         info.map(|e| vec![e.manufacturer.clone(), e.product.clone(), e.serial.clone()])
+            .or_else(|| {
+                self.usb_info()
+                    .map(|u| vec![u.manufacturer.clone(), u.product.clone(), u.serial.clone()])
+            })
             .unwrap_or_else(|| vec![String::new(), String::new(), String::new()])
     }
 }
@@ -1367,6 +1767,26 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
         .set_name(capped(name, MAX_ID_CHARS)));
     native!("log", |d, text: String| d.log(&text));
     native!("systemInfo", |d| d.system_info.clone());
+    // Raw USB (hid-usb.md §2: bulk_transfer, control_transfer, setProtocol).
+    native!(blocking "usbBulkOut" else { d.cut_off_write(); -1 }, |d, ep: i32, data: Vec<i32>, timeout: i32| d
+        .bulk_out(ep as u8, &to_bytes(&data), usb_timeout(timeout)));
+    native!(blocking "usbBulkIn" else d.cut_off_read(0), |d, ep: i32, len: i32, timeout: i32| d
+        .bulk_in(ep as u8, clamp_len(len), usb_timeout(timeout)));
+    native!(blocking "usbControlOut" else { d.cut_off_write(); -1 }, |d, setup: Vec<i32>, data: Vec<i32>| {
+        let (setup, timeout) = control_args(&setup);
+        d.control_out(setup, &to_bytes(&data), timeout)
+    });
+    native!(blocking "usbControlIn" else d.cut_off_read(0), |d, setup: Vec<i32>, len: i32| {
+        let (setup, timeout) = control_args(&setup);
+        d.control_in(setup, clamp_len(len).min(usize::from(u16::MAX)), timeout)
+    });
+    native!(blocking "setProtocol" else { d.cut_off_write(); false }, |d, name: String| d.set_protocol(&name));
+    native!("protocol", |d| match d.protocol() {
+        Protocol::Hid => "hid",
+        Protocol::RawUsb => "rawusb",
+        Protocol::Hybrid => "hybrid",
+    }
+    .to_string());
     // The `battery` feature (docs/host-api/hid-usb.md §addFeature).
     native!("batteryEnable", |d| d.enable_battery());
     native!("batterySetLevel", |d, level: f64| d.set_battery_level(level));

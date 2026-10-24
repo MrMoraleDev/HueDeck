@@ -170,9 +170,29 @@ export function createSimDevice(options = {}) {
     const value = make(mock);
     if (value !== undefined && globalThis[name] !== value) globalThis[name] = value;
   };
+  // Raw USB (rawusb / hybrid plugins): recorded; IN transfers answer zeros,
+  // OUT transfers the length, as the stub host does.
+  const usbDefaults = {
+    bulk_transfer: (endpoint, data, length, timeout) => {
+      mock.calls.push({ method: "bulk_transfer", args: [endpoint, data, length, timeout] });
+      const n = Number(length) || (data && data.length) || 0;
+      return Number(endpoint) & 0x80 ? new Array(n).fill(0) : n;
+    },
+    control_transfer: (requestType, request, value, index, data, length, timeout) => {
+      mock.calls.push({ method: "control_transfer", args: [requestType, request, value, index, data, length, timeout] });
+      const n = Number(length) || (data && data.length) || 0;
+      return Number(requestType) & 0x80 ? new Array(n).fill(0) : n;
+    },
+    setProtocol: (name) => {
+      mock.calls.push({ method: "setProtocol", args: [name] });
+    },
+  };
+  for (const [k, v] of Object.entries(usbDefaults)) {
+    if (!(k in mock)) mock[k] = v;
+  }
   // Not implemented in HueDeck device sessions yet (host.js `unimplemented`).
   for (const k of [
-    "bulk_transfer", "control_transfer", "setProtocol", "createFanControl", "removeFanControl", "setRPM",
+    "createFanControl", "removeFanControl", "setRPM",
     "getFanlevel", "getFanLevel", "getNormalizedFanlevel", "getNormalizedFanLevel", "getImageBuffer",
     "getMotherboardName", "createTemperatureSensor", "removeTemperatureSensor", "SetTemperature",
   ]) {

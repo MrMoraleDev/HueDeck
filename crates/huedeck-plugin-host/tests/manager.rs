@@ -40,6 +40,7 @@ fn present(mock: &MockHid, plugin: &CatalogEntry) -> Vec<Present> {
         .into_iter()
         .map(|e| Present {
             device: SessionDevice {
+                usb: None,
                 smbus: None,
                 key: format!("1234:5555:{}", e.serial),
                 vid: e.vid,
@@ -153,6 +154,7 @@ fn a_session_that_failed_before_removal_stays_failed() {
     );
     let device = Present {
         device: SessionDevice {
+            usb: None,
             smbus: None,
             key: "1234:3333:F".into(),
             vid: 0x1234,

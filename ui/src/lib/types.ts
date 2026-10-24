@@ -75,6 +75,10 @@ export interface DeviceView {
   battery?: BatteryView | null;
   /** Pulse red while the battery is low. */
   blinkLowBattery: boolean;
+  /** Why the device cannot be driven as plugged in ("needs WinUSB driver: ..."). */
+  driverProblem?: string;
+  /** Where to read about driverProblem. */
+  helpUrl?: string;
 }
 
 export type ShutdownMode = "restore" | "keep" | "off";

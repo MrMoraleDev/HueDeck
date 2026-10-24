@@ -23,9 +23,13 @@
 // Policy (a wrong 0x52 packet can misconfigure the controller, and byte 0xB8 != 0 writes the
 // configuration to flash):
 //   * Nothing is written before the current 0x52 report has been read ("restore image").
-//   * The save byte is always 0.
+//   * The save byte is 0 in every packet except the two SaveToDevice(request) sends after the
+//     user asked for "Save to devices" (HueDeck extension; the save sequence is OpenRGB's
+//     MSIMotherboard185Controller::Update(true), see docs/hardware/msi-mystic-light-185.md).
 //   * Shutdown(false) blanks the stream and writes the restore image back, which also leaves
-//     per-LED mode; Shutdown(true) (system suspend) paints the shutdown colour.
+//     per-LED mode; Shutdown(false, "keep" | "off") (HueDeck exit modes) writes a static
+//     configuration with the last colours or black instead, save byte 0; Shutdown(true)
+//     (system suspend) paints the shutdown colour.
 
 // ---------------------------------------------------------------------------------------------
 // Metadata (call-if-function exports, SignalRGB-compatible)
@@ -50,6 +54,9 @@ export function ImageUrl() { return ""; }
 export function ConflictingProcesses() {
   return ["LEDKeeper.exe", "LEDKeeper2.exe", "LightKeeperService.exe", "LightKeeperService2.exe"];
 }
+// HueDeck extensions (docs/host-api/save-shutdown.md).
+export function SaveCapabilities() { return { static: true, effects: ["breathing"] }; }
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
 
 /* global device, LightingMode, forcedColor, shutdownColor */
 export function ControllableParameters() {
@@ -211,13 +218,20 @@ export function Render() {
   paint(colourSource());
 }
 
-export function Shutdown(SystemSuspending) {
+export function Shutdown(SystemSuspending, mode) {
   if (!writesEnabled) {
     return;
   }
   if (SystemSuspending) {
     const rgb = hexToRgb(param("shutdownColor", "#000000"));
     paint(() => rgb);
+    return;
+  }
+  if (mode === "keep" || mode === "off") {
+    // Volatile: the board's own static mode with the last colours (or black), save byte 0.
+    const zones = mode === "keep" ? zoneColours(colourSource()) : zoneColours(() => [0, 0, 0]);
+    sendStream(blankStream());
+    sendConfig(staticConfig(zones, MODE_STATIC, false));
     return;
   }
   // Normal exit: blank the stream, then put the configuration back exactly as we found it (save
@@ -227,6 +241,146 @@ export function Shutdown(SystemSuspending) {
   }
   sendStream(blankStream());
   sendConfig(writableFrom(restoreImage));
+}
+
+// "Save to devices" (HueDeck extension): store one colour per zone (the average of the zone's
+// LEDs on the frame shown) in static mode, or the breathing effect with those colours, in the
+// controller's flash, so the board shows it at boot without HueDeck. The send sequence is the one
+// of OpenRGB's MSIMotherboard185Controller::Update(true): read 0x52, send what was read with the
+// save byte set, then the new configuration with the save byte set. Afterwards the board is put
+// back in per-LED mode for the live effect (save byte 0), and what it now holds becomes the
+// image Shutdown(false, "restore") writes back. A preview only describes it.
+export function SaveToDevice(request) {
+  if (!writesEnabled) {
+    return { unsupported: "the board's configuration could not be read at start, so HueDeck writes nothing to it" };
+  }
+  const effect = request && request.effect ? String(request.effect) : null;
+  if (effect !== null && effect !== "breathing") {
+    return { unsupported: `the board has no "${effect}" effect HueDeck can store` };
+  }
+  const onboard = request && Array.isArray(request.colors) && request.colors.length >= ONBOARD_LEDS
+    ? request.colors.slice(0, ONBOARD_LEDS)
+    : null;
+  const zones = zoneColours(colourSource(), onboard);
+  const result = {
+    effect: effect ?? "static",
+    zones: SAVE_ZONE_NAMES.map((name, i) => ({ name, color: hex(zones[i]) })),
+    note: "One colour per zone (the average of its LEDs): the board stores zones, not single LEDs.",
+  };
+  if (!request || request.action !== "save") {
+    return result;
+  }
+  const current = readConfig();
+  if (current === null) {
+    throw new Error("MSI 185: GET 0x52 failed before the save; nothing was written");
+  }
+  const packet = staticConfig(zones, effect === "breathing" ? MODE_BREATHING : MODE_STATIC, true);
+  const before = writableFrom(current);
+  before[SAVE_FLAG_OFFSET] = SAVE_FLAG_ON;
+  if (!sendFeature(before, "0x52 (save)") || !sendFeature(packet, "0x52 (save)")) {
+    throw new Error("MSI 185: send_report(0x52) failed during the save");
+  }
+  lastConfig = packet.slice();
+  lastConfig[SAVE_FLAG_OFFSET] = 0x00;
+  const stored = readConfig();
+  restoreImage = stored ?? packet.map((b, i) => (i === SAVE_FLAG_OFFSET ? 0 : i === CORSAIR_FLAGS_OFFSET ? (b + READBACK_BIAS) & 0xFF : b));
+  configure(stripCounts());
+  return result;
+}
+
+// Zone colours for a static configuration: onboard (the average of the six LEDs), JRGB1, JRGB2,
+// JRAINBOW1, JRAINBOW2 (the average of each strip's LEDs). `source` as in buildStream();
+// `onboard` the six onboard colours when the host handed them over.
+function zoneColours(source, onboard = null) {
+  const onboardLeds = onboard ?? Array.from({ length: ONBOARD_LEDS }, (_, x) => (source ? source() : rgbOrBlack(device.color(x, 0))));
+  const headers = HEADERS.map((header) => (source ? source() : rgbOrBlack(device.subdeviceColor(header.id, 0, 0))));
+  const counts = configuredCounts ?? stripCounts();
+  const strips = STRIPS.map((strip, index) => {
+    if (source) {
+      return source();
+    }
+    const flat = channelColours(strip.channel);
+    const leds = [];
+    for (let led = 0; led < counts[index] && 3 * led + 2 < flat.length; led++) {
+      leds.push(flat.slice(3 * led, 3 * led + 3));
+    }
+    return average(leds);
+  });
+  return [average(onboardLeds), ...headers, ...strips];
+}
+
+const SAVE_ZONE_NAMES = ["Onboard LEDs", "JRGB1", "JRGB2", "JRAINBOW1", "JRAINBOW2"];
+const MODE_STATIC = 0x01;                 // MSI_MODE_STATIC
+const MODE_BREATHING = 0x02;              // MSI_MODE_BREATHING
+const SAVE_FLAG_ON = 0x01;                // FeaturePacket_185 save_data = true
+// Options byte: brightness MSI_BRIGHTNESS_LEVEL_100 (10) in bits 2-6, speed in bits 0-1
+// (MSI_SPEED_MEDIUM for breathing, OpenRGB's default), no JRGB sync.
+const OPTIONS_STATIC = 10 << 2;
+const OPTIONS_BREATHING = (10 << 2) | 1;
+const FLAG_CUSTOM_COLOUR = 0x80;          // MSI_COLOR_FLAG_USE_CUSTOM_COLOR
+const FLAG_SYNC_ONBOARD = 0x01;           // MSI_COLOR_FLAG_SYNC_SETTING_ONBOARD
+
+// A static (or breathing) configuration built on the restore image: the records of this board's
+// zones get the effect, one colour (colour 1 = colour 2), full brightness and the custom-colour
+// flag; the onboard master also the onboard sync flag, so the nine onboard slots follow it (they
+// get the same record anyway); the JRAINBOW records keep the strips' LED counts. Every other byte
+// stays as the board had it. `save` sets the save byte.
+function staticConfig(zones, effect, save) {
+  const packet = writableFrom(restoreImage);
+  const options = effect === MODE_BREATHING ? OPTIONS_BREATHING : OPTIONS_STATIC;
+  const record = (offset, rgb, flags) => {
+    packet[offset] = effect;
+    packet[offset + 1] = rgb[0] & 0xFF;
+    packet[offset + 2] = rgb[1] & 0xFF;
+    packet[offset + 3] = rgb[2] & 0xFF;
+    packet[offset + 4] = options;
+    packet[offset + 5] = rgb[0] & 0xFF;
+    packet[offset + 6] = rgb[1] & 0xFF;
+    packet[offset + 7] = rgb[2] & 0xFF;
+    packet[offset + 8] = flags;
+    packet[offset + 9] = 0x00;
+  };
+  const [onboard, jrgb1, jrgb2, jrainbow1, jrainbow2] = zones;
+  record(0x01, jrgb1, FLAG_CUSTOM_COLOUR);
+  record(0xAE, jrgb2, FLAG_CUSTOM_COLOUR);
+  const counts = configuredCounts ?? stripCounts();
+  record(STRIPS[0].record, jrainbow1, FLAG_CUSTOM_COLOUR);
+  packet[STRIPS[0].record + STRIP_COUNT] = counts[0];
+  record(STRIPS[1].record, jrainbow2, FLAG_CUSTOM_COLOUR);
+  packet[STRIPS[1].record + STRIP_COUNT] = counts[1];
+  record(MASTER_ZONE, onboard, FLAG_CUSTOM_COLOUR | FLAG_SYNC_ONBOARD);
+  for (let slot = 1; slot <= 9; slot++) {
+    record(MASTER_ZONE + 10 * slot, onboard, FLAG_CUSTOM_COLOUR);
+  }
+  packet[SAVE_FLAG_OFFSET] = save ? SAVE_FLAG_ON : 0x00;
+  return packet;
+}
+
+// GET_REPORT(Feature, 0x52) as a byte array, or null unless all 185 bytes came back.
+function readConfig() {
+  const image = device.get_report([CONFIG_ID], CONFIG_LENGTH);
+  const size = readSize(image);
+  if (size !== CONFIG_LENGTH || !isByteArray(image, CONFIG_LENGTH) || (image[0] & 0xFF) !== CONFIG_ID) {
+    return null;
+  }
+  return Array.from({ length: CONFIG_LENGTH }, (_, i) => image[i] & 0xFF);
+}
+
+function average(colours) {
+  if (colours.length === 0) {
+    return [0, 0, 0];
+  }
+  const sum = [0, 0, 0];
+  for (const c of colours) {
+    for (let i = 0; i < 3; i++) {
+      sum[i] += c[i] & 0xFF;
+    }
+  }
+  return sum.map((s) => Math.round(s / colours.length));
+}
+
+function hex(rgb) {
+  return `#${rgb.map((v) => (v & 0xFF).toString(16).padStart(2, "0")).join("")}`;
 }
 
 // ---------------------------------------------------------------------------------------------

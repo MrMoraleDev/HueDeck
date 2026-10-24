@@ -1,0 +1,12 @@
+{
+  "ProductName": "HueDeck be quiet! Light Wings 120 mm",
+  "DisplayName": "Light Wings 120 mm - 18 LED",
+  "Brand": "be quiet!",
+  "Type": "Fan",
+  "LedCount": 18,
+  "Width": 7,
+  "Height": 7,
+  "LedMapping": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17],
+  "LedCoordinates": [[3,2],[4,2],[4,3],[4,4],[3,4],[2,4],[2,3],[2,2],[3,0],[5,1],[6,2],[6,4],[5,5],[3,6],[1,5],[0,4],[0,2],[1,1]],
+  "LedNames": ["Rear 1","Rear 2","Rear 3","Rear 4","Rear 5","Rear 6","Rear 7","Rear 8","Front 1","Front 2","Front 3","Front 4","Front 5","Front 6","Front 7","Front 8","Front 9","Front 10"]
+}

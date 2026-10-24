@@ -1,0 +1,12 @@
+{
+  "ProductName": "HueDeck Cooler Master SickleFlow 120 ARGB",
+  "DisplayName": "SickleFlow 120 ARGB - 6 LED",
+  "Brand": "Cooler Master",
+  "Type": "Fan",
+  "LedCount": 6,
+  "Width": 5,
+  "Height": 5,
+  "LedMapping": [0,1,2,3,4,5],
+  "LedCoordinates": [[2,0],[4,1],[4,3],[2,4],[0,3],[0,1]],
+  "LedNames": ["Led 1","Led 2","Led 3","Led 4","Led 5","Led 6"]
+}

@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "license": "GPL-3.0-or-later",
   "publisher": "HueDeck",
-  "description": "Direct mode of MSI Mystic Light motherboard RGB controllers (vendor id 0x1462), adapted from OpenRGB's MSIMotherboardController: the 185-byte boards (per-LED colour streams with the JRAINBOW/JCORSAIR ARGB headers as channels, or one colour per zone on zone-based boards), the 162-byte boards (static colours) and the 112-byte boards (one colour per zone). The configuration read at start is written back on exit and the save-to-flash byte is never set. The MAG B550 TOMAHAWK (0x7C91) keeps its own plugin (msi-mystic-light-7c91); boards behind vendor id 0x0DB0 are in msi-mystic-light-common. Protocol notes: docs/hardware/msi-mystic-light.md.",
+  "description": "Direct mode of MSI Mystic Light motherboard RGB controllers (vendor id 0x1462), adapted from OpenRGB's MSIMotherboardController: the 185-byte boards (per-LED colour streams with the JRAINBOW/JCORSAIR ARGB headers as channels, or one colour per zone on zone-based boards), the 162-byte boards (static colours) and the 112-byte boards (one colour per zone). The configuration read at start is written back on exit and the save-to-flash byte is set only by \"Save to devices\" (SaveToDevice, after the user confirmed it; 185- and 162-byte boards). The MAG B550 TOMAHAWK (0x7C91) keeps its own plugin (msi-mystic-light-7c91); boards behind vendor id 0x0DB0 are in msi-mystic-light-common. Protocol notes: docs/hardware/msi-mystic-light.md.",
   "entry": "plugin.js",
   "compat": "signalrgb-2.5",
   "deviceType": "motherboard",
@@ -30,5 +30,7 @@
     }
   ],
   "permissions": ["hid"],
+  "save": { "static": true, "effects": ["breathing"] },
+  "shutdownModes": ["restore", "keep", "off"],
   "keywords": ["msi", "mystic-light", "motherboard", "argb", "jrainbow", "jrgb", "jcorsair", "openrgb"]
 }

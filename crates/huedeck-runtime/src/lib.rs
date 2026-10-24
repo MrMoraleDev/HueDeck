@@ -2,7 +2,9 @@
 //! The device runtime `huedeck` (CLI runs) and `huedeckd` (the daemon) share:
 //!
 //! * [`hardware`]: the HID backend of this OS and the present devices a plugin claims;
-//! * [`smbus`]: the SMBus buses (NVIDIA GPU I2C) and the devices SMBus plugins find on them;
+//! * [`smbus`]: the SMBus buses (NVIDIA GPU I2C, chipset SMBus; Linux `/dev/i2c-*`)
+//!   and the devices SMBus plugins find on them;
+//! * [`sensors`]: the sensor backends (Linux hwmon);
 //! * [`hotplug`]: arrival/removal notifications and how long to let them settle;
 //! * [`conflicts`]: other RGB software holding the same devices (reported, never killed);
 //! * [`signalrgb`]: a local SignalRGB installation's setup, read in place (channel
@@ -20,5 +22,6 @@ pub mod hardware;
 pub mod hotplug;
 pub mod notify;
 pub mod signalrgb;
+pub mod sensors;
 pub mod smbus;
 pub mod system;

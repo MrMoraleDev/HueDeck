@@ -1175,6 +1175,7 @@ dependencies = [
  "huedeck-hal",
  "huedeck-hal-windows",
  "huedeck-hid-desc",
+ "huedeck-protocol",
  "libc",
  "tracing",
 ]

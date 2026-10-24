@@ -1,0 +1,36 @@
+{
+  "$comment": "WLED UDP realtime datagrams worked out by hand from https://kno.wled.ge/interfaces/udp-realtime/ (not by running the plugin). Byte 0 = protocol (2 DRGB, 4 DNRGB), byte 1 = timeout in seconds. DRGB: byte 2+3n = R of LED n, then G, B; up to 490 LEDs. DNRGB: bytes 2-3 = start index (high byte first), byte 4+3n = R of LED start+n; up to 489 LEDs per datagram. HueDeck uses timeout 2 while streaming and 1 for the shutdown packet.",
+  "port": 21324,
+  "drgb_red_green": {
+    "$comment": "2 LEDs: LED 0 #FF0000, LED 1 #00FF00, timeout 2 s",
+    "hex": "02 02 FF 00 00 00 FF 00"
+  },
+  "drgb_red_green_shutdown": {
+    "$comment": "same colours, timeout 1 s (sent once by Shutdown)",
+    "hex": "02 01 FF 00 00 00 FF 00"
+  },
+  "drgb_490": {
+    "$comment": "490 LEDs (the DRGB limit) all #123456: one datagram, 2 + 490*3 = 1472 bytes",
+    "header_hex": "02 02",
+    "length": 1472,
+    "pixel_hex": "12 34 56"
+  },
+  "dnrgb_500": {
+    "$comment": "500 LEDs all #123456: more than 490, so DNRGB. Datagram 1 starts at LED 0 (00 00) with 489 LEDs: 4 + 1467 = 1471 bytes. Datagram 2 starts at LED 489 = 0x01E9 (01 E9) with the remaining 11 LEDs: 4 + 33 = 37 bytes.",
+    "packets": [
+      { "header_hex": "04 02 00 00", "length": 1471, "leds": 489 },
+      { "header_hex": "04 02 01 E9", "length": 37, "leds": 11 }
+    ],
+    "pixel_hex": "12 34 56"
+  },
+  "info": {
+    "$comment": "A trimmed GET /json/info answer, field names as in the WLED JSON API docs (https://kno.wled.ge/interfaces/json-api/).",
+    "ver": "0.14.4",
+    "leds": { "count": 2, "rgbw": false, "lc": 1 },
+    "name": "Desk strip",
+    "udpport": 21324,
+    "brand": "WLED",
+    "product": "FOSS",
+    "mac": "AABBCCDDEEFF"
+  }
+}

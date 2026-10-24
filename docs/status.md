@@ -81,7 +81,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `bus.*` (SMBus), Free/Fixed wrappers | Done (M5) | `src/smbus.rs`, `tests/session_smbus.rs` |
 | `bulk_transfer`, `control_transfer`, `setProtocol` (rawusb, hybrid) | **Missing** | `host.js` lists them under `unimplemented("device", …)`; `catalog.rs` `accept()` refuses `rawusb`/`hybrid`/`serial`; no `UsbBackend` impl anywhere (`nusb` is pinned but unused, `hal-windows/Cargo.toml` `TODO(M2)`) |
 | `@SignalRGB/serial` | **Missing** | stub only in dry-run (`host.js` `modules.serial`); no `SerialBackend` impl |
-| `@SignalRGB/udp`, `tcp`, `XMLHttpRequest`, `addFeature("udp"/"dtls")` | In progress (`feature/network-lights`) | today: recording stubs in dry-run, `unimplementedMember` in device sessions |
+| `@SignalRGB/udp`, `tcp`, `XMLHttpRequest`, `addFeature("udp")` | Done (network plugins) | LAN-only (docs/host-api/network-huedeck.md); `addFeature("dtls")` and `https` missing (no TLS stack) |
 | `addFeature("battery")` | In progress (`feature/battery`) | today: recording stub |
 | `addFeature("keyboard"/"mouse")` (`sendEvent`, `sendHid`) | Missing | recording stubs; needs the M6 macro/input bus |
 | Fan API (`createFanControl`, `setRPM`, …) | Missing | throws in device sessions; `fanControlDisabled()` answers `true` |
@@ -167,7 +167,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Audio FFT (`engine.audio`) | Missing | `crates/huedeck-inputs/src/lib.rs` defines `AudioSnapshot` only; renderer side ready (`inject.rs` fills typed arrays in place) |
 | Screen zones (`engine.zone`) | Missing | `ZoneSnapshot` shape only; renderer side ready |
 | Area/linear meters (`engine.vision`) | Missing | `huedeck-effects` parses `<meta meter>` (`model.rs`), nothing computes them |
-| Network plugins (udp/tcp, DiscoveryService, mDNS, `service`/`controller`/`discovery`, XHR, DTLS, settings panel) | In progress (`feature/network-lights`) | today: `catalog.rs` refuses `Type() == "network"` |
+| Network plugins (udp/tcp, DiscoveryService, mDNS, `service`/`controller`/`discovery`, XHR, settings, dashboard section) | Done, DTLS missing | first-party WLED, DDP, E1.31, Philips Hue (CLIP v1), Nanoleaf, Govee, LIFX, Yeelight; all untested on hardware |
 | LCD faces (`@SignalRGB/lcd`, second browser per device) | Missing | dry-run stub only |
 | Macros (Inputs/Actions), key/mouse hooks, `system.*`, `signalrgb.*`, `keys` | Missing | spec in `docs/host-api/macros-system.md`; no code |
 | Action router (`huedeck://`, `signalrgb://`) | Missing | no URL handler |
@@ -175,7 +175,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | OpenRGB SDK server :6742 | Missing | `OPENRGB_SDK_PORT` constant in `crates/huedeck-api/src/lib.rs` only |
 | Dynamic ControllableParameters UI | Partial | static `ControllableParameters` render in `Devices.svelte` and persist (`device_parameters` table); runtime `device.addProperty/removeProperty` changes stay inside the plugin (`host.js`) and never reach the API or UI; `DeviceMessages`/`addMessage` are not shown |
 | Accept: audio-reactive + screen effects track input < 100 ms | Missing | |
-| Accept: Govee/Yeelight/WLED-class plugin drives a LAN device | In progress (`feature/network-lights`) | |
+| Accept: Govee/Yeelight/WLED-class plugin drives a LAN device | Mock and loopback tests only | needs a real device |
 | Accept: OpenRGB SDK client sets a colour on the MSI board | Missing | |
 | Accept: a DL-certified keyboard lights with no plugin | Partial | the generic `hid-lamparray` plugin is that path for HID LampArray devices; not tested on a keyboard |
 

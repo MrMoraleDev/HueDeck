@@ -1,0 +1,18 @@
+{
+  "$comment": "Govee LAN API messages worked out by hand from Govee's LAN API document (scan/turn/brightness/colorwc/devStatus: {\"msg\":{\"cmd\":...,\"data\":{...}}}) and, for the razer frames, from OpenRGB d4798c12 GoveeController.cpp, not by running the plugin. razer frame for [red, blue]: count 2, len = 2 + 3*2 = 8 -> BB 00 08 B0 01 02 FF 00 00 00 00 FF, xor = BB^08^B0^01^02^FF^FF = 00 -> 13 bytes; base64 by 6-bit groups: BB0008 = 101110|110000|000000|001000 = u w A I; B00102 = 101100|000000|000100|000010 = s A E C; FF0000 = / w A A; 0000FF = A A D /; 00 = A A = = -> uwAIsAEC/wAAAAD/AA==. Enable BB 00 01 B1 01 0A (xor BB^01^B1^01 = 0A): uwAB + B1010A = 101100|010000|000100|001010 = s Q E K -> uwABsQEK. Disable BB 00 01 B1 00 0B: uwAB + B1000B = 101100|010000|000000|001011 = s Q A L -> uwABsQAL.",
+  "scan": "{\"msg\":{\"cmd\":\"scan\",\"data\":{\"account_topic\":\"reserve\"}}}",
+  "scan_reply": "{\"msg\":{\"cmd\":\"scan\",\"data\":{\"ip\":\"192.168.1.23\",\"device\":\"1F:80:C5:32:32:36:72:4E\",\"sku\":\"H619A\",\"bleVersionHard\":\"3.01.01\",\"bleVersionSoft\":\"1.03.01\",\"wifiVersionHard\":\"1.00.10\",\"wifiVersionSoft\":\"1.02.03\"}}}",
+  "dev_status": "{\"msg\":{\"cmd\":\"devStatus\",\"data\":{}}}",
+  "turn_on": "{\"msg\":{\"cmd\":\"turn\",\"data\":{\"value\":1}}}",
+  "turn_off": "{\"msg\":{\"cmd\":\"turn\",\"data\":{\"value\":0}}}",
+  "brightness_100": "{\"msg\":{\"cmd\":\"brightness\",\"data\":{\"value\":100}}}",
+  "brightness_40": "{\"msg\":{\"cmd\":\"brightness\",\"data\":{\"value\":40}}}",
+  "color_red": "{\"msg\":{\"cmd\":\"colorwc\",\"data\":{\"color\":{\"r\":255,\"g\":0,\"b\":0},\"colorTemInKelvin\":0}}}",
+  "color_123456": "{\"msg\":{\"cmd\":\"colorwc\",\"data\":{\"color\":{\"r\":18,\"g\":52,\"b\":86},\"colorTemInKelvin\":0}}}",
+  "color_restore_0a141e": "{\"msg\":{\"cmd\":\"colorwc\",\"data\":{\"color\":{\"r\":10,\"g\":20,\"b\":30},\"colorTemInKelvin\":0}}}",
+  "white_restore_2700": "{\"msg\":{\"cmd\":\"colorwc\",\"data\":{\"color\":{\"r\":0,\"g\":0,\"b\":0},\"colorTemInKelvin\":2700}}}",
+  "status_reply": "{\"msg\":{\"cmd\":\"devStatus\",\"data\":{\"onOff\":0,\"brightness\":40,\"color\":{\"r\":10,\"g\":20,\"b\":30},\"colorTemInKelvin\":0}}}",
+  "razer_enable": "{\"msg\":{\"cmd\":\"razer\",\"data\":{\"pt\":\"uwABsQEK\"}}}",
+  "razer_disable": "{\"msg\":{\"cmd\":\"razer\",\"data\":{\"pt\":\"uwABsQAL\"}}}",
+  "razer_red_blue": "{\"msg\":{\"cmd\":\"razer\",\"data\":{\"pt\":\"uwAIsAEC/wAAAAD/AA==\"}}}"
+}

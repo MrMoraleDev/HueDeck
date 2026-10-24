@@ -185,7 +185,8 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 |---|---|---|
 | hal-linux hidraw + hid-desc | Done, untested on Linux | `crates/huedeck-hal-linux/src/{sysfs,tlc,hidraw,sys}.rs`: sysfs enumeration, TLC split, raw hidraw ioctls; `huedeck devices` and hardware runs wired through `huedeck-runtime`. Checked with `cargo clippy --target x86_64-unknown-linux-gnu` only |
 | udev hotplug | Done, untested on Linux | `crates/huedeck-hal-linux/src/{hotplug,uevent}.rs`: netlink udev monitor, pure Rust |
-| nusb, serialport, i2cdev SMBus, hwmon/pwm | Missing | WP-L3, WP-L4 |
+| i2c-dev SMBus, hwmon sensors | Done, untested on Linux | `crates/huedeck-hal-linux/src/{i2c,hwmon}.rs`: adapters by sysfs name (PIIX4 ports 0/1, i801, NVIDIA port 1, AMDGPU OEM), Windows policy plus the broker write allowlist on DIMM buses, SPD from the kernel `eeprom` file or a host-internal EE1004 page select; wired in `huedeck-runtime` (`smbus.rs`, `sensors.rs`); udev i2c rules per adapter name. Checked with `cargo clippy --target x86_64-unknown-linux-gnu` and fake-sysfs/fake-device tests only |
+| nusb, serialport, hwmon pwm (fan control) | Missing | WP-L3, WP-SENSORS-FANS |
 | `tools/gen-udev` | Done | `huedeck udev generate` (`crates/huedeck-cli/src/udev.rs`); generated `packaging/udev/70-huedeck.rules` with a drift test; `packaging/sysusers.d/huedeck.conf` |
 | CEF on Linux (X11/Wayland, headless CI) | Missing | `huedeck-renderer` builds with `cef` on Windows only (`ci.yml` `renderer-cef`) |
 | PipeWire audio + screen capture | Missing | |
@@ -194,7 +195,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `docs/linux-porting.md` | Missing | design input in `docs/research/m7-linux-backend.md` |
 | Accept: same plugins light the same hardware on Ubuntu LTS | Missing | |
 | Accept: identical `Validate` tuples on both OSes (fixture) | Partial | `crates/huedeck-hal-linux/src/fixtures.rs`: one descriptor through the Windows path logic and the Linux split; descriptors are synthetic, a captured Linux `report_descriptor` per reference device is still to record |
-| Accept: RAM via `/dev/i2c-*` without a helper | Missing | |
+| Accept: RAM via `/dev/i2c-*` without a helper | Partial | code done (WP-L4); needs a Linux run on the reference machine |
 | Accept: conformance suite on both OSes | Missing | there is no conformance suite yet (see M2) |
 | Accept: reproducible release via cargo-dist | Missing | `release.yml` is a hand-written placeholder (cargo-auditable + CycloneDX SBOM, unsigned) |
 
@@ -367,6 +368,7 @@ These can start in parallel with Windows work: they touch `huedeck-hal-linux` an
 30. **WP-L4: `/dev/i2c-*` SMBus and hwmon. Size M.**
     - `huedeck-hal-linux/src/{i2c,hwmon}.rs` (`i2cdev`), adapter discovery by name (PIIX4, NVIDIA, AMDGPU DM aux) per `docs/research/m7-linux-backend.md`.
     - Wired in `huedeck-runtime/src/smbus.rs` under `cfg(unix)`.
+    - **Done** on `feature/linux-i2c`, untested on Linux hardware. Pure ioctls through `libc` in `sys.rs` (no `i2cdev` crate: it lacks `I2C_FUNCS`). GPU I2C on Linux also comes from `/dev/i2c-*` (no NvAPI). AMDGPU DDC and DP AUX buses are left out. hwmon temperatures and fans are a `SensorBackend` (`huedeck_runtime::sensors::backends()`), not yet polled: WP-SENSORS-FANS adds the facade.
 31. **WP-L5: CEF on Linux. Size L.**
     - `huedeck-renderer` builds and runs on Linux (OSR needs no X11 window; headless CI with `--ozone-platform=headless` or Xvfb); shm via `memfd`/`/dev/shm`; the control pipe as a unix socket (`huedeck-protocol`, `huedeck-render`).
     - Add a `renderer-cef` Ubuntu CI job.

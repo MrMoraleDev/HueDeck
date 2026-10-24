@@ -16,9 +16,9 @@
 //! `BusLock` takes it again. A `Batch` runs its ops under one hold (or
 //! inside the lease), each through the same checks as a lone op.
 
+use crate::chipset::{ChipsetBus, SmbusXfer};
 use crate::mutex::{GlobalMutex, ACQUIRE_TIMEOUT_MS};
 use crate::pawnio::PawnExec;
-use crate::chipset::{ChipsetBus, SmbusXfer};
 use crate::policy::{audit, Lease, Policy, MAX_HOLD};
 use lightloom_protocol::broker::{
     BrokerError, BrokerOp, BrokerPayload, BrokerRequest, BrokerResponse, BusInfo, HealthReport, ModuleStatus,
@@ -1042,7 +1042,10 @@ mod tests {
         assert_eq!(fake.call_count(), before);
         assert_eq!(mutex.counts(), (2, 2));
         // A lease and a batch inside it.
-        assert_eq!(call(BrokerOp::BusLock { bus: 0, lease_ms: 50 }), Ok(BrokerPayload::Ack));
+        assert_eq!(
+            call(BrokerOp::BusLock { bus: 0, lease_ms: 50 }),
+            Ok(BrokerPayload::Ack)
+        );
         let write = BrokerOp::SmbusWriteByte {
             bus: 0,
             addr: 0x39,

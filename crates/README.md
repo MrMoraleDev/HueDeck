@@ -21,7 +21,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
                          huedeck-hal  (traits + mock; no OS code)
           ┌──────────────┬───────┴─────────┬──────────────────┐
           ▼              ▼                 ▼                  ▼
- huedeck-hal-windows  huedeck-hal-linux  huedeck-nvapi   huedeck-plugin-host
+ huedeck-hal-windows  huedeck-hal-linux  huedeck-nvapi  huedeck-adl  huedeck-plugin-host
   (hidapi + native     (stub, M7)        (NvAPI GPU I2C)
    HID, broker client)
      ▲    ▲
@@ -61,6 +61,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 | `huedeck-api` | lib | native done; compat partial | axum routers: native `/v1` REST + WS + dashboard (`docs/api/openapi.yaml`), SignalRGB-compatible REST and canvas events, loopback / Origin / token guard, movable native listener |
 | `huedeck-runtime` | lib | done | what CLI and daemon share: HID backend and device matching, SMBus buses and scans, hotplug, conflict detection, the SignalRGB setup reader, data directories, system info |
 | `huedeck-nvapi` | lib | done | dynamic `nvapi64.dll` binding, one NvAPI worker thread, `NvapiBus: SmbusBus` per GPU |
+| `huedeck-adl` | lib | done; untested on hardware | dynamic `atiadlxx.dll` (legacy ADL, MIT headers declared by hand) binding, one ADL worker thread, `AdlBus: SmbusBus` (kind `AmdGpu`) per AMD GPU |
 | `huedeck-iobroker` | lib + bin | done (AMD PIIX4 only) | LocalSystem service: PawnIO IOCTLs, pinned modules, PIIX4 transfers, global SMBus mutex, static policy and rate limit, named pipe with DACL, audit log |
 | `huedeck-setup` | bin | done | `--smbus` (checks PawnIO, never installs it; copies the broker and modules, registers the service), `--uninstall`, `--plan` |
 | `huedeck-daemon` | lib + bin `huedeckd` | done | single instance, token, port choice, engine thread (sessions, canvas, renderer, SQLite), battery thresholds and alerts, API serving, a shutdown that restores devices |

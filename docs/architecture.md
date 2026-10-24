@@ -33,6 +33,7 @@ huedeck-hid-desc     HID report-descriptor parser -> top-level collections / rep
 huedeck-protocol     broker wire types (serde + postcard), closed op enum, shm frame layout shared with the renderer
 huedeck-iobroker     the Windows service: PawnIO client, module hash pins, allowlists, mutex discipline, audit log, fuzz target
 huedeck-nvapi        dynamic nvapi64.dll loader (I2C, GPU enumeration, thermal) with self-declared interface ids
+huedeck-adl          dynamic atiadlxx.dll loader (legacy ADL: AMD GPU enumeration and I2C)
 huedeck-plugin-host  rquickjs runtime per thread, ES-module resolver/loader, call-if-function exports, device/bus/channel/service host objects, API_GAP trap, watchdog, compat-v1 + native-v2 profiles
 huedeck-effects      lightscript <meta> parser (html5ever), effect index, presets, engine-data producer
 huedeck-render       RendererClient trait; null renderer; CEF client (shm reader, process supervisor); frame clock
@@ -148,7 +149,7 @@ by CI, the Node simulator and golden-packet tests from M0.
 | raw USB | `nusb` over WinUSB (bound by `huedeck-setup` for approved VID:PIDs) | `nusb`, driverless |
 | serial | `serialport` | `serialport` + dialout group |
 | SMBus / SuperIO / MSR | broker -> PawnIO (`SmbusPIIX4`, `SmbusI801`, `LpcIO`, MSR), hashes pinned | `i2cdev` on `/dev/i2c-*`; hwmon for fans and temps: out-of-tree `nct6687` for the NCT6687D on the reference board (mainline `nct6683` exposes PWM writes only on Mitac boards), `nct6775` / `it87` elsewhere |
-| GPU I2C | `huedeck-nvapi` (dynamic `nvapi64.dll`) inside the broker; ADLX later | GPU buses appear as `/dev/i2c-*` |
+| GPU I2C | `huedeck-nvapi` (dynamic `nvapi64.dll`) and `huedeck-adl` (dynamic `atiadlxx.dll`), in the unelevated process | GPU buses appear as `/dev/i2c-*` |
 | sensors | broker MSR/NvAPI thermal; optional LibreHardwareMonitor HTTP JSON | hwmon |
 | screen / audio | `xcap` (WGC) / `cpal` (WASAPI loopback) | PipeWire portal or X11 / PipeWire or Pulse monitor |
 | Dynamic Lighting | WinRT `LampArray` consumed as a generic backend (certified keyboards light without a plugin) | n/a |

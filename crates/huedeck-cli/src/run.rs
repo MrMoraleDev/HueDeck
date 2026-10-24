@@ -7,7 +7,7 @@
 //! reported, never terminated), and every session ends with the plugin's
 //! `Shutdown(false)` — on Ctrl-C too — unless `--keep` is given.
 //!
-//! The SMBus devices (GPU RGB over NvAPI; RAM RGB through the HueDeck I/O
+//! The SMBus devices (GPU RGB over NvAPI and AMD ADL; RAM RGB through the HueDeck I/O
 //! broker, when it is installed and healthy) join the run unless
 //! `--no-smbus`: the SMBus plugins scan the buses once before the sessions
 //! start. They are left out, with one line saying why, while SignalRGB,
@@ -75,7 +75,7 @@ pub struct RunArgs {
     /// Never applies to SMBus devices: they are left out then.
     #[arg(long)]
     pub ignore_conflicts: bool,
-    /// Leave the SMBus devices out. By default NVIDIA GPU RGB controllers (through NvAPI)
+    /// Leave the SMBus devices out. By default NVIDIA and AMD GPU RGB controllers (through NvAPI and ADL)
     /// and RAM (through the HueDeck I/O broker, when installed) join the run: the SMBus
     /// plugins scan the buses first. They are left out anyway while SignalRGB, OpenRGB or
     /// huedeckd runs.
@@ -494,8 +494,9 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
 
 // Used by `bench --mock-smbus` (and tests).
 /// A scripted bus for the SMBus plugin `meta`: the first `BrandGPUList()`
-/// card's NVIDIA bus with a device answering at every `SmbusAddresses()`
-/// address (unset registers read 0xFF); else an AMD PIIX4 bus with one DRAM
+/// card's GPU bus (NVIDIA, or AMD when the plugin's `SmbusBuses()` allows
+/// `amdgpu` but not `nvidia`) with a device answering at every
+/// `SmbusAddresses()` address (unset registers read 0xFF); else an AMD PIIX4 bus with one DRAM
 /// RGB controller at the first `SmbusAddresses()` address: the ENE-style
 /// indexed register file OpenRGB's DRAM detectors identify (0xA0..0xAF read
 /// 0..15, "Micron" at 0x1025, a version string at 0x1000), and a DDR4 SPD at
@@ -504,14 +505,23 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
 pub(crate) fn permissive_mock_smbus(meta: &huedeck_plugin_host::PluginMeta) -> BusHandle {
     let rec = TransactionRecorder::new();
     let mut bus = match meta.gpu_ids().first() {
-        Some(gpu) => MockSmbus::new("MOCK NVIDIA GPU", huedeck_hal::SmbusBusKind::Nvidia, rec)
-            .with_pci(huedeck_hal::PciIds {
-                vendor: gpu.vendor,
-                device: gpu.device,
-                sub_vendor: gpu.sub_vendor,
-                sub_device: gpu.sub_device,
-            })
-            .with_instance("pci01"),
+        Some(gpu) => {
+            use huedeck_hal::SmbusBusKind::{AmdGpu, Nvidia};
+            let amd = meta.smbus_buses.contains(&AmdGpu) && !meta.smbus_buses.contains(&Nvidia);
+            let (name, kind) = if amd {
+                ("AMD ADLX Bus - MOCK AMD GPU", AmdGpu)
+            } else {
+                ("MOCK NVIDIA GPU", Nvidia)
+            };
+            MockSmbus::new(name, kind, rec)
+                .with_pci(huedeck_hal::PciIds {
+                    vendor: gpu.vendor,
+                    device: gpu.device,
+                    sub_vendor: gpu.sub_vendor,
+                    sub_device: gpu.sub_device,
+                })
+                .with_instance("pci01")
+        }
         None => MockSmbus::new("MOCK AMD PIIX4 Bus - 0x0b00", huedeck_hal::SmbusBusKind::Amd, rec)
             .with_pci(huedeck_hal::PciIds {
                 vendor: 0x1022,

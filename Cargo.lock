@@ -1078,6 +1078,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "huedeck-adl"
+version = "0.0.1"
+dependencies = [
+ "huedeck-hal",
+ "thiserror 2.0.21",
+ "tracing",
+ "windows",
+]
+
+[[package]]
 name = "huedeck-api"
 version = "0.0.1"
 dependencies = [
@@ -1290,6 +1300,7 @@ name = "huedeck-runtime"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "huedeck-adl",
  "huedeck-effects",
  "huedeck-engine",
  "huedeck-hal",

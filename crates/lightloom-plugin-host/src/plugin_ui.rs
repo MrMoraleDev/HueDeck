@@ -86,8 +86,8 @@ impl PluginUi {
     /// `device.addProperty(obj)` with `obj` as JSON. `Err` names why the
     /// object was refused (the message is logged to the plugin's log).
     pub fn add_property(&mut self, json: &str) -> Result<(), String> {
-        let value: serde_json::Value =
-            serde_json::from_str(json).map_err(|_| "addProperty(): parameter must be an object!".to_string())?;
+        let value: serde_json::Value = serde_json::from_str(json)
+            .map_err(|_| "addProperty(): parameter must be an object!".to_string())?;
         if !value.is_object() {
             return Err("addProperty(): parameter must be an object!".into());
         }
@@ -278,7 +278,10 @@ mod tests {
         assert_eq!(ui.messages()[2].priority, Some(3));
         assert!(ui.remove_message("fw"));
         assert!(ui.remove_message("lightloom-alert-1"));
-        assert_eq!(ui.messages().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m"]);
+        assert_eq!(
+            ui.messages().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["m"]
+        );
         for i in 0..MAX_MESSAGES + 1 {
             let r = ui.add_message(format!("x{i}"), String::new(), String::new());
             assert_eq!(r.is_err(), i >= MAX_MESSAGES - 1, "{i}");

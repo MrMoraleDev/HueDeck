@@ -36,8 +36,13 @@
 //         (through its inverted rainbow flag) clear the custom-colour bit, which turns the colours off.
 //       185 per-LED boards with no streamed zone (only JRGB/PIPE zones, e.g. MPG Z790-S WIFI 7D88):
 //         OpenRGB sends the switch but never a stream (dark board); Lightloom writes nothing at all.
-//   * The "save to flash" byte (last byte of every 0x52 report) is always 0. OpenRGB's save paths
-//     (DeviceSaveMode, MODE_FLAG_AUTOMATIC_SAVE) and its hardware effects are not ported.
+//   * The "save to flash" byte (last byte of every 0x52 report) is 0, except in the reports of
+//     save() ("Save to devices", a Lightloom extension the user has to ask for and confirm): OpenRGB's
+//     DeviceSaveMode() for its Static and Breathing modes, i.e. Update(true) (185: the board's
+//     own report then the new one, both with the save byte; 162: the new one). 112-byte boards
+//     cannot be saved (not ported). OpenRGB's other hardware effects are not ported.
+//   * Exit modes (Lightloom extension): showStatic() writes OpenRGB's Static mode with the last
+//     colours, or black, with the save byte 0 (volatile).
 //   * Shutdown writes the restore image back (save byte 0), which leaves Direct mode and puts the
 //     board's own effect back. OpenRGB has no exit step; this is Lightloom's choice. 185-byte images get
 //     the J_CORSAIR +9 read-back bias removed first (as plugins/msi-mystic-light-7c91 does).
@@ -77,6 +82,9 @@ const LED_COUNT = 10;                       // RainbowZoneData: cycle_or_led_num
 
 // MSI_MODE values used here.
 const MODE_STATIC = 1;
+const MODE_BREATHING = 2;                   // MSI_MODE_BREATHING
+const SPEED_MEDIUM = 1;                     // MSI_SPEED_MEDIUM, OpenRGB's default speed
+const SAVE_ON = 1;                          // save_data = true
 const MODE_DOUBLE_FLASHING = 4;
 const MODE_LIGHTNING = 5;
 const MSI_DIRECT_MODE = 0x25;
@@ -689,6 +697,173 @@ export function createMysticLight(dev, { label = "MSI Mystic Light" } = {}) {
     put(zoneBased, off + COLOR2, rgb);
   }
 
+  // ------------------------------------------------------------------------------- static / save
+  // The average colour of one zone on the frame `colourOf` describes (frame()'s argument).
+  function zoneColour(zone, colourOf) {
+    const colour = colourOf(zone);
+    const n = Math.max(1, zone.count);
+    const sum = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const c = colour(i);
+      for (let k = 0; k < 3; k++) {
+        sum[k] += c[k] & 0xFF;
+      }
+    }
+    return sum.map((s) => Math.round(s / n));
+  }
+
+  // One record of OpenRGB's SetMode() + SetZoneColor() (colour 1 = colour 2) for `effect`.
+  function staticRecord(p, off, effect, rgb, zone) {
+    const speed = effect === MODE_BREATHING ? SPEED_MEDIUM : 0;
+    p[off + EFFECT] = effect;
+    p[off + SPEED_BRIGHTNESS] = ((BRIGHTNESS_LEVEL_100 << BRIGHTNESS_SHIFT) & BRIGHTNESS_MASK) | (speed & SPEED_MASK);
+    p[off + COLOR_FLAGS] = (p[off + COLOR_FLAGS] | USE_CUSTOM_COLOR) & 0xFF;
+    p[off + PADDING] = zone === Z.J_RAINBOW_3 ? 4 : 0;
+    put(p, off + COLOR, rgb);
+    put(p, off + COLOR2, rgb);
+  }
+
+  // OpenRGB's Static (or Breathing) mode on every zone of the board with the zone's colour, built
+  // on the restore image (the configuration the board had at start): MSIMotherboard185Controller /
+  // MSIMotherboard162Controller SetMode() and SetZoneColor(), then the save byte.
+  function staticPacket(colourOf, effect, save) {
+    const L = variant === 185 ? LAYOUT_185 : LAYOUT_162;
+    const p = restoreImage.slice();
+    if (variant === 185) {
+      const at = L.J_CORSAIR + PADDING;
+      p[at] = p[at] >= CORSAIR_READBACK_BIAS ? p[at] - CORSAIR_READBACK_BIAS : p[at];
+    }
+    for (const zone of zones) {
+      const rgb = zoneColour(zone, colourOf);
+      if (variant === 185) {
+        const off = zoneData185(zone.type);
+        if (off < 0) {
+          continue;
+        }
+        staticRecord(p, off, effect, rgb, zone.type);
+        const rainbow = rainbowZoneData185(zone.type);
+        if (rainbow >= 0 && zone.count > 0) {
+          p[rainbow + LED_COUNT] = zone.count & 0xFF;
+        }
+        if (zone.type === Z.ON_BOARD_LED_0) {
+          // SetMode() for modes up to Lightning: the onboard zone leaves the JRGB / pipe sync;
+          // SetZoneColor() / SetMode() copy the zone to every onboard LED record.
+          p[off + SPEED_BRIGHTNESS] &= ~SYNC_SETTING_JRGB & 0xFF;
+          p[off + COLOR_FLAGS] = (p[off + COLOR_FLAGS] | SYNC_ONBOARD) & ~(SYNC_JPIPE1 | SYNC_JPIPE2) & 0xFF;
+          for (let i = 0; i < cfg.onboard; i++) {
+            const led = zoneData185(Z.ON_BOARD_LED_1 + i);
+            if (led >= 0) {
+              staticRecord(p, led, effect, rgb, Z.ON_BOARD_LED_1 + i);
+            }
+          }
+        }
+      } else {
+        // 162: what updateLed162() does for each LED value of the zone, in `effect`.
+        for (let led = zone.count - 1; led >= 0; led--) {
+          const type = zone.type + led;
+          const off = zoneData162(type);
+          if (off >= 0 && type <= Z.ON_BOARD_LED_0) {
+            staticRecord(p, off, effect, rgb, type);
+            p[off + SPEED_BRIGHTNESS] &= ~SYNC_SETTING_JRGB & 0xFF;
+            p[off + COLOR_FLAGS] &= ~SYNC_ONBOARD & 0xFF;
+          }
+          if (type >= Z.ON_BOARD_LED_0) {
+            const next = zoneData162(type + 1);
+            if (next >= 0) {
+              staticRecord(p, next, effect, rgb, type + 1);
+            }
+          }
+        }
+        p[L.ON_BOARD_LED + COLOR_FLAGS] = (p[L.ON_BOARD_LED + COLOR_FLAGS] | USE_CUSTOM_COLOR | SYNC_ONBOARD) & 0xFF;
+      }
+    }
+    p[L.SAVE] = save ? SAVE_ON : 0;
+    return p;
+  }
+
+  // Why save() cannot run on this board (null: it can).
+  function saveRefusal() {
+    if (!ready || restoreImage === null) {
+      return "the board's configuration could not be read at start, so Lightloom writes nothing to it";
+    }
+    if (variant === 112) {
+      return "112-byte Mystic Light boards cannot be saved by Lightloom";
+    }
+    return null;
+  }
+
+  /**
+   * "Save to devices": what would be stored ({ zones: [{name, color}] }) or { unsupported }.
+   * `colourOf` as for frame(); `effect` "breathing" or null (static).
+   */
+  function describeSave(colourOf, effect) {
+    const refusal = saveRefusal();
+    if (refusal !== null) {
+      return { unsupported: refusal };
+    }
+    if (effect !== null && effect !== "breathing") {
+      return { unsupported: `the board has no "${effect}" effect Lightloom can store` };
+    }
+    return {
+      effect: effect ?? "static",
+      zones: zones.map((zone) => {
+        const rgb = zoneColour(zone, colourOf);
+        return { name: zone.name, color: `#${rgb.map((v) => v.toString(16).padStart(2, "0")).join("")}` };
+      }),
+      note: "One colour per zone (the average of its LEDs): the board stores zones, not single LEDs.",
+    };
+  }
+
+  /**
+   * Store describeSave()'s configuration in the board's flash (OpenRGB's Update(true)), then go
+   * back to Direct for the live effect. What the board now holds becomes the restore image.
+   */
+  function save(colourOf, effect) {
+    const result = describeSave(colourOf, effect);
+    if (result.unsupported) {
+      return result;
+    }
+    const packet = staticPacket(colourOf, effect === "breathing" ? MODE_BREATHING : MODE_STATIC, true);
+    if (variant === 185) {
+      // ReadSettings(), the board's own state with the save byte, then the new state with it.
+      const current = readSettings(LAYOUT_185.length);
+      if (current === null) {
+        throw new Error(`${label}: GET 0x52 failed before the save; nothing was written`);
+      }
+      const at = LAYOUT_185.J_CORSAIR + PADDING;
+      current[at] = current[at] >= CORSAIR_READBACK_BIAS ? current[at] - CORSAIR_READBACK_BIAS : current[at];
+      current[LAYOUT_185.SAVE] = SAVE_ON;
+      if (!send(current) || !send(packet)) {
+        throw new Error(`${label}: send_report(0x52) failed during the save`);
+      }
+      const stored = readSettings(LAYOUT_185.length);
+      restoreImage = stored ?? packet.map((b, i) => (i === LAYOUT_185.SAVE ? 0 : b));
+      directMode = false;
+      setDirectMode185();
+    } else {
+      if (!send(packet)) {
+        throw new Error(`${label}: send_report(0x52) failed during the save`);
+      }
+      restoreImage = packet.slice();
+      restoreImage[LAYOUT_162.SAVE] = 0;
+    }
+    lastFrame = null;
+    return result;
+  }
+
+  /** Exit modes "keep" / "off": OpenRGB's Static mode with these colours, save byte 0. */
+  function showStatic(colourOf) {
+    if (!ready || restoreImage === null) {
+      return;
+    }
+    if (variant === 112) {
+      frame(colourOf, true);
+      return;
+    }
+    send(staticPacket(colourOf, MODE_STATIC, false));
+    lastFrame = null;
+  }
+
   // ------------------------------------------------------------------------------- zones
   // The zones of RGBController_MSIMotherboard{185,162,112}::SetupZones(), in order. Rows are
   // zones on the device's LED grid (one row each); channels are the resizable ARGB zones of
@@ -979,6 +1154,9 @@ export function createMysticLight(dev, { label = "MSI Mystic Light" } = {}) {
     frame,
     resize,
     restore,
+    describeSave,
+    save,
+    showStatic,
     get ready() { return ready; },
     get variant() { return variant; },
     get name() { return name; },

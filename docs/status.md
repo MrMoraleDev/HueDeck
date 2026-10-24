@@ -40,7 +40,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | M2 Compatible plugin host | **Partial** | no rawusb/hybrid/serial sessions (`bulk_transfer`, `control_transfer`, `setProtocol` throw); the Sonix 320F keyboard is not driven (EVision V1); the physical hot-unplug test has not been run |
 | M3 Effects pipeline | **Done** | the Chromium sandbox is off until releases are signed |
 | M4 Dashboard, persistence, API, packaging | **Partial** | the MSI, winget and Authenticode signing; autostart and tray; the plugin sources manager; the logs page; compat API parts; the fresh-machine acceptance run |
-| M5 Privileged bus | **Partial** | only PIIX4 (no I801, no LpcIO); no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
+| M5 Privileged bus | **Partial** | PIIX4 and I801 (I801 mock-tested only, no Intel board run); no LpcIO; no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
 | M6 Inputs, network, extras | **Missing** (network in progress) | audio, screen, meters, LCD faces, macros, actions, LampArray HAL backend, OpenRGB SDK server, runtime parameters UI |
 | M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; nusb/serial/i2c/hwmon, CEF, packaging and cargo-dist missing |
 
@@ -146,7 +146,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 |---|---|---|
 | `lightloom-iobroker` (LocalSystem service), op enum, mutex, allowlists, rate limit, dry-run, audit | Done | `crates/lightloom-iobroker/src/{server,policy,mutex,pipe,pawnio}.rs`, `crates/lightloom-protocol/src/broker.rs`, 52 + 15 tests |
 | PawnIO SmbusPIIX4, pinned | Done | `crates/lightloom-iobroker/src/{piix4,pins}.rs` (PawnIO.Modules 0.2.11 SHA-256) |
-| PawnIO SmbusI801 (Intel) | Missing | only mentioned in `boot.rs` comments; no pin, no transfer code |
+| PawnIO SmbusI801 (Intel) | Done (no hardware run) | `crates/lightloom-iobroker/src/{i801,chipset,pins,boot}.rs`: pinned, tried after PIIX4, fake + fuzz tested; needs an Intel board |
 | PawnIO LpcIO (SuperIO, NCT6687D) | Missing | no code |
 | `lightloom-setup` one-shot elevated installer | Partial | `crates/lightloom-setup/src/main.rs`: copies pinned modules + broker, registers the service; does not install PawnIO (only checks it) and does no WinUSB binding. PawnIO option: in progress (`feature/installer`) |
 | `bus.*` mapping, capability matrix | Done | `crates/lightloom-plugin-host/src/smbus.rs`, `plugins/README.md` "SMBus plugins" |
@@ -258,7 +258,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
 2. **WP-SERIAL: `@SignalRGB/serial` and `Type() == "serial"`. Size M.**
    - Touches: new `lightloom-hal-windows/src/serial.rs` (`serialport`); the plugin host native module (`src/device.rs` or a new `src/serial.rs`); `catalog.rs` `accept()`; `host.js` serial module; tests.
    - Conflicts with WP-USB on `catalog.rs`/`host.js`: run it after WP-USB, or give it only the module files.
-3. **WP-I801: Intel chipset SMBus (PawnIO `SmbusI801`). Size M.**
+3. **WP-I801: Intel chipset SMBus (PawnIO `SmbusI801`). Size M.** Done on `feature/intel-smbus` (mock/fake/fuzz only; hardware acceptance on an Intel board pending).
    - Touches: `lightloom-iobroker/src/{pins,boot,detect}.rs`, a new `i801.rs` beside `piix4.rs`, `lightloom-protocol/src/broker.rs` (bus kind, if needed), `lightloom-setup` (module list).
    - Mock and fake tests only; it needs an Intel board for hardware acceptance.
 4. **WP-AMDGPU: AMD GPU I2C via ADL/ADLX. Size M.**

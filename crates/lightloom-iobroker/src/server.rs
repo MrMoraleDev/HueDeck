@@ -5,9 +5,9 @@
 //! Order for a bus operation: protocol version → bus exists → [`Policy`]
 //! (ranges, SPD denial, chipset kinds only, rate limit, dry-run) → the global
 //! SMBus mutex (bounded wait, `BusContended` when another program keeps it)
-//! → on port 0, re-select the port (another program may have moved the
-//! primary controller's mux) → the PawnIO transfer → mux put back → mutex
-//! released. A `BusLock` keeps the mutex (and the port) across operations
+//! → on PIIX4 port 0, re-select the port (another program may have moved the
+//! primary controller's mux; the I801 has no ports) → the PawnIO transfer →
+//! mux put back → mutex released. A `BusLock` keeps the mutex (and the port) across operations
 //! until `BusUnlock`, the lease running out, or the client going away; each
 //! bus has its own lease, and the mutex stays held while any lease does.
 //! Renewals never stretch one continuous hold past [`MAX_HOLD`]: every lease
@@ -18,7 +18,7 @@
 
 use crate::mutex::{GlobalMutex, ACQUIRE_TIMEOUT_MS};
 use crate::pawnio::PawnExec;
-use crate::piix4::Piix4Bus;
+use crate::chipset::{ChipsetBus, SmbusXfer};
 use crate::policy::{audit, Lease, Policy, MAX_HOLD};
 use lightloom_protocol::broker::{
     BrokerError, BrokerOp, BrokerPayload, BrokerRequest, BrokerResponse, BusInfo, HealthReport, ModuleStatus,
@@ -31,8 +31,8 @@ use std::time::{Duration, Instant};
 pub struct BrokerBus<E> {
     /// What `ListBuses` reports (its `id` is its index).
     pub info: BusInfo,
-    /// The PawnIO handle behind it.
-    pub piix4: Piix4Bus<E>,
+    /// The PawnIO handle behind it (a PIIX4 port or the I801).
+    pub chip: ChipsetBus<E>,
 }
 
 /// The PawnIO facts `Health` reports.
@@ -44,7 +44,7 @@ pub struct HealthInfo {
     pub pawnio_edition: PawnIoEdition,
     /// Code-integrity options.
     pub ci_options: u32,
-    /// PIIX4 sleep mode set at start.
+    /// Module sleep mode set at start.
     pub sleep_mode: u8,
     /// Loaded modules.
     pub modules: Vec<ModuleStatus>,
@@ -165,9 +165,9 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
                 let index = self.bus_index(op.bus().unwrap_or(u8::MAX))?;
                 let info = self.buses[index].info.clone();
                 self.policy.check(op, &info, now)?;
-                // Operations the PIIX4 module cannot do are refused before the mutex.
+                // Operations the module cannot do are refused before the mutex.
                 if !matches!(op, BrokerOp::SpdRead { .. }) {
-                    crate::piix4::xfer_input(op)?;
+                    self.buses[index].chip.check(op)?;
                 }
                 let leased = self.leased(index);
                 if !leased {
@@ -178,8 +178,8 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
                 let result = match *op {
                     BrokerOp::SpdRead {
                         addr, offset, len, ..
-                    } => self.buses[index].piix4.spd_read(addr, offset, len),
-                    _ => self.buses[index].piix4.transfer(op),
+                    } => self.buses[index].chip.spd_read(addr, offset, len),
+                    _ => self.buses[index].chip.transfer(op),
                 };
                 if !leased {
                     self.end(index);
@@ -195,7 +195,7 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
     }
 
     /// `BrokerOp::Batch`: each op checked as if it came alone (policy, the
-    /// PIIX4 module's capabilities), then sent, all under one hold of the
+    /// module's capabilities), then sent, all under one hold of the
     /// mutex (or the client's lease). Stops at the first op refused or
     /// failed, and before an op once [`BATCH_HOLD_LIMIT_MS`] has passed.
     fn batch(&mut self, bus: u8, ops: &[BrokerOp], now: Instant) -> Result<BrokerPayload, BrokerError> {
@@ -214,7 +214,7 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
             let checked = self
                 .policy
                 .check(op, &info, now)
-                .and_then(|()| crate::piix4::xfer_input(op).map(drop));
+                .and_then(|()| self.buses[index].chip.check(op));
             if let Err(e) = checked {
                 error = Some(e);
                 break;
@@ -228,7 +228,7 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
                 }
                 held_since = Some(Instant::now());
             }
-            let result = self.buses[index].piix4.transfer(op);
+            let result = self.buses[index].chip.transfer(op);
             self.ops_served += 1;
             match result {
                 Ok(payload) => {
@@ -267,8 +267,8 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
             self.mutex.acquire(ACQUIRE_TIMEOUT_MS)?;
             self.mutex_held = true;
         }
-        if self.buses[index].piix4.port() == 0 {
-            match self.buses[index].piix4.select_port() {
+        if self.buses[index].chip.selects_port() {
+            match self.buses[index].chip.select_port() {
                 Ok(previous) => {
                     if previous != 0 {
                         self.restore = Some(Restore { bus: index, previous });
@@ -287,7 +287,7 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
     fn end(&mut self, index: usize) {
         if let Some(r) = self.restore.filter(|r| r.bus == index) {
             self.restore = None;
-            if let Err(e) = self.buses[index].piix4.restore_port(r.previous) {
+            if let Err(e) = self.buses[index].chip.restore_port(r.previous) {
                 tracing::warn!("PIIX4 port {} not restored: {e}", r.previous);
             }
         }
@@ -334,6 +334,7 @@ impl<E: PawnExec, M: GlobalMutex> Server<E, M> {
 mod tests {
     use super::*;
     use crate::fake::{FakeMutex, FakePiix4};
+    use crate::piix4::Piix4Bus;
     use lightloom_protocol::broker::BusKind;
 
     fn info(name: &str) -> BusInfo {
@@ -376,11 +377,11 @@ mod tests {
         let buses = vec![
             BrokerBus {
                 info: info("AMD PIIX4 Bus - 0x0b00"),
-                piix4: Piix4Bus::new(primary.clone(), 0).unwrap(),
+                chip: Piix4Bus::new(primary.clone(), 0).unwrap().into(),
             },
             BrokerBus {
                 info: info("AMD PIIX4 Bus - 0x0b20"),
-                piix4: Piix4Bus::new(FakePiix4::new().on_port(1), 1).unwrap(),
+                chip: Piix4Bus::new(FakePiix4::new().on_port(1), 1).unwrap().into(),
             },
         ];
         Rig {
@@ -977,5 +978,94 @@ mod tests {
         );
         assert!(r.primary.calls().is_empty());
         assert_eq!(r.mutex.counts(), (0, 0));
+    }
+
+    /// An Intel board: one I801 bus, no port select anywhere, the same
+    /// checks, SPD read, batch and lease as on the PIIX4.
+    #[test]
+    fn i801_bus_is_served_like_a_piix4_port_without_ports() {
+        let fake = FakePiix4::new_i801()
+            .with_device(0x39, [(0x81, 0x42)])
+            .with_spd(0x50, &ddr4_spd());
+        let mutex = FakeMutex::new();
+        let t0 = Instant::now();
+        let mut intel = info("Intel ICH8 Bus - 0xefa0");
+        intel.kind = BusKind::Intel;
+        (intel.vendor, intel.device) = (0x8086, 0x7A23);
+        let buses = vec![BrokerBus {
+            info: intel,
+            chip: crate::i801::I801Bus::new(fake.clone()).into(),
+        }];
+        let mut server = Server::new(buses, mutex.clone(), health(), false, t0);
+        let mut call = |op| server.handle(&BrokerRequest::new(1, op), t0).result;
+        assert!(matches!(
+            call(BrokerOp::ListBuses),
+            Ok(BrokerPayload::Buses(b)) if b[0].kind == BusKind::Intel && b[0].id == 0
+        ));
+        assert_eq!(
+            call(BrokerOp::SmbusReadByte {
+                bus: 0,
+                addr: 0x39,
+                reg: 0x81
+            }),
+            Ok(BrokerPayload::Byte(0x42))
+        );
+        assert_eq!(
+            call(BrokerOp::SpdRead {
+                bus: 0,
+                addr: 0x50,
+                offset: 320,
+                len: 2
+            }),
+            Ok(BrokerPayload::Block(vec![0x85, 0x9B]))
+        );
+        assert_eq!(fake.spd_page(), 0);
+        assert_eq!(mutex.counts(), (2, 2));
+        // Refused before the mutex: a block read, an SPD write.
+        let before = fake.call_count();
+        assert_eq!(
+            call(BrokerOp::SmbusReadBlock {
+                bus: 0,
+                addr: 0x39,
+                reg: 0,
+                len: 4
+            }),
+            Err(BrokerError::Unsupported)
+        );
+        assert!(call(BrokerOp::SmbusWriteByte {
+            bus: 0,
+            addr: 0x50,
+            reg: 0,
+            value: 1
+        })
+        .is_err());
+        assert_eq!(fake.call_count(), before);
+        assert_eq!(mutex.counts(), (2, 2));
+        // A lease and a batch inside it.
+        assert_eq!(call(BrokerOp::BusLock { bus: 0, lease_ms: 50 }), Ok(BrokerPayload::Ack));
+        let write = BrokerOp::SmbusWriteByte {
+            bus: 0,
+            addr: 0x39,
+            reg: 0x01,
+            value: 0x07,
+        };
+        assert_eq!(
+            call(BrokerOp::Batch {
+                bus: 0,
+                ops: vec![write.clone(), write]
+            }),
+            Ok(BrokerPayload::Batch {
+                results: vec![BrokerPayload::Ack, BrokerPayload::Ack],
+                error: None
+            })
+        );
+        assert_eq!(call(BrokerOp::BusUnlock { bus: 0 }), Ok(BrokerPayload::Ack));
+        assert_eq!(mutex.counts(), (3, 3));
+        assert!(!mutex.held());
+        assert_eq!(fake.register(0x39, 0x01), Some(0x07));
+        assert!(
+            fake.calls().iter().all(|(f, _)| f == "ioctl_smbus_xfer"),
+            "no port select on the I801"
+        );
     }
 }

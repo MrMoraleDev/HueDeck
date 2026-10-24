@@ -22,6 +22,8 @@ pub trait Files {
     fn read(&self, path: &Path) -> Option<Vec<u8>>;
     /// `path` with every symbolic link resolved, `None` when it does not exist.
     fn resolve(&self, path: &Path) -> Option<PathBuf>;
+    /// The entry names of directory `dir`, sorted (empty when unreadable).
+    fn list(&self, dir: &Path) -> Vec<String>;
 }
 
 /// The real filesystem.
@@ -35,6 +37,18 @@ impl Files for RealFs {
 
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
         std::fs::canonicalize(path).ok()
+    }
+
+    fn list(&self, dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
     }
 }
 
@@ -67,6 +81,18 @@ impl Files for MemFs {
             .keys()
             .any(|k| k.starts_with(path))
             .then(|| path.to_path_buf())
+    }
+
+    fn list(&self, dir: &Path) -> Vec<String> {
+        let names: std::collections::BTreeSet<String> = self
+            .files
+            .keys()
+            .chain(self.links.keys())
+            .filter_map(|k| k.strip_prefix(dir).ok())
+            .filter_map(|rest| rest.components().next())
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        names.into_iter().collect()
     }
 }
 

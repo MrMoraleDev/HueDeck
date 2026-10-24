@@ -14,8 +14,11 @@
 //!   device's `input` or other nodes, has `ACTION!="remove"` (systemd 258
 //!   re-applies ACLs on `change`) and adds `TAG+="uaccess"` (an ACL for the
 //!   user of the active seat);
-//! * SMBus claims add nothing per device; one `i2c-dev` rule puts every
-//!   `/dev/i2c-*` in group `i2c` (packaging/sysusers.d/huedeck.conf creates it);
+//! * SMBus claims add nothing per device; the `i2c-dev` rules put in group
+//!   `i2c` (packaging/sysusers.d/huedeck.conf creates it) only the adapters
+//!   HueDeck uses, matched by name as `huedeck_hal_linux::i2c::classify`
+//!   does (PIIX4 ports 0/1, i801, NVIDIA port 1, AMDGPU OEM): never the
+//!   DDC, touchpad or EC buses, nor the PIIX4 ports 2-4;
 //! * usage claims (any device with a HID LampArray collection) and network
 //!   claims have no VID:PID and get a comment only.
 
@@ -125,10 +128,15 @@ const HEADER: &str = "\
 ";
 
 const I2C_RULE: &str = "\
-# SMBus / I2C adapters (RAM, motherboard and GPU lighting through /dev/i2c-*): group i2c.
-# Create the group and join it once: packaging/sysusers.d/huedeck.conf (or
-# `groupadd -r i2c`), then `usermod -aG i2c $USER` and log in again.
-ACTION!=\"remove\", SUBSYSTEM==\"i2c-dev\", KERNEL==\"i2c-[0-9]*\", GROUP=\"i2c\", MODE=\"0660\"
+# SMBus / I2C adapters (RAM, motherboard and GPU lighting through /dev/i2c-*): group i2c,
+# only the adapters HueDeck uses (by kernel adapter name). Create the group and join it
+# once: packaging/sysusers.d/huedeck.conf (or `groupadd -r i2c`), then
+# `usermod -aG i2c $USER` and log in again. The i2c-dev module must be loaded
+# (packaging/modules-load.d/huedeck.conf).
+ACTION!=\"remove\", SUBSYSTEM==\"i2c-dev\", KERNEL==\"i2c-[0-9]*\", ATTR{name}==\"SMBus PIIX4 adapter port [01] at *|SMBus PIIX4 adapter at *\", GROUP=\"i2c\", MODE=\"0660\"
+ACTION!=\"remove\", SUBSYSTEM==\"i2c-dev\", KERNEL==\"i2c-[0-9]*\", ATTR{name}==\"SMBus I801 adapter at *\", GROUP=\"i2c\", MODE=\"0660\"
+ACTION!=\"remove\", SUBSYSTEM==\"i2c-dev\", KERNEL==\"i2c-[0-9]*\", ATTR{name}==\"NVIDIA i2c adapter 1 at *\", GROUP=\"i2c\", MODE=\"0660\"
+ACTION!=\"remove\", SUBSYSTEM==\"i2c-dev\", KERNEL==\"i2c-[0-9]*\", ATTR{name}==\"AMDGPU DM i2c OEM bus|AMDGPU i2c bit bus OEM 0x97\", GROUP=\"i2c\", MODE=\"0660\"
 ";
 
 fn rule_lines(transport: &str, vid: u16, pid: u16) -> Vec<String> {
@@ -276,7 +284,10 @@ mod tests {
                 r#"ACTION!="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1234", ATTR{idProduct}=="abcd", TAG+="uaccess""#,
                 r#"ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1e71", ATTRS{idProduct}=="2001", TAG+="uaccess""#,
                 r#"ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1e71", ATTRS{idProduct}=="2007", TAG+="uaccess""#,
-                r#"ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660""#,
+                r#"ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="SMBus PIIX4 adapter port [01] at *|SMBus PIIX4 adapter at *", GROUP="i2c", MODE="0660""#,
+                r#"ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="SMBus I801 adapter at *", GROUP="i2c", MODE="0660""#,
+                r#"ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="NVIDIA i2c adapter 1 at *", GROUP="i2c", MODE="0660""#,
+                r#"ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="AMDGPU DM i2c OEM bus|AMDGPU i2c bit bus OEM 0x97", GROUP="i2c", MODE="0660""#,
             ]
         );
         assert!(r.contains("# b.b: B\n"));

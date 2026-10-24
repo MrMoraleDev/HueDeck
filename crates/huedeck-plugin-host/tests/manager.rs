@@ -46,6 +46,7 @@ fn present(mock: &MockHid, plugin: &CatalogEntry) -> Vec<Present> {
                 vid: e.vid,
                 pid: e.pid,
                 endpoints: vec![e],
+                network: None,
             },
             plugin: plugin.clone(),
         })
@@ -160,6 +161,7 @@ fn a_session_that_failed_before_removal_stays_failed() {
             vid: 0x1234,
             pid: 0x3333,
             endpoints: vec![info.clone()],
+            network: None,
         },
         plugin,
     };

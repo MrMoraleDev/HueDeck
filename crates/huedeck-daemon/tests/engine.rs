@@ -89,6 +89,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
                 vid: 0x1234,
                 pid: 0x4D4D,
                 endpoints: vec![info],
+                network: None,
             }],
             smbus: Vec::new(),
         },
@@ -130,6 +131,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
     let port = |p| Request::SetSettings {
         signalrgb: None,
         gpu_compositing: None,
+        network: None,
         smbus: None,
         shutdown_mode: None,
         battery_low: None,
@@ -150,6 +152,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
     let on = Request::SetSettings {
         signalrgb: None,
         gpu_compositing: None,
+        network: None,
         smbus: None,
         battery_low: None,
         battery_critical: None,
@@ -502,6 +505,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
         Request::SetSettings {
             signalrgb: None,
             gpu_compositing: None,
+            network: None,
             smbus: Some(false),
             shutdown_mode: None,
             battery_low: None,
@@ -680,6 +684,7 @@ fn save_to_devices_and_exit_modes() {
         Request::SetSettings {
             signalrgb: None,
             gpu_compositing: None,
+            network: None,
             smbus: None,
             shutdown_mode: Some("keep".into()),
             battery_low: None,
@@ -697,6 +702,7 @@ fn save_to_devices_and_exit_modes() {
             Request::SetSettings {
                 signalrgb: None,
                 gpu_compositing: None,
+                network: None,
                 smbus: None,
                 shutdown_mode: Some("explode".into()),
                 battery_low: None,
@@ -746,5 +752,141 @@ fn save_to_devices_and_exit_modes() {
     );
     assert_eq!(commits(), 1, "exit modes never store anything");
     drop(shared);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn network_lights_follow_their_service() {
+    let home = std::env::temp_dir().join(format!("huedeck-engine-net-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../huedeck-plugin-host/testdata/network");
+    let handle = engine::start(EngineOptions {
+        paths: Paths::under(&home),
+        config: Config::default(),
+        dry_run: true,
+        hardware: HardwareMode::None,
+        ephemeral: true,
+        plugins_dir: Some(plugins),
+        effects_dir: None,
+        components_dir: None,
+        renderer: None,
+        plugin_cache: None,
+        notifier: Arc::new(MockNotifier::default()),
+        api_port: huedeck_api::NATIVE_PORT,
+        api_port_notice: None,
+    })
+    .unwrap();
+    let shared = handle.shared();
+    let b: &dyn Backend = &*shared;
+    let s = wait_for(b, "boot", |s| s.state == "Running");
+    assert!(!s.settings.network && s.network.is_empty(), "off by default");
+    assert!(call(
+        b,
+        Request::NetworkAdd {
+            plugin: "Loopback Lights".into(),
+            ip: "127.0.0.1".into()
+        }
+    )
+    .is_err());
+
+    call(
+        b,
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
+            port: None,
+            openrgb_sdk: None,
+            shutdown_mode: None,
+            smbus: None,
+            network: Some(true),
+        },
+    )
+    .unwrap();
+    wait_for(b, "the service", |s| {
+        s.network
+            .iter()
+            .any(|n| n.plugin == "Loopback Lights" && n.running)
+    });
+    assert!(call(
+        b,
+        Request::NetworkAdd {
+            plugin: "Loopback Lights".into(),
+            ip: "8.8.8.8".into()
+        }
+    )
+    .is_err());
+    call(
+        b,
+        Request::NetworkAdd {
+            plugin: "Loopback Lights".into(),
+            ip: "127.0.0.1".into(),
+        },
+    )
+    .unwrap();
+    const ID: &str = "manual-127.0.0.1";
+    const DEV: &str = "net:loopback-lights:manual-127.0.0.1";
+    let s = wait_for(b, "the controller", |s| {
+        s.network[0].controllers.iter().any(|c| c.id == ID)
+    });
+    let c = &s.network[0].controllers[0];
+    assert!(c.can_pair && c.device.is_none() && s.network[0].can_forget);
+    assert_eq!(c.ip.as_deref(), Some("127.0.0.1"));
+
+    // Pairing announces it: a device session starts and the device list shows it.
+    call(
+        b,
+        Request::NetworkAction {
+            plugin: "Loopback Lights".into(),
+            id: ID.into(),
+            action: "pair".into(),
+        },
+    )
+    .unwrap();
+    let s = wait_for(b, "the network device", |s| {
+        s.devices
+            .iter()
+            .any(|d| d.key == DEV && d.state == "running" && d.frames > 1)
+    });
+    let d = s.devices.iter().find(|d| d.key == DEV).unwrap();
+    assert_eq!(d.name, "Lamp manual-127.0.0.1");
+    assert_eq!(d.bus.as_deref(), Some("network · 127.0.0.1"));
+    assert_eq!(s.network[0].controllers[0].device.as_deref(), Some(DEV));
+
+    // Forget suppresses it: the session ends.
+    call(
+        b,
+        Request::NetworkAction {
+            plugin: "Loopback Lights".into(),
+            id: ID.into(),
+            action: "forget".into(),
+        },
+    )
+    .unwrap();
+    wait_for(b, "the device to go", |s| {
+        s.devices.iter().all(|d| d.key != DEV || d.state == "absent")
+    });
+    // Turning network lights off stops the services.
+    call(
+        b,
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
+            port: None,
+            openrgb_sdk: None,
+            shutdown_mode: None,
+            smbus: None,
+            network: Some(false),
+        },
+    )
+    .unwrap();
+    let s = b.snapshot();
+    assert!(s.network.is_empty() && !s.settings.network);
+    handle.shutdown();
     let _ = std::fs::remove_dir_all(&home);
 }

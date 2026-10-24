@@ -847,7 +847,12 @@ ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="31e3", ATTRS{idProduct}
 ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="03eb", ATTRS{idProduct}=="ff01", TAG+="uaccess"
 ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="03eb", ATTRS{idProduct}=="ff02", TAG+="uaccess"
 
-# SMBus / I2C adapters (RAM, motherboard and GPU lighting through /dev/i2c-*): group i2c.
-# Create the group and join it once: packaging/sysusers.d/huedeck.conf (or
-# `groupadd -r i2c`), then `usermod -aG i2c $USER` and log in again.
-ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"
+# SMBus / I2C adapters (RAM, motherboard and GPU lighting through /dev/i2c-*): group i2c,
+# only the adapters HueDeck uses (by kernel adapter name). Create the group and join it
+# once: packaging/sysusers.d/huedeck.conf (or `groupadd -r i2c`), then
+# `usermod -aG i2c $USER` and log in again. The i2c-dev module must be loaded
+# (packaging/modules-load.d/huedeck.conf).
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="SMBus PIIX4 adapter port [01] at *|SMBus PIIX4 adapter at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="SMBus I801 adapter at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="NVIDIA i2c adapter 1 at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="AMDGPU DM i2c OEM bus|AMDGPU i2c bit bus OEM 0x97", GROUP="i2c", MODE="0660"

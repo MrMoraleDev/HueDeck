@@ -1,6 +1,8 @@
 <!-- Generated 2026-10-17 from static analysis of SignalRGB 2.5.80 (plugin corpus usage, logs, exe strings, public docs). No decompiled code. Subsystem: network-services -->
 # SignalRGB 2.5.80 — Network/service plugins + addon packaging (RE contract)
 
+> What HueDeck implements of this contract, and where it differs: [network-huedeck.md](network-huedeck.md).
+
 Corpus facts (exhaustive scan): `Type()==="network"` appears in **0/348 CDN plugins, 0/464 bundled plugins, 9/… addon .js**. All 9 network services live in `cache\addons\<md5>\`. Log: `Plugin Scan Summary: Total Processed: 650, USB Plugins Found: 1361, SMBUS Plugins Found: 27, Network Services Found: 9` (Logs\SignalRGB_20261010_193126.old.9.log:444). `plugin_cache.json` key `services` = `{ "<Name()>": "<abs path .js>" }` (Cololight, Govee, LeetDesk, Nanoleaf, Philips Hue, SRGBmods-WLC, Twinkly, WLED, Yeelight).
 
 Files (A = `%USERPROFILE%\AppData\Local\WhirlwindFX\SignalRgb\cache\addons`):

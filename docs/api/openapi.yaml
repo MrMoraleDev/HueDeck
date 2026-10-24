@@ -116,6 +116,7 @@ paths:
                   additionalProperties: true
                   description: "`ControllableParameters` values by property, applied live and stored."
                 blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low. }
+                shutdownMode: { enum: [restore, keep, off, default], description: "This device's exit mode (\"When HueDeck closes\"); `default`: the setting's. See docs/host-api/save-shutdown.md." }
       responses:
         "200":
           description: Done.
@@ -489,6 +490,7 @@ paths:
                 batteryLow: { type: integer, minimum: 1, maximum: 95, description: "Low-battery threshold, percent (plugins see it as `battery.lowBatteryWarningLevel`); above `batteryCritical`, else `400 bad_request`." }
                 batteryCritical: { type: integer, minimum: 0, description: Critical battery threshold, percent; below `batteryLow`. }
                 batteryNotifications: { type: boolean, description: Show low and critical battery alerts as system notifications. }
+                shutdownMode: { enum: [restore, keep, off], description: "What devices show when HueDeck closes: their own lighting, the last colours (not stored) or off; else `400 bad_request`." }
                 port: { type: integer, minimum: 1024, maximum: 65535, description: "Port of the native API and the dashboard (loopback only)." }
       responses:
         "200":
@@ -504,6 +506,7 @@ paths:
                   batteryLow: { type: integer }
                   batteryCritical: { type: integer }
                   batteryNotifications: { type: boolean }
+                  shutdownMode: { enum: [restore, keep, off] }
                   port: { type: integer }
                   url: { type: string, examples: ["http://127.0.0.1:53000/"] }
         "400":
@@ -647,6 +650,57 @@ paths:
                 type: object
                 properties:
                   devices: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/save/preview:
+    post:
+      tags: [devices]
+      operationId: savePreview
+      summary: What "Save to devices" would store in each device (nothing is written)
+      description: "Each device's plugin runs `SaveToDevice({action: \"preview\"})` with every write recorded and never sent. Every device when `devices` is empty. docs/host-api/save-shutdown.md."
+      security: [{ bearer: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                devices: { $ref: "#/components/schemas/SaveChoices" }
+      responses:
+        "200":
+          description: One entry per device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SaveAnswer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/save:
+    post:
+      tags: [devices]
+      operationId: saveToDevices
+      summary: Store lighting in the devices' own memory (flash / EEPROM)
+      description: "Needs `confirm: true` (ask the user first) and named devices, else `400 bad_request`. At most one save per device per minute: a device saved sooner gets `ok: false` with the wait. Every attempt is written to `save-audit.log`."
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm, devices]
+              properties:
+                confirm: { const: true }
+                devices: { $ref: "#/components/schemas/SaveChoices" }
+      responses:
+        "200":
+          description: One entry per device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SaveAnswer" }
+        "400":
+          description: "`bad_request`: no confirmation, or no device named."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /v1/shutdown:
     post:
@@ -919,6 +973,47 @@ components:
             - type: "null"
           description: The last battery report (plugins with the `battery` feature), kept after the device goes away.
         blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low (user setting). }
+        save:
+          oneOf:
+            - $ref: "#/components/schemas/SaveSupport"
+            - type: "null"
+          description: What "Save to devices" can store in this device; null when nothing.
+        shutdownModes:
+          type: array
+          items: { enum: [restore, keep, off] }
+          description: Exit modes the device's plugin carries out, natively or through its `shutdownColor` parameter (`restore` always).
+        shutdownMode: { type: [string, "null"], enum: [restore, keep, off, null], description: "This device's own exit mode; null: the setting's." }
+    SaveSupport:
+      type: object
+      properties:
+        static: { type: boolean, description: The colours of the current frame (as the device stores them). }
+        effects: { type: array, items: { enum: [spectrum, breathing, wave, rainbow] }, description: Built-in effects it can store instead. }
+        waitSecs: { type: integer, description: Seconds before the device may be saved again (one save per device per minute). }
+    SaveChoices:
+      type: object
+      description: Device key -> what to store.
+      additionalProperties:
+        type: object
+        properties:
+          effect: { type: [string, "null"], description: "One of the device's `save.effects`; null: the current colours." }
+    SaveAnswer:
+      type: object
+      properties:
+        preview: { type: boolean }
+        devices:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              name: { type: string }
+              ok: { type: boolean }
+              dryRun: { type: boolean, description: Nothing was sent (a preview, or `--dry-run`). }
+              result:
+                type: [object, "null"]
+                description: "What the plugin returned: `{effect, zones: [{name, color}], note}`."
+                additionalProperties: true
+              error: { type: [string, "null"], description: Why it cannot be (or was not) stored. }
     BatteryView:
       type: object
       properties:
@@ -997,6 +1092,7 @@ components:
         batteryLow: { type: integer, description: Low-battery threshold, percent. }
         batteryCritical: { type: integer, description: Critical battery threshold, percent. }
         batteryNotifications: { type: boolean }
+        shutdownMode: { enum: [restore, keep, off], description: What devices show when HueDeck closes. }
         notificationsAvailable: { type: boolean, description: This OS has system notifications HueDeck can show. }
     Event:
       type: object

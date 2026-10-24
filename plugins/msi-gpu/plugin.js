@@ -11,10 +11,11 @@
 //
 // Protocol notes and sources: docs/hardware/msi-gpu.md. Status: tested on 10DE:2504 / 1462:3903 (2026-10-19).
 //
-// Safety, as in OpenRGB: one write per register, no retries; register 0x3F (MSI_GPU_REG_SAVE,
-// which stores the current state in the card's flash) is never written (the plugin skips it,
-// and the host refuses it through SmbusDeniedRegisters()); only address 0x68. The host renders
-// SMBus devices at most every 33 ms, OpenRGB's TimeToSend for this controller.
+// Safety, as in OpenRGB: one write per register, no retries; only address 0x68. Register 0x3F
+// (MSI_GPU_REG_SAVE, which stores the current state in the card's flash) is written only by
+// SaveToDevice(request), the "Save to devices" button after the user confirmed it: write() skips
+// it everywhere else, and the host refuses it (SmbusDeniedRegisters()) outside that one call.
+// The host renders SMBus devices at most every 33 ms, OpenRGB's TimeToSend for this controller.
 
 /* global device, bus, shutdownColor */
 
@@ -58,8 +59,13 @@ export function BrandGPUList() { return GPUS.map((g) => ({ ...g })); }
 // HueDeck extensions (docs/host-api/smbus.md): the only address Scan() may look at, on NVIDIA buses.
 export function SmbusAddresses() { return [ADDRESS]; }
 export function SmbusBuses() { return ["nvidia"]; }
-// Registers the host never lets this plugin write: MSI_GPU_REG_SAVE.
+// Registers the host never lets this plugin write, except inside SaveToDevice(request):
+// MSI_GPU_REG_SAVE.
 export function SmbusDeniedRegisters() { return [REG_SAVE]; }
+// HueDeck extensions (docs/host-api/save-shutdown.md): what the card can store, and the exit modes
+// Shutdown(SystemSuspending, mode) carries out.
+export function SaveCapabilities() { return { static: true, effects: ["spectrum", "breathing"] }; }
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
 
 // Registers (MSIGPUController.h).
 const REG_BRIGHTNESS = 0x36;
@@ -75,10 +81,23 @@ const REG_R3 = 0x2A;
 const REG_G3 = 0x2B;
 const REG_B3 = 0x2C;
 const REG_MODE = 0x22;
-// MSI_GPU_REG_SAVE: writes the current state to the card's flash. Never written.
+// MSI_GPU_REG_SAVE: writes the current state to the card's flash. Written only by commitToFlash().
 const REG_SAVE = 0x3F;
+// MSIGPUController::Save(): the value written to MSI_GPU_REG_SAVE.
+const SAVE_VALUE = 0x01;
 
 const MODE_STATIC = 0x13;
+const MODE_RAINBOW = 0x08;
+const MODE_BREATHING = 0x04;
+// speed_values[MSI_GPU_SPEED_MID], the default speed of OpenRGB's modes (RGBController_MSIGPU.cpp).
+const SPEED_MID = 0x02;
+// What SaveToDevice() can store: OpenRGB's "Direct"/static (the colour), "Rainbow" (no colour) and
+// "Breathing" (colour 1) modes.
+const SAVE_MODES = {
+  static: { mode: MODE_STATIC, speed: false, color: true },
+  spectrum: { mode: MODE_RAINBOW, speed: true, color: false },
+  breathing: { mode: MODE_BREATHING, speed: true, color: true },
+};
 // OpenRGB "Direct" brightness: MSI_GPU_BRIGHTNESS_MAX (5) * MSI_GPU_BRIGHTNESS_MULTI (20).
 const BRIGHTNESS_FULL = 5 * 20;
 
@@ -173,9 +192,88 @@ function hexColor(text) {
   return [(v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF];
 }
 
-// Leave the card as it was: colours, speed and brightness back, the mode last (it applies them).
-// When the startup state could not be read, show the shutdown colour in static mode instead.
-export function Shutdown() {
+// "Save to devices" (HueDeck extension): store the frame's colour, or a built-in effect, in the
+// card's flash. As OpenRGB does it: DeviceUpdateMode() (brightness, the speed for modes that have
+// one, the mode), DeviceUpdateLEDs() (0x26, then colour 1) and DeviceSaveMode() (0x3F <- 1). The
+// card then goes back to Direct (static at full brightness) for the live effect, and a later
+// Shutdown(false, "restore") puts back what was stored. A preview only describes it.
+export function SaveToDevice(request) {
+  const effect = request && request.effect ? String(request.effect) : null;
+  const plan = SAVE_MODES[effect ?? "static"];
+  if (!plan) {
+    return { unsupported: `the card has no "${effect}" effect HueDeck can store` };
+  }
+  const first = request && Array.isArray(request.colors) && request.colors.length > 0 ? request.colors[0] : device.color(0, 0);
+  const [r, g, b] = [first[0] & 0xFF, first[1] & 0xFF, first[2] & 0xFF];
+  const result = {
+    effect: effect ?? "static",
+    zones: plan.color ? [{ name: "GPU", color: hex(r, g, b) }] : [],
+    note: plan.color ? "One colour for the whole card." : "The card's own colour cycle.",
+  };
+  if (!request || request.action !== "save") {
+    return result;
+  }
+  write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
+  if (plan.speed) {
+    write(REG_SPEED, SPEED_MID);
+  }
+  write(REG_MODE, plan.mode);
+  if (plan.color) {
+    setColor(r, g, b);
+  }
+  commitToFlash();
+  if (saved) {
+    saved[REG_BRIGHTNESS] = BRIGHTNESS_FULL;
+    saved[REG_MODE] = plan.mode;
+    if (plan.speed) {
+      saved[REG_SPEED] = SPEED_MID;
+    }
+    if (plan.color) {
+      saved[REG_UNKNOWN] = 0x00;
+      saved[REG_R1] = r;
+      saved[REG_G1] = g;
+      saved[REG_B1] = b;
+    }
+  }
+  // Back to Direct (DeviceUpdateMode() for Direct); the next frame is sent whole.
+  write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
+  write(REG_MODE, MODE_STATIC);
+  lastColor = null;
+  return result;
+}
+
+// MSIGPUController::Save(). The only write of register 0x3F; called from SaveToDevice() only.
+function commitToFlash() {
+  const status = bus.WriteByte(REG_SAVE, SAVE_VALUE);
+  if (status < 0) {
+    throw new Error(`MSI GPU: writing the save register failed with ${status}`);
+  }
+}
+
+function hex(r, g, b) {
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+// Shutdown(SystemSuspending, mode), mode a HueDeck extension:
+//   "restore" (and SignalRGB, which passes no mode): the card as it was at start (or as last
+//     stored by SaveToDevice): colours, speed and brightness back, the mode last (it applies
+//     them). When the startup state could not be read, the shutdown colour in static mode.
+//   "keep": the last colour HueDeck showed, in static mode (not stored: gone at the next boot).
+//   "off": static black (not stored).
+export function Shutdown(SystemSuspending, mode) {
+  if (mode === "keep") {
+    const [r, g, b] = lastColor ?? device.color(0, 0);
+    setColor(r & 0xFF, g & 0xFF, b & 0xFF);
+    write(REG_MODE, MODE_STATIC);
+    lastColor = null;
+    return;
+  }
+  if (mode === "off") {
+    setColor(0, 0, 0);
+    write(REG_MODE, MODE_STATIC);
+    lastColor = null;
+    return;
+  }
   if (saved) {
     restore(REG_UNKNOWN);
     for (const reg of COLOR_REGS) {

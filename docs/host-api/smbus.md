@@ -275,7 +275,10 @@ HueDeck implements the surface above in `crates/huedeck-plugin-host` (`js/host.j
 - **`SmbusDeniedRegisters()` (HueDeck extension, optional).** Registers the host never
   lets the plugin write, at any address and in every phase (for a register-less write, its
   first byte): save-to-flash and similar commands. The MSI GPU plugin lists 0x3F
-  (`MSI_GPU_REG_SAVE`). The manifest repeats them as `smbus.deniedRegisters`.
+  (`MSI_GPU_REG_SAVE`). The manifest repeats them as `smbus.deniedRegisters`. The one
+  exception is the plugin's `SaveToDevice({action: "save"})` that the user asked for and
+  confirmed ("Save to devices"): for the duration of that call only, writes to these
+  registers go through (and are logged); see [save-shutdown.md](save-shutdown.md).
 - **DIMM deny ranges.** Writes and Quick commands to 0x50-0x57 (SPD EEPROM) are refused on
   every bus. On buses that may reach the DIMMs (chipset: System, AMD, Intel; and Nuvoton)
   also 0x30-0x37 (SPD write protect / page select), 0x48-0x4F (DDR5 PMIC) and 0x50-0x5F

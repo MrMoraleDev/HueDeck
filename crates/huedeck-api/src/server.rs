@@ -212,6 +212,12 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/pawnio/install", post(pawnio_install))
         .route("/v1/pawnio/remove", post(pawnio_remove))
         .route("/v1/rescan", post(rescan))
+        .route("/v1/network", get(network))
+        .route("/v1/network/{plugin}/add", post(network_add))
+        .route(
+            "/v1/network/{plugin}/controllers/{id}/{action}",
+            post(network_action),
+        )
         .route("/v1/shutdown", post(shutdown))
         .route("/v1/canvas/event", post(canvas_event))
         .route("/v1/canvas/tap", post(canvas_tap))
@@ -461,6 +467,7 @@ struct SettingsPatch {
     signalrgb: Option<bool>,
     gpu_compositing: Option<bool>,
     smbus: Option<bool>,
+    network: Option<bool>,
     shutdown_mode: Option<String>,
     #[serde(default)]
     battery_low: Option<u8>,
@@ -520,6 +527,7 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
             signalrgb: p.signalrgb,
             gpu_compositing: p.gpu_compositing,
             smbus: p.smbus,
+            network: p.network,
             shutdown_mode: p.shutdown_mode,
             battery_low: p.battery_low,
             battery_critical: p.battery_critical,
@@ -585,6 +593,30 @@ async fn pawnio_remove(State(ctx): State<ApiContext>) -> Response {
         })
         .await,
     )
+}
+
+async fn network(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().network).into_response()
+}
+
+#[derive(Deserialize)]
+struct NetworkAddBody {
+    ip: String,
+}
+
+async fn network_add(
+    State(ctx): State<ApiContext>,
+    Path(plugin): Path<String>,
+    Json(b): Json<NetworkAddBody>,
+) -> Response {
+    reply(ctx.call(Request::NetworkAdd { plugin, ip: b.ip }).await)
+}
+
+async fn network_action(
+    State(ctx): State<ApiContext>,
+    Path((plugin, id, action)): Path<(String, String, String)>,
+) -> Response {
+    reply(ctx.call(Request::NetworkAction { plugin, id, action }).await)
 }
 
 async fn rescan(State(ctx): State<ApiContext>) -> Response {

@@ -70,7 +70,7 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "version $Version is not x.y.z
 
 $Stage = (Resolve-Path $Stage).Path
 foreach ($f in "huedeckd.exe", "huedeckw.exe", "huedeck.exe", "huedeck-renderer.exe", "huedeck-setup.exe",
-  "huedeck-iobroker.exe", "ui/index.html", "pawnio-modules/SmbusPIIX4.bin", "pawnio-modules/Echo.bin",
+  "huedeck-iobroker.exe", "ui/index.html", "pawnio-modules/SmbusPIIX4.bin", "pawnio-modules/SmbusI801.bin", "pawnio-modules/Echo.bin",
   "pawnio-modules/COPYING", "pawnio-modules/SmbusPIIX4.p", "LICENSE") {
   if (-not (Test-Path (Join-Path $Stage $f))) { throw "the staged build lacks $f" }
 }

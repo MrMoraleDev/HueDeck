@@ -60,13 +60,13 @@
         {#if d.image}<img src={d.image} alt="" />{/if}
         <div class="title">
           <strong>{d.name}</strong>
-          <span class="muted key">{d.bus ? `SMBus · ${d.bus}` : d.key}</span>
+          <span class="muted key">{d.bus ? (d.bus.startsWith("network") ? d.bus : `SMBus · ${d.bus}`) : d.key}</span>
         </div>
         <span class={`badge ${stateBadge(d)}`}>{d.state}</span>
         {#if d.battery}<BatteryBadge battery={d.battery} />{/if}
         {#if d.connected}
           <span class="muted stats"
-            >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? "bus" : "HID"} errors</span
+            >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? (d.bus.startsWith("network") ? "network" : "bus") : "HID"} errors</span
           >
         {/if}
         <label class="row"

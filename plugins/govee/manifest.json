@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 2,
+  "id": "huedeck.govee",
+  "name": "Govee",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "HueDeck",
+  "description": "Govee Wi-Fi lights over Govee's public LAN API (turn on \"LAN Control\" in the Govee Home app): multicast scan on UDP 4001, replies on 4002, JSON commands to the light on 4003. One colour per light; optional per-segment streaming adapted from OpenRGB's GoveeController (GPL-2.0-or-later). Untested: nobody working on HueDeck owns a Govee light. Protocol notes: docs/hardware/govee.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    { "network": { "udpPorts": [4001, 4002, 4003] } }
+  ],
+  "shutdownModes": ["restore"],
+  "permissions": ["network-udp", "settings"],
+  "keywords": ["govee", "wifi", "lan", "light", "network"]
+}

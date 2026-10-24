@@ -35,7 +35,9 @@
     {#each shown as e (e.id)}
       <button class="effect" class:active={e.id === snapshot.lighting.effect} onclick={() => daemon.run(() => api.applyEffect(e.id))}>
         <span class="title">{e.title}</span>
-        <span class="badge">{e.source === "signalrgb" ? "SignalRGB" : e.source === "user" ? "yours" : "HueDeck"}</span>
+        <span class="badge" title={e.thirdParty ? "Third-party effect, read from your SignalRGB installation" : undefined}
+          >{e.source === "signalrgb" ? "SignalRGB · third-party" : e.source === "user" ? "yours" : "HueDeck"}</span
+        >
         {#if e.description}<span class="desc muted">{e.description}</span>{/if}
       </button>
     {:else}

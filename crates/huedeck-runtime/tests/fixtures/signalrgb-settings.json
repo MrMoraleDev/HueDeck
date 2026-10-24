@@ -1,0 +1,65 @@
+{
+  "": {
+    "StartupLaunch": "true"
+  },
+  "layouts": {
+    "brightness": 80,
+    "gridSize": 4,
+    "currentProfile": ""
+  },
+  "lighting": {
+    "globalBrightness": 65,
+    "AutoPlaylistTimer": "true"
+  },
+  "lighting\\endpoint": {
+    "scale": "{\"x\":21.25,\"y\":21.25}"
+  },
+  "lighting\\endpoint\\position": {
+    "x": 1,
+    "y": 1
+  },
+  "lighting\\endpoint\\1462:7c91:A020200512A3": {
+    "brightness": 40
+  },
+  "lighting\\endpoint\\1462:7c91:A020200512A3\\position": {
+    "x": 24,
+    "y": 61
+  },
+  "lighting\\endpoint\\1532:007d:000000000000": {
+    "enabled": "false"
+  },
+  "lighting\\endpoint\\1532:007d:000000000000\\position": {
+    "x": 100,
+    "y": 40
+  },
+  "lighting\\endpoint\\0f6a3c1e-2b4d-4e5f-8a9b-1c2d3e4f5a6b\\position": {
+    "x": 10,
+    "y": 150
+  },
+  "devices\\1462:7c91:A020200512A3": {
+    "JRainbow 1": "[{\"Brand\":\"Generic\",\"ComponentId\":\"0f6a3c1e-2b4d-4e5f-8a9b-1c2d3e4f5a6b\",\"DisplayName\":\"ARGB Strip 4 - 4 LED\",\"Height\":1,\"LedCoordinates\":[[0,0],[1,0],[2,0],[3,0]],\"LedCount\":4,\"LedMapping\":[0,1,2,3],\"LedNames\":[\"Led 1\",\"Led 2\",\"Led 3\",\"Led 4\"],\"ProductName\":\"Fixture Strip 4\",\"Type\":\"Strip\",\"Width\":4}]",
+    "LightingMode": "Canvas"
+  },
+  "devices\\1532:007d:000000000000\\battery": {
+    "trayIcon": "true"
+  },
+  "effects\\selected": {
+    "id": "Side To Side.html",
+    "name": "Side To Side",
+    "previous": "Black Ice"
+  },
+  "effects\\Side To Side.html": {
+    "direction": "All Directions",
+    "color1": "@Variant(\u0000\u0000\u0000C\u0004ÿÿ\u0000\u0000ÿÿ\u0000\u0000\u0000)",
+    "rainbow": "false",
+    "speed": 2,
+    "blob": "@ByteArray(abc)"
+  },
+  "effects\\Side To Side.html\\savedStateA": {
+    "color1": "@Variant(\u0000\u0000\u0000C\u0004ÿÿ.àÿÿ\u0000\u0000\u0000)"
+  },
+  "effects\\-MTwqhnV_LPbIrkfZOfo": {
+    "-RemoteFileByteSize": 2853,
+    "color1": "@Variant(\u0000\u0000\u0000C\u0004ÿÿÿÿ\u0000\u0000ÿÿ\u0000\u0000)"
+  }
+}

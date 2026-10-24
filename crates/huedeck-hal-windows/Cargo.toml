@@ -21,4 +21,5 @@ tracing = { workspace = true }
 hidapi = { workspace = true, features = ["windows-native"] }
 # cfgmgr32 (CM_Locate_DevNode / CM_Get_Parent) parent grouping and HIDP_CAPS probing.
 windows = { workspace = true }
-# TODO(M2): CM_Register_Notification hotplug, nusb, serialport.
+# Raw USB over WinUSB (`Type() == "rawusb"` / `"hybrid"` plugins).
+nusb = { workspace = true }

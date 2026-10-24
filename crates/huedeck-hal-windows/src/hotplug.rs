@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! HID arrival and removal notifications: `CM_Register_Notification` on the
-//! HID device-interface class, the Windows [`HotplugSource`].
+//! HID and USB arrival and removal notifications: `CM_Register_Notification`
+//! on the HID device-interface class and on the USB device-interface class
+//! (`GUID_DEVINTERFACE_USB_DEVICE`, so raw USB devices without a HID
+//! interface are seen too), the Windows [`HotplugSource`].
 //!
-//! One event per HID collection, carrying what its interface path tells: the
-//! path and VID/PID (the serial stays empty, a removed device can no longer
-//! be asked). A plug or unplug produces a burst of events (every collection,
-//! sometimes twice); consumers wait for the burst to settle, then enumerate
-//! again (see `huedeck_plugin_host::manager`).
+//! One event per HID collection ([`DeviceClass::Hid`]) or USB device
+//! ([`DeviceClass::Usb`]), carrying what its interface path tells: the path
+//! and VID/PID (the serial stays empty, a removed device can no longer be
+//! asked). A plug or unplug produces a burst of events (every collection and
+//! the USB device, sometimes twice); consumers wait for the burst to settle,
+//! then enumerate again (see `huedeck_plugin_host::manager`).
 
 use huedeck_hal::hotplug::{DeviceClass, DeviceEvent, HotplugSource};
 use huedeck_hal::{DeviceKey, HalError, HalResult};
@@ -18,18 +21,25 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_NOTIFY_FILTER, CM_NOTIFY_FILTER_0, CM_NOTIFY_FILTER_0_0, CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
     CR_SUCCESS, HCMNOTIFICATION,
 };
+use windows::core::GUID;
 use windows::Win32::Devices::HumanInterfaceDevice::HidD_GetHidGuid;
+
+/// `GUID_DEVINTERFACE_USB_DEVICE` (usbiodef.h): every USB device node.
+const GUID_DEVINTERFACE_USB_DEVICE: GUID = GUID::from_u128(0xA5DCBF10_6530_11D2_901F_00C04FB951ED);
+
+/// What one registration's callback sends, and the class of its events.
+type Context = (Sender<DeviceEvent>, DeviceClass);
 
 /// An active registration and the sender its callback uses.
 struct Registration {
     handle: HCMNOTIFICATION,
-    context: *mut Sender<DeviceEvent>,
+    context: *mut Context,
 }
 
-/// HID hotplug notifications (see the module docs).
+/// HID and USB hotplug notifications (see the module docs).
 #[derive(Default)]
 pub struct HidHotplug {
-    registration: Option<Registration>,
+    registrations: Vec<Registration>,
 }
 
 // SAFETY: the registration handle may be unregistered from any thread, and the
@@ -39,7 +49,7 @@ unsafe impl Send for HidHotplug {}
 impl std::fmt::Debug for HidHotplug {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HidHotplug")
-            .field("active", &self.registration.is_some())
+            .field("active", &!self.registrations.is_empty())
             .finish()
     }
 }
@@ -88,10 +98,12 @@ unsafe extern "system" fn on_notify(
     let _ = std::panic::catch_unwind(|| {
         // SAFETY: cfgmgr32 passes the event it describes with `size`; `context` is the
         // sender registered with this callback, alive until unregistration returns.
-        let (path, sender) = unsafe { (symbolic_link(data, size), &*context.cast::<Sender<DeviceEvent>>()) };
-        let (vid, pid) = crate::probe::path_vid_pid(&path).unwrap_or((0, 0));
+        let (path, (sender, class)) = unsafe { (symbolic_link(data, size), &*context.cast::<Context>()) };
+        let (vid, pid) = crate::probe::path_vid_pid(&path)
+            .or_else(|| crate::path::usb_instance_vid_pid(&path))
+            .unwrap_or((0, 0));
         let key = DeviceKey::new(vid, pid, "");
-        let class = DeviceClass::Hid;
+        let class = *class;
         let event = if arrived {
             DeviceEvent::Arrived { key, class, path }
         } else {
@@ -102,21 +114,17 @@ unsafe extern "system" fn on_notify(
     0
 }
 
-impl HotplugSource for HidHotplug {
-    fn subscribe(&mut self) -> HalResult<Receiver<DeviceEvent>> {
-        self.stop();
-        let (tx, rx) = channel();
-        let context = Box::into_raw(Box::new(tx));
+impl HidHotplug {
+    /// Register one device-interface class whose events carry `class`.
+    fn register(&mut self, guid: GUID, class: DeviceClass, tx: Sender<DeviceEvent>) -> HalResult<()> {
+        let context = Box::into_raw(Box::new((tx, class)));
         let filter = CM_NOTIFY_FILTER {
             cbSize: std::mem::size_of::<CM_NOTIFY_FILTER>() as u32,
             Flags: 0,
             FilterType: CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
             Reserved: 0,
             u: CM_NOTIFY_FILTER_0 {
-                DeviceInterface: CM_NOTIFY_FILTER_0_0 {
-                    // SAFETY: plain query of a constant GUID.
-                    ClassGuid: unsafe { HidD_GetHidGuid() },
-                },
+                DeviceInterface: CM_NOTIFY_FILTER_0_0 { ClassGuid: guid },
             },
         };
         let mut handle = HCMNOTIFICATION::default();
@@ -138,12 +146,29 @@ impl HotplugSource for HidHotplug {
                 cr.0
             )));
         }
-        self.registration = Some(Registration { handle, context });
+        self.registrations.push(Registration { handle, context });
+        Ok(())
+    }
+}
+
+impl HotplugSource for HidHotplug {
+    fn subscribe(&mut self) -> HalResult<Receiver<DeviceEvent>> {
+        self.stop();
+        let (tx, rx) = channel();
+        // SAFETY: plain query of a constant GUID.
+        let hid = unsafe { HidD_GetHidGuid() };
+        let registered = self
+            .register(hid, DeviceClass::Hid, tx.clone())
+            .and_then(|()| self.register(GUID_DEVINTERFACE_USB_DEVICE, DeviceClass::Usb, tx));
+        if let Err(e) = registered {
+            self.stop();
+            return Err(e);
+        }
         Ok(rx)
     }
 
     fn stop(&mut self) {
-        if let Some(r) = self.registration.take() {
+        for r in self.registrations.drain(..) {
             // SAFETY: unregistering waits for running callbacks, so the sender can be freed after it.
             unsafe {
                 let _ = CM_Unregister_Notification(r.handle);

@@ -15,10 +15,11 @@
 //!   buses), simulated time, lease expiry, the client leaving, a contended
 //!   mutex and failing transfers, against a [`Rig`] in dry-run or not.
 //!
-//! A [`Rig`] is a [`Server`] over three fake PawnIO buses (an AMD primary on
-//! port 0 with two DDR4 SPDs, an aux on port 1, and a bus of a kind chosen by
-//! the input, GPU and SuperIO kinds included) and a fake global mutex. After
-//! every step it panics when an invariant breaks:
+//! A [`Rig`] is a [`Server`] over four fake PawnIO buses (an AMD primary on
+//! port 0 with two DDR4 SPDs, an aux on port 1, a bus of a kind chosen by
+//! the input, GPU and SuperIO kinds included, and an Intel I801 bus with a
+//! DDR4 SPD, whose fake module panics on a port select) and a fake global
+//! mutex. After every step it panics when an invariant breaks:
 //!
 //! * nothing panics (the fakes also assert the broker never writes an SPD);
 //! * no write ever reaches 0x50-0x57, and no transfer reaches 0x30-0x37 or
@@ -40,6 +41,7 @@
 //! * the response echoes the id and fits a frame.
 
 use crate::fake::{FakeMutex, FakePiix4};
+use crate::i801::I801Bus;
 use crate::pawnio::NtStatus;
 use crate::piix4::Piix4Bus;
 use crate::pipe::frame_complete;
@@ -64,13 +66,16 @@ const DEVICES: [u8; 12] = [
     0x20, 0x27, 0x39, 0x3C, 0x08, 0x2D, 0x34, 0x48, 0x4C, 0x58, 0x5F, 0x77,
 ];
 /// Failures a fake transfer can be made to return.
-const FAILURES: [NtStatus; 5] = [
+const FAILURES: [NtStatus; 6] = [
     NtStatus::NO_SUCH_DEVICE,
     NtStatus::IO_TIMEOUT,
     NtStatus::NOT_SUPPORTED,
     NtStatus::IO_DEVICE_ERROR,
     NtStatus::DEVICE_BUSY,
+    NtStatus::RETRY,
 ];
+/// Buses of a rig (the four of [`Rig`]).
+const BUSES: u8 = 4;
 /// Kinds the third bus may have.
 const KINDS: [BusKind; 6] = [
     BusKind::Amd,
@@ -120,7 +125,7 @@ pub enum Action {
     Contend(bool),
     /// Transfers on bus `bus` fail with this status from now on (or stop failing).
     Fail {
-        /// Bus index (0..3).
+        /// Bus index (0..BUSES).
         bus: u8,
         /// Status, `None` to stop.
         status: Option<NtStatus>,
@@ -227,13 +232,31 @@ impl Rig {
                 .on_port(1)
         };
         let third = KINDS[config.third_kind % KINDS.len()];
-        let fakes = vec![(primary, BusKind::Amd), (plain(), BusKind::Amd), (plain(), third)];
+        // Bus 3: an Intel board's I801 (no ports; its fake panics on a port
+        // select), with a DDR4 SPD and SPD_WD set.
+        let mut intel = fake_with_devices(FakePiix4::new_i801()).with_spd(0x50, &ddr4_spd(0xA5));
+        if config.nack_page_select {
+            intel = intel.nack_page_select();
+        }
+        let fakes = vec![
+            (primary, BusKind::Amd),
+            (plain(), BusKind::Amd),
+            (plain(), third),
+            (intel, BusKind::Intel),
+        ];
+        debug_assert_eq!(fakes.len(), usize::from(BUSES));
         let buses = fakes
             .iter()
             .enumerate()
             .map(|(i, (fake, kind))| BrokerBus {
                 info: bus_info(*kind),
-                piix4: Piix4Bus::new(fake.clone(), u8::from(i != 0)).expect("port 0 or 1"),
+                chip: if i == 3 {
+                    I801Bus::new(fake.clone()).into()
+                } else {
+                    Piix4Bus::new(fake.clone(), u8::from(i != 0))
+                        .expect("port 0 or 1")
+                        .into()
+                },
             })
             .collect();
         let mutex = FakeMutex::new();
@@ -503,10 +526,11 @@ impl<'a> Bytes<'a> {
 
     fn bus(&mut self) -> u8 {
         match self.u8() % 16 {
-            0..=6 => 0,
-            7..=10 => 1,
-            11..=13 => 2,
-            14 => 3,
+            0..=5 => 0,
+            6..=8 => 1,
+            9..=10 => 2,
+            11..=13 => 3,
+            14 => BUSES,
             _ => self.u8(),
         }
     }
@@ -662,7 +686,7 @@ impl<'a> Bytes<'a> {
             236..=239 => Action::ClientGone,
             240..=245 => Action::Contend(self.u8() & 1 == 1),
             _ => {
-                let bus = self.u8() % 3;
+                let bus = self.u8() % BUSES;
                 let s = self.u8();
                 Action::Fail {
                     bus,
@@ -939,7 +963,7 @@ mod tests {
     }
 
     fn bus() -> impl Strategy<Value = u8> {
-        prop_oneof![6 => Just(0u8), 3 => Just(1u8), 2 => Just(2u8), 1 => any::<u8>()]
+        prop_oneof![6 => Just(0u8), 3 => Just(1u8), 2 => Just(2u8), 3 => Just(3u8), 1 => any::<u8>()]
     }
 
     fn data() -> impl Strategy<Value = Vec<u8>> {
@@ -1036,7 +1060,7 @@ mod tests {
             2 => Just(Action::Expire),
             1 => Just(Action::ClientGone),
             1 => any::<bool>().prop_map(Action::Contend),
-            1 => (0u8..3, proptest::option::of(proptest::sample::select(FAILURES.to_vec())))
+            1 => (0u8..BUSES, proptest::option::of(proptest::sample::select(FAILURES.to_vec())))
                 .prop_map(|(bus, status)| Action::Fail { bus, status }),
         ];
         (advance, action)

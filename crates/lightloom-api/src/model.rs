@@ -25,10 +25,51 @@ pub struct Snapshot {
     pub layouts: Vec<String>,
     /// User settings.
     pub settings: Settings,
+    /// Network plugins' discovery services (while network lights are on).
+    #[serde(default)]
+    pub network: Vec<NetworkServiceView>,
     /// Running software that holds the same devices (reported, never terminated).
     pub conflicts: Vec<String>,
     /// Problems worth showing (renderer missing, plugin directories empty, ...).
     pub warnings: Vec<String>,
+}
+
+/// One network plugin's discovery service.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkServiceView {
+    /// The plugin's `Name()` (the id commands use).
+    pub plugin: String,
+    /// The service runs.
+    pub running: bool,
+    /// Why it stopped, if it did.
+    pub error: Option<String>,
+    /// `discovery.forgetController` exists (dashboard *Forget*).
+    pub can_forget: bool,
+    /// What `service.controllers` holds.
+    pub controllers: Vec<NetworkControllerView>,
+    /// Last service log lines.
+    pub log: Vec<String>,
+}
+
+/// One controller a network service lists.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkControllerView {
+    /// Its id.
+    pub id: String,
+    /// `name` (or the id).
+    pub name: String,
+    /// `ip`.
+    pub ip: Option<String>,
+    /// `status`.
+    pub status: Option<String>,
+    /// `paired`, when the plugin reports it.
+    pub paired: Option<bool>,
+    /// It has `startLink()` and is not paired (dashboard *Pair*).
+    pub can_pair: bool,
+    /// It was announced: the device key it runs as.
+    pub device: Option<String>,
 }
 
 /// The canvas: effect, brightness, layout, renderer.
@@ -237,6 +278,10 @@ pub struct Settings {
     /// Drive SMBus devices (GPU RGB through NvAPI; RAM RGB through the I/O
     /// broker when it is installed and healthy); on unless turned off.
     pub smbus: bool,
+    /// Network lights: run the network plugins' discovery and drive the LAN
+    /// devices they announce (off unless turned on).
+    #[serde(default)]
+    pub network: bool,
     /// Port of the native API and the dashboard now (loopback only).
     pub port: u16,
     /// Why the daemon does not serve on the configured port (it was busy at
@@ -432,6 +477,25 @@ pub enum Request {
         /// Serve the OpenRGB SDK protocol (127.0.0.1:6742).
         #[serde(default)]
         openrgb_sdk: Option<bool>,
+        /// Network lights (starts or stops the discovery services).
+        #[serde(default)]
+        network: Option<bool>,
+    },
+    /// *Add by IP*: ask a network plugin to look at `ip`.
+    NetworkAdd {
+        /// Plugin `Name()`.
+        plugin: String,
+        /// The address.
+        ip: String,
+    },
+    /// *Pair* (`startLink()`) or *Forget* (`forgetController`) a network controller.
+    NetworkAction {
+        /// Plugin `Name()`.
+        plugin: String,
+        /// Controller id.
+        id: String,
+        /// `pair` or `forget`.
+        action: String,
     },
     /// Import the local SignalRGB setup (read in place): its canvas placements
     /// as a layout, and the component arrays of its channels.
@@ -481,6 +545,8 @@ impl Request {
             Request::CanvasEvent { .. } => "canvasEvent",
             Request::CanvasTap { .. } => "canvasTap",
             Request::SetSettings { .. } => "setSettings",
+            Request::NetworkAdd { .. } => "networkAdd",
+            Request::NetworkAction { .. } => "networkAction",
             Request::ImportSignalRgb { .. } => "importSignalRgb",
             Request::GetLayout { .. } => "getLayout",
             Request::ListComponents => "listComponents",

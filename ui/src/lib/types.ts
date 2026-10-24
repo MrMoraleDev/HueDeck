@@ -58,7 +58,7 @@ export interface DeviceView {
   frames: number;
   renderErrors: number;
   ioErrors: number;
-  /** SMBus devices: "<bus name> · 0x<address>". */
+  /** SMBus devices: "<bus name> · 0x<address>"; network devices: "network · <ip>". */
   bus?: string | null;
   defaultScale: number;
   image?: string | null;
@@ -148,6 +148,7 @@ export interface Settings {
   signalrgbAvailable: boolean;
   gpuCompositing: boolean;
   smbus: boolean;
+  network: boolean;
   /** OpenRGB SDK server on 127.0.0.1:6742 (opt-in). */
   openrgbSdk: boolean;
   /** Port of the dashboard and the API (127.0.0.1 only). */
@@ -172,8 +173,29 @@ export interface Snapshot {
   effects: EffectView[];
   layouts: string[];
   settings: Settings;
+  network: NetworkService[];
   conflicts: string[];
   warnings: string[];
+}
+
+export interface NetworkController {
+  id: string;
+  name: string;
+  ip?: string | null;
+  status?: string | null;
+  paired?: boolean | null;
+  canPair: boolean;
+  /** The device key once the plugin announced it. */
+  device?: string | null;
+}
+
+export interface NetworkService {
+  plugin: string;
+  running: boolean;
+  error?: string | null;
+  canForget: boolean;
+  controllers: NetworkController[];
+  log: string[];
 }
 
 export interface LibraryComponent {

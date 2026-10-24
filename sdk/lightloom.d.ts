@@ -381,8 +381,9 @@ declare namespace Lightloom {
     // --- features, notifications, logging ------------------------------------------
 
     /**
-     * Install a feature global of the same name. `"udp"` and `"dtls"` throw `HostApiMissing`
-     * in Lightloom device sessions (no sockets for device plugins yet).
+     * Install a feature global of the same name. `"udp"` works in network device sessions
+     * (docs/host-api/network-lightloom.md) and throws `HostApiMissing` elsewhere; `"dtls"`
+     * always throws (Lightloom has no TLS stack).
      * @signalrgb
      */
     addFeature(name: "battery" | "keyboard" | "mouse" | "base64" | "udp" | "dtls"): void;
@@ -482,7 +483,23 @@ declare namespace Lightloom {
     decode(text: string): number[];
   }
 
-  /** A socket of `udp.createSocket()` / `tcp.createSocket()`. @signalrgb @stub */
+  /** What a socket's `message` handler gets. */
+  interface SocketMessage {
+    /** Payload as text (UTF-8). */
+    data: string;
+    utf16: string;
+    /** Payload bytes. */
+    buffer: number[];
+    address: string;
+    port: number;
+    timestamp: number;
+  }
+
+  /**
+   * A socket of `udp.createSocket()` / `tcp.createSocket()` (network services and network
+   * device sessions; local-network destinations only). Events arrive between plugin calls.
+   * @signalrgb
+   */
   interface Socket {
     readonly UnconnectedState: 0;
     readonly HostLookupState: 1;
@@ -492,18 +509,30 @@ declare namespace Lightloom {
     readonly ListeningState: 5;
     readonly ClosingState: 6;
     readonly state: number;
-    on(event: string, handler: (...args: unknown[]) => void): void;
-    bind(port?: number): void;
-    connect(host: string, port: number): void;
+    on(event: "message", handler: (msg: SocketMessage) => void): void;
+    on(event: "error", handler: (code: number, message: string) => void): void;
+    on(event: "connection", handler: (client?: Socket) => void): void;
+    on(event: "listening" | "close", handler: () => void): void;
+    /** UDP: bind a local port (0 = ephemeral). One-shot. */
+    bind(port?: number): boolean;
+    /** UDP: default peer of `send`; TCP: connect (at most 2 s). */
+    connect(host: string, port: number): boolean;
     disconnect(): void;
     close(): void;
+    /** To the peer: bytes sent, or -1. */
     send(data: Bytes | string): number;
-    write(data: Bytes | string): number;
+    /** UDP: to `host:port`: bytes sent, or -1. */
+    write(data: Bytes | string, host: string, port: number): number;
+    /**
+     * TCP server, Lightloom extension: listen on the local address facing `peerIp` (never
+     * 0.0.0.0) and accept `peerIp` only; `{ address, port }` or `null`.
+     */
+    listen?(port: number, peerIp: string): { address: string; port: number } | null;
     address(): { address: string; port: number; protocol: string };
     remoteAddress(): { address: string; port: number; protocol: string };
   }
 
-  /** Global `udp` after `device.addFeature("udp")`. @signalrgb @unimplemented (device sessions) */
+  /** Global `udp` after `device.addFeature("udp")` (network device sessions). @signalrgb */
   interface UdpFeature {
     send(ip: string, port: number, data: Bytes, bigEndian?: boolean): number;
     createSocket(): Socket;
@@ -920,7 +949,7 @@ declare namespace Lightloom {
 
   // ------------------------------------------------------------------ network-plugin globals
 
-  /** Global `service` of network plugins. @signalrgb @stub */
+  /** Global `service` of a network plugin's discovery context (docs/host-api/network-lightloom.md). @signalrgb */
   interface Service {
     name: string;
     controllers: Array<{ id: unknown; obj: unknown }>;
@@ -930,13 +959,16 @@ declare namespace Lightloom {
     updateController(controller: object): void;
     hasController(id: string): boolean;
     getController(id: string): unknown;
-    getSetting(group: string, key: string): unknown;
+    /** Persisted per plugin; `id` / `key` must not contain `/` or `..`. */
+    getSetting(group: string, key: string): string | undefined;
+    /** Strings are stored as is, other values as JSON text, `undefined` deletes. */
     saveSetting(group: string, key: string, value: unknown): void;
     removeSetting(group: string, key: string): void;
     announceController(controller: object): void;
     suppressController(controller: object): void;
-    broadcast(message: string): void;
-    resolve(host: string): void;
+    /** To `UdpBroadcastAddress:UdpBroadcastPort`: bytes sent, or -1. */
+    broadcast(message: string | Bytes): number;
+    resolve(host: string, callback: (host: { protocol: "IPV4" | "IPV6"; ip: string }) => void): void;
     [member: string]: unknown;
   }
 
@@ -948,7 +980,11 @@ declare namespace Lightloom {
     Delete(url: string, callback: (xhr: XMLHttpRequestLike) => void, ...args: unknown[]): void;
   }
 
-  /** The `XMLHttpRequest` global: every request completes at once with status 0. @signalrgb @stub */
+  /**
+   * The `XMLHttpRequest` global: real `http://` requests to the local network in network
+   * contexts (sync or async, timeout default 3 s, at most 10 s); elsewhere every request
+   * completes at once with status 0. @signalrgb
+   */
   interface XMLHttpRequestLike {
     readyState: number;
     status: number;
@@ -1049,7 +1085,7 @@ declare var keyboard: Lightloom.Keyboard;
 declare var mouse: Lightloom.Mouse;
 /** After `device.addFeature("base64")`. */
 declare var base64: Lightloom.Base64;
-/** After `device.addFeature("udp")` (throws in Lightloom device sessions). */
+/** After `device.addFeature("udp")` (network device sessions; throws in the others). */
 declare var udp: Lightloom.UdpFeature;
 /** After `device.addFeature("dtls")` (throws in Lightloom device sessions). */
 declare var dtls: Lightloom.DtlsFeature;

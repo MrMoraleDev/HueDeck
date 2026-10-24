@@ -284,3 +284,115 @@ test("ProductId: OpenRGB's 109 compiled 0x1462 detectors minus 0x7C91, same as t
 test("the test colour helper matches the fixtures' formula", () => {
   assert.deepEqual(testColour(1, 13, 2), [209, 2, 178]);
 });
+
+// ---------------------------------------------------------------------------------------------
+// HueDeck extensions: "Save to devices" and the exit modes
+// ---------------------------------------------------------------------------------------------
+const C = [0x40, 0x50, 0x60];
+// Paint the whole frame one colour, then call `fn(plugin)`.
+const painted = (fn) => (plugin, device) => {
+  device.setColor(C);
+  for (const ch of device.channels) {
+    device.setChannelColors(ch.name, new Array(240).fill(C));
+  }
+  return fn(plugin);
+};
+const sends = (events) => events.filter((e) => e.op === "send_feature");
+const configs = (events) => sends(events).filter((e) => e.data.startsWith("52")).map((e) => hexToBytes(e.data));
+const image185 = (s) => {
+  const b = hexToBytes(s.image);
+  if (b[0x3E] >= 4) b[0x3E] -= 4;
+  return b;
+};
+// 7C79 (185, not mixed): JRGB1, JRAINBOW1, JRAINBOW2, onboard master, onboard LEDs 1-6, JRGB2.
+const RECORDS_7C79 = [0x01, 0x1F, 0x2A, 0x4A, 0x54, 0x5E, 0x68, 0x72, 0x7C, 0x86, 0xAE];
+
+function assertStaticRecords(packet, records, { effect = 1, options = 0x28 } = {}) {
+  for (const off of records) {
+    assert.deepEqual(packet.slice(off, off + 8), [effect, ...C, options, ...C], `record 0x${off.toString(16)}`);
+    assert.ok(packet[off + 8] & 0x80, `record 0x${off.toString(16)}: custom colour`);
+  }
+}
+
+test("save, 185-byte per-LED board: OpenRGB's Update(true) (the board's state, then the static zones, both with the save byte), then Direct again", async () => {
+  const s = scenario("185-7c79-sync");
+  const { hookEvents, extra } = await runScenario(pluginPath, s, {
+    vendorId: 0x1462,
+    beforeShutdown: painted((p) => p.SaveToDevice({ action: "save", effect: null, colors: [] })),
+  });
+  assert.ok(!extra.unsupported, JSON.stringify(extra));
+  assert.ok(extra.zones.every((z) => z.color === "#405060"), JSON.stringify(extra.zones));
+  const ops = hookEvents.filter((e) => e.op === "get_feature" || e.op === "send_feature").map((e) => e.op);
+  assert.deepEqual(ops.slice(0, 4), ["get_feature", "send_feature", "send_feature", "get_feature"]);
+  const [before, packet, enable] = configs(hookEvents);
+  const board = image185(s);
+  board[184] = 1;
+  assert.deepEqual(before, board, "the board's own state with the save byte");
+  assert.equal(packet[184], 1, "save byte");
+  assertStaticRecords(packet, RECORDS_7C79);
+  assert.equal(packet[0x4A + 8] & 0x31, 0x01, "onboard: sync onboard, not the pipes");
+  assert.equal(packet[0x1F + 10], 20, "JRAINBOW1 LED count");
+  const untouched = new Set(RECORDS_7C79.flatMap((o) => Array.from({ length: 11 }, (_, i) => o + i)));
+  untouched.add(184);
+  packet.forEach((b, i) => { if (!untouched.has(i)) assert.equal(b, image185(s)[i], `byte 0x${i.toString(16)} kept`); });
+  assert.equal(enable[0x4A], 0x25, "per-LED mode again");
+  assert.equal(enable[184], 0, "with the save byte 0");
+});
+
+test("save, 162-byte board: one report with the save byte (MSIMotherboard162Controller::Update(true))", async () => {
+  const s = scenario("162-7b85");
+  const { hookEvents } = await runScenario(pluginPath, s, {
+    vendorId: 0x1462,
+    beforeShutdown: painted((p) => p.SaveToDevice({ action: "save", effect: "breathing", colors: [] })),
+  });
+  const reports = configs(hookEvents);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0][161], 1);
+  // JRGB1, JRGB2, JRAINBOW1, JCORSAIR, onboard master and the onboard LED records.
+  assertStaticRecords(reports[0], [1, 151, 11, 21, 41, 51, 61], { effect: 2, options: 0x29 });
+});
+
+test("save: previews, other effects and 112-byte boards write nothing", async () => {
+  for (const [id, request] of [
+    ["185-7c79-sync", { action: "preview", effect: null }],
+    ["185-7c79-sync", { action: "save", effect: "spectrum" }],
+    ["112-7b16", { action: "save", effect: null }],
+    ["185-7d88-no-stream", { action: "save", effect: null }],
+  ]) {
+    const { hookEvents, extra } = await runScenario(pluginPath, scenario(id), {
+      vendorId: 0x1462,
+      beforeShutdown: painted((p) => p.SaveToDevice({ ...request, colors: [] })),
+    });
+    assert.deepEqual(sends(hookEvents), [], `${id} ${JSON.stringify(request)}`);
+    assert.equal(Boolean(extra.unsupported), request.action === "save", `${id}: ${JSON.stringify(extra)}`);
+  }
+});
+
+test("exit modes keep and off: OpenRGB's Static mode with the last colours or black, save byte 0", async () => {
+  const s = scenario("185-7c79-sync");
+  for (const mode of ["keep", "off"]) {
+    const { shutdown } = await runScenario(pluginPath, s, { vendorId: 0x1462, shutdownMode: mode, beforeShutdown: painted(() => null) });
+    const [packet] = configs(shutdown);
+    assert.equal(configs(shutdown).length, 1);
+    assert.equal(packet[184], 0);
+    const rgb = mode === "keep" ? C : [0, 0, 0];
+    for (const off of RECORDS_7C79) {
+      assert.deepEqual(packet.slice(off, off + 4), [1, ...rgb], `${mode} 0x${off.toString(16)}`);
+    }
+  }
+});
+
+test("the save byte is set only by SaveToDevice({action: 'save'})", async () => {
+  for (const s of fixtures.scenarios) {
+    for (const mode of ["restore", "keep", "off"]) {
+      const { events, shutdown, hookEvents } = await runScenario(pluginPath, s, {
+        vendorId: 0x1462,
+        shutdownMode: mode,
+        beforeShutdown: painted((p) => p.SaveToDevice({ action: "preview", effect: null, colors: [] })),
+      });
+      for (const packet of configs([...events, ...hookEvents, ...shutdown])) {
+        assert.equal(packet[packet.length - 1], 0, `${s.id} ${mode}`);
+      }
+    }
+  }
+});

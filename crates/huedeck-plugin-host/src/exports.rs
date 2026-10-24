@@ -262,6 +262,12 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
         }
     }
     meta.smbus_batch_writes = get("SmbusBatchWrites").is_some_and(|v| v.as_bool() == Some(true));
+    if let Some(v) = get("SaveCapabilities") {
+        meta.save_caps = crate::save::SaveCaps::from_json(v, &mut warnings);
+    }
+    if let Some(v) = get("ShutdownModes") {
+        meta.shutdown_modes = crate::save::shutdown_modes_from_json(v, &mut warnings);
+    }
     if let Some(a) = get("SmbusBuses").and_then(J::as_array) {
         for v in a {
             let name = as_string(v).unwrap_or_default();
@@ -291,7 +297,12 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
             .and_then(J::as_array)
             .map(|a| a.iter().filter_map(as_string).collect())
             .unwrap_or_default(),
+        save_to_device: flag("SaveToDevice"),
     };
+    if meta.save_caps.is_some() && !meta.lifecycle.save_to_device {
+        warnings.push("SaveCapabilities() without a SaveToDevice(request) export: nothing is saved".into());
+        meta.save_caps = None;
+    }
 
     let errors = ns
         .get("errors")

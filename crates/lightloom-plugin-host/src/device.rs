@@ -16,6 +16,7 @@
 
 use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::children::{ChildSetup, Children};
+use crate::plugin_ui::PluginUi;
 use crate::runtime::Deadline;
 use crate::stats::{LatencyHistogram, LatencySummary};
 use lightloom_engine::{
@@ -227,6 +228,8 @@ pub struct DeviceContext {
     alert: Option<Rgb>,
     /// The alert colour at the current frame's pulse phase.
     alert_now: Option<[u8; 3]>,
+    /// Parameters and messages for the dashboard (`device.addProperty`, `device.addMessage`, ...).
+    ui: PluginUi,
 }
 
 impl std::fmt::Debug for DeviceContext {
@@ -329,6 +332,7 @@ impl DeviceContext {
             battery_warning_level: DEFAULT_WARNING_LEVEL,
             alert: None,
             alert_now: None,
+            ui: PluginUi::default(),
         };
         ctx.update_factor();
         ctx
@@ -466,6 +470,25 @@ impl DeviceContext {
         }
         self.frame = frame;
         self.update_alert();
+    }
+
+    // ------------------------------------------------------------------ parameters and messages
+
+    /// The plugin's parameters and messages as of now.
+    pub fn plugin_ui(&self) -> &PluginUi {
+        &self.ui
+    }
+
+    /// Start from the plugin's `ControllableParameters()` / `DeviceMessages()`.
+    pub fn set_plugin_ui(&mut self, ui: PluginUi) {
+        self.ui = ui;
+    }
+
+    /// Log a refused `addProperty` / `addMessage` once per distinct message.
+    fn log_refusal(&mut self, result: Result<(), String>) {
+        if let Err(e) = result {
+            self.log_once(e);
+        }
     }
 
     // ------------------------------------------------------------------ battery and alert
@@ -1380,6 +1403,25 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
             i32::from(d.battery_warning_level),
         ]
     });
+    // Run-time parameters and messages (plugin_ui.rs).
+    native!("propAdd", |d, json: String| {
+        let r = d.ui.add_property(&json);
+        d.log_refusal(r)
+    });
+    native!("propRemove", |d, name: String| d.ui.remove_property(&name));
+    native!("msgAdd", |d, id: String, message: String, tooltip: String| {
+        let r = d.ui.add_message(id, message, tooltip);
+        d.log_refusal(r)
+    });
+    native!("msgNotify", |d,
+                          id: String,
+                          title: String,
+                          text: String,
+                          priority: i32| {
+        let r = d.ui.notify(id, title, text, priority);
+        d.log_refusal(r)
+    });
+    native!("msgRemove", |d, id: String| d.ui.remove_message(&id));
     // Subdevices (components-channels.md §2).
     native!("subCreate", |d, id: String| d
         .create_subdevice(&capped(id, MAX_ID_CHARS)));

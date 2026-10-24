@@ -52,6 +52,7 @@ pub fn present(groups: Vec<DeviceGroup>, catalog: &Catalog, filters: &[String]) 
                     vid: g.key.vid,
                     pid: g.key.pid,
                     endpoints,
+                    network: None,
                 },
                 plugin: plugin.clone(),
             });

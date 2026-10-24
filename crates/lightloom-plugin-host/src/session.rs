@@ -38,6 +38,12 @@
 //! [`GuardedBus`]), a `TransactionLock` still held when `Render()` returns is
 //! released by the host, and `Render()` runs at most once per
 //! [`SMBUS_FRAME_INTERVAL`] whatever the canvas rate.
+//!
+//! A network device ([`SessionDevice::network`], announced by a network
+//! service) has no HID collections either: `controller` is the announced data,
+//! sockets and `XMLHttpRequest` go through its own [`NetContext`] (closed when
+//! the session ends), socket events are delivered before each `Render()`, and
+//! `Render()` runs at most once per [`NETWORK_FRAME_INTERVAL`].
 
 use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::bus::{lock_guard, SharedGuard};
@@ -48,6 +54,7 @@ use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
 use crate::meta::PluginMeta;
+use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
 use crate::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode, ShutdownPlan};
 use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
@@ -68,6 +75,9 @@ use std::time::{Duration, Instant};
 /// (`RGBController_MSIGPU::TimeToSend`, 33 ms). The latest frame is rendered
 /// when the time comes, so nothing is lost but the frames in between.
 pub const SMBUS_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// Shortest time between two `Render()` calls of a network device (about 30
+/// fps); plugins pace their protocol further themselves.
+pub const NETWORK_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 /// One physical device: every HID collection that belongs to it, or the
 /// SMBus address it answers at.
@@ -83,6 +93,39 @@ pub struct SessionDevice {
     pub endpoints: Vec<HidEndpointInfo>,
     /// An SMBus device: its bus and address.
     pub smbus: Option<SmbusTarget>,
+    /// A network device: the controller a network service announced.
+    pub network: Option<NetworkTarget>,
+}
+
+/// A network device: what its service announced.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetworkTarget {
+    /// The plugin's `Name()`.
+    pub service: String,
+    /// The controller's id.
+    pub id: String,
+    /// The controller's data (bound to `controller` in the device context).
+    pub controller: serde_json::Value,
+}
+
+impl NetworkTarget {
+    /// The controller's `ip`, when it has one.
+    pub fn ip(&self) -> Option<&str> {
+        self.controller.get("ip").and_then(serde_json::Value::as_str)
+    }
+}
+
+/// `text` as a key segment: lowercase letters, digits, `-` and `.`.
+pub fn key_slug(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() || c == '.' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').chars().take(64).collect()
 }
 
 /// Where an SMBus device lives.
@@ -103,6 +146,7 @@ impl SessionDevice {
             pid,
             endpoints,
             smbus: None,
+            network: None,
         }
     }
 
@@ -116,6 +160,20 @@ impl SessionDevice {
             pid: d.pci.device,
             endpoints: Vec::new(),
             smbus: Some(SmbusTarget { bus, addr }),
+            network: None,
+        }
+    }
+
+    /// The network device `target`: key `net:<plugin slug>:<controller id>`, VID:PID 0.
+    pub fn network(target: NetworkTarget) -> Self {
+        let id: String = target.id.chars().filter(|c| !c.is_control()).take(128).collect();
+        Self {
+            key: format!("net:{}:{id}", key_slug(&target.service)),
+            vid: 0,
+            pid: 0,
+            endpoints: Vec::new(),
+            smbus: None,
+            network: Some(target),
         }
     }
 }
@@ -428,6 +486,8 @@ pub struct SessionReport {
     pub device_removed: bool,
     /// SMBus counters (SMBus devices only).
     pub smbus: Option<SmbusStats>,
+    /// Network counters (network devices only).
+    pub network: Option<NetStats>,
     /// The last battery report (plugins with the `battery` feature only).
     pub battery: Option<BatteryStatus>,
     /// Session wall time.
@@ -470,6 +530,7 @@ impl SessionReport {
             memory_bytes: 0,
             device_removed: false,
             smbus: None,
+            network: None,
             battery: None,
             elapsed_ms: 0.0,
         }
@@ -777,8 +838,8 @@ fn run(
     let meta = &plugin.meta;
     let mut report = SessionReport::new(&device, &plugin);
 
-    // SMBus devices never open a HID collection.
-    let backend: Arc<dyn HidBackend> = if device.smbus.is_some() {
+    // SMBus and network devices never open a HID collection.
+    let backend: Arc<dyn HidBackend> = if device.smbus.is_some() || device.network.is_some() {
         Arc::new(NoHid)
     } else {
         backend
@@ -804,6 +865,13 @@ fn run(
     });
     ctx.set_subdevice_controller(meta.subdevice_controller || meta.supports_subdevices);
     ctx.set_system_info(opts.system_info.as_deref());
+    if let Some(t) = &device.network {
+        ctx.set_device_info([
+            t.service.clone(),
+            meta.name.clone(),
+            t.ip().unwrap_or_default().to_string(),
+        ]);
+    }
     ctx.set_battery_warning_level(opts.battery_warning_level);
     if let Some(t) = &device.smbus {
         ctx.set_device_info([
@@ -813,6 +881,12 @@ fn run(
         ]);
     }
     let shared = ctx.shared();
+    let net: Option<SharedNet> = device.network.as_ref().map(|_| {
+        let mut n = NetContext::new(NetRole::Device, opts.write_mode);
+        let dev = Arc::clone(&shared);
+        n.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
+        n.shared()
+    });
     let guard: Option<SharedGuard> = device.smbus.as_ref().map(|t| {
         let mut g = GuardedBus::new(t.bus.clone(), Phase::Run { addr: t.addr }, opts.write_mode);
         g.deny_registers(meta.smbus_denied_registers.iter().copied());
@@ -833,6 +907,8 @@ fn run(
         device: Some(Arc::clone(&shared)),
         smbus: guard.clone(),
         module_stubs: false,
+        net: net.clone(),
+        controller: device.network.as_ref().map(|t| t.controller.to_string()),
         ..RuntimeOptions::default()
     };
     let rt = match PluginRuntime::new(&meta.source_path, &ropts) {
@@ -858,6 +934,7 @@ fn run(
             guard.as_ref(),
             &frames,
             &opts,
+            net.as_ref(),
             stop,
             live,
             controls,
@@ -951,6 +1028,9 @@ fn run(
         g.force_unlock();
         report.smbus = Some(g.stats().clone());
     }
+    if let Some(n) = &net {
+        report.network = Some(lock_net(n).stats().clone());
+    }
     for (probe, bytes) in lifecycle.before {
         let after = lock_device(&shared)
             .probe_feature(probe.report_id, probe.len)
@@ -990,6 +1070,7 @@ fn drive(
     guard: Option<&SharedGuard>,
     frames: &FrameStore,
     opts: &SessionOptions,
+    net: Option<&SharedNet>,
     stop: &Arc<AtomicBool>,
     live: &LiveStats,
     controls: &Receiver<Control>,
@@ -1014,7 +1095,14 @@ fn drive(
         }
     }
 
-    if let Some(target) = &device.smbus {
+    if let Some(target) = &device.network {
+        // A network device has nothing to validate: its service announced it.
+        report.endpoint_path = Some(format!(
+            "{} (network, {})",
+            target.ip().unwrap_or("no address"),
+            target.service
+        ));
+    } else if let Some(target) = &device.smbus {
         // An SMBus device has no collections to validate or reports to probe:
         // the scan found it, the guard binds the session to its address.
         report.endpoint_path = Some(format!("{} @0x{:02x}", target.bus.descriptor().name, target.addr));
@@ -1120,10 +1208,15 @@ fn drive(
     let mut lock_warned = false;
     let mut last_render: Option<Instant> = None;
     while !stop.load(Ordering::Acquire) {
-        if device.smbus.is_some() {
-            let left = last_render.map_or(Duration::ZERO, |t| {
-                SMBUS_FRAME_INTERVAL.saturating_sub(t.elapsed())
-            });
+        let min_interval = if device.smbus.is_some() {
+            Some(SMBUS_FRAME_INTERVAL)
+        } else if device.network.is_some() {
+            Some(NETWORK_FRAME_INTERVAL)
+        } else {
+            None
+        };
+        if let Some(interval) = min_interval {
+            let left = last_render.map_or(Duration::ZERO, |t| interval.saturating_sub(t.elapsed()));
             if !left.is_zero() {
                 std::thread::sleep(left);
                 continue;
@@ -1175,6 +1268,19 @@ fn drive(
         if controlled || report.frames.is_multiple_of(30) {
             let dev = lock_device(shared);
             live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+        }
+        if net.is_some() {
+            // Socket events and finished requests first, so Render() sees them.
+            match rt.call_host("pumpNet", None, budgets.render_budget(), Some(stop)) {
+                Ok(_) => {}
+                Err(e) if e.is_stop() => break,
+                Err(e) => {
+                    report.render_errors += 1;
+                    if report.render_errors <= 5 {
+                        report.fail("events", e);
+                    }
+                }
+            }
         }
         let (_, frame, captured) = frames.latest_stamped();
         {
@@ -1232,8 +1338,12 @@ fn drive(
             }
         }
         let dev = lock_device(shared);
+        let net_errors = net.map(|n| {
+            let n = lock_net(n);
+            n.stats().errors + n.stats().refused + n.stats().http_errors
+        });
         live.io_errors.store(
-            bus_errors.unwrap_or_else(|| dev.stats().errors()),
+            bus_errors.or(net_errors).unwrap_or_else(|| dev.stats().errors()),
             Ordering::Relaxed,
         );
         live.hid_disconnects
@@ -1403,9 +1513,10 @@ fn finish(
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
     report.battery = dev.battery();
-    report.io_errors = match &report.smbus {
-        Some(s) => s.errors + s.denied,
-        None => report.io.errors(),
+    report.io_errors = match (&report.smbus, &report.network) {
+        (Some(s), _) => s.errors + s.denied,
+        (None, Some(n)) => n.errors + n.refused,
+        (None, None) => report.io.errors(),
     };
     let (tail, lines) = dev.log_tail();
     report.log_tail = tail;

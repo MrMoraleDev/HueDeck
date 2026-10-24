@@ -6,6 +6,7 @@
   import Effects from "./components/Effects.svelte";
   import Layout from "./components/Layout.svelte";
   import Devices from "./components/Devices.svelte";
+  import Network from "./components/Network.svelte";
   import Settings from "./components/Settings.svelte";
   import BatteryBadge from "./components/BatteryBadge.svelte";
   import logotype from "./assets/lightloom-logotype.svg";
@@ -121,6 +122,7 @@
     {:else if tab === "layout"}
       <Layout snapshot={s} />
     {:else if tab === "devices"}
+      <Network snapshot={s} />
       <Devices snapshot={s} />
     {:else}
       <Settings snapshot={s} />

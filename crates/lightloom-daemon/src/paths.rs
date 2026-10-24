@@ -77,6 +77,11 @@ impl Paths {
         self.config.join("effects")
     }
 
+    /// Effect pages loaded through the compatible API's `lighting/loadEffect`.
+    pub fn developer_effects(&self) -> PathBuf {
+        self.data.join("developer-effects")
+    }
+
     /// The user's own component descriptors.
     pub fn user_components(&self) -> PathBuf {
         self.config.join("components")

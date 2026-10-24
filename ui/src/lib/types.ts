@@ -98,10 +98,35 @@ export interface EffectView {
   title: string;
   description: string;
   publisher: string;
-  source: "lightloom" | "user" | "signalrgb";
+  source: "lightloom" | "user" | "signalrgb" | "developer";
   controls: EffectControl[];
   values: Record<string, unknown>;
   presets: string[];
+  /** What the effect reads; "meters" marks game integrations. */
+  uses?: ("audio" | "video" | "meters" | "engine" | "webgl" | "input")[];
+}
+
+/** The auto-next timer (SignalRGB's "Effect Timer Interval"). */
+export interface EffectTimer {
+  enabled: boolean;
+  /** Seconds per effect. */
+  interval: number;
+}
+
+export interface PlaylistEntry {
+  effect: string;
+  preset?: string;
+  values?: Record<string, unknown>;
+  /** Seconds; absent: the timer's interval. */
+  duration?: number;
+}
+
+export interface Playlist {
+  id: string;
+  name: string;
+  shuffle: boolean;
+  entries: PlaylistEntry[];
+  updatedAt: string;
 }
 
 export interface Lighting {
@@ -112,6 +137,11 @@ export interface Lighting {
   layout: string;
   layoutBrightness: number;
   renderer: { kind: string; running: boolean; fps: number; status?: string | null };
+  /** The playlist playing now; `entry` indexes its entries. */
+  playlist?: { id: string; name: string; entry: number } | null;
+  timer: EffectTimer;
+  /** When the next effect comes by itself (Unix ms). */
+  nextSwitchMs?: number | null;
 }
 
 export interface Settings {
@@ -140,6 +170,7 @@ export interface Snapshot {
   devices: DeviceView[];
   effects: EffectView[];
   layouts: string[];
+  playlists: Playlist[];
   settings: Settings;
   conflicts: string[];
   warnings: string[];

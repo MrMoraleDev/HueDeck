@@ -65,6 +65,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, oneshot};
 
+mod playlists;
+
 /// Settings keys in the database.
 mod keys {
     pub const EFFECT: &str = "lighting.effect";
@@ -82,6 +84,10 @@ mod keys {
     /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
     pub const PORT: &str = "settings.port";
     pub const OPENRGB_SDK: &str = "settings.openrgbSdk";
+    /// The playing playlist and its entry.
+    pub const PLAYLIST: &str = "lighting.playlist";
+    /// The auto-next timer.
+    pub const EFFECT_TIMER: &str = "lighting.effectTimer";
 }
 
 /// The database key of the port saved from the dashboard.
@@ -373,6 +379,8 @@ struct Engine {
     battery_monitor: BatteryMonitor,
     /// Devices pulsing red now, with the start time of the session told to.
     alerting: BTreeMap<String, Instant>,
+    /// Playlists and the auto-next timer.
+    player: playlists::Player,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -445,6 +453,7 @@ impl Engine {
             batteries: BTreeMap::new(),
             battery_monitor: BatteryMonitor::default(),
             alerting: BTreeMap::new(),
+            player: playlists::Player::default(),
         };
         e.enter(LifecycleState::LoadingConfig);
         e.load_state();
@@ -542,6 +551,7 @@ impl Engine {
             .collect();
         drop(d);
         self.reload_channels();
+        self.load_player();
     }
 
     /// The stored component arrays of every device, as instances.
@@ -596,6 +606,11 @@ impl Engine {
             effects.add_dir(dir, EffectSource::Lightloom, false);
         }
         effects.add_dir(&self.opts.paths.user_effects(), EffectSource::User, false);
+        effects.add_dir(
+            &self.opts.paths.developer_effects(),
+            EffectSource::Developer,
+            false,
+        );
         self.effects = effects;
 
         let mut cdirs = Vec::new();
@@ -1062,6 +1077,7 @@ impl Engine {
                 self.dirty = true;
                 self.check_batteries();
             }
+            self.tick_player();
             if self.dirty {
                 self.publish();
             }
@@ -1109,6 +1125,9 @@ impl Engine {
                 layout: self.layout.name.clone(),
                 layout_brightness: self.layout.brightness,
                 renderer: self.canvas.view(self.fps()),
+                playlist: self.player.playback(),
+                timer: self.player.timer(),
+                next_switch_ms: self.player.next_switch_ms(),
             },
             devices: self.device_views(),
             effects: self
@@ -1132,9 +1151,11 @@ impl Engine {
                         .presets(&e.id)
                         .map(|p| p.into_keys().collect())
                         .unwrap_or_default(),
+                    uses: effect_uses(e),
                 })
                 .collect(),
             layouts: self.store.layout_names().unwrap_or_default(),
+            playlists: self.store.playlists().unwrap_or_default(),
             settings: Settings {
                 signalrgb: self.signalrgb,
                 signalrgb_available: lightloom_plugin_host::catalog::signalrgb_app_dir().is_some(),
@@ -1414,14 +1435,9 @@ impl Engine {
                 if self.effects.get(&id).is_none() {
                     return Err(ApiError::not_found(format!("no effect {id}")));
                 }
-                if !values.is_empty() {
-                    self.store.set_effect_params(&id, &values).map_err(internal)?;
-                }
-                self.store.set(keys::EFFECT, &id).map_err(internal)?;
-                self.effect = Some(id.clone());
-                self.start_canvas();
-                self.log(format!("effect: {id}"));
-                Ok(json!({ "effect": id }))
+                // The user's choice ends a playlist.
+                self.stop_playlist();
+                self.show_effect(id, values)
             }
             Request::SetEffectValues { id, values } => {
                 if self.effects.get(&id).is_none() {
@@ -1474,6 +1490,15 @@ impl Engine {
                 }
                 Ok(json!({}))
             }
+            Request::StepEffect { previous } if self.player.is_playing() => self.step_playlist(previous),
+            r @ (Request::ShuffleEffect
+            | Request::SavePlaylist { .. }
+            | Request::DeletePlaylist { .. }
+            | Request::PlayPlaylist { .. }
+            | Request::StopPlaylist
+            | Request::SetEffectTimer { .. }
+            | Request::LoadEffect { .. }
+            | Request::EffectImage { .. }) => self.handle_playlist(r),
             Request::StepEffect { previous } => {
                 let ids: Vec<String> = self.effects.iter().map(|e| e.id.clone()).collect();
                 if ids.is_empty() {
@@ -1949,6 +1974,23 @@ impl Engine {
         self.start_canvas();
         self.rescan();
     }
+}
+
+/// What an effect reads, by name (`EffectView::uses`).
+fn effect_uses(e: &lightloom_runtime::effects::EffectFile) -> Vec<String> {
+    let u = &e.meta.uses;
+    [
+        ("audio", u.audio),
+        ("video", u.video),
+        ("meters", u.meters),
+        ("engine", u.engine),
+        ("webgl", u.webgl),
+        ("input", u.input),
+    ]
+    .iter()
+    .filter(|(_, on)| *on)
+    .map(|(name, _)| (*name).to_string())
+    .collect()
 }
 
 fn param_value(v: &ParamValue) -> Value {

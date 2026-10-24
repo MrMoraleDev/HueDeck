@@ -4,7 +4,7 @@
 //! the dashboard token and the preview payload.
 
 use super::*;
-use crate::model::{EffectView, Lighting};
+use crate::model::{EffectView, Lighting, Playlist, PlaylistEntry};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use http_body_util::BodyExt;
@@ -35,6 +35,10 @@ impl Backend for Scripted {
             Request::ApplyEffect { id, .. } if id == "missing" => {
                 Err(ApiError::not_found("no effect missing"))
             }
+            Request::EffectImage { id } if id == "lightloom:plasma" => {
+                Ok(json!({ "path": image_file(), "contentType": "image/png" }))
+            }
+            Request::EffectImage { .. } => Err(ApiError::not_found("The requested effect has no image")),
             _ => Ok(json!({ "done": request.name() })),
         };
         self.calls.lock().unwrap().push(request);
@@ -49,6 +53,17 @@ impl Backend for Scripted {
     fn frames(&self) -> Arc<FrameStore> {
         Arc::clone(&self.frames)
     }
+}
+
+const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 13, 10, 26, 10, b'f', b'a', b'k', b'e'];
+
+/// A picture for `lightloom:plasma`.
+fn image_file() -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("lightloom-api-image-{}.png", std::process::id()));
+    if !path.exists() {
+        std::fs::write(&path, PNG).unwrap();
+    }
+    path
 }
 
 fn backend() -> Arc<Scripted> {
@@ -71,6 +86,17 @@ fn backend() -> Arc<Scripted> {
             ..EffectView::default()
         }],
         layouts: vec!["Default".into()],
+        playlists: vec![Playlist {
+            id: "evening".into(),
+            name: "Evening".into(),
+            entries: vec![PlaylistEntry {
+                effect: "lightloom:plasma".into(),
+                duration: Some(60),
+                ..PlaylistEntry::default()
+            }],
+            updated_at: "2026-10-23T10:00:00Z".into(),
+            ..Playlist::default()
+        }],
         ..Snapshot::default()
     };
     let frames = Arc::new(FrameStore::new(320, 200));
@@ -312,10 +338,11 @@ async fn compat_answers_in_signalrgbs_envelope() {
     .await;
     assert_eq!(s, StatusCode::OK);
     for route in COMPAT_ROUTES {
-        let path = format!("{COMPAT_PREFIX}{}", route.path).replace("{id}", "lightloom:plasma");
-        let body = route
-            .mutating
-            .then(|| json!({"preset": "x", "layout": "Default", "enabled": true, "global_brightness": 5}));
+        let path = compat_path(route);
+        let body = route.mutating.then(|| {
+            json!({"preset": "x", "layout": "Default", "enabled": true, "global_brightness": 5,
+                   "uid": "dev", "html": "<html></html>"})
+        });
         let (s, _) = send(&open, route.method, &path, host, true, body).await;
         assert!(s.is_success(), "{} {path}: {s}", route.method);
     }
@@ -341,6 +368,273 @@ async fn compat_answers_in_signalrgbs_envelope() {
     )
     .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+/// A compat route's path with ids that exist in the scripted snapshot.
+fn compat_path(route: &Route) -> String {
+    let id = if route.path.contains("/playlists/") {
+        "evening"
+    } else {
+        "lightloom:plasma"
+    };
+    format!("{COMPAT_PREFIX}{}", route.path).replace("{id}", id)
+}
+
+/// Like [`send`], with the raw body and its content type.
+async fn send_raw(
+    router: &axum::Router,
+    method: &str,
+    uri: &str,
+    host: &str,
+) -> (StatusCode, String, Vec<u8>) {
+    let req = HttpRequest::builder()
+        .method(method)
+        .uri(uri)
+        .header("host", host)
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let kind = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes().to_vec();
+    (status, kind, bytes)
+}
+
+/// SignalRGB's envelope: exactly these keys, `data` on success, `errors` on failure.
+fn assert_envelope(v: &Value, method: &str, path: &str, ok: bool) {
+    let obj = v
+        .as_object()
+        .unwrap_or_else(|| panic!("{method} {path}: not an object: {v}"));
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let payload = if ok { "data" } else { "errors" };
+    let mut want = vec!["api_version", "id", "method", "params", "status", payload];
+    want.sort_unstable();
+    assert_eq!(keys, want, "{method} {path}: {v}");
+    assert_eq!(v["api_version"], "1.0", "{method} {path}");
+    assert!(v["id"].is_u64(), "{method} {path}: {v}");
+    assert!(v["params"].is_object(), "{method} {path}: {v}");
+    assert_eq!(
+        v["status"],
+        if ok { "ok" } else { "error" },
+        "{method} {path}: {v}"
+    );
+    assert_eq!(v["method"], format!("{method} {path}"), "{method} {path}");
+    if !ok {
+        let e = &v["errors"][0];
+        for k in ["code", "title", "detail"] {
+            assert!(e[k].is_string(), "{method} {path}: errors[0].{k} in {v}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn every_compat_route_answers_in_the_envelope() {
+    let b = backend();
+    let r = compat_router(ctx(&b, true), COMPAT_REST_PORT);
+    let host = "127.0.0.1:16038";
+    let body = json!({"preset": "Calm", "layout": "Default", "enabled": true, "global_brightness": 5,
+                      "uid": "dev", "html": "<html></html>", "starting_effect_id": "lightloom:plasma"});
+    let mut ids = Vec::new();
+    for route in COMPAT_ROUTES {
+        let path = compat_path(route);
+        if route.path.ends_with("/image") {
+            // The picture itself on success.
+            let (s, kind, bytes) = send_raw(&r, route.method, &path, host).await;
+            assert_eq!(
+                (s, kind.as_str(), bytes.as_slice()),
+                (StatusCode::OK, "image/png", PNG)
+            );
+            continue;
+        }
+        let body = route.mutating.then(|| body.clone());
+        let (s, v) = send(&r, route.method, &path, host, true, body).await;
+        assert_eq!(s, StatusCode::OK, "{} {path}: {v}", route.method);
+        assert_envelope(&v, route.method, &path, true);
+        ids.push(v["id"].as_u64().unwrap());
+    }
+    // Request ids are distinct.
+    let n = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), n);
+
+    // Failures carry `errors`, with the HTTP status.
+    for (method, path) in [
+        ("GET", "/api/v1/lighting/effects/nope"),
+        ("GET", "/api/v1/lighting/effects/nope/presets"),
+        ("GET", "/api/v1/lighting/effects/nope/image"),
+        ("GET", "/api/v1/lighting/playlists/nope"),
+        ("GET", "/api/v1/nothing/here"),
+        ("POST", "/api/v1/lighting/effects/missing/apply"),
+    ] {
+        let (s, v) = send(&r, method, path, host, true, None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{method} {path}: {v}");
+        assert_envelope(&v, method, path, false);
+    }
+
+    // Answers with path parameters echo them.
+    let (_, v) = send(&r, "GET", "/api/v1/lighting/playlists/evening", host, false, None).await;
+    assert_eq!(v["params"]["id"], "evening");
+    assert_eq!(
+        (
+            v["data"]["effects_count"].as_u64(),
+            v["data"]["effects"][0]["name"].as_str()
+        ),
+        (Some(1), Some("Plasma"))
+    );
+    assert_eq!(
+        v["data"]["links"]["play"],
+        "/api/v1/lighting/playlists/evening/play"
+    );
+    let (_, v) = send(&r, "GET", "/api/v1/lighting/playlists", host, false, None).await;
+    assert_eq!(
+        (v["data"]["type"].as_str(), v["data"]["items"][0]["id"].as_str()),
+        (Some("playlists"), Some("evening"))
+    );
+    assert_eq!(v["data"]["items"][0]["last_update_time"], "2026-10-23T10:00:00Z");
+    let (_, v) = send(&r, "GET", "/api/v1/app", host, false, None).await;
+    assert_eq!(
+        (v["data"]["name"].as_str(), v["data"]["api_version"].as_str()),
+        (Some("Lightloom"), Some("1.0"))
+    );
+    let (_, v) = send(&r, "GET", "/api/v1/new", host, false, None).await;
+    assert_eq!(v["data"], json!({"items": [], "type": "new"}));
+    let (_, v) = send(&r, "GET", "/api/v1/partners/MSI", host, false, None).await;
+    assert_eq!(
+        v["data"],
+        json!({"id": "MSI", "permissions": {}, "type": "partner"})
+    );
+    let (_, v) = send(
+        &r,
+        "GET",
+        "/api/v1/lighting/effects/lightloom:plasma",
+        host,
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(
+        (
+            v["data"]["developer_effect"].as_bool(),
+            v["data"]["uses_meters"].as_bool()
+        ),
+        (Some(false), Some(false))
+    );
+    assert_eq!(
+        v["data"]["image"],
+        "/api/v1/lighting/effects/lightloom:plasma/image"
+    );
+}
+
+#[tokio::test]
+async fn compat_requests_reach_the_backend() {
+    let b = backend();
+    let r = compat_router(ctx(&b, true), COMPAT_REST_PORT);
+    let host = "127.0.0.1:16038";
+    send(&r, "POST", "/api/v1/lighting/shuffle", host, false, None).await;
+    let start = json!({"starting_effect_id": "lightloom:plasma"});
+    let play = "/api/v1/lighting/playlists/evening/play";
+    send(&r, "POST", play, host, false, Some(start)).await;
+    send(&r, "POST", play, host, false, None).await;
+    // loadEffect is a developer endpoint: the token even when changes are open.
+    let load = json!({"uid": "dev", "html": "<title>Dev</title>"});
+    let path = "/api/v1/lighting/loadEffect";
+    let (s, v) = send(&r, "POST", path, host, false, Some(load.clone())).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_envelope(&v, "POST", path, false);
+    let (s, v) = send(&r, "POST", path, host, true, Some(load)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["params"], json!({"uid": "dev"}));
+    let calls = b.calls.lock().unwrap();
+    assert_eq!(
+        *calls,
+        vec![
+            Request::ShuffleEffect,
+            Request::PlayPlaylist {
+                id: "evening".into(),
+                start: Some("lightloom:plasma".into())
+            },
+            Request::PlayPlaylist {
+                id: "evening".into(),
+                start: None
+            },
+            Request::LoadEffect {
+                uid: "dev".into(),
+                html: "<title>Dev</title>".into()
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn native_playlist_routes_reach_the_backend() {
+    let b = backend();
+    let r = native_router(ctx(&b, false), NATIVE_PORT);
+    let (s, v) = send(&r, "GET", "/v1/playlists", HOST, false, None).await;
+    assert_eq!((s, v[0]["id"].as_str()), (StatusCode::OK, Some("evening")));
+    let (s, v) = send(&r, "GET", "/v1/playlists/evening", HOST, false, None).await;
+    assert_eq!(
+        (s, v["entries"][0]["duration"].as_u64()),
+        (StatusCode::OK, Some(60))
+    );
+    let (s, _) = send(&r, "GET", "/v1/playlists/nope", HOST, false, None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let list = json!({"name": "Mix", "shuffle": true,
+                      "entries": [{"effect": "lightloom:plasma", "preset": "Calm"}]});
+    let start = json!({"start": "lightloom:plasma"});
+    let timer = json!({"enabled": true, "interval": 60});
+    send(&r, "POST", "/v1/playlists", HOST, true, Some(list.clone())).await;
+    send(&r, "PUT", "/v1/playlists/mix", HOST, true, Some(list)).await;
+    send(&r, "DELETE", "/v1/playlists/mix", HOST, true, None).await;
+    send(&r, "POST", "/v1/playlists/mix/play", HOST, true, Some(start)).await;
+    send(&r, "POST", "/v1/playlists/stop", HOST, true, None).await;
+    send(&r, "PATCH", "/v1/lighting/timer", HOST, true, Some(timer)).await;
+    send(&r, "POST", "/v1/effects/shuffle", HOST, true, None).await;
+    let calls = b.calls.lock().unwrap();
+    let names: Vec<&str> = calls.iter().map(Request::name).collect();
+    assert_eq!(
+        names,
+        [
+            "savePlaylist",
+            "savePlaylist",
+            "deletePlaylist",
+            "playPlaylist",
+            "stopPlaylist",
+            "setEffectTimer",
+            "shuffleEffect"
+        ]
+    );
+    match (&calls[0], &calls[1]) {
+        (Request::SavePlaylist { id: None, playlist }, Request::SavePlaylist { id: Some(id), .. }) => {
+            assert_eq!(
+                (playlist.name.as_str(), playlist.shuffle, id.as_str()),
+                ("Mix", true, "mix")
+            );
+            assert_eq!(playlist.entries[0].preset.as_deref(), Some("Calm"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        calls[3],
+        Request::PlayPlaylist {
+            id: "mix".into(),
+            start: Some("lightloom:plasma".into())
+        }
+    );
+    assert_eq!(
+        calls[5],
+        Request::SetEffectTimer {
+            enabled: Some(true),
+            interval: Some(60)
+        }
+    );
 }
 
 #[tokio::test]

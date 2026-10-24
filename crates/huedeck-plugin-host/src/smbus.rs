@@ -17,7 +17,9 @@
 //!    EEPROM area 0x50-0x5F ([`write_denied`]);
 //! 5. writes to a register of the plugin's `SmbusDeniedRegisters()` (save to
 //!    flash/EEPROM and the like) are refused, whatever the address (for a
-//!    register-less write, its first byte is the register);
+//!    register-less write, its first byte is the register), except inside
+//!    the plugin's `SaveToDevice(request)` call that the user asked for
+//!    ([`GuardedBus::set_save_window`], [`crate::save`]);
 //! 6. block transfers stay within the bus's `max_block_len`;
 //! 7. the bus is taken in turn: a session's `TransactionLock`, and every
 //!    lone operation of a session that holds none, waits in one FIFO queue
@@ -254,6 +256,8 @@ pub struct GuardedBus {
     mode: WriteMode,
     /// Registers never written (`SmbusDeniedRegisters()`).
     denied_registers: BTreeSet<u8>,
+    /// Inside a user-requested `SaveToDevice(request)`: the denied registers may be written.
+    save_window: bool,
     stats: SmbusStats,
     logged: BTreeSet<String>,
     log_sink: Option<LogSink>,
@@ -309,6 +313,7 @@ impl GuardedBus {
             session: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
             mode,
             denied_registers: BTreeSet::new(),
+            save_window: false,
             stats: SmbusStats::default(),
             logged: BTreeSet::new(),
             log_sink: None,
@@ -373,6 +378,28 @@ impl GuardedBus {
         self.denied_registers.extend(registers);
     }
 
+    /// Open (`true`) or close the save window: while it is open, writes to the
+    /// `SmbusDeniedRegisters()` go through (and are logged). The session opens it
+    /// for the duration of one user-requested `SaveToDevice(request)` call only.
+    pub fn set_save_window(&mut self, open: bool) {
+        self.save_window = open;
+    }
+
+    /// Whether the save window is open.
+    pub fn save_window(&self) -> bool {
+        self.save_window
+    }
+
+    /// Writes go through or are recorded (`DryRun`): a preview runs dry.
+    pub fn set_write_mode(&mut self, mode: WriteMode) {
+        self.mode = mode;
+    }
+
+    /// The write mode.
+    pub fn write_mode(&self) -> WriteMode {
+        self.mode
+    }
+
     /// Forward refusal messages to `sink` as well (logged once each).
     pub fn set_log_sink(&mut self, sink: Option<LogSink>) {
         self.log_sink = sink;
@@ -431,6 +458,15 @@ impl GuardedBus {
     /// Step 5 of the module docs: a write to `reg` (`None`: no register).
     fn check_register(&mut self, what: &str, reg: Option<u8>) -> Result<(), Status> {
         match reg {
+            Some(reg) if self.denied_registers.contains(&reg) && self.save_window => {
+                let text =
+                    format!("bus: {what} to register 0x{reg:02x} (SmbusDeniedRegisters) inside SaveToDevice");
+                tracing::warn!(target: "huedeck::smbus", bus = %self.handle.descriptor.name, "{text}");
+                if let Some(sink) = &self.log_sink {
+                    sink(&text);
+                }
+                Ok(())
+            }
             Some(reg) if self.denied_registers.contains(&reg) => Err(self.deny(
                 what,
                 format!("register 0x{reg:02x} is in the plugin's SmbusDeniedRegisters() (never written)"),
@@ -913,6 +949,35 @@ mod tests {
         assert!(g.write_byte(0x68, 0x30, 1).is_ok());
         assert_eq!(g.stats().denied, 4);
         assert_eq!(rec.payloads(TransactionKind::SmbusWrite).len(), 1);
+    }
+
+    #[test]
+    fn denied_registers_open_only_inside_the_save_window() {
+        let (h, rec) = handle(SmbusBusKind::Nvidia, &[0x68]);
+        h.allow(0x68);
+        let mut g = run(&h, 0x68);
+        g.deny_registers([0x3F]);
+        assert_eq!(g.write_byte(0x68, 0x3F, 1), Err(-1));
+        g.set_save_window(true);
+        assert!(g.save_window());
+        assert_eq!(g.write_byte(0x68, 0x3F, 1), Ok(()));
+        g.set_save_window(false);
+        assert_eq!(g.write_byte(0x68, 0x3F, 1), Err(-1), "closed again");
+        assert_eq!(
+            rec.payloads(TransactionKind::SmbusWrite),
+            vec![vec![0x68, 0x3F, 1]]
+        );
+        // The SPD and the policy's address checks stay closed inside the window.
+        g.set_save_window(true);
+        assert_eq!(g.write_byte(0x69, 0x3F, 1), Err(-1));
+        g.set_write_mode(WriteMode::DryRun);
+        assert_eq!(g.write_byte(0x68, 0x3F, 1), Ok(()));
+        assert_eq!(
+            rec.payloads(TransactionKind::SmbusWrite).len(),
+            1,
+            "a dry run sends nothing"
+        );
+        assert_eq!(g.stats().dry_run_log, vec![vec![0x68, 0x3F, 1]]);
     }
 
     #[test]

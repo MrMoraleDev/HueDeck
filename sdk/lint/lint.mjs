@@ -11,7 +11,9 @@
 //     `Size()`, `ControllableParameters()` against schemas/controllable-parameters.schema.json;
 //   * exports against the manifest: `VendorId()` / `ProductId()` against the USB claims,
 //     `HidUsages()` against the hidUsage claims, `SmbusAddresses()`, `SmbusDeniedRegisters()`,
-//     `SpdManufacturers()`, `SmbusBatchWrites()` and `BrandGPUList()` against the SMBus claim;
+//     `SpdManufacturers()`, `SmbusBatchWrites()` and `BrandGPUList()` against the SMBus claim,
+//     `SaveCapabilities()` / `ShutdownModes()` against `save` / `shutdownModes` (and a plugin
+//     that can save exports `SaveToDevice(request)`);
 //   * the sources for globals a HueDeck plugin does not have (DOM, Node, timers).
 //
 // plugins/_testkit/manifests.test.mjs runs this over every first-party plugin.
@@ -117,6 +119,15 @@ export async function lintPlugin(dir) {
     try {
       const ns = await importPlugin(file);
       const reading = readExports(ns);
+      // Network plugins: the DiscoveryService constructor only sets fields, so it runs here.
+      if (typeof ns.DiscoveryService === "function") {
+        try {
+          const d = new ns.DiscoveryService();
+          reading.mdns = Array.isArray(d.MDns) ? d.MDns.map((t) => String(t).replace(/\.local\.?$/, "")) : [];
+        } catch (e) {
+          add("error", "exports", "discovery-service", `new DiscoveryService() throws: ${e?.message ?? e}`, where);
+        }
+      }
       if (file === entry || isPluginModule(reading)) modules.push({ where, reading });
     } catch (e) {
       if (file === entry) add("error", "exports", "load", `the module does not load: ${e?.name ?? "Error"}: ${e?.message ?? e}`, where);
@@ -350,6 +361,7 @@ function checkExportsAgainstManifest(readings, manifest, add) {
   const usb = devices.filter((c) => "vid" in c);
   const usages = devices.filter((c) => "hidUsage" in c);
   const smbus = devices.filter((c) => "smbus" in c);
+  const network = devices.filter((c) => "network" in c);
   const type = ex.Type === undefined ? "hid" : String(ex.Type).toLowerCase();
 
   // USB: VendorId / ProductId of every plugin module against the claims.
@@ -424,6 +436,37 @@ function checkExportsAgainstManifest(readings, manifest, add) {
       if (!deepEqual(norm(ex.SmbusBuses), norm(s.buses))) {
         add("warning", "manifest", "smbus-mismatch", `SmbusBuses() ${show(ex.SmbusBuses)} differs from smbus.buses ${show(s.buses)}`, "/devices");
       }
+    }
+  }
+
+  // Save to devices and exit modes (docs/host-api/save-shutdown.md).
+  const saveLifecycle = readings.some((r) => r.lifecycle?.SaveToDevice);
+  if (!deepEqual(ex.SaveCapabilities ?? null, manifest.save ?? null)) {
+    add("error", "manifest", "save-mismatch", `SaveCapabilities() ${show(ex.SaveCapabilities ?? null)} differs from save ${show(manifest.save ?? null)}`, "/save");
+  }
+  if ((manifest.save !== undefined || ex.SaveCapabilities !== undefined) && !saveLifecycle) {
+    add("error", "exports", "save-without-export", "SaveCapabilities() / save without a SaveToDevice(request) export: HueDeck saves nothing", "/save");
+  }
+  if (!deepEqual(ex.ShutdownModes ?? [], manifest.shutdownModes ?? [])) {
+    add("error", "manifest", "shutdown-modes-mismatch", `ShutdownModes() ${show(ex.ShutdownModes ?? [])} differs from shutdownModes ${show(manifest.shutdownModes ?? [])}`, "/shutdownModes");
+  }
+
+  // Network.
+  if (type === "network" && network.length === 0) {
+    add("error", "manifest", "network-claim", "Type() is network but the manifest has no network claim", "/devices");
+  }
+  if (network.length > 0 && type !== "network") {
+    add("error", "manifest", "network-claim", `the manifest has a network claim but Type() returns ${show(ex.Type)}`, "/devices");
+  }
+  for (const c of network) {
+    const mdns = Array.isArray(c.network?.mdns) ? [...c.network.mdns].sort() : [];
+    const browsed = [...(readings[0].mdns ?? [])].sort();
+    if (!deepEqual(mdns, browsed)) {
+      add("error", "manifest", "network-mismatch", `DiscoveryService MDns ${show(browsed)} (without .local.) differ from network.mdns ${show(mdns)}`, "/devices");
+    }
+    const perms = Array.isArray(manifest.permissions) ? manifest.permissions : [];
+    if (mdns.length > 0 && !perms.includes("mdns")) {
+      add("error", "manifest", "permission", "a plugin that browses mDNS needs the 'mdns' permission", "/permissions");
     }
   }
 

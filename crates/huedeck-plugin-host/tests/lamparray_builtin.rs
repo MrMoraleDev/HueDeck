@@ -198,3 +198,22 @@ fn the_device_manager_runs_lamparray_sessions() {
     assert_eq!(reports.len(), 1);
     assert_eq!(mock.releases("lamp-a"), 1);
 }
+
+#[test]
+fn shutdown_mode_off_turns_the_lamps_off_before_release() {
+    let mock = MockLampArray::new();
+    mock.add(MockLampArray::row("lamp-a", 1, 2, 2));
+    let (h, frames) = start(&mock, options());
+    wait_until(&frames, RED, || !mock.writes("lamp-a").is_empty());
+    h.control(Control::ShutdownMode(
+        huedeck_plugin_host::save::ShutdownMode::Off,
+    ));
+    std::thread::sleep(Duration::from_millis(50));
+    frames.publish(Frame::solid(CANVAS_WIDTH, CANVAS_HEIGHT, RED));
+    std::thread::sleep(Duration::from_millis(50));
+    h.stop();
+    let report = h.join().unwrap();
+    assert_eq!(report.shutdown_mode, huedeck_plugin_host::save::ShutdownMode::Off);
+    assert_eq!(mock.writes("lamp-a").last().unwrap(), &vec![[0, 0, 0, 255]; 2]);
+    assert_eq!(mock.releases("lamp-a"), 1);
+}

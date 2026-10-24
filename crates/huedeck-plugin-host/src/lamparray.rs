@@ -21,12 +21,16 @@
 //! next frame is sent in full. Writes honour the device's minimum update
 //! interval (a frame that comes too early waits for the next one), unchanged
 //! colours are resent once a second only, and a stop releases the device to
-//! the OS (autonomous mode).
+//! the OS (the next controller, or autonomous mode); with
+//! [`ShutdownMode::Off`] it turns the lamps off first. `Keep` cannot be
+//! honoured once the device is handed back, and a save is refused (no device
+//! memory).
 
 use crate::catalog::CatalogEntry;
 use crate::device::{lock_device, DeviceContext, SharedDevice, WriteMode};
 use crate::meta::{DeviceType, PluginMeta};
 use crate::runtime::JsFailure;
+use crate::save::{SaveOutcome, ShutdownMode};
 use crate::session::{Control, LiveStats, SessionDevice, SessionOptions, SessionReport, SessionState};
 use crate::stats::LatencyHistogram;
 use huedeck_engine::{FrameStore, Placement, SamplerConfig};
@@ -76,6 +80,7 @@ impl SessionDevice {
             endpoints: Vec::new(),
             smbus: None,
             lamparray: Some(LampArrayTarget { backend, info }),
+            network: None,
         }
     }
 }
@@ -132,9 +137,24 @@ fn failure(class: &str, message: impl Into<String>) -> JsFailure {
 }
 
 /// Apply one [`Control`] between two frames (no plugin hooks to call).
-fn apply_control(shared: &SharedDevice, control: Control, report: &mut SessionReport) {
+fn apply_control(
+    shared: &SharedDevice,
+    key: &str,
+    control: Control,
+    shutdown_mode: &mut ShutdownMode,
+    report: &mut SessionReport,
+) {
     let mut dev = lock_device(shared);
     match control {
+        Control::ShutdownMode(m) => *shutdown_mode = m,
+        // A LampArray has no device memory HueDeck could write.
+        Control::Save(call) => {
+            let _ = call.reply.send(SaveOutcome::failed(
+                key,
+                call.action,
+                "a Windows Dynamic Lighting device cannot store lighting",
+            ));
+        }
         Control::Parameters(_) => report
             .notes
             .push("the built-in LampArray driver has no parameters".into()),
@@ -207,6 +227,7 @@ pub(crate) fn run(
     let mut render = LatencyHistogram::new();
     let mut last_seq = 0;
     let mut write_errors = 0u64;
+    let mut shutdown_mode = opts.shutdown_mode;
     while !stop.load(Ordering::Acquire) {
         let Some(seq) = frames.wait_for_newer(last_seq, Duration::from_millis(100)) else {
             continue;
@@ -217,7 +238,7 @@ pub(crate) fn run(
         last_seq = seq;
         let mut controlled = false;
         while let Ok(control) = controls.try_recv() {
-            apply_control(&shared, control, &mut report);
+            apply_control(&shared, &device.key, control, &mut shutdown_mode, &mut report);
             controlled = true;
         }
         if controlled || report.frames.is_multiple_of(30) {
@@ -302,7 +323,18 @@ pub(crate) fn run(
     }
 
     live.set_state(SessionState::Stopping);
+    while let Ok(control) = controls.try_recv() {
+        apply_control(&shared, &device.key, control, &mut shutdown_mode, &mut report);
+    }
+    report.shutdown_mode = shutdown_mode;
     if !opts.skip_shutdown && opts.write_mode == WriteMode::Live {
+        // `Off`: black before handing the device back. `Keep` cannot be honoured:
+        // once released, Windows gives the device to the next controller.
+        if shutdown_mode == ShutdownMode::Off && handle.available() {
+            if let Err(e) = handle.set_colors(&vec![[0, 0, 0, 255]; leds.len()]) {
+                report.fail("Shutdown", failure("IoError", e.to_string()));
+            }
+        }
         match handle.release() {
             Ok(()) => report.shutdown_called = true,
             Err(e) => report.fail("Shutdown", failure("IoError", e.to_string())),

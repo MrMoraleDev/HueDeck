@@ -67,7 +67,7 @@ pub fn present(
     let want_containers = lamps.iter().any(|l| l.container_id.is_some());
     let owned: Vec<OwnedHid> = hid
         .iter()
-        .filter(|p| p.device.smbus.is_none() && p.device.lamparray.is_none())
+        .filter(|p| p.device.smbus.is_none() && p.device.lamparray.is_none() && p.device.network.is_none())
         .map(|p| {
             let paths: Vec<String> = p.device.endpoints.iter().map(|e| e.path.clone()).collect();
             let mut containers: Vec<String> = if want_containers {

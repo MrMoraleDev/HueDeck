@@ -181,6 +181,8 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/devices", get(devices))
         .route("/v1/devices/{key}", get(device).patch(patch_device))
         .route("/v1/devices/{key}/channels/{channel}", put(put_channel))
+        .route("/v1/save/preview", post(save_preview))
+        .route("/v1/save", post(save_to_devices))
         .route("/v1/effects", get(effects))
         .route("/v1/effects/next", post(next_effect))
         .route("/v1/effects/previous", post(previous_effect))
@@ -207,6 +209,12 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/export", get(export))
         .route("/v1/import", post(import))
         .route("/v1/rescan", post(rescan))
+        .route("/v1/network", get(network))
+        .route("/v1/network/{plugin}/add", post(network_add))
+        .route(
+            "/v1/network/{plugin}/controllers/{id}/{action}",
+            post(network_action),
+        )
         .route("/v1/shutdown", post(shutdown))
         .route("/v1/canvas/event", post(canvas_event))
         .route("/v1/canvas/tap", post(canvas_tap))
@@ -245,6 +253,7 @@ async fn device(State(ctx): State<ApiContext>, Path(key): Path<String>) -> Respo
 struct DevicePatch {
     enabled: Option<bool>,
     parameters: Option<Map<String, Value>>,
+    shutdown_mode: Option<String>,
     #[serde(default)]
     blink_low_battery: Option<bool>,
 }
@@ -259,7 +268,42 @@ async fn patch_device(
             key,
             enabled: p.enabled,
             parameters: p.parameters,
+            shutdown_mode: p.shutdown_mode,
             blink_low_battery: p.blink_low_battery,
+        })
+        .await,
+    )
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SaveBody {
+    #[serde(default)]
+    confirm: bool,
+    #[serde(default)]
+    devices: std::collections::BTreeMap<String, crate::model::DeviceSaveChoice>,
+}
+
+/// What "Save to devices" would store in each device (nothing is written).
+async fn save_preview(State(ctx): State<ApiContext>, body: Option<Json<SaveBody>>) -> Response {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    reply(
+        ctx.call(Request::SaveToDevices {
+            preview: true,
+            confirm: false,
+            devices: b.devices,
+        })
+        .await,
+    )
+}
+
+/// Store lighting in the devices' own memory; needs `"confirm": true`.
+async fn save_to_devices(State(ctx): State<ApiContext>, Json(b): Json<SaveBody>) -> Response {
+    reply(
+        ctx.call(Request::SaveToDevices {
+            preview: false,
+            confirm: b.confirm,
+            devices: b.devices,
         })
         .await,
     )
@@ -420,6 +464,8 @@ struct SettingsPatch {
     signalrgb: Option<bool>,
     gpu_compositing: Option<bool>,
     smbus: Option<bool>,
+    network: Option<bool>,
+    shutdown_mode: Option<String>,
     #[serde(default)]
     battery_low: Option<u8>,
     #[serde(default)]
@@ -478,6 +524,8 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
             signalrgb: p.signalrgb,
             gpu_compositing: p.gpu_compositing,
             smbus: p.smbus,
+            network: p.network,
+            shutdown_mode: p.shutdown_mode,
             battery_low: p.battery_low,
             battery_critical: p.battery_critical,
             battery_notifications: p.battery_notifications,
@@ -520,6 +568,30 @@ async fn export(State(ctx): State<ApiContext>) -> Response {
 
 async fn import(State(ctx): State<ApiContext>, Json(state): Json<Value>) -> Response {
     reply(ctx.call(Request::Import { state }).await)
+}
+
+async fn network(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().network).into_response()
+}
+
+#[derive(Deserialize)]
+struct NetworkAddBody {
+    ip: String,
+}
+
+async fn network_add(
+    State(ctx): State<ApiContext>,
+    Path(plugin): Path<String>,
+    Json(b): Json<NetworkAddBody>,
+) -> Response {
+    reply(ctx.call(Request::NetworkAdd { plugin, ip: b.ip }).await)
+}
+
+async fn network_action(
+    State(ctx): State<ApiContext>,
+    Path((plugin, id, action)): Path<(String, String, String)>,
+) -> Response {
+    reply(ctx.call(Request::NetworkAction { plugin, id, action }).await)
 }
 
 async fn rescan(State(ctx): State<ApiContext>) -> Response {

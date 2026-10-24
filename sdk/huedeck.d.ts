@@ -370,8 +370,9 @@ declare namespace HueDeck {
     // --- features, notifications, logging ------------------------------------------
 
     /**
-     * Install a feature global of the same name. `"udp"` and `"dtls"` throw `HostApiMissing`
-     * in HueDeck device sessions (no sockets for device plugins yet).
+     * Install a feature global of the same name. `"udp"` works in network device sessions
+     * (docs/host-api/network-huedeck.md) and throws `HostApiMissing` elsewhere; `"dtls"`
+     * always throws (HueDeck has no TLS stack).
      * @signalrgb
      */
     addFeature(name: "battery" | "keyboard" | "mouse" | "base64" | "udp" | "dtls"): void;
@@ -471,7 +472,23 @@ declare namespace HueDeck {
     decode(text: string): number[];
   }
 
-  /** A socket of `udp.createSocket()` / `tcp.createSocket()`. @signalrgb @stub */
+  /** What a socket's `message` handler gets. */
+  interface SocketMessage {
+    /** Payload as text (UTF-8). */
+    data: string;
+    utf16: string;
+    /** Payload bytes. */
+    buffer: number[];
+    address: string;
+    port: number;
+    timestamp: number;
+  }
+
+  /**
+   * A socket of `udp.createSocket()` / `tcp.createSocket()` (network services and network
+   * device sessions; local-network destinations only). Events arrive between plugin calls.
+   * @signalrgb
+   */
   interface Socket {
     readonly UnconnectedState: 0;
     readonly HostLookupState: 1;
@@ -481,18 +498,30 @@ declare namespace HueDeck {
     readonly ListeningState: 5;
     readonly ClosingState: 6;
     readonly state: number;
-    on(event: string, handler: (...args: unknown[]) => void): void;
-    bind(port?: number): void;
-    connect(host: string, port: number): void;
+    on(event: "message", handler: (msg: SocketMessage) => void): void;
+    on(event: "error", handler: (code: number, message: string) => void): void;
+    on(event: "connection", handler: (client?: Socket) => void): void;
+    on(event: "listening" | "close", handler: () => void): void;
+    /** UDP: bind a local port (0 = ephemeral). One-shot. */
+    bind(port?: number): boolean;
+    /** UDP: default peer of `send`; TCP: connect (at most 2 s). */
+    connect(host: string, port: number): boolean;
     disconnect(): void;
     close(): void;
+    /** To the peer: bytes sent, or -1. */
     send(data: Bytes | string): number;
-    write(data: Bytes | string): number;
+    /** UDP: to `host:port`: bytes sent, or -1. */
+    write(data: Bytes | string, host: string, port: number): number;
+    /**
+     * TCP server, HueDeck extension: listen on the local address facing `peerIp` (never
+     * 0.0.0.0) and accept `peerIp` only; `{ address, port }` or `null`.
+     */
+    listen?(port: number, peerIp: string): { address: string; port: number } | null;
     address(): { address: string; port: number; protocol: string };
     remoteAddress(): { address: string; port: number; protocol: string };
   }
 
-  /** Global `udp` after `device.addFeature("udp")`. @signalrgb @unimplemented (device sessions) */
+  /** Global `udp` after `device.addFeature("udp")` (network device sessions). @signalrgb */
   interface UdpFeature {
     send(ip: string, port: number, data: Bytes, bigEndian?: boolean): number;
     createSocket(): Socket;
@@ -733,6 +762,18 @@ declare namespace HueDeck {
     SpdManufacturers?: Exported<SpdManufacturer[]>;
     /** Writes inside TransactionLock are queued and sent as one batch. @huedeck */
     SmbusBatchWrites?: Exported<boolean>;
+    /**
+     * What `SaveToDevice(request)` can store in the device's own memory ("Save to devices";
+     * docs/host-api/save-shutdown.md). Repeated as `save` in manifest.json.
+     * @huedeck
+     */
+    SaveCapabilities?: Exported<SaveCapabilities>;
+    /**
+     * The exit modes `Shutdown(systemSuspending, mode)` carries out itself; the others fall back
+     * to `shutdownColor`. Repeated as `shutdownModes` in manifest.json.
+     * @huedeck
+     */
+    ShutdownModes?: Exported<ShutdownMode[]>;
 
     // --- lifecycle (@signalrgb) ----------------------------------------------------------
     /** Accept one HID collection of the matched device; `device` is already bound. @signalrgb */
@@ -743,13 +784,48 @@ declare namespace HueDeck {
     Initialize?(): void;
     /** Every frame (SMBus sessions: at most every 33 ms). @signalrgb */
     Render?(): void;
-    /** On stop, removal and suspend; `systemSuspending` true: show black. @signalrgb */
-    Shutdown?(systemSuspending?: boolean): void;
+    /**
+     * On stop, removal and suspend; `systemSuspending` true: show black. HueDeck passes the exit
+     * mode as a second argument (`undefined` elsewhere: treat as "restore"). @signalrgb
+     */
+    Shutdown?(systemSuspending?: boolean, mode?: ShutdownMode): void;
+    /**
+     * "Save to devices": store the frame's colours (`effect` null) or a built-in effect in the
+     * device's own memory. Called only after the user confirmed it, at most once a minute per
+     * device; a "preview" must not write (the host runs it dry anyway). Throw on a failed write.
+     * @huedeck
+     */
+    SaveToDevice?(request: SaveRequest): SaveResult;
     /** Network plugins: the discovery service class/object. @signalrgb @unimplemented */
     DiscoveryService?: unknown;
     /** Called when the device brightness changes. @signalrgb */
     onBrightnessChanged?(): void;
   }
+
+  /** What happens to the lights when HueDeck closes. @huedeck */
+  type ShutdownMode = "restore" | "keep" | "off";
+
+  /** `SaveCapabilities()`. @huedeck */
+  interface SaveCapabilities {
+    /** The frame's colours (one per zone or LED, as the device stores them). */
+    static: boolean;
+    /** Built-in effects the device can store. */
+    effects: Array<"spectrum" | "breathing" | "wave" | "rainbow">;
+  }
+
+  /** The argument of `SaveToDevice()`. @huedeck */
+  interface SaveRequest {
+    action: "preview" | "save";
+    /** One of `SaveCapabilities().effects`, or null for the frame's colours. */
+    effect: string | null;
+    /** The device's LEDs on the frame shown last, `LedPositions()` order. */
+    colors: Array<[number, number, number]>;
+  }
+
+  /** What `SaveToDevice()` returns. @huedeck */
+  type SaveResult =
+    | { effect: string; zones: Array<{ name: string; color: string }>; note?: string }
+    | { unsupported: string };
 
   // ------------------------------------------------------------------ host modules
 
@@ -862,7 +938,7 @@ declare namespace HueDeck {
 
   // ------------------------------------------------------------------ network-plugin globals
 
-  /** Global `service` of network plugins. @signalrgb @stub */
+  /** Global `service` of a network plugin's discovery context (docs/host-api/network-huedeck.md). @signalrgb */
   interface Service {
     name: string;
     controllers: Array<{ id: unknown; obj: unknown }>;
@@ -872,13 +948,16 @@ declare namespace HueDeck {
     updateController(controller: object): void;
     hasController(id: string): boolean;
     getController(id: string): unknown;
-    getSetting(group: string, key: string): unknown;
+    /** Persisted per plugin; `id` / `key` must not contain `/` or `..`. */
+    getSetting(group: string, key: string): string | undefined;
+    /** Strings are stored as is, other values as JSON text, `undefined` deletes. */
     saveSetting(group: string, key: string, value: unknown): void;
     removeSetting(group: string, key: string): void;
     announceController(controller: object): void;
     suppressController(controller: object): void;
-    broadcast(message: string): void;
-    resolve(host: string): void;
+    /** To `UdpBroadcastAddress:UdpBroadcastPort`: bytes sent, or -1. */
+    broadcast(message: string | Bytes): number;
+    resolve(host: string, callback: (host: { protocol: "IPV4" | "IPV6"; ip: string }) => void): void;
     [member: string]: unknown;
   }
 
@@ -890,7 +969,11 @@ declare namespace HueDeck {
     Delete(url: string, callback: (xhr: XMLHttpRequestLike) => void, ...args: unknown[]): void;
   }
 
-  /** The `XMLHttpRequest` global: every request completes at once with status 0. @signalrgb @stub */
+  /**
+   * The `XMLHttpRequest` global: real `http://` requests to the local network in network
+   * contexts (sync or async, timeout default 3 s, at most 10 s); elsewhere every request
+   * completes at once with status 0. @signalrgb
+   */
   interface XMLHttpRequestLike {
     readyState: number;
     status: number;
@@ -991,7 +1074,7 @@ declare var keyboard: HueDeck.Keyboard;
 declare var mouse: HueDeck.Mouse;
 /** After `device.addFeature("base64")`. */
 declare var base64: HueDeck.Base64;
-/** After `device.addFeature("udp")` (throws in HueDeck device sessions). */
+/** After `device.addFeature("udp")` (network device sessions; throws in the others). */
 declare var udp: HueDeck.UdpFeature;
 /** After `device.addFeature("dtls")` (throws in HueDeck device sessions). */
 declare var dtls: HueDeck.DtlsFeature;

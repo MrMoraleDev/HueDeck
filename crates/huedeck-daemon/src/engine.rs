@@ -10,6 +10,13 @@
 //! seconds. Every session ends with the plugin's `Shutdown(false)` when the
 //! daemon stops.
 //!
+//! "Save to devices" ([`Request::SaveToDevices`]) hands each chosen device's
+//! session a `SaveToDevice(request)` (crate `huedeck_plugin_host::save`): only
+//! with the client's `confirm`, at most once a minute per device (the device
+//! manager's limit), and with one line per attempt in `save-audit.log`. What
+//! devices show when HueDeck closes ([`ShutdownMode`]) is a setting with
+//! per-device overrides, handed to every session (and changed live).
+//!
 //! SMBus devices (GPU RGB; RAM RGB when the I/O broker is installed and
 //! healthy) are on unless turned off (`[smbus] enabled = false`, the
 //! dashboard setting). Their buses are scanned at start, on a rescan request and when
@@ -23,6 +30,13 @@
 //! ([`huedeck_runtime::conflicts::claim_smbus`]): with a `huedeck` run on
 //! the buses, the daemon leaves them alone (and a `huedeck` run started
 //! while the daemon drives them leaves its SMBus devices out).
+//!
+//! Network lights are off unless turned on (`[network] enabled`, the
+//! dashboard setting). While on, every network plugin runs its discovery
+//! service ([`huedeck_plugin_host::service`]); the controllers a service
+//! announces become devices (`net:<plugin>:<id>`) driven like the others, and
+//! a controller it suppresses (or a service that stops) ends its session.
+//! Plugin settings (`service.saveSetting`) live in the database.
 
 use crate::battery::{self, BatteryMonitor, Severity, Thresholds};
 use crate::config::Config;
@@ -31,7 +45,8 @@ use crate::paths::{self, Paths};
 use crate::store::{StateExport, Store};
 use arc_swap::ArcSwap;
 use huedeck_api::model::{
-    BatteryView, ChannelView, DeviceView, EffectView, Endpoint, Lighting, RendererView, Settings,
+    BatteryView, ChannelView, DeviceSaveChoice, DeviceView, EffectView, Endpoint, Lighting,
+    NetworkControllerView, NetworkServiceView, RendererView, SaveSupport, Settings,
 };
 use huedeck_api::{ApiError, Backend, Event, Request, Snapshot};
 use huedeck_engine::{
@@ -47,8 +62,10 @@ use huedeck_plugin_host::device::{Brightness, LogSink, WriteMode};
 use huedeck_plugin_host::discover::ScanBudget;
 use huedeck_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
 use huedeck_plugin_host::meta::{ControllableParameter, ParamValue};
+use huedeck_plugin_host::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode};
+use huedeck_plugin_host::service::{PluginSettings, ServiceCommand, ServiceHandle, ServiceOptions};
 use huedeck_plugin_host::session::{
-    Control, EndpointKind, SessionDevice, SessionHandle, SessionOptions, SessionState,
+    Control, EndpointKind, NetworkTarget, SessionDevice, SessionHandle, SessionOptions, SessionState,
 };
 use huedeck_plugin_host::smbus::BusHandle;
 use huedeck_render::{CefRenderer, CefRendererConfig, NullRenderer, Pattern, RendererClient};
@@ -75,6 +92,9 @@ mod keys {
     pub const SIGNALRGB: &str = "settings.signalrgb";
     pub const GPU: &str = "settings.gpuCompositing";
     pub const SMBUS: &str = "settings.smbus";
+    pub const SHUTDOWN_MODE: &str = "settings.shutdownMode";
+    /// Followed by the device key: that device's exit mode (`""`: the setting's).
+    pub const DEVICE_SHUTDOWN_MODE: &str = "shutdownMode.";
     pub const BATTERY_LOW: &str = "settings.batteryLow";
     pub const BATTERY_CRITICAL: &str = "settings.batteryCritical";
     pub const BATTERY_NOTIFICATIONS: &str = "settings.batteryNotifications";
@@ -83,10 +103,51 @@ mod keys {
     /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
     pub const PORT: &str = "settings.port";
     pub const OPENRGB_SDK: &str = "settings.openrgbSdk";
+    pub const NETWORK: &str = "settings.network";
+}
+
+/// How long a stopping network service may take.
+const SERVICE_STOP: Duration = Duration::from_secs(3);
+
+/// Network plugin settings: read from memory by the service threads, written
+/// through to the database by the engine thread (which owns the connection).
+#[derive(Default)]
+struct DbSettings {
+    cache: Mutex<BTreeMap<(String, String, String), String>>,
+    pending: Mutex<Vec<(String, String, String, Option<String>)>>,
+}
+
+impl PluginSettings for DbSettings {
+    fn get(&self, plugin: &str, id: &str, key: &str) -> Option<String> {
+        lock(&self.cache)
+            .get(&(plugin.to_string(), id.to_string(), key.to_string()))
+            .cloned()
+    }
+
+    fn set(&self, plugin: &str, id: &str, key: &str, value: Option<&str>) {
+        let k = (plugin.to_string(), id.to_string(), key.to_string());
+        let mut cache = lock(&self.cache);
+        let changed = match value {
+            Some(v) => cache.insert(k, v.to_string()).as_deref() != Some(v),
+            None => cache.remove(&k).is_some(),
+        };
+        drop(cache);
+        if changed {
+            lock(&self.pending).push((
+                plugin.to_string(),
+                id.to_string(),
+                key.to_string(),
+                value.map(String::from),
+            ));
+        }
+    }
 }
 
 /// The database key of the port saved from the dashboard.
 pub const PORT_KEY: &str = keys::PORT;
+
+/// How long a "Save to devices" request waits for the devices' sessions.
+const SAVE_WAIT: Duration = Duration::from_secs(20);
 
 /// The layout every installation starts with.
 pub const DEFAULT_LAYOUT: &str = "Default";
@@ -280,8 +341,22 @@ struct SessionDefaults {
     use_signalrgb: bool,
     system_info: Option<Arc<huedeck_hal::SystemInfo>>,
     write_mode: WriteMode,
+    /// What devices show when HueDeck closes.
+    shutdown_mode: ShutdownMode,
+    /// Per-device exit modes.
+    shutdown_overrides: BTreeMap<String, ShutdownMode>,
     /// `battery.lowBatteryWarningLevel` of new sessions.
     battery_low: u8,
+}
+
+impl SessionDefaults {
+    /// The exit mode of `key`.
+    fn shutdown_mode_of(&self, key: &str) -> ShutdownMode {
+        self.shutdown_overrides
+            .get(key)
+            .copied()
+            .unwrap_or(self.shutdown_mode)
+    }
 }
 
 /// The canvas source.
@@ -349,6 +424,16 @@ struct Engine {
     smbus_hw: Option<SmbusHardware>,
     /// SMBus devices found by the last scan.
     smbus_present: Vec<Present>,
+    /// Network lights are on.
+    network: bool,
+    /// One discovery service per network plugin (while network lights are on).
+    services: Vec<ServiceHandle>,
+    /// The services' state generations at the last look.
+    service_generations: Vec<u64>,
+    /// Devices the services announced.
+    net_present: Vec<Present>,
+    /// Network plugin settings.
+    plugin_settings: Arc<DbSettings>,
     /// A scan is wanted at the next rescan (start, request, setting turned on,
     /// SMBus devices stopped for a blocking program).
     smbus_scan_due: bool,
@@ -440,6 +525,11 @@ impl Engine {
             openrgb_sdk: false,
             smbus_hw: None,
             smbus_present: Vec::new(),
+            network: false,
+            services: Vec::new(),
+            service_generations: Vec::new(),
+            net_present: Vec::new(),
+            plugin_settings: Arc::new(DbSettings::default()),
             smbus_scan_due: true,
             smbus_blockers: Vec::new(),
             smbus_claim: None,
@@ -478,6 +568,7 @@ impl Engine {
         e.enter(LifecycleState::ScanningHardware);
         e.open_hardware();
         e.rescan();
+        e.start_services();
         e.enter(LifecycleState::Running);
         e
     }
@@ -509,6 +600,16 @@ impl Engine {
         self.smbus = get(keys::SMBUS)
             .and_then(|v| v.as_bool())
             .unwrap_or(self.opts.config.smbus.enabled);
+        self.network = get(keys::NETWORK)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(self.opts.config.network.enabled);
+        *lock(&self.plugin_settings.cache) = self
+            .store
+            .plugin_settings()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(p, i, k, v)| ((p, i, k), v))
+            .collect();
         let percent = |k: &str| get(k).and_then(|v| v.as_u64()).and_then(|v| u8::try_from(v).ok());
         self.thresholds = Thresholds::new(
             percent(keys::BATTERY_LOW).unwrap_or(battery::DEFAULT_LOW),
@@ -548,13 +649,19 @@ impl Engine {
         d.use_signalrgb = self.signalrgb;
         d.battery_low = self.thresholds.low;
         d.system_info = huedeck_runtime::system::machine_info().map(Arc::new);
-        d.parameters = self
-            .store
-            .devices()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|r| (r.key, r.parameters))
+        let rows = self.store.devices().unwrap_or_default();
+        let get = |k: &str| self.store.get::<Value>(k).ok().flatten();
+        d.shutdown_mode = get(keys::SHUTDOWN_MODE)
+            .and_then(|v| v.as_str().and_then(ShutdownMode::parse))
+            .unwrap_or_default();
+        d.shutdown_overrides = rows
+            .iter()
+            .filter_map(|r| {
+                let v = get(&format!("{}{}", keys::DEVICE_SHUTDOWN_MODE, r.key))?;
+                Some((r.key.clone(), ShutdownMode::parse(v.as_str()?)?))
+            })
             .collect();
+        d.parameters = rows.into_iter().map(|r| (r.key, r.parameters)).collect();
         drop(d);
         self.reload_channels();
     }
@@ -647,18 +754,19 @@ impl Engine {
                 }
                 Err(e) => {
                     self.warnings.push(format!("{e:#}"));
-                    self.opts.hardware = mode;
-                    return;
+                    // Network devices still get sessions.
+                    Arc::new(huedeck_hal::hid::NoHid)
                 }
             },
-            HardwareMode::None => {
-                self.opts.hardware = mode;
-                return;
-            }
+            HardwareMode::None => Arc::new(huedeck_hal::hid::NoHid),
             HardwareMode::Fixed { backend, .. } => Arc::clone(backend),
         };
+        let hid = !matches!(mode, HardwareMode::None)
+            && (self.hardware.is_some() || !matches!(mode, HardwareMode::Real));
         self.opts.hardware = mode;
-        self.backend = Some(Arc::clone(&backend));
+        if hid {
+            self.backend = Some(Arc::clone(&backend));
+        }
         let defaults = Arc::clone(&self.defaults);
         let events = self.shared.events.clone();
         let direct = Arc::clone(&self.shared.direct);
@@ -689,6 +797,7 @@ impl Engine {
                 log_sink: Some(sink),
                 channel_components: channels,
                 system_info: d.system_info.clone(),
+                shutdown_mode: d.shutdown_mode_of(&key),
                 direct: Some(Arc::clone(&direct)),
                 battery_warning_level: d.battery_low,
                 ..SessionOptions::default()
@@ -746,6 +855,7 @@ impl Engine {
         self.scan_lamparrays();
         self.scan_smbus();
         self.merge_smbus();
+        self.merge_network();
         self.reconcile();
         if !self.smbus {
             // Sessions stopped: another HueDeck process may drive the buses now.
@@ -764,7 +874,9 @@ impl Engine {
         let hid: Vec<Present> = self
             .present
             .iter()
-            .filter(|p| p.device.smbus.is_none() && p.device.lamparray.is_none())
+            .filter(|p| {
+                p.device.smbus.is_none() && p.device.lamparray.is_none() && p.device.network.is_none()
+            })
             .cloned()
             .collect();
         match huedeck_runtime::lamparray::present(backend, &hid, &self.opts.config.devices.ignore) {
@@ -815,6 +927,176 @@ impl Engine {
                 tracing::warn!("recording {}: {e:#}", p.device.key);
             }
         }
+    }
+
+    // ---------------------------------------------------------------- network
+
+    /// Start a discovery service per network plugin (network lights on, none running).
+    fn start_services(&mut self) {
+        if !self.network || !self.services.is_empty() {
+            return;
+        }
+        let plugins: Vec<CatalogEntry> = self.catalog.network_plugins().into_iter().cloned().collect();
+        for plugin in plugins {
+            let name = plugin.meta.name.clone();
+            let events = self.shared.events.clone();
+            let label = name.clone();
+            let opts = ServiceOptions {
+                settings: Arc::clone(&self.plugin_settings) as Arc<dyn PluginSettings>,
+                log_sink: Some(Arc::new(move |line: &str| {
+                    let line: String = line.chars().take(300).collect();
+                    tracing::debug!(target: "plugin", service = %label, "{line}");
+                    let _ = events.send(Event::log(format!("[{label}] {line}")));
+                })),
+                ..ServiceOptions::default()
+            };
+            match huedeck_plugin_host::service::spawn(plugin, opts) {
+                Ok(h) => {
+                    self.log(format!("network: {name} discovery started"));
+                    self.services.push(h);
+                }
+                Err(e) => self.log(format!("network: {name} discovery did not start: {e}")),
+            }
+        }
+        self.service_generations = vec![u64::MAX; self.services.len()];
+    }
+
+    /// Stop every discovery service; their devices go with them.
+    fn stop_services(&mut self) {
+        for h in self.services.drain(..) {
+            h.shutdown(SERVICE_STOP);
+        }
+        self.service_generations.clear();
+        if !self.net_present.is_empty() {
+            self.net_present.clear();
+            self.merge_network();
+            self.reconcile();
+        }
+    }
+
+    /// Write the settings the services saved; follow what they announced.
+    fn poll_services(&mut self) {
+        let pending: Vec<_> = std::mem::take(&mut *lock(&self.plugin_settings.pending));
+        for (plugin, id, key, value) in pending {
+            if let Err(e) = self
+                .store
+                .set_plugin_setting(&plugin, &id, &key, value.as_deref())
+            {
+                tracing::warn!("saving a {plugin} setting: {e:#}");
+            }
+        }
+        let generations: Vec<u64> = self.services.iter().map(ServiceHandle::generation).collect();
+        if generations == self.service_generations {
+            return;
+        }
+        self.service_generations = generations;
+        self.dirty = true;
+        let mut present = Vec::new();
+        for h in &self.services {
+            for (id, data) in h.state().announced {
+                present.push(Present {
+                    device: SessionDevice::network(NetworkTarget {
+                        service: h.name().to_string(),
+                        id,
+                        controller: data,
+                    }),
+                    plugin: h.plugin().clone(),
+                });
+            }
+        }
+        // Announced again with other data: its session starts over with the new data.
+        let changed: Vec<String> = present
+            .iter()
+            .filter(|p| {
+                self.net_present
+                    .iter()
+                    .any(|o| o.device.key == p.device.key && o.device.network != p.device.network)
+            })
+            .map(|p| p.device.key.clone())
+            .collect();
+        let same_keys = present.len() == self.net_present.len()
+            && present
+                .iter()
+                .all(|p| self.net_present.iter().any(|o| o.device.key == p.device.key));
+        self.net_present = present;
+        if same_keys && changed.is_empty() {
+            return;
+        }
+        self.merge_network();
+        self.reconcile();
+        for key in changed {
+            self.restart_device(&key);
+        }
+    }
+
+    /// Put the announced network devices (after `[devices] ignore`) into the
+    /// devices present, in place of the earlier ones, and record them.
+    fn merge_network(&mut self) {
+        self.present.retain(|p| p.device.network.is_none());
+        let ignore = &self.opts.config.devices.ignore;
+        let added: Vec<Present> = self
+            .net_present
+            .iter()
+            .filter(|p| {
+                ignore.is_empty() || !huedeck_runtime::hardware::matches_filter(&p.device.key, ignore)
+            })
+            .cloned()
+            .collect();
+        for p in &added {
+            let name = p
+                .device
+                .network
+                .as_ref()
+                .and_then(|t| t.controller.get("name").and_then(Value::as_str))
+                .unwrap_or(&p.plugin.meta.name);
+            if let Err(e) = self.store.device_seen(
+                &p.device.key,
+                0,
+                0,
+                name,
+                &p.plugin.meta.source_path.to_string_lossy(),
+            ) {
+                tracing::warn!("recording {}: {e:#}", p.device.key);
+            }
+        }
+        self.present.extend(added);
+    }
+
+    fn network_views(&self) -> Vec<NetworkServiceView> {
+        self.services
+            .iter()
+            .map(|h| {
+                let st = h.state();
+                let slug = huedeck_plugin_host::session::key_slug(h.name());
+                let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
+                NetworkServiceView {
+                    plugin: h.name().to_string(),
+                    running: st.running,
+                    error: st.error.clone(),
+                    can_forget: st.can_forget,
+                    controllers: st
+                        .controllers
+                        .iter()
+                        .map(|c| {
+                            let paired = c.data.get("paired").and_then(Value::as_bool);
+                            NetworkControllerView {
+                                id: c.id.clone(),
+                                name: text(&c.data, "name").unwrap_or_else(|| c.id.clone()),
+                                ip: text(&c.data, "ip"),
+                                status: text(&c.data, "status"),
+                                paired,
+                                can_pair: c.can_pair && paired != Some(true),
+                                device: st
+                                    .announced
+                                    .contains_key(&c.id)
+                                    .then(|| format!("net:{slug}:{}", c.id)),
+                            }
+                        })
+                        .collect(),
+                    log: st.log_tail.iter().cloned().collect(),
+                }
+            })
+            .collect()
     }
 
     /// Whether an SMBus device session is running.
@@ -1126,6 +1408,7 @@ impl Engine {
                 self.dirty = true;
                 self.check_batteries();
             }
+            self.poll_services();
             if self.dirty {
                 self.publish();
             }
@@ -1134,6 +1417,9 @@ impl Engine {
 
     fn shut_down(&mut self) {
         self.enter(LifecycleState::ShuttingDown);
+        for h in self.services.drain(..) {
+            h.stop();
+        }
         if let Some(manager) = self.manager.take() {
             let (_, failed) = manager.finish();
             for f in failed {
@@ -1204,11 +1490,13 @@ impl Engine {
                 signalrgb_available: huedeck_plugin_host::catalog::signalrgb_app_dir().is_some(),
                 gpu_compositing: self.gpu,
                 smbus: self.smbus,
+                network: self.network,
                 port: self.opts.api_port,
                 port_notice: self.opts.api_port_notice.clone(),
                 openrgb_sdk: self.openrgb_sdk,
                 fps: self.fps(),
                 dry_run: self.opts.dry_run,
+                shutdown_mode: lock(&self.defaults).shutdown_mode.as_str().into(),
                 battery_low: self.thresholds.low,
                 battery_critical: self.thresholds.critical,
                 battery_notifications: self.battery_notify,
@@ -1224,6 +1512,7 @@ impl Engine {
                 );
                 all
             },
+            network: self.network_views(),
             warnings: {
                 let mut all = self.warnings.clone();
                 all.extend(self.battery_warnings());
@@ -1393,8 +1682,19 @@ impl Engine {
                             .lamparray
                             .as_ref()
                             .map(|_| "Windows Dynamic Lighting".into())
+                    })
+                    .or_else(|| {
+                        p.device
+                            .network
+                            .as_ref()
+                            .map(|t| format!("network · {}", t.ip().unwrap_or("?")))
                     }),
-                name: meta.name.clone(),
+                name: p
+                    .device
+                    .network
+                    .as_ref()
+                    .and_then(|t| t.controller.get("name").and_then(Value::as_str))
+                    .map_or_else(|| meta.name.clone(), String::from),
                 plugin: meta.name.clone(),
                 device_type: format!("{:?}", meta.device_type).to_ascii_lowercase(),
                 plugin_path: meta.source_path.to_string_lossy().into_owned(),
@@ -1410,6 +1710,23 @@ impl Engine {
                 default_scale: meta.default_scale,
                 image,
                 parameters,
+                save: meta
+                    .save_caps
+                    .as_ref()
+                    .filter(|_| meta.lifecycle.save_to_device)
+                    .map(|c| SaveSupport {
+                        static_colors: c.static_colors,
+                        effects: c.effects.clone(),
+                        wait_secs: self.manager.as_ref().map_or(0, |m| m.save_wait_secs(key)),
+                    }),
+                shutdown_modes: save::supported_modes(meta)
+                    .iter()
+                    .map(|m| m.as_str().to_string())
+                    .collect(),
+                shutdown_mode: defaults
+                    .shutdown_overrides
+                    .get(key)
+                    .map(|m| m.as_str().to_string()),
                 battery: self.battery_view(key),
                 blink_low_battery: self.blink.contains(key),
                 ..DeviceView::default()
@@ -1599,10 +1916,16 @@ impl Engine {
                 }
                 Ok(json!({ "brightness": self.brightness, "enabled": self.enabled }))
             }
+            Request::SaveToDevices {
+                preview,
+                confirm,
+                devices,
+            } => self.save_to_devices(preview, confirm, devices),
             Request::SetDevice {
                 key,
                 enabled,
                 parameters,
+                shutdown_mode,
                 blink_low_battery,
             } => {
                 let known = self
@@ -1613,6 +1936,33 @@ impl Engine {
                     .any(|r| r.key == key);
                 if !known {
                     return Err(ApiError::not_found(format!("no device {key}")));
+                }
+                if let Some(mode) = shutdown_mode {
+                    let mode = match mode.as_str() {
+                        "" | "default" => None,
+                        m => Some(ShutdownMode::parse(m).ok_or_else(|| {
+                            ApiError::bad_request(format!(
+                                "unknown exit mode {m:?} (restore, keep, off, default)"
+                            ))
+                        })?),
+                    };
+                    self.store
+                        .set(
+                            &format!("{}{key}", keys::DEVICE_SHUTDOWN_MODE),
+                            &mode.map_or("", ShutdownMode::as_str),
+                        )
+                        .map_err(internal)?;
+                    let effective = {
+                        let mut d = lock(&self.defaults);
+                        match mode {
+                            Some(m) => d.shutdown_overrides.insert(key.clone(), m),
+                            None => d.shutdown_overrides.remove(&key),
+                        };
+                        d.shutdown_mode_of(&key)
+                    };
+                    if let Some(h) = self.sessions().find(|h| h.key() == key) {
+                        h.control(Control::ShutdownMode(effective));
+                    }
                 }
                 if let Some(values) = parameters {
                     self.store
@@ -1738,11 +2088,13 @@ impl Engine {
                 signalrgb,
                 gpu_compositing,
                 smbus,
+                shutdown_mode,
                 battery_low,
                 battery_critical,
                 battery_notifications,
                 port,
                 openrgb_sdk,
+                network,
             } => {
                 if let Some(on) = openrgb_sdk {
                     if on != self.openrgb_sdk {
@@ -1792,6 +2144,34 @@ impl Engine {
                     self.opts.api_port_notice = None;
                     self.dirty = true;
                 }
+                if let Some(on) = network {
+                    if on != self.network {
+                        self.network = on;
+                        self.store.set(keys::NETWORK, &on).map_err(internal)?;
+                        if on {
+                            self.start_services();
+                        } else {
+                            self.stop_services();
+                        }
+                        self.log(format!("network lights {}", if on { "on" } else { "off" }));
+                    }
+                }
+                if let Some(mode) = shutdown_mode {
+                    let mode = ShutdownMode::parse(&mode).ok_or_else(|| {
+                        ApiError::bad_request(format!("unknown exit mode {mode:?} (restore, keep, off)"))
+                    })?;
+                    self.store
+                        .set(keys::SHUTDOWN_MODE, &mode.as_str())
+                        .map_err(internal)?;
+                    let d = {
+                        let mut d = lock(&self.defaults);
+                        d.shutdown_mode = mode;
+                        d.clone()
+                    };
+                    for h in self.sessions() {
+                        h.control(Control::ShutdownMode(d.shutdown_mode_of(h.key())));
+                    }
+                }
                 if let Some(on) = smbus {
                     if on != self.smbus {
                         self.smbus = on;
@@ -1819,12 +2199,36 @@ impl Engine {
                     "signalrgb": self.signalrgb,
                     "gpuCompositing": self.gpu,
                     "smbus": self.smbus,
+                    "network": self.network,
+                    "shutdownMode": lock(&self.defaults).shutdown_mode.as_str(),
                     "batteryLow": self.thresholds.low,
                     "batteryCritical": self.thresholds.critical,
                     "batteryNotifications": self.battery_notify,
                     "port": self.opts.api_port,
                     "openrgbSdk": self.openrgb_sdk,
                 }))
+            }
+            Request::NetworkAdd { plugin, ip } => {
+                let ip = ip.trim().to_string();
+                match ip.parse::<std::net::IpAddr>() {
+                    Ok(addr) if huedeck_plugin_host::net::policy::lan_allowed(addr) => {}
+                    _ => {
+                        return Err(ApiError::bad_request(format!(
+                            "{ip} is not a local network address"
+                        )))
+                    }
+                }
+                self.service(&plugin)?.command(ServiceCommand::Add(ip.clone()));
+                Ok(json!({ "plugin": plugin, "ip": ip }))
+            }
+            Request::NetworkAction { plugin, id, action } => {
+                let command = match action.as_str() {
+                    "pair" => ServiceCommand::Pair(id.clone()),
+                    "forget" => ServiceCommand::Forget(id.clone()),
+                    other => return Err(ApiError::bad_request(format!("unknown action {other:?}"))),
+                };
+                self.service(&plugin)?.command(command);
+                Ok(json!({ "plugin": plugin, "id": id, "action": action }))
             }
             Request::ImportSignalRgb { name } => {
                 self.import_signalrgb(name.unwrap_or_else(|| "SignalRGB".into()))
@@ -1870,6 +2274,176 @@ impl Engine {
                 Ok(json!({ "stopping": true }))
             }
         }
+    }
+
+    /// The running service of network plugin `plugin`.
+    fn service(&self, plugin: &str) -> Result<&ServiceHandle, ApiError> {
+        if !self.network {
+            return Err(ApiError::conflict("network lights are off"));
+        }
+        self.services
+            .iter()
+            .find(|h| h.name() == plugin)
+            .ok_or_else(|| ApiError::not_found(format!("no network plugin {plugin}")))
+    }
+
+    /// "Save to devices": a preview (every device, or the ones named) or a save of
+    /// the named devices, which needs `confirm`. Each device's session runs its
+    /// plugin's `SaveToDevice(request)`; the answer lists every device with what
+    /// was (or would be) stored or why not. Saves are written to the audit log.
+    fn save_to_devices(
+        &mut self,
+        preview: bool,
+        confirm: bool,
+        devices: BTreeMap<String, DeviceSaveChoice>,
+    ) -> Result<Value, ApiError> {
+        let action = if preview {
+            SaveAction::Preview
+        } else {
+            SaveAction::Save
+        };
+        if action == SaveAction::Save {
+            if !confirm {
+                return Err(ApiError::bad_request(
+                    "saving writes the devices' own memory: ask the user, then send \"confirm\": true",
+                ));
+            }
+            if devices.is_empty() {
+                return Err(ApiError::bad_request("name the devices to save"));
+            }
+        }
+        let wanted: Vec<(String, SaveChoice)> = if devices.is_empty() {
+            self.present
+                .iter()
+                .map(|p| (p.device.key.clone(), SaveChoice::default()))
+                .collect()
+        } else {
+            devices
+                .into_iter()
+                .map(|(k, c)| (k, SaveChoice { effect: c.effect }))
+                .collect()
+        };
+        let mut results: Vec<(String, SaveOutcome)> = Vec::new();
+        let mut pending = Vec::new();
+        for (key, choice) in wanted {
+            let Some(p) = self.present.iter().find(|p| p.device.key == key) else {
+                results.push((
+                    key.clone(),
+                    SaveOutcome::failed(&key, action, "no such device is connected"),
+                ));
+                continue;
+            };
+            let name = p.plugin.meta.name.clone();
+            let meta = &p.plugin.meta;
+            let refused = match meta.save_caps.as_ref().filter(|_| meta.lifecycle.save_to_device) {
+                None => Some("this device cannot store lighting in its own memory".to_string()),
+                Some(c) if !c.allows(&choice) => Some(match &choice.effect {
+                    Some(e) => format!("this device cannot store the {e} effect"),
+                    None => "this device cannot store the current colours".into(),
+                }),
+                Some(_) => None,
+            };
+            if let Some(why) = refused {
+                results.push((name, SaveOutcome::failed(&key, action, why)));
+                continue;
+            }
+            let sent = match &mut self.manager {
+                Some(m) => m.save(&key, action, choice.clone()).map_err(|e| e.to_string()),
+                None => Err("no devices are driven".into()),
+            };
+            match sent {
+                Ok(rx) => pending.push((name, key, choice, rx)),
+                Err(e) => {
+                    let outcome = SaveOutcome::failed(&key, action, e);
+                    if action == SaveAction::Save {
+                        self.audit_save(&name, &choice, &outcome);
+                    }
+                    results.push((name, outcome));
+                }
+            }
+        }
+        let deadline = Instant::now() + SAVE_WAIT;
+        for (name, key, choice, rx) in pending {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let outcome = rx
+                .recv_timeout(left)
+                .unwrap_or_else(|_| SaveOutcome::failed(&key, action, "the device did not answer in time"));
+            if action == SaveAction::Save {
+                self.audit_save(&name, &choice, &outcome);
+            }
+            results.push((name, outcome));
+        }
+        let list: Vec<Value> = results
+            .into_iter()
+            .map(|(name, o)| {
+                json!({
+                    "key": o.key,
+                    "name": name,
+                    "ok": o.ok,
+                    "dryRun": o.dry_run,
+                    "result": o.result,
+                    "error": o.error,
+                })
+            })
+            .collect();
+        self.dirty = true;
+        Ok(json!({ "preview": preview, "devices": list }))
+    }
+
+    /// One line per save attempt in `save-audit.log` (and the event log).
+    fn audit_save(&self, name: &str, choice: &SaveChoice, o: &SaveOutcome) {
+        let what = choice.effect.as_deref().unwrap_or("static colours");
+        let stored = o
+            .result
+            .get("zones")
+            .and_then(Value::as_array)
+            .map(|zones| {
+                zones
+                    .iter()
+                    .map(|z| {
+                        format!(
+                            "{}={}",
+                            z.get("name").and_then(Value::as_str).unwrap_or("?"),
+                            z.get("color").and_then(Value::as_str).unwrap_or("?")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        let outcome = match (&o.error, o.ok) {
+            (_, true) => "stored".to_string(),
+            (Some(e), false) => format!("failed: {e}"),
+            (None, false) => "failed".to_string(),
+        };
+        let line = format!(
+            "{} save {} ({name}) {what}{}{}: {outcome}",
+            humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
+            o.key,
+            if stored.is_empty() {
+                String::new()
+            } else {
+                format!(" [{stored}]")
+            },
+            if o.dry_run { " (dry run, nothing sent)" } else { "" },
+        );
+        let path = self.opts.paths.save_audit_log();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| {
+                use std::io::Write;
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)?;
+                writeln!(f, "{line}")
+            });
+        if let Err(e) = written {
+            tracing::warn!("cannot write {}: {e}", path.display());
+        }
+        tracing::warn!(target: "huedeck::save", "{line}");
+        let _ = self.shared.events.send(Event::log(line));
     }
 
     /// Component instances for `device`'s `channel` from what a client sent:
@@ -2017,14 +2591,17 @@ impl Engine {
 
     /// The plugin, effect and component libraries changed (SignalRGB on/off).
     fn reload_libraries(&mut self) {
+        self.stop_services();
         self.reconcile_with(Vec::new());
         self.load_libraries();
         self.start_canvas();
         self.rescan();
+        self.start_services();
     }
 
     /// The whole database was replaced.
     fn reload_everything(&mut self) {
+        self.stop_services();
         self.reconcile_with(Vec::new());
         self.warnings.clear();
         self.load_state();
@@ -2032,6 +2609,7 @@ impl Engine {
         self.load_libraries();
         self.start_canvas();
         self.rescan();
+        self.start_services();
     }
 }
 

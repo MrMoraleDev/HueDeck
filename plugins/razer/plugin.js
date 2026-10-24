@@ -26,7 +26,9 @@
 // 0x03 0x0B, extended 0x0F 0x03, linear 0x03 0x0C, or per-LED reports on a few old devices),
 // then the "custom frame" effect (0x03 0x0A / 0x0F 0x02). The ARGB controller takes 321-byte
 // feature reports on its second interface; the Kraken V4 family takes 64-byte output reports.
-// Never sent: anything with the "save" storage flag, DPI, polling rate, battery or power settings.
+// Never sent: DPI, polling rate, battery or power settings, and the "save" storage flag outside
+// SaveToDevice() (Lightloom's "Save to devices", after the user confirmed it; extended-matrix
+// devices only: docs/hardware/razer.md, "Save to devices").
 // Products with a battery (battery.js) are asked for their battery level and charging status
 // (read-only queries 0x07 0x80 / 0x07 0x84, facts from OpenRazer) every 45 seconds.
 
@@ -97,6 +99,9 @@ export function LedPositions() { return [[0, 0]]; }
 export function ImageUrl() { return ""; }
 // Razer's own software drives the lights while it runs; Lightloom reports it, never closes it.
 export function ConflictingProcesses() { return ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"]; }
+// Lightloom extensions (docs/host-api/save-shutdown.md).
+export function SaveCapabilities() { return { static: true, effects: ["spectrum"] }; }
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
 
 let main = null;          // the opened device (a "target", see makeTarget())
 let paired = [];          // devices paired to a receiver, each a target with a subdevice
@@ -240,8 +245,19 @@ export function Render() {
  * family (SetModeWave()), and the products OpenRGB switches to software mode go back to hardware
  * mode. The DeathAdder V2 Pro keeps its recorded shutdown (black frame, hardware mode).
  */
-export function Shutdown(_systemSuspending) {
+export function Shutdown(_systemSuspending, mode) {
   if (!main) {
+    return;
+  }
+  if (mode === "keep" || mode === "off") {
+    // Lightloom exit modes: the last frame (or a black one) stays on the device, which is left in
+    // its custom-frame / software mode; nothing is stored.
+    for (const target of protocol === "razer-argb" || protocol === "kraken-v4" || protocol === "recorded" ? [main] : [main, ...paired]) {
+      const colours = mode === "keep" && target.lastColours
+        ? target.lastColours
+        : framePixels(target, mode === "keep");
+      sendFrame(target, colours);
+    }
     return;
   }
   switch (protocol) {
@@ -266,6 +282,118 @@ export function Shutdown(_systemSuspending) {
         }
       }
   }
+}
+
+// --- "Save to devices" (Lightloom extension) ------------------------------------------------------
+
+/**
+ * Store a static colour (the average of the device's LEDs on the frame shown) or the spectrum
+ * cycle in the device itself, with OpenRazer's VARSTORE storage flag: the extended-matrix static
+ * or spectrum effect report (razer_create_mode_static/spectrum_cycle_extended_matrix_report) and
+ * the extended brightness report at full brightness, each with storage 0x01 instead of OpenRGB's
+ * 0x00, for the device and each extended-matrix device paired to it. Standard-matrix effect
+ * reports carry no storage byte, so those devices (and the ARGB controller and Kraken V4) are not
+ * offered. Afterwards the device goes back to custom frames for the live effect. A preview only
+ * describes it.
+ */
+export function SaveToDevice(request) {
+  if (!main) {
+    return { unsupported: "the device was not recognised" };
+  }
+  const effect = request && request.effect ? String(request.effect) : null;
+  if (effect !== null && effect !== "spectrum") {
+    return { unsupported: `the device has no "${effect}" effect Lightloom can store` };
+  }
+  const targets = saveTargets();
+  if (targets.length === 0) {
+    return { unsupported: "only Razer devices with the extended matrix protocol can store an effect (standard-matrix effect reports have no storage flag)" };
+  }
+  const plan = targets.map((target) => ({ target, colour: averageColour(framePixels(target, true)) }));
+  const result = {
+    effect: effect ?? "static",
+    zones: effect === null ? plan.map(({ target, colour }) => ({ name: target.name, color: hex(colour) })) : [],
+    note: effect === null ? "One colour for each device (the average of its LEDs)." : "The device's own colour cycle.",
+  };
+  if (!request || request.action !== "save") {
+    return result;
+  }
+  for (const { target, colour } of plan) {
+    const ledId = saveLedId(target);
+    const effectReport = effect === "spectrum"
+      ? rz.spectrumExtended(target.ctx, rz.STORAGE_SAVE, ledId)
+      : rz.staticExtended(target.ctx, rz.STORAGE_SAVE, ledId, colour);
+    if (usbSend(target, effectReport) < 0) {
+      throw new Error(`Razer: storing the effect on ${target.name} failed`);
+    }
+    usbSend(target, rz.brightnessExtended(target.ctx, rz.STORAGE_SAVE, ledId, target.maxBrightness));
+    target.lastColours = null;
+  }
+  // Back to custom frames: the next Render() sends the frame and the custom-frame effect again
+  // (the recorded DeathAdder V2 Pro needs its frame-mode request first).
+  if (protocol === "recorded") {
+    recordedRequest(0x0F, 0x02, [0x00, 0x00, 0x08, 0x00, 0x01, 0x00]);
+  }
+  return result;
+}
+
+/** The targets whose effect reports carry a storage byte (extended matrix). */
+function saveTargets() {
+  if (protocol !== "razer" && protocol !== "recorded") {
+    return [];
+  }
+  return [main, ...paired].filter((t) => t.matrix === EXTENDED);
+}
+
+/** The LED id of a stored effect: the target's own (OpenRGB's dev_led_id); the recorded
+ * DeathAdder V2 Pro uses 0x00, the LED id of its recorded effect report. */
+function saveLedId(target) {
+  return protocol === "recorded" && target === main ? rz.LED_ID_ZERO : target.ledId;
+}
+
+/** A target's colours (OpenRGB order): the frame shown when `keep`, black otherwise. */
+function framePixels(target, keep) {
+  if (protocol === "razer-argb") {
+    const n = main.entry.rows * ARGB_LEDS_PER_CHANNEL;
+    return keep && main.lastColours ? main.lastColours : new Array(n).fill([0, 0, 0]);
+  }
+  const colours = coloursOf(target);
+  return keep ? colours : colours.map(() => [0, 0, 0]);
+}
+
+/** Send one frame through the target's own protocol (as Render() does). */
+function sendFrame(target, colours) {
+  switch (protocol) {
+    case "recorded": {
+      const [r, g, b] = colours[0] ?? [0, 0, 0];
+      recordedSend(0x0F, 0x03, [0x00, 0x00, 0x00, 0x00, 0x00, r, g, b]);
+      return;
+    }
+    case "kraken-v4":
+      krakenV4SetDirect(target, colours);
+      return;
+    case "razer-argb":
+      if (argbEndpoints) {
+        setLeds(main, colours);
+      }
+      return;
+    default:
+      setLeds(target, colours);
+  }
+}
+
+function averageColour(colours) {
+  const lit = colours.length > 0 ? colours : [[0, 0, 0]];
+  const sum = [0, 0, 0];
+  for (const c of lit) {
+    for (let i = 0; i < 3; i++) {
+      sum[i] += c[i] & 0xFF;
+    }
+  }
+  return sum.map((s) => Math.round(s / lit.length));
+}
+
+function hex(rgb) {
+  return `#${rgb.map((v) => (v & 0xFF).toString(16).padStart(2, "0")).join("")}`;
 }
 
 // --- targets and geometry -----------------------------------------------------------------------

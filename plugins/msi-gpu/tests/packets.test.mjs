@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// MSI GPU plugin: Scan, Initialize, a frame and Shutdown send exactly the register writes worked
-// out by hand from OpenRGB's MSIGPUController (fixtures/expected.json), only to address 0x68,
-// and never the flash-save register 0x3F.
+// MSI GPU plugin: Scan, Initialize, a frame, Shutdown (every exit mode) and SaveToDevice send
+// exactly the register writes worked out by hand from OpenRGB's MSIGPUController
+// (fixtures/expected.json), only to address 0x68; the flash-save register 0x3F only inside
+// SaveToDevice({action: "save"}).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -125,7 +126,7 @@ test("a card whose state cannot be read gets the static shutdown colour", async 
   }
 });
 
-test("register 0x3F is never written", async () => {
+test("register 0x3F is never written outside SaveToDevice", async () => {
   const { mock, plugin, device, restore } = await setup();
   try {
     plugin.Initialize();
@@ -133,8 +134,13 @@ test("register 0x3F is never written", async () => {
       device.setColor([i * 10, 255 - i, i]);
       plugin.Render();
     }
+    plugin.SaveToDevice({ action: "preview", effect: null, colors: [[1, 2, 3]] });
+    plugin.SaveToDevice({ action: "preview", effect: "spectrum", colors: [[1, 2, 3]] });
     plugin.Shutdown(false);
     plugin.Shutdown(true);
+    for (const mode of ["restore", "keep", "off", "bogus"]) {
+      plugin.Shutdown(false, mode);
+    }
     assert.ok(mock.writes().length > 0);
     assert.ok(mock.writes().every((w) => w.reg !== 0x3F));
   } finally {
@@ -150,6 +156,83 @@ test("only address 0x68 is touched", async () => {
     plugin.Shutdown(false);
     assert.ok(mock.ops.every((o) => o.addr === 0x68));
     assert.ok(mock.writes().every((w) => w.op === "WriteByte"), "byte writes only");
+  } finally {
+    restore();
+  }
+});
+
+const save = (plugin, effect, colors = [[0x12, 0x34, 0x56]]) => plugin.SaveToDevice({ action: "save", effect, colors });
+
+test("save static: DeviceUpdateMode, DeviceUpdateLEDs, then 0x3F <- 1, then Direct again", async () => {
+  const { mock, plugin, restore } = await setup({ color: [0x12, 0x34, 0x56] });
+  try {
+    plugin.Initialize();
+    plugin.Render();
+    mock.ops.length = 0;
+    const result = save(plugin, null);
+    assert.deepEqual(writes(mock), [...pairs(expected.save_static_123456), ...pairs(expected.save_resume)]);
+    assert.deepEqual(result.zones, [{ name: "GPU", color: "#123456" }]);
+    assert.equal(result.effect, "static");
+    // The next frame goes out whole, and the restore puts back what was stored.
+    mock.ops.length = 0;
+    plugin.Render();
+    assert.deepEqual(writes(mock), pairs(expected.frame_123456));
+    mock.ops.length = 0;
+    plugin.Shutdown(false, "restore");
+    assert.deepEqual(writes(mock), pairs(expected.shutdown_after_save));
+  } finally {
+    restore();
+  }
+});
+
+test("save the card's own effects", async () => {
+  const { mock, plugin, restore } = await setup();
+  try {
+    plugin.Initialize();
+    mock.ops.length = 0;
+    const spectrum = save(plugin, "spectrum");
+    assert.deepEqual(writes(mock), [...pairs(expected.save_spectrum), ...pairs(expected.save_resume)]);
+    assert.deepEqual(spectrum.zones, []);
+    mock.ops.length = 0;
+    save(plugin, "breathing");
+    assert.deepEqual(writes(mock), [...pairs(expected.save_breathing_123456), ...pairs(expected.save_resume)]);
+    mock.ops.length = 0;
+    assert.ok(save(plugin, "wave").unsupported);
+    assert.deepEqual(mock.ops, [], "nothing for an effect the card does not have");
+    assert.deepEqual(plugin.SaveCapabilities(), { static: true, effects: ["spectrum", "breathing"] });
+  } finally {
+    restore();
+  }
+});
+
+test("a preview describes the save and writes nothing", async () => {
+  const { mock, plugin, restore } = await setup({ color: [0xAA, 0xBB, 0xCC] });
+  try {
+    plugin.Initialize();
+    mock.ops.length = 0;
+    const result = plugin.SaveToDevice({ action: "preview", effect: null, colors: [[0xAA, 0xBB, 0xCC]] });
+    assert.deepEqual(result.zones, [{ name: "GPU", color: "#aabbcc" }]);
+    assert.deepEqual(mock.ops, []);
+  } finally {
+    restore();
+  }
+});
+
+test("exit modes: keep shows the last colour, off static black, neither stored", async () => {
+  const { mock, plugin, restore } = await setup({ color: [0x12, 0x34, 0x56] });
+  try {
+    assert.deepEqual(plugin.ShutdownModes(), ["restore", "keep", "off"]);
+    plugin.Initialize();
+    plugin.Render();
+    mock.ops.length = 0;
+    plugin.Shutdown(false, "keep");
+    assert.deepEqual(writes(mock), pairs(expected.shutdown_keep_123456));
+    mock.ops.length = 0;
+    plugin.Shutdown(false, "off");
+    assert.deepEqual(writes(mock), pairs(expected.shutdown_off));
+    mock.ops.length = 0;
+    plugin.Shutdown(false, "restore");
+    assert.deepEqual(writes(mock), pairs(expected.shutdown_restore));
   } finally {
     restore();
   }

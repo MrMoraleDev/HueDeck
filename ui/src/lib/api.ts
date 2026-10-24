@@ -2,7 +2,7 @@
 // The daemon's native API (crates/lightloom-api/src/server.rs). Requests that change
 // state carry the token lightloomd embeds in the page it serves.
 
-import type { LibraryComponent, PawnIoView, Placement, Snapshot } from "./types";
+import type { LibraryComponent, PawnIoView, Placement, SaveResult, ShutdownMode, Snapshot } from "./types";
 
 function token(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="lightloom-token"]')?.content ?? "";
@@ -56,7 +56,7 @@ export const api = {
   setLighting: (patch: { brightness?: number; enabled?: boolean }) => request("PATCH", "/v1/lighting", patch),
   setDevice: (
     key: string,
-    patch: { enabled?: boolean; parameters?: Record<string, unknown>; blinkLowBattery?: boolean },
+    patch: { enabled?: boolean; parameters?: Record<string, unknown>; blinkLowBattery?: boolean; shutdownMode?: ShutdownMode | "default" },
   ) =>
     request("PATCH", `/v1/devices/${enc(key)}`, patch),
   setChannel: (key: string, channel: string, components: unknown[]) =>
@@ -74,6 +74,7 @@ export const api = {
     batteryLow?: number;
     batteryCritical?: number;
     batteryNotifications?: boolean;
+    shutdownMode?: ShutdownMode;
     openrgbSdk?: boolean;
   }) =>
     request("PATCH", "/v1/settings", patch),
@@ -90,6 +91,12 @@ export const api = {
   pawnioInstall: () => request<PawnIoView>("POST", "/v1/pawnio/install"),
   pawnioRemove: () => request<PawnIoView>("POST", "/v1/pawnio/remove"),
   rescan: () => request("POST", "/v1/rescan"),
+  /** What "Save to devices" would store (nothing is written); every device when `devices` is empty. */
+  savePreview: (devices: Record<string, { effect: string | null }> = {}) =>
+    request<{ devices: SaveResult[] }>("POST", "/v1/save/preview", { devices }),
+  /** Store lighting in the devices' own memory; only after the user confirmed it. */
+  saveToDevices: (devices: Record<string, { effect: string | null }>) =>
+    request<{ devices: SaveResult[] }>("POST", "/v1/save", { confirm: true, devices }),
   shutdown: () => request("POST", "/v1/shutdown"),
   tap: (x: number, y: number) => request("POST", "/v1/canvas/tap", { x, y }),
 };

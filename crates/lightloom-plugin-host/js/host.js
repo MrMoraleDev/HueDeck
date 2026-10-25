@@ -676,6 +676,47 @@ function deviceLog(value, ...rest) {
 
 const channelObjects = new Map();
 
+/**
+ * The `keyboard` / `mouse` feature of a device session: events go to the macro
+ * runtime (crates/lightloom-plugin-host/src/input.rs). Plain objects: members
+ * SignalRGB lacks (`keyboard.sendKey`) stay `undefined` for plugins that test them.
+ */
+function inputFeature(kind) {
+  const send = (what, data) => native.inputEvent(what, JSON.stringify(data));
+  const opts = (o) => (o !== null && typeof o === "object" ? o : {});
+  const hid = (what, vk, options, extra) => {
+    if (typeof vk !== "number") {
+      throw new TypeError("sendHid(): vkCode must be a number!");
+    }
+    const o = opts(options);
+    if (o.released === undefined) {
+      throw new TypeError("sendHid(): released option must be specified!");
+    }
+    send(what, { vk, released: Boolean(o.released), ...extra(o) });
+  };
+  if (kind === "keyboard") {
+    return {
+      sendEvent: (data) => {
+        const d = opts(data);
+        send("key", { key: d.key === undefined ? "" : String(d.key), keyCode: Number(d.keyCode) || 0, released: Boolean(d.released) });
+      },
+      sendHid: (vk, options) => hid("keyHid", vk, options, () => ({})),
+    };
+  }
+  return {
+    sendEvent: (data) => {
+      const d = opts(data);
+      send("button", {
+        name: d.name === undefined ? "" : String(d.name),
+        buttonCode: Number(d.buttonCode) || 0,
+        released: Boolean(d.released),
+      });
+    },
+    sendHid: (vk, options) =>
+      hid("buttonHid", vk, options, (o) => (o.XButton === undefined ? {} : { XButton: Number(o.XButton) })),
+  };
+}
+
 if (deviceMode) {
   const stubAddFeature = deviceTarget.addFeature;
   Object.assign(deviceTarget, {
@@ -743,6 +784,15 @@ if (deviceMode) {
       }
       if (key === "udp" || key === "dtls") {
         unimplementedMember(`device.addFeature(${key})`)();
+      }
+      if (key === "keyboard" || key === "mouse") {
+        const current = globalThis[key];
+        if (current === undefined || current.__lightloomFeature !== key) {
+          const feature = inputFeature(key);
+          defineProperty(feature, "__lightloomFeature", { value: key });
+          globalThis[key] = feature;
+        }
+        return;
       }
       return stubAddFeature(name);
     },

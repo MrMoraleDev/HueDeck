@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+publish = false
+name = "lightloom-macros"
+description = "Lightloom macro runtime: SignalRGB-shaped macro scripts (Actions and Inputs) in QuickJS, their globals (system, signalrgb, keys, mouse, block, console), the event bus and the opt-in input hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+rquickjs = { workspace = true }
+lightloom-hal = { path = "../lightloom-hal" }
+lightloom-plugin-host = { path = "../lightloom-plugin-host" }
+
+[dev-dependencies]
+lightloom-hal = { path = "../lightloom-hal", features = ["mock"] }

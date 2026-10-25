@@ -1595,6 +1595,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightloom-macros"
+version = "0.0.1"
+dependencies = [
+ "lightloom-hal",
+ "lightloom-plugin-host",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "lightloom-nvapi"
 version = "0.0.1"
 dependencies = [

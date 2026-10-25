@@ -15,6 +15,7 @@ ControllableParameters globals, API-gap recording and the watchdog.
 - `plugins/gaps_and_loops.js`: touches undocumented members; `Initialize()` never returns.
 - `device/rawusb.js`: `Type() "rawusb"`, vendor control requests and bulk IN/OUT (raw USB session tests).
 - `device/hybrid.js`: `Type() "Hybrid"`, HID writes plus bulk OUT and `setProtocol("hid" | "hybrid")`.
+- `device/input.js`: the `keyboard` / `mouse` features (macro input events and `sendHid`).
 - `broken/syntax_error.js`: does not parse.
 - `oom/hoarder.js`: allocates until the 64 MiB (test: 8 MiB) heap cap stops it.
 - `edge/`: harness edge cases. A promise job that never ends (`job_spin.js`),

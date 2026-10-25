@@ -19,8 +19,9 @@ tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 hidapi = { workspace = true, features = ["windows-native"] }
-# cfgmgr32 (CM_Locate_DevNode / CM_Get_Parent) parent grouping and HIDP_CAPS probing.
-windows = { workspace = true }
+# cfgmgr32 (CM_Locate_DevNode / CM_Get_Parent) parent grouping and HIDP_CAPS probing;
+# SendInput, the clipboard and low-level hooks of the macro runtime (`input`).
+windows = { workspace = true, features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_DataExchange", "Win32_System_Memory"] }
 # Also WinRT Windows.Devices.Lights (LampArray) and the package-identity check.
 # Raw USB over WinUSB (`Type() == "rawusb"` / `"hybrid"` plugins).
 nusb = { workspace = true }

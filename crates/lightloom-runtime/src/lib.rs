@@ -7,6 +7,7 @@
 //! * [`sensors`]: the sensor backends (Linux hwmon);
 //! * [`hotplug`]: arrival/removal notifications and how long to let them settle;
 //! * [`power`]: sleep/resume, lock/unlock and display off/on notifications;
+//! * [`input`]: synthetic input, desktop helpers and the opt-in input hooks of macros;
 //! * [`lamparray`]: the OS LampArray backend (Windows Dynamic Lighting) and which of
 //!   its devices Lightloom drives itself (those no plugin owns);
 //! * [`conflicts`]: other RGB software holding the same devices (reported, never killed);
@@ -27,6 +28,7 @@ pub mod dirs;
 pub mod effects;
 pub mod hardware;
 pub mod hotplug;
+pub mod input;
 pub mod lamparray;
 pub mod notify;
 pub mod pawnio;

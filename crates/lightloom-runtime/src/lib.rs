@@ -14,6 +14,8 @@
 //! * [`notify`]: this OS's system notifications (Windows toasts);
 //! * [`dirs`]: Lightloom's data and config directories and the daemon's `api-port` file;
 //! * [`system`]: machine facts for `@SignalRGB/systeminfo` and the process's memory.
+//! * [`user_registry`]: the per-user registry for keys Lightloom writes on request
+//!   (the opt-in `lightloom://` URL scheme).
 
 #![forbid(unsafe_code)]
 
@@ -28,3 +30,4 @@ pub mod sensors;
 pub mod signalrgb;
 pub mod smbus;
 pub mod system;
+pub mod user_registry;

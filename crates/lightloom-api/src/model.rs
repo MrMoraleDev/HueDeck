@@ -417,6 +417,17 @@ pub struct Settings {
     pub battery_notifications: bool,
     /// This OS has system notifications Lightloom can show.
     pub notifications_available: bool,
+    /// `lightloom://` links open Lightloom actions: the per-user URL-scheme
+    /// registration (`HKCU\Software\Classes\lightloom`) is on (opt-in).
+    #[serde(default)]
+    pub url_scheme: bool,
+    /// This OS (and install) can register the URL scheme.
+    #[serde(default)]
+    pub url_scheme_available: bool,
+    /// Why the registration is not what the setting says (it failed, or the
+    /// `lightloom` command-line client is missing); `None` normally.
+    #[serde(default)]
+    pub url_scheme_notice: Option<String>,
 }
 
 /// A state change asked of the daemon.
@@ -675,6 +686,16 @@ pub enum Request {
         /// Effect id.
         id: String,
     },
+    /// Run a `lightloom://` action URL (docs/integrations/actions.md).
+    Action {
+        /// The URL (or a bare action path).
+        url: String,
+    },
+    /// Register (`true`) or remove (`false`) the per-user `lightloom://` URL scheme.
+    SetUrlScheme {
+        /// Registered.
+        enabled: bool,
+    },
     /// Enumerate devices again now.
     Rescan,
     /// Stop the daemon (every plugin restores its device first).
@@ -718,6 +739,8 @@ impl Request {
             Request::SetEffectTimer { .. } => "setEffectTimer",
             Request::LoadEffect { .. } => "loadEffect",
             Request::EffectImage { .. } => "effectImage",
+            Request::Action { .. } => "action",
+            Request::SetUrlScheme { .. } => "setUrlScheme",
             Request::Rescan => "rescan",
             Request::Shutdown => "shutdown",
         }
@@ -728,8 +751,10 @@ impl Request {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
-    /// `state` (the snapshot changed), `stats` (counters only), `log`, or
-    /// `battery` (a low or critical battery alert: `{key, name, level, severity}`).
+    /// `state` (the snapshot changed), `stats` (counters only), `log`,
+    /// `battery` (a low or critical battery alert: `{key, name, level, severity}`)
+    /// or `action` (an action URL for the dashboard: `{action: "view", page, tab, uid}`,
+    /// `{action: "raiseWindow"}` or `{action: "toast", title, message}`).
     pub kind: String,
     /// Event payload (`log`: the line).
     #[serde(default, skip_serializing_if = "Value::is_null")]

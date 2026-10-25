@@ -3,7 +3,7 @@
 // second while devices run), the log lines, and the connection status.
 
 import { api, wsUrl } from "./api";
-import type { Snapshot } from "./types";
+import type { DashboardAction, Snapshot } from "./types";
 
 /** A message for the banner; a failed fetch means the daemon is not running. */
 function describe(e: unknown): string {
@@ -16,6 +16,10 @@ class DaemonState {
   connected = $state(false);
   error = $state<string | null>(null);
   logs = $state<string[]>([]);
+  /** The last toast an action URL sent (`app/toast`). */
+  toast = $state<{ title: string; message: string } | null>(null);
+  /** Called for `view` and `raiseWindow` actions (the app switches tabs). */
+  onAction: ((a: DashboardAction) => void) | null = null;
   private socket: WebSocket | null = null;
   private pending = false;
   private again = false;
@@ -53,6 +57,14 @@ class DaemonState {
           this.logs = [...this.logs.slice(-499), `${time}  ${e.data}`];
         } else if (e.kind === "state") {
           void this.refresh();
+        } else if (e.kind === "action" && e.data && typeof e.data === "object") {
+          const a = e.data as DashboardAction;
+          if (a.action === "toast") {
+            this.toast = { title: a.title, message: a.message };
+            setTimeout(() => (this.toast = null), 8000);
+          } else {
+            this.onAction?.(a);
+          }
         }
       } catch {
         // Not JSON: ignore.

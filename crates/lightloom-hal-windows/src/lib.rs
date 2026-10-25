@@ -22,7 +22,8 @@
 //!   shutdown held until devices are restored.
 //! * [`registry`] (Windows only): read-only `HKEY_CURRENT_USER` string values
 //!   (importing SignalRGB's component assignments) and `HKEY_LOCAL_MACHINE`
-//!   ones (whether PawnIO is installed).
+//!   ones (whether PawnIO is installed); the `HKEY_CURRENT_USER` writer for
+//!   the opt-in `lightloom://` URL scheme.
 //! * [`broker`]: client of the privileged `lightloom-iobroker` (chipset SMBus,
 //!   RAM lighting) as `lightloom_hal::SmbusBus` objects; the named-pipe
 //!   transport is Windows only.

@@ -26,6 +26,17 @@
   }
 
   onMount(() => {
+    // Action URLs: view/<page> switches tabs (and scrolls to a device), app/raiseWindow focuses the page.
+    daemon.onAction = (a) => {
+      if (a.action === "view") {
+        if (tabs.some((x) => x.id === a.tab)) select(a.tab as Tab);
+        if (a.uid) {
+          const uid = a.uid;
+          setTimeout(() => document.getElementById(`device-${uid}`)?.scrollIntoView({ behavior: "smooth" }), 100);
+        }
+      }
+      window.focus();
+    };
     daemon.connect();
     const follow = () => {
       const t = location.hash.slice(1) as Tab;
@@ -106,6 +117,12 @@
 <main>
   {#if daemon.error}
     <div class="banner bad">{daemon.error}</div>
+  {/if}
+  {#if daemon.toast}
+    <div class="banner">
+      <strong>{daemon.toast.title}</strong>
+      {daemon.toast.message}
+    </div>
   {/if}
   {#if s}
     {#if s.conflicts.length}

@@ -56,7 +56,7 @@
 
 <div class="list">
   {#each snapshot.devices as d (d.key)}
-    <section class="panel device">
+    <section class="panel device" id={`device-${d.key}`}>
       <div class="row head">
         {#if d.image}<img src={d.image} alt="" />{/if}
         <div class="title">

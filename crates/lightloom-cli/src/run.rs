@@ -7,7 +7,7 @@
 //! reported, never terminated), and every session ends with the plugin's
 //! `Shutdown(false)` — on Ctrl-C too — unless `--keep` is given.
 //!
-//! The SMBus devices (GPU RGB over NvAPI; RAM RGB through the Lightloom I/O
+//! The SMBus devices (GPU RGB over NvAPI and AMD ADL; RAM RGB through the Lightloom I/O
 //! broker, when it is installed and healthy) join the run unless
 //! `--no-smbus`: the SMBus plugins scan the buses once before the sessions
 //! start. They are left out, with one line saying why, while SignalRGB,
@@ -75,7 +75,7 @@ pub struct RunArgs {
     /// Never applies to SMBus devices: they are left out then.
     #[arg(long)]
     pub ignore_conflicts: bool,
-    /// Leave the SMBus devices out. By default NVIDIA GPU RGB controllers (through NvAPI)
+    /// Leave the SMBus devices out. By default NVIDIA and AMD GPU RGB controllers (through NvAPI and ADL)
     /// and RAM (through the Lightloom I/O broker, when installed) join the run: the SMBus
     /// plugins scan the buses first. They are left out anyway while SignalRGB, OpenRGB or
     /// lightloomd runs.
@@ -496,8 +496,9 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
 
 // Used by `bench --mock-smbus` (and tests).
 /// A scripted bus for the SMBus plugin `meta`: the first `BrandGPUList()`
-/// card's NVIDIA bus with a device answering at every `SmbusAddresses()`
-/// address (unset registers read 0xFF); else an AMD PIIX4 bus with one DRAM
+/// card's GPU bus (NVIDIA, or AMD when the plugin's `SmbusBuses()` allows
+/// `amdgpu` but not `nvidia`) with a device answering at every
+/// `SmbusAddresses()` address (unset registers read 0xFF); else an AMD PIIX4 bus with one DRAM
 /// RGB controller at the first `SmbusAddresses()` address: the ENE-style
 /// indexed register file OpenRGB's DRAM detectors identify (0xA0..0xAF read
 /// 0..15, "Micron" at 0x1025, a version string at 0x1000), and a DDR4 SPD at
@@ -506,14 +507,23 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
 pub(crate) fn permissive_mock_smbus(meta: &lightloom_plugin_host::PluginMeta) -> BusHandle {
     let rec = TransactionRecorder::new();
     let mut bus = match meta.gpu_ids().first() {
-        Some(gpu) => MockSmbus::new("MOCK NVIDIA GPU", lightloom_hal::SmbusBusKind::Nvidia, rec)
-            .with_pci(lightloom_hal::PciIds {
-                vendor: gpu.vendor,
-                device: gpu.device,
-                sub_vendor: gpu.sub_vendor,
-                sub_device: gpu.sub_device,
-            })
-            .with_instance("pci01"),
+        Some(gpu) => {
+            use lightloom_hal::SmbusBusKind::{AmdGpu, Nvidia};
+            let amd = meta.smbus_buses.contains(&AmdGpu) && !meta.smbus_buses.contains(&Nvidia);
+            let (name, kind) = if amd {
+                ("AMD ADLX Bus - MOCK AMD GPU", AmdGpu)
+            } else {
+                ("MOCK NVIDIA GPU", Nvidia)
+            };
+            MockSmbus::new(name, kind, rec)
+                .with_pci(lightloom_hal::PciIds {
+                    vendor: gpu.vendor,
+                    device: gpu.device,
+                    sub_vendor: gpu.sub_vendor,
+                    sub_device: gpu.sub_device,
+                })
+                .with_instance("pci01")
+        }
         None => MockSmbus::new("MOCK AMD PIIX4 Bus - 0x0b00", lightloom_hal::SmbusBusKind::Amd, rec)
             .with_pci(lightloom_hal::PciIds {
                 vendor: 0x1022,
@@ -1600,6 +1610,14 @@ fn print_report(r: &RunReport) {
 mod tests {
     use super::*;
 
+    /// The bench tests run one at a time: each gives Initialize a few seconds,
+    /// which several QuickJS sessions starting at once on a loaded machine miss.
+    static BENCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn one_bench_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        BENCH.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn colors_parse() {
         assert_eq!(parse_color("#ff0000"), Ok(Rgb::new(255, 0, 0)));
@@ -1646,6 +1664,7 @@ mod tests {
 
     #[test]
     fn bench_mock_runs_the_first_party_plugin_end_to_end() {
+        let _bench = one_bench_at_a_time();
         let args = RunArgs {
             devices: Vec::new(),
             catalog: CatalogArgs {
@@ -1705,6 +1724,7 @@ mod tests {
 
     #[test]
     fn bench_mock_smbus_runs_msi_gpu_end_to_end() {
+        let _bench = one_bench_at_a_time();
         let out = std::env::temp_dir().join(format!("lightloom-bench-smbus-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
@@ -1733,7 +1753,30 @@ mod tests {
     }
 
     #[test]
+    fn bench_mock_smbus_offers_amd_gpu_plugins_an_amd_gpu_bus() {
+        let _bench = one_bench_at_a_time();
+        let out = std::env::temp_dir().join(format!("lightloom-bench-amdgpu-{}.json", std::process::id()));
+        let mode = Mode::Bench {
+            fps: 60.0,
+            // Long enough for Initialize on a loaded CI or dev machine.
+            seconds: 3.0,
+            mock: None,
+            mock_smbus: Some("sapphire-nitro-glow".into()),
+        };
+        assert_eq!(run(mode, &mock_args(Some(out.clone()))).unwrap(), Outcome::Clean);
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let s = &report["sessions"][0];
+        assert_eq!(s["name"], "Sapphire Nitro Glow");
+        assert_eq!(s["device"], "smbus:1002:7340:1da2:e423@pci01:28");
+        assert!(s["smbus"]["writes"].as_u64().unwrap() >= 5, "{s}");
+        assert_eq!(s["smbus"]["errors"], 0, "{s}");
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn bench_mock_smbus_runs_crucial_end_to_end() {
+        let _bench = one_bench_at_a_time();
         let out = std::env::temp_dir().join(format!("lightloom-bench-ram-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,

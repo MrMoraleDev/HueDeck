@@ -21,7 +21,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
                          lightloom-hal  (traits + mock; no OS code)
           ┌──────────────┬───────┴─────────┬──────────────────┐
           ▼              ▼                 ▼                  ▼
- lightloom-hal-windows  lightloom-hal-linux  lightloom-nvapi   lightloom-plugin-host
+ lightloom-hal-windows  lightloom-hal-linux  lightloom-nvapi  lightloom-adl  lightloom-plugin-host
   (hidapi + native     (stub, M7)        (NvAPI GPU I2C)
    HID, broker client)
      ▲    ▲
@@ -61,6 +61,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 | `lightloom-api` | lib | native done; compat partial | axum routers: native `/v1` REST + WS + dashboard (`docs/api/openapi.yaml`), SignalRGB-compatible REST and canvas events, loopback / Origin / token guard, movable native listener |
 | `lightloom-runtime` | lib | done | what CLI and daemon share: HID backend and device matching, SMBus buses and scans, hotplug, conflict detection, the SignalRGB setup reader, data directories, system info, PawnIO / RAM lighting facts and the elevated helper run (`pawnio`) |
 | `lightloom-nvapi` | lib | done | dynamic `nvapi64.dll` binding, one NvAPI worker thread, `NvapiBus: SmbusBus` per GPU |
+| `lightloom-adl` | lib | done; untested on hardware | dynamic `atiadlxx.dll` (legacy ADL, MIT headers declared by hand) binding, one ADL worker thread, `AdlBus: SmbusBus` (kind `AmdGpu`) per AMD GPU |
 | `lightloom-iobroker` | lib + bin | done (AMD PIIX4; Intel I801 untested on hardware) | LocalSystem service: PawnIO IOCTLs, pinned modules, PIIX4 / I801 transfers, global SMBus mutex, static policy and rate limit, named pipe with DACL, audit log |
 | `lightloom-setup` | bin | done | the elevated helper of RAM lighting: `--pawnio-install` (verified WinHTTP download of the official `PawnIO_setup.exe` 2.2.0: size, SHA-256, Authenticode signer `namazso.eu`; `-install -silent`; skipped when PawnIO >= 2.2.0), `--smbus` (pinned modules, default `pawnio-modules` next to it, and the broker under `%ProgramFiles%`, registers and starts `LightloomIoBroker`, replacing an older one), `--uninstall` (PawnIO stays), `--elevate` (relaunch through UAC), `--pause`, `--plan` |
 | `lightloom-winres` | lib (build) | done | build-script helper: icon (`packaging/wix/lightloom.ico`) and version resource of the Windows executables (`winresource`, Windows hosts only) |

@@ -15,6 +15,7 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 | `sony-gamepad` | Sony DualShock 4 light bar; DualSense / DualSense Edge light bar and player LEDs, over USB (from OpenRGB) | DualSense `054C:0CE6` (light bar) |
 | `hid-lamparray` | any HID LampArray (Windows Dynamic Lighting) device no other plugin claims | Razer DeathAdder V2 Pro's LampArray collection |
 | `msi-gpu` | MSI graphics card RGB at I2C 0x68 (SMBus plugin, NVIDIA through NvAPI): RTX 3060 Gaming X Trio LHR | none yet |
+| `sapphire-nitro-glow` | Sapphire Radeon Nitro+ / Pure / Toxic "Nitro Glow V3" RGB at I2C 0x28 (SMBus plugin, AMD GPU through ADL): RX 5500 XT to RX 9070 XT, untested | none yet |
 | `crucial-ballistix` | Crucial Ballistix DDR4 RGB modules (SMBus plugin, chipset SMBus through the Lightloom I/O broker and PawnIO): BL8G32C16U4WL | none yet |
 | `corsair-peripheral` | Corsair CUE-protocol peripherals: K55/K65/K68/K70/K95/Strafe RGB keyboards, Glaive/Harpoon/Ironclaw/M65/Nightsword/Scimitar/Sabre mice, MM800 RGB Polaris, ST100 RGB; plus K55 RGB PRO XT and K65 Mini (from OpenRGB) | none yet |
 | `corsair-peripheral-v2` | Corsair V2-protocol peripherals: K55 RGB PRO, K57 (wired), K60 RGB PRO family, K70 Core / RGB PRO / TKL, K95 PLATINUM XT, K100, Dark Core / Harpoon / Ironclaw / Katar Pro / M55 / M65 Ultra / M75 / Scimitar Elite mice, MM700, Slipstream receivers (from OpenRGB) | none yet |
@@ -113,7 +114,7 @@ instead of USB ids, and Lightloom runs them only when they declare where they ma
 
 - `SmbusAddresses()` (required, Lightloom extension): the 7-bit addresses `Scan()` may touch
   and the devices may live at. Nothing else on the bus is reachable.
-- `SmbusBuses()` (optional): bus kinds to be offered (`"nvidia"`, `"amd"`, `"intel"`, ...).
+- `SmbusBuses()` (optional): bus kinds to be offered (`"nvidia"`, `"amdgpu"`, `"amd"`, `"intel"`, ...).
 - `SmbusDeniedRegisters()` (optional, Lightloom extension): registers the host never lets the
   plugin write (save-to-flash and the like; MSI GPU: `0x3F`), except inside the user's
   "Save to devices" call (`SaveToDevice`). The manifest lists them as

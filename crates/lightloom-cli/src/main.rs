@@ -106,7 +106,7 @@ enum Command {
     Plugins {
         #[command(flatten)]
         catalog: run::CatalogArgs,
-        /// Leave the SMBus buses alone (no NvAPI, no I/O broker, no Scan()).
+        /// Leave the SMBus buses alone (no NvAPI, no ADL, no I/O broker, no Scan()).
         #[arg(long)]
         no_smbus: bool,
         /// Scan the SMBus buses without writing: the scans' writes are recorded, never sent

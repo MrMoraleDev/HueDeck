@@ -3,7 +3,8 @@
 //!
 //! SMBus is on unless turned off (`lightloom --no-smbus`, the daemon's
 //! `smbus.enabled = false`). The buses are the NVIDIA GPUs' I2C ports
-//! through NvAPI, reached from this (unelevated) process, and the chipset
+//! through NvAPI and the AMD GPUs' I2C lines through ADL (`atiadlxx.dll`),
+//! both reached from this (unelevated) process, and the chipset
 //! SMBus (RAM) served by the privileged Lightloom I/O broker over its named
 //! pipe, used only when the broker answers and reports itself healthy (same
 //! protocol, official PawnIO 2.2.0 or later, its module loaded). This
@@ -13,7 +14,7 @@
 //!
 //! On Linux every bus (chipset SMBus and the GPUs' I2C ports alike) is a
 //! `/dev/i2c-*` adapter opened by this process (`lightloom_hal_linux::i2c`:
-//! udev rules and group `i2c`, no helper, no NvAPI), with the same policy.
+//! udev rules and group `i2c`, no helper, no NvAPI or ADL), with the same policy.
 //!
 //! Discovery runs plugins' `Scan(bus)`, which may write; it is refused while
 //! SignalRGB, OpenRGB or a vendor lighting service runs
@@ -32,10 +33,11 @@ use lightloom_plugin_host::smbus::BusHandle;
 /// Why SMBus discovery did not run.
 pub const BLOCKED: &str = "is running: Lightloom never touches SMBus/GPU I2C alongside it. Close it first";
 
-/// The SMBus buses of this machine (kept for the whole run: the NvAPI worker lives here).
+/// The SMBus buses of this machine (kept for the whole run: the NvAPI and ADL workers live here).
 pub struct SmbusHardware {
     buses: Vec<BusHandle>,
     nvapi: Option<lightloom_nvapi::NvapiHub>,
+    adl: Option<lightloom_adl::AdlHub>,
     notes: Vec<String>,
     broker: Option<BrokerHealth>,
 }
@@ -45,6 +47,7 @@ impl std::fmt::Debug for SmbusHardware {
         f.debug_struct("SmbusHardware")
             .field("buses", &self.buses)
             .field("nvapi", &self.nvapi.is_some())
+            .field("adl", &self.adl.is_some())
             .field("notes", &self.notes)
             .field("broker", &self.broker)
             .finish()
@@ -52,10 +55,11 @@ impl std::fmt::Debug for SmbusHardware {
 }
 
 impl SmbusHardware {
-    /// Open the buses: one per NVIDIA GPU (NvAPI), then the chipset buses of
-    /// the I/O broker (Linux: the `/dev/i2c-*` adapters, GPUs included).
-    /// Nothing is written; NvAPI is initialised and the GPUs enumerated, the
-    /// broker asked for its bus list (Linux: the nodes opened, `I2C_FUNCS`).
+    /// Open the buses: one per NVIDIA GPU (NvAPI), one per AMD GPU (ADL),
+    /// then the chipset buses of the I/O broker (Linux: the `/dev/i2c-*`
+    /// adapters, GPUs included). Nothing is written; NvAPI and ADL are
+    /// initialised and the GPUs enumerated, the broker asked for its bus list
+    /// (Linux: the nodes opened, `I2C_FUNCS`).
     pub fn open() -> Self {
         let mut notes = Vec::new();
         let (mut buses, nvapi) = if cfg!(target_os = "linux") {
@@ -76,17 +80,25 @@ impl SmbusHardware {
                 }
                 Err(e) => {
                     notes.push(format!(
-                        "No NVIDIA driver / NvAPI unavailable ({e}): no GPU lighting"
+                        "No NVIDIA driver / NvAPI unavailable ({e}): no NVIDIA GPU lighting"
                     ));
                     (Vec::new(), None)
                 }
             }
         };
+        let (amd, adl) = if cfg!(target_os = "linux") {
+            // AMD GPU I2C comes from /dev/i2c-* there too.
+            (Vec::new(), None)
+        } else {
+            amd_gpu_buses(lightloom_adl::AdlHub::start(), &mut notes)
+        };
+        buses.extend(amd);
         let mut broker = None;
         buses.extend(chipset_buses(&mut notes, &mut broker));
         Self {
             buses,
             nvapi,
+            adl,
             notes,
             broker,
         }
@@ -97,6 +109,7 @@ impl SmbusHardware {
         Self {
             buses,
             nvapi: None,
+            adl: None,
             notes: Vec::new(),
             broker: None,
         }
@@ -152,6 +165,37 @@ impl SmbusHardware {
             .filter(|p| matches_filter(&p.device.key, filters))
             .collect();
         (present, outcomes)
+    }
+}
+
+/// The buses of a started (or failed) ADL hub, one per AMD GPU, kind
+/// `AmdGpu`. No AMD driver (`atiadlxx.dll` absent, the usual case on NVIDIA
+/// and Intel machines) adds no note, only a debug line; any other failure does.
+fn amd_gpu_buses(
+    started: Result<lightloom_adl::AdlHub, lightloom_adl::AdlError>,
+    notes: &mut Vec<String>,
+) -> (Vec<BusHandle>, Option<lightloom_adl::AdlHub>) {
+    match started {
+        Ok(hub) => {
+            let buses: Vec<BusHandle> = hub
+                .buses()
+                .into_iter()
+                .map(|b| BusHandle::new(Box::new(b)))
+                .collect();
+            if buses.is_empty() {
+                tracing::debug!("ADL found no AMD GPU");
+                return (buses, None);
+            }
+            (buses, Some(hub))
+        }
+        Err(lightloom_adl::AdlError::NotAvailable) => {
+            tracing::debug!("no AMD graphics driver (atiadlxx.dll): no AMD GPU buses");
+            (Vec::new(), None)
+        }
+        Err(e) => {
+            notes.push(format!("AMD ADL unavailable ({e}): no AMD GPU lighting"));
+            (Vec::new(), None)
+        }
     }
 }
 
@@ -251,6 +295,64 @@ mod tests {
         assert!(filtered.is_empty());
         let (kept, _) = hw.scan(&catalog, &["smbus:10de".into()], &ScanBudget::default());
         assert_eq!(kept.len(), 1);
+    }
+
+    fn rx6700xt() -> lightloom_adl::GpuInfo {
+        lightloom_adl::GpuInfo {
+            name: "AMD Radeon RX 6700 XT".into(),
+            pci: PciIds {
+                vendor: 0x1002,
+                device: 0x73DF,
+                sub_vendor: 0x1DA2,
+                sub_device: 0xE445,
+            },
+            bus: 3,
+        }
+    }
+
+    #[test]
+    fn a_missing_amd_driver_adds_no_bus_and_no_note() {
+        use lightloom_adl::AdlError;
+        let mut notes = Vec::new();
+        let (buses, hub) = amd_gpu_buses(Err(AdlError::NotAvailable), &mut notes);
+        assert!(buses.is_empty() && hub.is_none() && notes.is_empty());
+        let (buses, _) = amd_gpu_buses(
+            Err(AdlError::MissingFunction("ADL2_Display_WriteAndReadI2C")),
+            &mut notes,
+        );
+        assert!(buses.is_empty());
+        assert_eq!(notes.len(), 1, "a broken driver is worth a note: {notes:?}");
+        // The real loader on this machine: with no atiadlxx.dll, nothing at all.
+        if !lightloom_adl::is_available() {
+            let mut notes = Vec::new();
+            let (buses, hub) = amd_gpu_buses(lightloom_adl::AdlHub::start(), &mut notes);
+            assert!(buses.is_empty() && hub.is_none() && notes.is_empty());
+        }
+    }
+
+    #[test]
+    fn amd_gpu_buses_are_scanned_by_amd_gpu_plugins() {
+        let fake = lightloom_adl::FakeAdlI2c::new(vec![rx6700xt()]).add_device(0, 0x28, []);
+        let log = fake.log();
+        let hub = lightloom_adl::AdlHub::with_transport(fake).unwrap();
+        let mut notes = Vec::new();
+        let (buses, hub) = amd_gpu_buses(Ok(hub), &mut notes);
+        assert!(hub.is_some() && notes.is_empty());
+        assert_eq!(buses.len(), 1);
+        assert_eq!(buses[0].descriptor().kind, SmbusBusKind::AmdGpu);
+        let hw = SmbusHardware::from_buses(buses);
+        let catalog = Catalog::scan(
+            &[PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")],
+            Duration::from_secs(10),
+        );
+        let (present, outcomes) = hw.scan(&catalog, &[], &ScanBudget::default());
+        assert_eq!(present.len(), 1, "{outcomes:?}");
+        assert_eq!(present[0].device.key, "smbus:1002:73df:1da2:e445@pci03:28");
+        let seen = log.lock().unwrap();
+        assert!(
+            seen.iter().all(|t| t.addr == 0x28 && !t.plan.write),
+            "the scan only read 0x28: {seen:?}"
+        );
     }
 
     #[test]

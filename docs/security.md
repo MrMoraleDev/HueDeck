@@ -92,15 +92,65 @@ device.
 - HID: a plugin gets only the collections of the devices that match its `VendorId()` /
   `ProductId()` (or `HidUsages()`) and that its `Validate()` accepted. `[devices] ignore` in
   `config.toml` keeps devices away from every plugin.
-- Network: `XMLHttpRequest` / `XmlHttp` are stubs whose requests never leave the process;
-  `device.addFeature("udp" | "dtls")` and the `@SignalRGB/udp`, `tcp`, `serial` and `lcd`
-  modules throw `HostApiMissing`. Plugins have no network access today.
+- Network: only `Type() == "network"` plugins get real sockets, `XMLHttpRequest` and the
+  `udp` / `dtls` features, and only while the user's *Network lights* setting is on. Every
+  destination must be on the local network (loopback, RFC 1918, link-local, local multicast,
+  broadcast); names are resolved first and the address checked is the one connected to
+  (`docs/host-api/network-lightloom.md`). Other plugins see stubs whose requests never leave
+  the process. HTTPS and DTLS: below.
 - SMBus (section 3): an SMBus plugin runs only if it declares `SmbusAddresses()`; it reaches
   only those addresses during `Scan()`, and only the address its scan returned afterwards;
   `SmbusDeniedRegisters()` and the host's own deny ranges hold in every phase.
 - `--dry-run` (CLI and daemon setting) records SMBus writes without sending them.
 - First-party plugins are checked in CI by `plugins/_testkit/manifests.test.mjs`, which runs
   `sdk/lint` (manifest schema, exports against the manifest, no DOM/Node/timer globals).
+
+**HTTPS from plugins.** `XMLHttpRequest` speaks `https://` through rustls (ring provider, the
+same stack as the update check) over the same LAN-only connection as plain HTTP. LAN devices
+have no certificate a public CA vouches for (a Hue bridge's is self-signed, or signed by
+Signify's private CA, with the bridge id as its common name), so the web PKI is not used; the
+policy (`crates/lightloom-plugin-host/src/net/tls.rs`) accepts a certificate only when:
+
+1. the request names a pin (`xhr.tlsPin`, SHA-256 of the certificate, hex) and it matches;
+   nothing else is then considered;
+2. the request names the expected common name (`xhr.tlsName`, e.g. the Hue bridge id) and the
+   certificate's subject CN is exactly that (any case); its pin is then remembered;
+3. the certificate matches the pin stored for this host and port in the plugin's settings
+   (id `lightloom-tls`, key `<host>:<port>`, in the daemon database with the plugin's other
+   settings);
+4. trust on first use: nothing is stored for this host and port and the request named no
+   `tlsName`: the certificate is accepted and its pin stored, so a different certificate later
+   is refused until the pin is removed (the plugin's *Forget*, or `service.removeSetting`).
+
+Anything else fails like an unreachable host (status 0, the reason in the plugin log); the
+response carries the certificate's pin (`xhr.tlsFingerprint`) either way. The handshake
+signature is always verified against the certificate's key, so a copied certificate is useless
+without the device's private key. Validity dates and chains are not checked: a pin or a name
+is the trust anchor. The first-use window is the weak point (an attacker already on the LAN at
+first contact is pinned instead of the device); `tlsName` closes it for devices whose
+certificate names them, which is why the Hue plugin always sets it. Device contexts without a
+settings store (tests, the CLI) get no first use: `tlsPin` or `tlsName` only.
+
+**DTLS.** `device.addFeature("dtls")` gives a network device context one DTLS 1.2 client
+connection with a pre-shared key, the transport of Hue Entertainment streaming
+(`crates/lightloom-plugin-host/src/net/dtls.rs`). It implements exactly one cipher suite,
+`TLS_PSK_WITH_AES_128_GCM_SHA256` (RFC 5487), plain PSK key exchange, the cookie exchange,
+retransmission and fragment reassembly, and nothing else (no resumption, renegotiation,
+certificates or extensions). The cryptography is `ring`'s (AES-128-GCM, HMAC-SHA256 for the TLS
+1.2 PRF, SHA-256, the OS random source); the module only frames bytes, and the server's
+Finished must verify before anything is sent. Why not a crate: none fits. rustls has no DTLS;
+`webrtc-dtls` (MIT/Apache-2.0) is async (tokio) and pulls in about 120 crates (about 100 new to
+the plugin host), mostly for certificate handling Hue does not use, including `bincode` 1
+(flagged unmaintained, RUSTSEC-2025-0141, which `cargo deny` would refuse);
+`openssl` needs a native OpenSSL build; `mbedtls` / `tinydtls` bindings are C builds. About 800
+lines on top of `ring`, which `rustls` already brings into the tree, keep the attack surface
+small and add no dependency (its loopback test server is compiled for tests only). It was
+checked against an independent implementation: `webrtc-dtls` 0.12.0 as the server (with and
+without extended master secret offered) and as the client of the test server, both directions
+completing the handshake and exchanging data (2026-10-25, a throw-away harness outside the
+repository); the PRF matches OpenSSL 3.2.4's `TLS1-PRF` on the
+IETF test vector (a unit test). The PSK is the plugin's to keep (Hue: the `clientkey`, in the
+plugin settings like the username).
 
 **Known gaps (planned).**
 

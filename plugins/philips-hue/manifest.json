@@ -2,17 +2,17 @@
   "manifestVersion": 2,
   "id": "lightloom.philips-hue",
   "name": "Philips Hue",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "GPL-3.0-or-later",
   "publisher": "Lightloom",
-  "description": "Philips Hue bridges on the LAN through the CLIP v1 REST API over plain HTTP: link-button pairing, one canvas subdevice per colour lamp, at most 10 light commands per second per bridge, lamp state restored on shutdown. Written from Philips' public developer documentation. Untested: nobody working on Lightloom owns a Hue bridge. Notes: docs/hardware/philips-hue.md.",
+  "description": "Philips Hue bridges on the LAN: link-button pairing, one canvas subdevice per colour lamp; the lamps of an entertainment area stream over the Entertainment API (CLIP v2 over pinned HTTPS, HueStream v2 over DTLS-PSK on UDP 2100) when the bridge supports it, the others (and all of them otherwise) through the CLIP v1 REST API over plain HTTP at most 10 light commands per second per bridge; lamp state restored on shutdown. Written from Philips' public developer documentation. Untested: nobody working on Lightloom owns a Hue bridge. Notes: docs/hardware/philips-hue.md.",
   "entry": "plugin.js",
   "compat": "signalrgb-2.5",
   "deviceType": "lightingcontroller",
   "devices": [
-    { "network": { "mdns": ["_hue._tcp"], "tcpPorts": [80] } }
+    { "network": { "mdns": ["_hue._tcp"], "tcpPorts": [80, 443] } }
   ],
   "shutdownModes": ["restore"],
-  "permissions": ["network-http", "mdns", "settings"],
+  "permissions": ["network-http", "mdns", "dtls", "settings"],
   "keywords": ["philips", "hue", "bridge", "smart lights", "network", "lan"]
 }

@@ -421,6 +421,10 @@ pub struct SessionOptions {
     /// A hardware mode to put the device in right after `Initialize()` (the
     /// user's choice survives restarts and sleep); `None`: follow the canvas.
     pub hardware_mode: Option<HardwareModeChoice>,
+    /// Network devices: the settings store of their plugin, where `https`
+    /// trust-on-first-use pins live (net/tls.rs); `None`: `https` needs
+    /// `tlsPin` or `tlsName`.
+    pub plugin_settings: Option<Arc<dyn crate::service::PluginSettings>>,
 }
 
 impl Default for SessionOptions {
@@ -444,6 +448,7 @@ impl Default for SessionOptions {
             input_sink: None,
             lcd: None,
             hardware_mode: None,
+            plugin_settings: None,
         }
     }
 }
@@ -1149,8 +1154,13 @@ fn run(
         s.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
         s.shared()
     });
-    let net: Option<SharedNet> = device.network.as_ref().map(|_| {
+    let net: Option<SharedNet> = device.network.as_ref().map(|t| {
         let mut n = NetContext::new(NetRole::Device, opts.write_mode);
+        n.set_pin_store(
+            opts.plugin_settings
+                .as_ref()
+                .map(|s| crate::net::tls::PinStore::new(t.service.clone(), Arc::clone(s))),
+        );
         let dev = Arc::clone(&shared);
         n.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
         n.shared()

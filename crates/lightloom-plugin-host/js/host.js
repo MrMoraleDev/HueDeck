@@ -770,15 +770,15 @@ if (deviceMode) {
     // docs/sensors.md); plugins that check this skip fan control and their
     // temperature probes, and the fan API below stays a no-op.
     fanControlDisabled: () => true,
-    // Network device sessions get the real `udp` feature; DTLS is not provided.
+    // Network device sessions get the real `udp` and `dtls` features.
     addFeature: (name) => {
       const key = String(name);
-      if (key === "udp" && netNative) {
-        const current = globalThis.udp;
-        if (current === undefined || current.__lightloomFeature !== "udp") {
-          const feature = recording("udp", { ...udpFeatureMembers() });
-          defineProperty(feature, "__lightloomFeature", { value: "udp" });
-          globalThis.udp = feature;
+      if ((key === "udp" || key === "dtls") && netNative) {
+        const current = globalThis[key];
+        if (current === undefined || current.__lightloomFeature !== key) {
+          const feature = recording(key, key === "udp" ? { ...udpFeatureMembers() } : dtlsFeatureMembers());
+          defineProperty(feature, "__lightloomFeature", { value: key });
+          globalThis[key] = feature;
         }
         return;
       }
@@ -1355,6 +1355,33 @@ function udpFeatureMembers() {
   };
 }
 
+// `device.addFeature("dtls")` (network-lightloom.md, "DTLS"): one DTLS 1.2 PSK
+// connection per device context. The handshake runs on a host thread; its
+// outcome and a close by the peer arrive through pumpNet() as callbacks.
+const dtlsCallbacks = Object.assign(Object.create(null), { dtlsOpen: null, dtlsClose: null, dtlsError: null });
+
+function dtlsFeatureMembers() {
+  const setter = (name, slot) => (cb) => {
+    if (typeof cb !== "function") {
+      throw new TypeError(`${name}(): callback must be a function!`);
+    }
+    dtlsCallbacks[slot] = cb;
+  };
+  return {
+    createConnection: (host, port, identity, key) =>
+      native.dtlsConnect(strArg(host), toInt(port), strArg(identity), strArg(key)),
+    // `endianness` only matters for multi-byte numbers; payloads are bytes.
+    send: (data) => native.dtlsSend(payloadBytes(data)),
+    hasEncryptedConnection: () => native.dtlsState() === 2,
+    CloseConnection: () => native.dtlsClose(),
+    onConnectionEstablished: setter("onConnectionEstablished", "dtlsOpen"),
+    onConnectionClosed: setter("onConnectionClosed", "dtlsClose"),
+    onConnectionError: setter("onConnectionError", "dtlsError"),
+    // A pre-shared key involves no certificate: nothing to ignore.
+    ignoreSslErrors: () => {},
+  };
+}
+
 function callSafely(fn, self, args, what) {
   try {
     fn.apply(self, args);
@@ -1377,6 +1404,7 @@ function finishXhr(x, r, guarded) {
   x.statusText = String(r.statusText ?? "");
   x.responseText = String(r.body ?? "");
   x.responseURL = st.url;
+  x.tlsFingerprint = String(r.tlsFingerprint ?? "");
   if (x.responseType === "json") {
     try {
       x.response = parseJson(x.responseText);
@@ -1407,7 +1435,11 @@ function finishXhr(x, r, guarded) {
   fire("onloadend");
 }
 
-/** XMLHttpRequest over the host's HTTP client (http:// on the LAN; sync or async). */
+/**
+ * XMLHttpRequest over the host's HTTP client (http:// and https:// on the LAN; sync or async).
+ * Lightloom extensions for https: `tlsPin` (SHA-256 of the expected certificate, hex),
+ * `tlsName` (its expected common name) and, after the request, `tlsFingerprint`.
+ */
 class NetXMLHttpRequest {
   constructor() {
     this.readyState = 0;
@@ -1425,6 +1457,9 @@ class NetXMLHttpRequest {
     this.ontimeout = null;
     this.onloadend = null;
     this.onabort = null;
+    this.tlsPin = "";
+    this.tlsName = "";
+    this.tlsFingerprint = "";
     xhrState.set(this, { method: "GET", url: "", async: true, headers: [], responseHeaders: [], aborted: false });
   }
   open(method, url, async = true) {
@@ -1473,6 +1508,8 @@ class NetXMLHttpRequest {
       headers: st.headers,
       body: body === null || body === undefined ? null : typeof body === "string" ? body : String(body),
       timeout: Number.isFinite(t) && t > 0 ? Math.trunc(t) : 0,
+      tlsPin: this.tlsPin ? String(this.tlsPin) : null,
+      tlsName: this.tlsName ? String(this.tlsName) : null,
     });
     if (st.async) {
       this.readyState = 2;
@@ -1646,6 +1683,13 @@ function pumpNet() {
       if (x !== undefined) {
         pendingXhr.delete(ev.socket);
         finishXhr(x, ev.http ?? {}, true);
+      }
+      continue;
+    }
+    if (ev.kind in dtlsCallbacks) {
+      const cb = dtlsCallbacks[ev.kind];
+      if (typeof cb === "function") {
+        callSafely(cb, undefined, ev.message === undefined ? [] : [ev.message], `dtls ${ev.kind}`);
       }
       continue;
     }

@@ -51,7 +51,7 @@ the device expects. The host API is documented in [docs/host-api/](../docs/host-
 | `wled` | WLED controllers (network: mDNS, UDP realtime DRGB/DNRGB) | none yet |
 | `ddp` | any DDP receiver added by IP (network: UDP 4048) | none yet |
 | `e131` | any E1.31 / sACN receiver added by IP (network: UDP 5568, unicast) | none yet |
-| `philips-hue` | Philips Hue bridges (network: mDNS, link-button pairing, CLIP v1 REST over HTTP) | none yet |
+| `philips-hue` | Philips Hue bridges (network: mDNS, link-button pairing, Entertainment API streaming over DTLS-PSK with CLIP v2 over HTTPS, CLIP v1 REST fallback) | none yet |
 | `nanoleaf` | Nanoleaf panels (network: mDNS, token pairing, extControl UDP streaming) | none yet |
 | `govee` | Govee lights with LAN control enabled (network: UDP 4001/4002/4003) | none yet |
 | `lifx` | LIFX bulbs (network: LAN protocol, UDP 56700) | none yet |

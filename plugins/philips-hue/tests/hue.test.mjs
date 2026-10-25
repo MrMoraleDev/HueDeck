@@ -139,7 +139,7 @@ test("pairing: 101 (press the button) twice, then a username that is saved; lamp
     assert.match(bridge.status, /link button/);
     assert.equal(bridge.paired, false);
     const post = s.net.http.find((r) => r.method === "POST");
-    assert.deepEqual(JSON.parse(post.body), { devicetype: "lightloom#pc" });
+    assert.deepEqual(JSON.parse(post.body), { devicetype: "lightloom#pc", generateclientkey: true });
     clock += 1000;
     s.discovery.Update();
     s.net.flush();

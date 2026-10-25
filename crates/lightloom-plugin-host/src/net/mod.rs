@@ -8,17 +8,21 @@
 //! and what arrives is queued until the host asks for it ([`NetContext::poll`],
 //! the JS `pumpNet()`), which happens between plugin calls (every 50 ms in a
 //! service, before each `Render()` in a session). Asynchronous HTTP requests
-//! run on short-lived threads and complete through the same queue.
+//! run on short-lived threads and complete through the same queue. So does
+//! the handshake of the context's one DTLS connection (`dtls` feature).
 //!
 //! Every destination goes through [`policy::lan_allowed`]. In a dry run a
 //! device context records its sends instead of sending them.
 
+pub mod dtls;
 pub mod http;
 pub mod mdns;
 pub mod policy;
+pub mod tls;
 
 use crate::device::{panic_text, LogSink, WriteMode};
 use crate::runtime::Deadline;
+use dtls::{DtlsSession, Psk};
 use http::{HttpRequest, HttpResponse};
 use policy::{lan_allowed, resolve_lan};
 use rquickjs::{Ctx, Function, Object};
@@ -73,6 +77,8 @@ pub struct NetStats {
     pub dry_run: u64,
     /// Events dropped because the plugin did not take them in time.
     pub dropped: u64,
+    /// DTLS connections established.
+    pub dtls_connections: u64,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -84,7 +90,8 @@ fn is_false(b: &bool) -> bool {
 pub struct NetEvent {
     /// Socket id (or async request id for `http`).
     pub socket: u32,
-    /// `message`, `close`, `error`, `connection`, `listening` or `http`.
+    /// `message`, `close`, `error`, `connection`, `listening`, `http`, or
+    /// `dtlsOpen` / `dtlsClose` / `dtlsError` (socket 0).
     pub kind: &'static str,
     /// Payload bytes (`message`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -154,6 +161,23 @@ pub mod state {
     pub const LISTENING: i32 = 5;
 }
 
+/// The context's DTLS connection (`device.addFeature("dtls")`: one per context).
+enum DtlsSlot {
+    None,
+    Connecting(Receiver<Result<DtlsSession, String>>),
+    Open(Box<DtlsSession>),
+}
+
+/// `dtls` states for the JS side.
+pub mod dtls_state {
+    /// No connection.
+    pub const NONE: i32 = 0;
+    /// Handshake running.
+    pub const CONNECTING: i32 = 1;
+    /// Established.
+    pub const OPEN: i32 = 2;
+}
+
 /// The sockets and pending requests of one plugin context.
 pub struct NetContext {
     role: NetRole,
@@ -166,6 +190,8 @@ pub struct NetContext {
     log: Option<LogSink>,
     logged: BTreeSet<String>,
     broadcast: Option<(u32, SocketAddr)>,
+    dtls: DtlsSlot,
+    pins: Option<tls::PinStore>,
 }
 
 impl std::fmt::Debug for NetContext {
@@ -218,7 +244,20 @@ impl NetContext {
             log: None,
             logged: BTreeSet::new(),
             broadcast: None,
+            dtls: DtlsSlot::None,
+            pins: None,
         }
+    }
+
+    /// Where `https` trust-on-first-use pins are kept (the plugin's settings);
+    /// without a store `https` needs `tlsPin` or `tlsName`.
+    pub fn set_pin_store(&mut self, pins: Option<tls::PinStore>) {
+        self.pins = pins;
+    }
+
+    /// The pin store.
+    pub fn pin_store(&self) -> Option<tls::PinStore> {
+        self.pins.clone()
     }
 
     /// Wrap into a [`SharedNet`].
@@ -617,10 +656,11 @@ impl NetContext {
             return id;
         }
         let (tx, rx) = channel();
+        let pins = self.pins.clone();
         let spawned = std::thread::Builder::new()
             .name("lightloom-http".into())
             .spawn(move || {
-                let _ = tx.send(http::execute(&req));
+                let _ = tx.send(http::execute_with(&req, pins.as_ref()));
             });
         if spawned.is_ok() {
             self.http.push((id, rx));
@@ -639,6 +679,144 @@ impl NetContext {
         }
     }
 
+    // ------------------------------------------------------------------ DTLS
+
+    fn dtls_event(&mut self, kind: &'static str, message: Option<String>) {
+        let mut ev = NetEvent::new(0, kind);
+        ev.message = message;
+        self.push(ev);
+    }
+
+    /// `dtls.createConnection(host, port, identity, key)`: start the handshake
+    /// with `addr` (a `dtlsOpen` or `dtlsError` event follows). An earlier
+    /// connection is replaced (closed without a `dtlsClose` event).
+    pub fn dtls_connect(&mut self, addr: SocketAddr, psk: Psk) -> bool {
+        self.dtls_drop();
+        if !lan_allowed(addr.ip()) {
+            self.refuse(format!("dtls: {} is not on the local network", addr.ip()));
+            self.dtls_event(
+                "dtlsError",
+                Some(format!("{} is not on the local network", addr.ip())),
+            );
+            return false;
+        }
+        if self.dry_run {
+            // A dry run never opens device connections.
+            self.held_back(0);
+            self.log_once(format!("dry run: no DTLS connection to {addr}"));
+            self.dtls_event("dtlsError", Some("dry run: not connected".into()));
+            return false;
+        }
+        let (tx, rx) = channel();
+        let spawned = std::thread::Builder::new()
+            .name("lightloom-dtls".into())
+            .spawn(move || {
+                let _ = tx.send(DtlsSession::connect(addr, &psk, dtls::HANDSHAKE_TIMEOUT));
+            });
+        match spawned {
+            Ok(_) => {
+                self.dtls = DtlsSlot::Connecting(rx);
+                true
+            }
+            Err(e) => {
+                self.dtls_event("dtlsError", Some(format!("no handshake thread: {e}")));
+                false
+            }
+        }
+    }
+
+    /// `dtls.send(data)`: bytes sent, or -1 without an established connection.
+    pub fn dtls_send(&mut self, data: &[u8]) -> i32 {
+        if data.len() > MAX_DATAGRAM {
+            return self.refuse(format!(
+                "dtls.send(): {} bytes is over the {MAX_DATAGRAM}-byte limit",
+                data.len()
+            ));
+        }
+        let r = match &mut self.dtls {
+            DtlsSlot::Open(s) => s.send(data),
+            _ => {
+                self.log_once("dtls.send() before the connection is established".into());
+                return -1;
+            }
+        };
+        match r {
+            Ok(n) => self.sent(n),
+            Err(e) => {
+                self.stats.errors += 1;
+                self.log_once(format!("dtls: {e}"));
+                -1
+            }
+        }
+    }
+
+    /// [`dtls_state`] of the connection.
+    pub fn dtls_state(&self) -> i32 {
+        match self.dtls {
+            DtlsSlot::None => dtls_state::NONE,
+            DtlsSlot::Connecting(_) => dtls_state::CONNECTING,
+            DtlsSlot::Open(_) => dtls_state::OPEN,
+        }
+    }
+
+    /// Close the connection (close_notify) or abandon the handshake; whether there was one.
+    fn dtls_drop(&mut self) -> bool {
+        match std::mem::replace(&mut self.dtls, DtlsSlot::None) {
+            DtlsSlot::Open(mut s) => {
+                s.close();
+                true
+            }
+            // The handshake thread ends on its own; its session closes when dropped.
+            DtlsSlot::Connecting(_) => true,
+            DtlsSlot::None => false,
+        }
+    }
+
+    /// `dtls.CloseConnection()`: close_notify, then a `dtlsClose` event.
+    pub fn dtls_close(&mut self) {
+        if self.dtls_drop() {
+            self.dtls_event("dtlsClose", None);
+        }
+    }
+
+    fn poll_dtls(&mut self) {
+        let mut event = None;
+        match &mut self.dtls {
+            DtlsSlot::Connecting(rx) => match rx.try_recv() {
+                Ok(Ok(session)) => {
+                    self.stats.dtls_connections += 1;
+                    self.dtls = DtlsSlot::Open(Box::new(session));
+                    event = Some(("dtlsOpen", None));
+                }
+                Ok(Err(e)) => {
+                    self.dtls = DtlsSlot::None;
+                    event = Some(("dtlsError", Some(e)));
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.dtls = DtlsSlot::None;
+                    event = Some(("dtlsError", Some("the handshake thread ended".into())));
+                }
+            },
+            DtlsSlot::Open(s) => {
+                if let Some(why) = s.poll() {
+                    self.dtls = DtlsSlot::None;
+                    event = Some(("dtlsClose", Some(why)));
+                }
+            }
+            DtlsSlot::None => {}
+        }
+        if let Some((kind, message)) = event {
+            if let Some(m) = &message {
+                self.log_once(format!("dtls: {m}"));
+                if kind == "dtlsError" {
+                    self.stats.errors += 1;
+                }
+            }
+            self.dtls_event(kind, message);
+        }
+    }
+
     // ------------------------------------------------------------------ poll
 
     /// Everything that arrived since the last poll, in order.
@@ -648,6 +826,7 @@ impl NetContext {
         for id in ids {
             self.poll_socket(id, &mut buf);
         }
+        self.poll_dtls();
         let mut done = Vec::new();
         self.http.retain(|(id, rx)| match rx.try_recv() {
             Ok(r) => {
@@ -925,7 +1104,7 @@ pub(crate) fn install<'js>(
                 .unwrap_or_default()
             }
         };
-        let held = {
+        let (held, pins) = {
             let mut n = lock_net(n);
             let held = n.dry_run && !req.method.eq_ignore_ascii_case("GET");
             if held {
@@ -933,7 +1112,7 @@ pub(crate) fn install<'js>(
                 n.stats.http_requests += 1;
                 n.log_once(format!("dry run: {} {} not sent", req.method, req.url));
             }
-            held
+            (held, n.pins.clone())
         };
         let r = if held {
             HttpResponse {
@@ -948,7 +1127,7 @@ pub(crate) fn install<'js>(
             }
         } else {
             let _blocked = d.suspend();
-            let r = http::execute(&req);
+            let r = http::execute_with(&req, pins.as_ref());
             lock_net(n).record_http(&r);
             r
         };
@@ -961,6 +1140,40 @@ pub(crate) fn install<'js>(
             Err(_) => -1,
         }
     );
+    native!("dtlsConnect", |n,
+                            d,
+                            host: String,
+                            port: i32,
+                            identity: String,
+                            key: String| {
+        let Some(port) = port_arg(port) else { return false };
+        let psk = match Psk::from_hex(&identity, &key) {
+            Ok(p) => p,
+            Err(e) => {
+                let mut n = lock_net(n);
+                n.log_once(format!("dtls.createConnection(): {e}"));
+                n.dtls_event("dtlsError", Some(e));
+                return false;
+            }
+        };
+        let addr = {
+            let _blocked = (!d.expired()).then(|| d.suspend());
+            resolve_lan(&host, port)
+        };
+        match addr {
+            Ok(a) => lock_net(n).dtls_connect(a, psk),
+            Err(e) => {
+                let mut n = lock_net(n);
+                n.refuse(format!("dtls.createConnection(): {e}"));
+                n.dtls_event("dtlsError", Some(e));
+                false
+            }
+        }
+    });
+    native!("dtlsSend", |n, d, data: Vec<i32>| lock_net(n)
+        .dtls_send(&to_bytes(&data)));
+    native!("dtlsState", |n, d| lock_net(n).dtls_state());
+    native!("dtlsClose", |n, d| lock_net(n).dtls_close());
     native!("netResolve", |n, d, host: String| {
         let _blocked = (!d.expired()).then(|| d.suspend());
         resolve_all(&host)

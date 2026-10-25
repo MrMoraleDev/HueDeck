@@ -13,7 +13,13 @@
 //   * XMLHttpRequest answers from routes registered with `net.route(method, url, reply)`:
 //     synchronous requests (open(..., false)) complete inside send(); asynchronous ones complete
 //     at `net.flush()` (the host completes them between plugin calls). An unrouted request ends
-//     with status 0, like an unreachable host.
+//     with status 0, like an unreachable host. https:// URLs route the same way; the recorded
+//     request keeps the Lightloom extensions `tlsName` / `tlsPin`, and a reply may set
+//     `tlsFingerprint`.
+//   * `device.addFeature("dtls")` installs `net.dtls.feature` as the `dtls` global: a DTLS
+//     connection that the test drives with `net.dtls.establish()`, `net.dtls.fail(message)` and
+//     `net.dtls.closeFromPeer()`; `net.dtls.connections` records createConnection() calls and
+//     `net.dtls.sent` the byte arrays sent while it was established.
 //   * The `service` mock records announce/suppress/settings/broadcast calls.
 
 import { registerHooks } from "node:module";
@@ -102,6 +108,7 @@ export function createMockNet(options = {}) {
     udp: null,
     tcp: null,
     XMLHttpRequest: null,
+    dtls: null,
   };
 
   function record(socket, proto, ip, port, data) {
@@ -195,6 +202,52 @@ export function createMockNet(options = {}) {
   };
   net.tcp = { createSocket: () => makeSocket("tcp") };
 
+  // DTLS (host: 0 none, 1 handshaking, 2 established).
+  const dtls = { state: 0, connections: [], sent: [], closed: 0, callbacks: {} };
+  const fire = (name, args = []) => dtls.callbacks[name]?.(...args);
+  dtls.feature = {
+    createConnection(host, port, identity, key) {
+      // As on the host, a new connection replaces the old one without a close callback.
+      dtls.state = 0;
+      dtls.connections.push({ host: String(host), port: Number(port), identity: String(identity), key: String(key) });
+      dtls.state = 1;
+      return true;
+    },
+    send(data) {
+      if (dtls.state !== 2) return -1;
+      const bytes = toBytes(data);
+      dtls.sent.push(bytes);
+      return bytes.length;
+    },
+    hasEncryptedConnection: () => dtls.state === 2,
+    CloseConnection() {
+      if (dtls.state === 0) return;
+      dtls.state = 0;
+      dtls.closed += 1;
+      fire("closed");
+    },
+    onConnectionEstablished(cb) { dtls.callbacks.established = cb; },
+    onConnectionClosed(cb) { dtls.callbacks.closed = cb; },
+    onConnectionError(cb) { dtls.callbacks.error = cb; },
+    ignoreSslErrors() {},
+  };
+  /** The handshake succeeded (the host calls onConnectionEstablished between plugin calls). */
+  dtls.establish = () => {
+    dtls.state = 2;
+    fire("established");
+  };
+  /** The handshake failed. */
+  dtls.fail = (message = "DTLS handshake timed out") => {
+    dtls.state = 0;
+    fire("error", [message]);
+  };
+  /** The bridge closed the connection. */
+  dtls.closeFromPeer = (message = "the peer closed the connection") => {
+    dtls.state = 0;
+    fire("closed", [message]);
+  };
+  net.dtls = dtls;
+
   function lookup(method, url) {
     return routes.findLast((r) => r.method === method && (r.url instanceof RegExp ? r.url.test(url) : r.url === url));
   }
@@ -234,7 +287,7 @@ export function createMockNet(options = {}) {
       this.aborted = true;
     }
     send(body = null) {
-      const req = { method: this.method, url: this.url, headers: { ...this.headers }, body: body == null ? null : String(body), async: this.async };
+      const req = { method: this.method, url: this.url, headers: { ...this.headers }, body: body == null ? null : String(body), async: this.async, tlsName: this.tlsName ?? "", tlsPin: this.tlsPin ?? "" };
       net.http.push(req);
       this.__complete = () => {
         if (this.aborted) return;
@@ -255,6 +308,7 @@ export function createMockNet(options = {}) {
         this.responseHeaders = Object.fromEntries(Object.entries(reply.headers ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
         this.responseText = payload;
         this.response = this.responseType === "json" ? safeJson(payload) : payload;
+        this.tlsFingerprint = reply.tlsFingerprint ?? "";
         this.onreadystatechange?.();
         this.onload?.();
       };
@@ -375,6 +429,7 @@ export function installNetGlobals({ net, device, service, controller, params = {
     device.addFeature = (name) => {
       device.features.push(name);
       if (name === "udp") set("udp", { send: net.udp.send });
+      if (name === "dtls") set("dtls", net.dtls.feature);
     };
     set("device", device);
   }

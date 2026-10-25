@@ -15,7 +15,8 @@ page run in `lightloomd`; first-party ones live in `plugins/<name>/` and are tes
   `fc00::/7`), link-local, local multicast (`224.0.0.0/24`, `239.0.0.0/8`, `ff02::/16`) or
   broadcast address. Anything else fails like an unreachable host (`send` returns `-1`, an
   XHR ends with status 0) and is logged once. Host names are resolved first and the check
-  applies to the address that is connected to. There is no proxy and no `https`.
+  applies to the address that is connected to. There is no proxy. `https://` certificates are
+  pinned, not checked against public CAs ([HTTPS](#https)).
 * **Sockets live with the plugin.** A socket exists from `createSocket()` until `close()` or
   the end of the service/session that made it. UDP sockets bind `0.0.0.0` (ephemeral port
   unless the plugin asks for one) because replies may arrive on any interface. TCP servers
@@ -23,7 +24,8 @@ page run in `lightloomd`; first-party ones live in `plugins/<name>/` and are tes
   the interface that faces `peerIp` and accepts connections from `peerIp` only (Yeelight
   music mode is the one first-party user).
 * **Dry run** (`lightloomd --dry-run`): device sessions record UDP/TCP sends and non-GET HTTP
-  requests without sending them; discovery (service context) runs normally.
+  requests without sending them and open no DTLS connection; discovery (service context) runs
+  normally.
 * **Time limits.** Synchronous XHR: the request's `timeout` (default 3 s, at most 10 s).
   TCP connect: at most 2 s. Time blocked in network calls does not count against the
   JavaScript budget of the call, but the wall-clock cap still applies.
@@ -95,8 +97,8 @@ without HID: no `Validate`, `Initialize()`, `Render()` at most every 33 ms, `Shu
 Globals: `device`, `controller` (the announced data), the `ControllableParameters` globals
 (stored per device key like any device), `XMLHttpRequest`. `device.addFeature("udp")` installs
 `udp.send(ip, port, bytes, endianness)` (8192 bytes at most; `endianness` ignored for byte
-arrays); `device.addFeature("dtls")` is not provided (Hue Entertainment needs it). Socket
-events and asynchronous XHRs are delivered before each `Render()`.
+arrays); `device.addFeature("dtls")` installs `dtls` ([DTLS](#dtls)). Socket events, DTLS
+callbacks and asynchronous XHRs are delivered before each `Render()`.
 
 Device key `net:<plugin slug>:<controller id>`, VID:PID `0000:0000`; the device list shows the
 controller's `ip`.
@@ -132,7 +134,55 @@ refused (`-1`).
 (parsed when `responseType` is `"json"`), `getResponseHeader`, `getAllResponseHeaders`,
 `onreadystatechange`, `onload`, `onerror`, `ontimeout`, `abort`. Synchronous requests
 complete inside `send()`; asynchronous ones complete at the next event delivery. `http://`
-only; bodies up to 4 MiB.
+and `https://`; bodies up to 4 MiB.
+
+### HTTPS
+
+`https://` runs TLS (rustls, TLS 1.2 and 1.3) over the same LAN-only connection; the default
+port is 443. LAN devices have no publicly signed certificate, so a certificate is accepted only
+by one of these rules, in this order (details and rationale: [security.md](../security.md),
+"HTTPS from plugins"):
+
+1. `xhr.tlsPin = "<sha256 hex>"` (Lightloom extension; `:` separators allowed): the
+   certificate's SHA-256 must be that, and nothing else counts;
+2. `xhr.tlsName = "<name>"` (Lightloom extension): the certificate's subject common name must
+   be that name, any case (a Hue bridge's is its bridge id);
+3. the pin stored for this host and port: plugin setting id `lightloom-tls`, key
+   `<host>:<port>` (readable and removable with `service.getSetting` / `removeSetting`);
+4. trust on first use, when nothing is stored and no `tlsName` was set: accepted, and its pin
+   stored (3. then applies).
+
+A refused certificate ends the request with status 0 and the reason in the plugin log. After
+any `https` request, `xhr.tlsFingerprint` is the SHA-256 (hex) of the certificate the server
+presented. Device sessions started without the plugin's settings store (tests, the CLI) have
+no stored pins and no first use.
+
+## DTLS
+
+`device.addFeature("dtls")` in a network device context installs the global `dtls`, SignalRGB's
+shape (network-services.md §1.7, as Hue Entertainment uses it): one DTLS 1.2 connection with a
+pre-shared key, cipher suite `TLS_PSK_WITH_AES_128_GCM_SHA256` only.
+
+```js
+device.addFeature("dtls");
+dtls.onConnectionEstablished(() => {});    // the handshake completed
+dtls.onConnectionError((message) => {});   // it failed (timeout, alert, wrong key, LAN rule, dry run)
+dtls.onConnectionClosed((message) => {});  // CloseConnection(), or the peer closed it (message)
+dtls.createConnection(ip, 2100, identity, keyHex); // starts the handshake; true when started
+dtls.hasEncryptedConnection();             // established
+dtls.send(bytes, endianness);              // one record per call: bytes sent, or -1
+dtls.CloseConnection();                    // close_notify
+dtls.ignoreSslErrors(true);                // accepted, no effect (a PSK has no certificate)
+```
+
+* `identity` is sent as UTF-8; `keyHex` is the key in hexadecimal (Hue: the `clientkey`).
+* The handshake runs on a host thread (at most 5 s, lost flights retransmitted);
+  `createConnection` returns at once and the outcome arrives as a callback before a later
+  `Render()`. A new `createConnection` replaces the connection without a close callback.
+* The callbacks are single: setting one again replaces it. `endianness` is ignored (payloads
+  are bytes); a payload over 8192 bytes is refused (`-1`).
+* Same LAN rule as the sockets; in a dry run nothing is sent and the error callback says so.
+* Data the server sends is read and dropped, except an alert that closes the connection.
 
 ## Where it lives
 
@@ -140,6 +190,8 @@ only; bodies up to 4 MiB.
 |---|---|
 | sockets, LAN rule, event queue, natives | `crates/lightloom-plugin-host/src/net/mod.rs`, `net/policy.rs` |
 | HTTP client | `net/http.rs` |
+| HTTPS certificate policy and pins | `net/tls.rs` |
+| DTLS 1.2 PSK client (and the loopback test server, `test-support` feature) | `net/dtls.rs` |
 | mDNS one-shot browser | `net/mdns.rs` |
 | service thread, `service.*` natives, settings trait | `src/service.rs` |
 | network device sessions (`SessionDevice::network`) | `src/session.rs` |
@@ -150,9 +202,6 @@ only; bodies up to 4 MiB.
 
 ## Not provided (yet)
 
-* `device.addFeature("dtls")` and `https://`: Lightloom has no TLS stack. Philips Hue therefore
-  uses the CLIP v1 REST API over HTTP; the Entertainment API (DTLS-PSK on UDP 2100) and CLIP
-  v2 are future work.
 * The sender's MAC address as the `id` of UDP discoveries (ARP lookup).
 * `Hosts`, the QML UI (`<plugin>.qml`, `Interface()`), `callDiscoveryFunction` /
   `callControllerFunction`, `resolveMacAddress`, `saveSnapshot`, `showSettings` /

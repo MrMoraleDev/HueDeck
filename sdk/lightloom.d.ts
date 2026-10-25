@@ -389,9 +389,8 @@ declare namespace Lightloom {
     // --- features, notifications, logging ------------------------------------------
 
     /**
-     * Install a feature global of the same name. `"udp"` works in network device sessions
-     * (docs/host-api/network-lightloom.md) and throws `HostApiMissing` elsewhere; `"dtls"`
-     * always throws (Lightloom has no TLS stack).
+     * Install a feature global of the same name. `"udp"` and `"dtls"` work in network device
+     * sessions (docs/host-api/network-lightloom.md) and throw `HostApiMissing` elsewhere.
      * @signalrgb
      */
     addFeature(name: "battery" | "keyboard" | "mouse" | "base64" | "udp" | "dtls"): void;
@@ -549,16 +548,25 @@ declare namespace Lightloom {
     createSocket(): Socket;
   }
 
-  /** Global `dtls` after `device.addFeature("dtls")`. @signalrgb @unimplemented (device sessions) */
+  /**
+   * Global `dtls` after `device.addFeature("dtls")` in a network device session: one DTLS 1.2
+   * connection with a pre-shared key (`TLS_PSK_WITH_AES_128_GCM_SHA256`), LAN only. The
+   * handshake runs in the background; its outcome arrives through the callbacks.
+   * @signalrgb
+   */
   interface DtlsFeature {
-    createConnection(ip: string, port: number, identity: string, psk: string): void;
-    send(data: Bytes): number;
+    /** Start the handshake; `psk` in hex. `true` when it started. */
+    createConnection(ip: string, port: number, identity: string, psk: string): boolean;
+    /** One record: bytes sent, or -1 without an established connection. */
+    send(data: Bytes, endianness?: number | boolean): number;
     hasEncryptedConnection(): boolean;
+    /** close_notify; the closed callback follows. */
     CloseConnection(): void;
     onConnectionEstablished(handler: () => void): void;
-    onConnectionClosed(handler: () => void): void;
-    onConnectionError(handler: (error: unknown) => void): void;
-    ignoreSslErrors(): void;
+    onConnectionClosed(handler: (reason?: string) => void): void;
+    onConnectionError(handler: (message: string) => void): void;
+    /** Accepted, no effect: a pre-shared key has no certificate. */
+    ignoreSslErrors(ignore?: boolean): void;
   }
 
   // ------------------------------------------------------------------ SMBus (docs/host-api/smbus.md)
@@ -1058,11 +1066,20 @@ declare namespace Lightloom {
   }
 
   /**
-   * The `XMLHttpRequest` global: real `http://` requests to the local network in network
-   * contexts (sync or async, timeout default 3 s, at most 10 s); elsewhere every request
+   * The `XMLHttpRequest` global: real `http://` and `https://` requests to the local network in
+   * network contexts (sync or async, timeout default 3 s, at most 10 s); elsewhere every request
    * completes at once with status 0. @signalrgb
    */
   interface XMLHttpRequestLike {
+    /**
+     * `https`: the SHA-256 (hex) the server's certificate must have. Lightloom extension
+     * (docs/host-api/network-lightloom.md, "HTTPS").
+     */
+    tlsPin?: string;
+    /** `https`: the common name the server's certificate must have (Hue: the bridge id). Lightloom extension. */
+    tlsName?: string;
+    /** `https`, after the request: the SHA-256 (hex) of the server's certificate. Lightloom extension. */
+    readonly tlsFingerprint?: string;
     readyState: number;
     status: number;
     statusText: string;
@@ -1164,7 +1181,7 @@ declare var mouse: Lightloom.Mouse;
 declare var base64: Lightloom.Base64;
 /** After `device.addFeature("udp")` (network device sessions; throws in the others). */
 declare var udp: Lightloom.UdpFeature;
-/** After `device.addFeature("dtls")` (throws in Lightloom device sessions). */
+/** After `device.addFeature("dtls")` (network device sessions; throws in the others). */
 declare var dtls: Lightloom.DtlsFeature;
 /** Network plugins. */
 declare var service: Lightloom.Service;

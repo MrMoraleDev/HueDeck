@@ -46,3 +46,37 @@ test("service settings reject path segments", () => {
   service.saveSetting("bridge", "key", undefined);
   assert.equal(service.getSetting("bridge", "key"), undefined);
 });
+
+test("the dtls feature: connect, establish, send, close; https requests keep tlsName", () => {
+  const net = createMockNet();
+  const device = {};
+  const restore = installNetGlobals({ net, device });
+  try {
+    device.addFeature("dtls");
+    const events = [];
+    globalThis.dtls.onConnectionEstablished(() => events.push("open"));
+    globalThis.dtls.onConnectionError((m) => events.push(`error ${m}`));
+    globalThis.dtls.onConnectionClosed(() => events.push("closed"));
+    assert.equal(globalThis.dtls.createConnection("192.168.1.20", 2100, "id", "00ff"), true);
+    assert.equal(globalThis.dtls.send([1]), -1, "not before the handshake");
+    net.dtls.establish();
+    assert.equal(globalThis.dtls.hasEncryptedConnection(), true);
+    assert.equal(globalThis.dtls.send([1, 2, 300]), 3);
+    assert.deepEqual(net.dtls.sent, [[1, 2, 44]]);
+    globalThis.dtls.CloseConnection();
+    net.dtls.fail("x");
+    assert.deepEqual(events, ["open", "closed", "error x"]);
+    assert.deepEqual(net.dtls.connections, [{ host: "192.168.1.20", port: 2100, identity: "id", key: "00ff" }]);
+    net.route("GET", "https://192.168.1.20/auth/v1", { status: 200, headers: { "hue-application-id": "abc" }, tlsFingerprint: "f".repeat(64) });
+    const x = new net.XMLHttpRequest();
+    x.open("GET", "https://192.168.1.20/auth/v1", false);
+    x.tlsName = "001788fffe1a2b3c";
+    x.send();
+    assert.equal(x.getResponseHeader("hue-application-id"), "abc");
+    assert.equal(x.tlsFingerprint, "f".repeat(64));
+    assert.equal(net.http[0].tlsName, "001788fffe1a2b3c");
+  } finally {
+    restore();
+  }
+  assert.equal(globalThis.dtls, undefined, "restored");
+});

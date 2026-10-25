@@ -442,6 +442,10 @@ fn run(
         return Err("not a network plugin".into());
     }
     let mut net = NetContext::new(NetRole::Service, WriteMode::Live);
+    net.set_pin_store(Some(crate::net::tls::PinStore::new(
+        natives.plugin.clone(),
+        Arc::clone(&natives.settings),
+    )));
     let sink_natives = natives.clone();
     net.set_log_sink(Some(Arc::new(move |line: &str| sink_natives.log(line))));
     let net: SharedNet = net.shared();

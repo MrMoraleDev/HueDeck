@@ -1132,6 +1132,8 @@ impl Engine {
         let direct = Arc::clone(&self.shared.direct);
         let input_sink = self.macros.input_sink();
         let lcd: Arc<dyn lightloom_lcd::LcdProvider> = self.lcd.clone();
+        let plugin_settings: Arc<dyn PluginSettings> =
+            Arc::clone(&self.plugin_settings) as Arc<dyn PluginSettings>;
         let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
             let d = lock(&defaults).clone();
             let key = device.key.clone();
@@ -1165,6 +1167,8 @@ impl Engine {
                 input_sink: Some(Arc::clone(&input_sink)),
                 lcd: Some(Arc::clone(&lcd)),
                 hardware_mode: d.hardware_modes.get(&key).cloned(),
+                // Network devices keep their https pins with their plugin's settings.
+                plugin_settings: device.network.is_some().then(|| Arc::clone(&plugin_settings)),
                 ..SessionOptions::default()
             }
         });

@@ -21,5 +21,6 @@ tracing = { workspace = true }
 hidapi = { workspace = true, features = ["windows-native"] }
 # cfgmgr32 (CM_Locate_DevNode / CM_Get_Parent) parent grouping and HIDP_CAPS probing.
 windows = { workspace = true }
+# Also WinRT Windows.Devices.Lights (LampArray) and the package-identity check.
 # Raw USB over WinUSB (`Type() == "rawusb"` / `"hybrid"` plugins).
 nusb = { workspace = true }

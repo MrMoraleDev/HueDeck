@@ -76,6 +76,7 @@ fn a_device_without_winusb_is_listed_as_needing_it() {
             backend,
             devices: vec![device("1234:7001:A", &bound), device("1234:7002:B", &unbound)],
             smbus: Vec::new(),
+            lamparrays: None,
         },
         ephemeral: true,
         plugins_dir: Some(plugins),

@@ -452,14 +452,14 @@ branch) and on manual dispatch, without publishing, so a tag never runs untested
   runtime are suppressed), then the `.deb` is installed on the runner (`lightloomd --version`
   through `/usr/bin`, the unit, the group, the desktop entry and metainfo) and removed;
   CycloneDX SBOMs.
-- `linux-reproducible`: builds the daemon and CLI twice from the same checkout into two
-  target directories, with `--remap-path-prefix` for the workspace, `CARGO_HOME` and the
+- `linux-reproducible`: builds the daemon and CLI twice from the same checkout in one target
+  directory, cleaned in between (the binaries are copied out after each build), with `--remap-path-prefix` for the workspace, `CARGO_HOME` and the
   target directory, and fails when the SHA-256 of either binary differs.
 - `assemble`: checks that the zip, the MSI, the tarball, the AppImage, the `.deb`, the `.rpm`
-  and both sets of SBOMs
-  are there under their expected names, writes one `SHA256SUMS` over every file (the updater
+  and both sets of SBOMs are there under their expected names, writes one `SHA256SUMS` over every file (the updater
   verifies its download against it) and uploads them as the `lightloom-release` artifact.
-  It waits for `linux-reproducible`, so a build that is not reproducible is not released.
+  It does not wait for `linux-reproducible` yet: that job reports a difference but does not
+  hold the release back until it has passed on a real run.
 
 Release builds use no rust-cache: they start clean, and a restored cache would skip
 cef-dll-sys's build script, which copies the CEF runtime next to the renderer. Only the CEF

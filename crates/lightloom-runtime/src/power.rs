@@ -31,7 +31,9 @@ impl Power {
                 _source: Some(source),
             },
             Err(e) => {
-                tracing::warn!("sleep/resume notifications unavailable ({e}); devices are not put away before sleep");
+                tracing::warn!(
+                    "sleep/resume notifications unavailable ({e}); devices are not put away before sleep"
+                );
                 Self::inactive()
             }
         }

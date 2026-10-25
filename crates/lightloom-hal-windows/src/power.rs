@@ -21,7 +21,9 @@ use std::cell::RefCell;
 use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{GetLastError, ERROR_CLASS_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{
+    GetLastError, ERROR_CLASS_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Power::{
     RegisterPowerSettingNotification, UnregisterPowerSettingNotification, POWERBROADCAST_SETTING,
@@ -34,8 +36,8 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, PostThreadMessageW,
     RegisterClassW, TranslateMessage, DEVICE_NOTIFY_WINDOW_HANDLE, MSG, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, PBT_POWERSETTINGCHANGE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_POWERBROADCAST,
-    WM_QUIT, WM_WTSSESSION_CHANGE, WNDCLASSW, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, PBT_POWERSETTINGCHANGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_POWERBROADCAST, WM_QUIT, WM_WTSSESSION_CHANGE, WNDCLASSW, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
 const CLASS: PCWSTR = w!("LightloomPowerEvents");
@@ -245,11 +247,20 @@ mod tests {
     fn messages_map_to_events() {
         let ev = |msg, w: u32| unsafe { event_of(msg, WPARAM(w as usize), LPARAM(0)) };
         assert_eq!(ev(WM_POWERBROADCAST, PBT_APMSUSPEND), Some(PowerEvent::Suspend));
-        assert_eq!(ev(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC), Some(PowerEvent::Resume));
-        assert_eq!(ev(WM_POWERBROADCAST, PBT_APMRESUMESUSPEND), Some(PowerEvent::Resume));
+        assert_eq!(
+            ev(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC),
+            Some(PowerEvent::Resume)
+        );
+        assert_eq!(
+            ev(WM_POWERBROADCAST, PBT_APMRESUMESUSPEND),
+            Some(PowerEvent::Resume)
+        );
         assert_eq!(ev(WM_POWERBROADCAST, PBT_POWERSETTINGCHANGE), None, "no data");
         assert_eq!(ev(WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK), Some(PowerEvent::Lock));
-        assert_eq!(ev(WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK), Some(PowerEvent::Unlock));
+        assert_eq!(
+            ev(WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK),
+            Some(PowerEvent::Unlock)
+        );
         assert_eq!(ev(WM_WTSSESSION_CHANGE, 1), None);
 
         let mut s = POWERBROADCAST_SETTING {
@@ -271,7 +282,8 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut p = WindowsPower::new();
         let s = Arc::clone(&seen);
-        p.subscribe(Arc::new(move |e| s.lock().unwrap().push(e))).expect("hidden window");
+        p.subscribe(Arc::new(move |e| s.lock().unwrap().push(e)))
+            .expect("hidden window");
         // What Windows sends before sleeping, to this process's own window.
         // SAFETY: a window of this test's class, alive until `stop`.
         unsafe {
@@ -287,7 +299,10 @@ mod tests {
         // Windows also sends the display state after the registration.
         let sleeps = || {
             let s = seen.lock().unwrap();
-            s.iter().filter(|e| **e != PowerEvent::DisplayOn).copied().collect::<Vec<_>>()
+            s.iter()
+                .filter(|e| **e != PowerEvent::DisplayOn)
+                .copied()
+                .collect::<Vec<_>>()
         };
         assert_eq!(sleeps(), [PowerEvent::Suspend]);
         // Subscribing again replaces the window.

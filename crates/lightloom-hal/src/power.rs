@@ -105,7 +105,8 @@ mod tests {
         let mut src = ManualPower::new();
         assert!(!src.fire(PowerEvent::Suspend), "nobody listens yet");
         let s = Arc::clone(&seen);
-        src.subscribe(Arc::new(move |e| s.lock().unwrap().push(e))).unwrap();
+        src.subscribe(Arc::new(move |e| s.lock().unwrap().push(e)))
+            .unwrap();
         assert!(src.fire(PowerEvent::Suspend));
         assert!(src.fire(PowerEvent::Resume));
         src.stop();

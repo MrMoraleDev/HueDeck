@@ -150,9 +150,16 @@ fn sleep_shuts_every_session_down_and_resume_starts_them_over() {
     let mut power = ManualPower::new();
     power.subscribe(shared.power_sink()).unwrap();
 
-    let hid_writes = |first: u8| hid.writes().into_iter().filter(|w| w[0] == first).collect::<Vec<_>>();
+    let hid_writes = |first: u8| {
+        hid.writes()
+            .into_iter()
+            .filter(|w| w[0] == first)
+            .collect::<Vec<_>>()
+    };
     let smbus_writes = || rec.payloads(TransactionKind::SmbusWrite);
-    wait_for(b, "both devices rendering", |s| running(s, KEY) && running(s, GPU));
+    wait_for(b, "both devices rendering", |s| {
+        running(s, KEY) && running(s, GPU)
+    });
     assert_eq!(hid_writes(0x10).len(), 1, "one Initialize()");
     // The exit mode from feature/bake travels with the suspend flag.
     call(b, settings(Some("off"), None)).unwrap();
@@ -166,9 +173,17 @@ fn sleep_shuts_every_session_down_and_resume_starts_them_over() {
         [vec![0x20, 1, 2, 0]],
         "Shutdown(true, \"off\") ran once"
     );
-    assert_eq!(*hid.writes().last().unwrap(), vec![0x20, 1, 2, 0], "nothing after Shutdown");
+    assert_eq!(
+        *hid.writes().last().unwrap(),
+        vec![0x20, 1, 2, 0],
+        "nothing after Shutdown"
+    );
     let gpu_last = smbus_writes().pop().unwrap();
-    assert_eq!(&gpu_last[..2], &[0x68, 0x22], "the GPU plugin's Shutdown() wrote its mode last");
+    assert_eq!(
+        &gpu_last[..2],
+        &[0x68, 0x22],
+        "the GPU plugin's Shutdown() wrote its mode last"
+    );
     assert!(
         s.devices.iter().all(|d| d.state != "running"),
         "{:?}",
@@ -202,13 +217,18 @@ fn sleep_shuts_every_session_down_and_resume_starts_them_over() {
     assert!(power.fire(PowerEvent::Lock));
     std::thread::sleep(Duration::from_millis(300));
     assert_ne!(last_frame(), [1, 0, 0, 0], "lights stay on by default");
-    assert_eq!(call(b, settings(None, Some(true))).unwrap()["lightsOffWhenIdle"], true);
+    assert_eq!(
+        call(b, settings(None, Some(true))).unwrap()["lightsOffWhenIdle"],
+        true
+    );
     assert!(b.snapshot().settings.lights_off_when_idle);
     until("a black frame", || last_frame() == [1, 0, 0, 0]);
     assert!(power.fire(PowerEvent::Unlock));
     until("a lit frame after unlock", || last_frame() != [1, 0, 0, 0]);
     assert!(power.fire(PowerEvent::DisplayOff));
-    until("a black frame with the display off", || last_frame() == [1, 0, 0, 0]);
+    until("a black frame with the display off", || {
+        last_frame() == [1, 0, 0, 0]
+    });
     assert!(power.fire(PowerEvent::DisplayOn));
     until("a lit frame with the display on", || last_frame() != [1, 0, 0, 0]);
     assert_eq!(hid_writes(0x10).len(), 2, "locking never restarts sessions");

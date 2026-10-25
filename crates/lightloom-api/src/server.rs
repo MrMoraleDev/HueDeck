@@ -566,6 +566,8 @@ struct SettingsPatch {
     /// The per-user `lightloom://` URL-scheme registration (opt-in).
     #[serde(default)]
     url_scheme: Option<bool>,
+    #[serde(default)]
+    lights_off_when_idle: Option<bool>,
 }
 
 /// `PATCH /v1/settings`. A `port` moves the native API and the dashboard:
@@ -630,6 +632,7 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
             battery_notifications: p.battery_notifications,
             port,
             openrgb_sdk: p.openrgb_sdk,
+            lights_off_when_idle: p.lights_off_when_idle,
         })
         .await;
     let mut value = match result {

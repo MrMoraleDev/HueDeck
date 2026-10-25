@@ -497,6 +497,9 @@ pub struct Settings {
     /// `lightloom` command-line client is missing); `None` normally.
     #[serde(default)]
     pub url_scheme_notice: Option<String>,
+    /// Black canvas while the PC is locked or the display is off (off by default).
+    #[serde(default)]
+    pub lights_off_when_idle: bool,
 }
 
 /// A state change asked of the daemon.
@@ -674,6 +677,9 @@ pub enum Request {
         /// Network lights (starts or stops the discovery services).
         #[serde(default)]
         network: Option<bool>,
+        /// Black canvas while the PC is locked or the display is off.
+        #[serde(default)]
+        lights_off_when_idle: Option<bool>,
     },
     /// *Add by IP*: ask a network plugin to look at `ip`.
     NetworkAdd {

@@ -95,6 +95,7 @@ export const api = {
     shutdownMode?: ShutdownMode;
     openrgbSdk?: boolean;
     urlScheme?: boolean;
+    lightsOffWhenIdle?: boolean;
   }) =>
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */

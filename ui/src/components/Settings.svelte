@@ -266,6 +266,22 @@
   </section>
 
   <section class="panel">
+    <h2>Sleep and lock</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.lightsOffWhenIdle}
+        onchange={(e) =>
+          daemon.run(() => api.setSettings({ lightsOffWhenIdle: (e.target as HTMLInputElement).checked }))}
+      /> Lights off when the PC locks or the screen turns off</label
+    >
+    <p class="muted">
+      Before the PC sleeps or hibernates every device is shut down as for a system suspend (most go dark); on wake they
+      are found again and the effect comes back.
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>OpenRGB SDK</h2>
     <label class="check"
       ><input

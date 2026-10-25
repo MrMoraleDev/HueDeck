@@ -230,6 +230,8 @@ export interface Settings {
   network: boolean;
   /** OpenRGB SDK server on 127.0.0.1:6742 (opt-in). */
   openrgbSdk: boolean;
+  /** Black canvas while the PC is locked or the display is off (off by default). */
+  lightsOffWhenIdle: boolean;
   /** Port of the dashboard and the API (127.0.0.1 only). */
   /** What devices show when Lightloom closes. */
   shutdownMode: ShutdownMode;

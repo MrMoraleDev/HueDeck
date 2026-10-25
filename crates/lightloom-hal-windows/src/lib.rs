@@ -47,6 +47,8 @@
 //! * [`lamparray`] (Windows only): Windows Dynamic Lighting LampArrays through
 //!   WinRT `Windows.Devices.Lights` (`DeviceWatcher` discovery, availability,
 //!   package-identity check).
+//! * [`power`] (Windows only): sleep/resume, lock/unlock and display off/on
+//!   from a hidden window (`lightloom_hal::PowerSource`).
 //!
 //! Serial follows in later milestones.
 
@@ -72,6 +74,8 @@ pub mod lamparray;
 pub mod native;
 #[cfg(windows)]
 pub mod owner;
+#[cfg(windows)]
+pub mod power;
 #[cfg(windows)]
 pub mod probe;
 #[cfg(windows)]

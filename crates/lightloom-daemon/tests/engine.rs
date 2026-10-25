@@ -142,6 +142,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
         battery_notifications: None,
         port: Some(p),
         openrgb_sdk: None,
+        lights_off_when_idle: None,
     };
     assert_eq!(call(b, port(17000)).unwrap()["port"], 17000);
     wait_for(b, "the new port in the settings", |s| s.settings.port == 17000);
@@ -162,6 +163,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
         battery_notifications: None,
         port: None,
         openrgb_sdk: Some(true),
+        lights_off_when_idle: None,
         shutdown_mode: None,
     };
     assert_eq!(call(b, on).unwrap()["openrgbSdk"], true);
@@ -532,6 +534,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
             battery_notifications: None,
             port: None,
             openrgb_sdk: None,
+            lights_off_when_idle: None,
         },
     )
     .unwrap();
@@ -713,6 +716,7 @@ fn save_to_devices_and_exit_modes() {
             battery_notifications: None,
             port: None,
             openrgb_sdk: None,
+            lights_off_when_idle: None,
         },
     )
     .unwrap();
@@ -731,6 +735,7 @@ fn save_to_devices_and_exit_modes() {
                 battery_notifications: None,
                 port: None,
                 openrgb_sdk: None,
+                lights_off_when_idle: None,
             },
         )
         .unwrap_err()
@@ -821,6 +826,7 @@ fn network_lights_follow_their_service() {
             battery_notifications: None,
             port: None,
             openrgb_sdk: None,
+            lights_off_when_idle: None,
             shutdown_mode: None,
             smbus: None,
             network: Some(true),
@@ -901,6 +907,7 @@ fn network_lights_follow_their_service() {
             battery_notifications: None,
             port: None,
             openrgb_sdk: None,
+            lights_off_when_idle: None,
             shutdown_mode: None,
             smbus: None,
             network: Some(false),

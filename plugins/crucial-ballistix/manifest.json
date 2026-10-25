@@ -19,7 +19,7 @@
           { "bank": 6, "id": 155, "name": "Crucial Technology" }
         ],
         "batchWrites": true,
-        "tested": []
+        "tested": [{ "bus": "amd" }]
       }
     }
   ],

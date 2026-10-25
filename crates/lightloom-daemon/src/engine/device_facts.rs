@@ -35,7 +35,7 @@ impl ManifestCache {
 pub(super) fn tested(facts: Option<&ManifestFacts>, device: &SessionDevice) -> bool {
     let Some(facts) = facts else { return false };
     match &device.smbus {
-        Some(t) => facts.tests_pci(&t.bus.descriptor().pci),
+        Some(t) => facts.tests_smbus(t.bus.descriptor()),
         None if device.network.is_none() && device.lamparray.is_none() => {
             facts.tests_usb(device.vid, device.pid)
         }

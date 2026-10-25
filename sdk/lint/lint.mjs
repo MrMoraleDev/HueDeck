@@ -219,7 +219,13 @@ function checkManifest(manifest, dir, add) {
       }
       const tuple = (t) => ["vendor", "device", "subVendor", "subDevice"].map((k) => hexOrNumber(t?.[k])).join(":");
       const cards = (Array.isArray(smbus.pci) ? smbus.pci : []).map(tuple);
+      const families = Array.isArray(smbus.buses) ? smbus.buses : ["any"];
       for (const t of Array.isArray(smbus.tested) ? smbus.tested : []) {
+        if (t && typeof t === "object" && "bus" in t) {
+          // A chipset bus family (RAM plugins): one of the buses the plugin is offered.
+          if (!families.includes(t.bus) && !families.includes("any")) add("error", "manifest", "tested-unclaimed", `tested bus ${t.bus} is not one of the claimed buses`, `${at}/smbus/tested`);
+          continue;
+        }
         if (!cards.includes(tuple(t))) add("error", "manifest", "tested-unclaimed", `tested card ${tuple(t)} is not one of the claimed pci cards`, `${at}/smbus/tested`);
       }
       if (manifest.deviceType === "ram" && cards.length === 0 && !(Array.isArray(smbus.spdManufacturers) && smbus.spdManufacturers.length > 0)) {

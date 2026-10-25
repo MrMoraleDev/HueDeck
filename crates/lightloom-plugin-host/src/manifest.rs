@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! What the dashboard shows from a plugin's `manifest.json`
 //! (`schemas/plugin-manifest-v2.schema.json`): its version, and which devices
-//! someone has run it on (`tested`: product ids of a USB claim, PCI tuples of
-//! an SMBus claim). The host binds devices from the plugin's exports; the
+//! someone has run it on (`tested`: product ids of a USB claim, PCI tuples or
+//! chipset bus families of an SMBus claim). The host binds devices from the plugin's exports; the
 //! manifest is only read for these facts, and a plugin without one (a
 //! third-party SignalRGB plugin) simply has none.
 
 use std::path::Path;
 
-use lightloom_hal::smbus::PciIds;
+use lightloom_hal::smbus::{PciIds, SmbusBusDescriptor};
 use serde_json::Value;
 
 /// The facts of one `manifest.json`.
@@ -20,6 +20,8 @@ pub struct ManifestFacts {
     pub tested_usb: Vec<(u16, u16)>,
     /// The `tested` cards of the SMBus claims.
     pub tested_pci: Vec<PciIds>,
+    /// The `tested` chipset bus families (`{"bus": "amd"}`) of the SMBus claims.
+    pub tested_buses: Vec<String>,
 }
 
 /// A `usbId`: a number, or a hex string with or without `0x`.
@@ -62,6 +64,10 @@ impl ManifestFacts {
                 .and_then(|s| s.get("tested"))
                 .and_then(Value::as_array);
             for card in cards.into_iter().flatten() {
+                if let Some(bus) = card.get("bus").and_then(Value::as_str) {
+                    facts.tested_buses.push(bus.to_ascii_lowercase());
+                    continue;
+                }
                 let field = |k: &str| card.get(k).and_then(id);
                 if let (Some(vendor), Some(device), Some(sub_vendor), Some(sub_device)) = (
                     field("vendor"),
@@ -95,6 +101,15 @@ impl ManifestFacts {
     /// Someone ran the plugin on this card.
     pub fn tests_pci(&self, pci: &PciIds) -> bool {
         self.tested_pci.contains(pci)
+    }
+
+    /// Someone ran the plugin on this bus: its card, or its chipset bus family.
+    pub fn tests_smbus(&self, bus: &SmbusBusDescriptor) -> bool {
+        self.tests_pci(&bus.pci)
+            || self
+                .tested_buses
+                .iter()
+                .any(|b| b == crate::bus::kind_name(bus.kind))
     }
 }
 
@@ -135,6 +150,26 @@ mod tests {
             ..card
         }));
         assert!(m.tested_usb.is_empty());
+    }
+
+    #[test]
+    fn reads_tested_bus_families() {
+        let m = ManifestFacts::parse(
+            r#"{ "devices": [ { "smbus": { "addresses": [57], "buses": ["amd", "intel"],
+                "tested": [{ "bus": "amd" }] } } ] }"#,
+        )
+        .unwrap();
+        assert_eq!(m.tested_buses, ["amd"]);
+        assert!(m.tested_pci.is_empty());
+        let bus = |kind| SmbusBusDescriptor {
+            name: "chipset".into(),
+            kind,
+            pci: PciIds::default(),
+            instance: "0b00".into(),
+            max_block_len: 32,
+        };
+        assert!(m.tests_smbus(&bus(lightloom_hal::smbus::SmbusBusKind::Amd)));
+        assert!(!m.tests_smbus(&bus(lightloom_hal::smbus::SmbusBusKind::Intel)));
     }
 
     #[test]

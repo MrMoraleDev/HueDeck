@@ -190,8 +190,18 @@
             "tested": {
               "type": "array",
               "uniqueItems": true,
-              "items": { "$ref": "#/$defs/pciTuple" },
-              "description": "Cards, from pci, that someone has run the plugin on (GPU plugins); empty until then. RAM plugins list no pci and keep this empty until a run is recorded in their docs/hardware note."
+              "items": {
+                "oneOf": [
+                  { "$ref": "#/$defs/pciTuple" },
+                  {
+                    "type": "object",
+                    "required": ["bus"],
+                    "properties": { "bus": { "type": "string", "enum": ["amd", "intel", "nuvoton"] } },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "description": "What someone has run the plugin on: cards, from pci (GPU plugins), or a chipset bus family, {\"bus\": \"amd\"} (RAM plugins, which list no pci; the run is recorded in their docs/hardware note). Empty until then."
             },
             "deniedRegisters": {
               "type": "array",

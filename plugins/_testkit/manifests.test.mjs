@@ -44,7 +44,7 @@ for (const dir of dirs) {
       const ids = [
         ...("vid" in claim ? [claim.vid, ...claim.pids, ...(claim.tested ?? [])] : []),
         ...("hidUsage" in claim ? [claim.hidUsage.usagePage, claim.hidUsage.usage] : []),
-        ...("smbus" in claim ? [...(claim.smbus.pci ?? []), ...(claim.smbus.tested ?? [])].flatMap((t) => Object.values(t)) : []),
+        ...("smbus" in claim ? [...(claim.smbus.pci ?? []), ...(claim.smbus.tested ?? []).filter((t) => !("bus" in t))].flatMap((t) => Object.values(t)) : []),
       ];
       for (const id of ids) {
         assert.equal(typeof id, "string", `id ${id} is written as a hex string`);

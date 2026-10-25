@@ -20,7 +20,9 @@
 //!    register-less write, its first byte is the register), except inside
 //!    the plugin's `SaveToDevice(request)` call that the user asked for
 //!    ([`GuardedBus::set_save_window`], [`crate::save`]);
-//! 6. block transfers stay within the bus's `max_block_len`;
+//! 6. block transfers stay within the bus's `max_block_len` (a register-less
+//!    write within [`SmbusBusDescriptor::max_raw_write_len`]: up to 140 bytes on
+//!    NvAPI buses, for MSI's per-LED GPU frame);
 //! 7. the bus is taken in turn: a session's `TransactionLock`, and every
 //!    lone operation of a session that holds none, waits in one FIFO queue
 //!    per bus (sessions on one bus never starve each other) for at most
@@ -522,6 +524,10 @@ impl GuardedBus {
 
     fn check_block(&mut self, what: &str, len: usize) -> Result<(), Status> {
         let max = self.handle.descriptor.max_block_len;
+        self.check_len(what, len, max)
+    }
+
+    fn check_len(&mut self, what: &str, len: usize, max: usize) -> Result<(), Status> {
         if len == 0 || len > max {
             return Err(self.deny(what, format!("{len} bytes (this bus moves 1..={max})")));
         }
@@ -760,7 +766,8 @@ impl GuardedBus {
 
     /// `WriteBlockWithoutRegister(addr, data)`.
     pub fn write_block_no_reg(&mut self, addr: u8, data: &[u8]) -> Result<(), Status> {
-        self.check_block("WriteBlockWithoutRegister", data.len())?;
+        let max = self.handle.descriptor.max_raw_write_len();
+        self.check_len("WriteBlockWithoutRegister", data.len(), max)?;
         let mut record = vec![addr];
         record.extend_from_slice(data);
         self.write(
@@ -949,6 +956,32 @@ mod tests {
         assert!(g.write_byte(0x68, 0x30, 1).is_ok());
         assert_eq!(g.stats().denied, 4);
         assert_eq!(rec.payloads(TransactionKind::SmbusWrite).len(), 1);
+    }
+
+    #[test]
+    fn long_raw_writes_only_on_nvapi_and_never_to_a_denied_register() {
+        let (h, rec) = handle(SmbusBusKind::Nvidia, &[0x68]);
+        h.allow(0x68);
+        let mut g = run(&h, 0x68);
+        g.deny_registers([0x3F]);
+        let mut frame = vec![0x49];
+        frame.extend(std::iter::repeat_n(0x40, 136));
+        assert_eq!(g.write_block_no_reg(0x68, &frame), Ok(()), "MSI per-LED frame");
+        frame[0] = 0x3F;
+        assert_eq!(g.write_block_no_reg(0x68, &frame), Err(-1), "first byte is the register");
+        assert_eq!(g.write_block_no_reg(0x68, &[0x49; 141]), Err(-1), "over 140 bytes");
+        assert_eq!(g.write_block(0x68, 0x49, &[0; 33]), Err(-1), "Block Write stays at 32");
+        assert_eq!(g.read_block(0x68, 0x49, 33), Err(-1));
+        assert_eq!(g.read_block_no_reg(0x68, 33), Err(-1));
+        let sent = rec.payloads(TransactionKind::SmbusWrite);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].len(), 1 + 137, "address, then the frame");
+
+        let (h, rec) = handle(SmbusBusKind::Amd, &[0x39]);
+        h.allow(0x39);
+        let mut g = run(&h, 0x39);
+        assert_eq!(g.write_block_no_reg(0x39, &[0; 33]), Err(-1), "chipset buses keep 32");
+        assert!(rec.payloads(TransactionKind::SmbusWrite).is_empty());
     }
 
     #[test]

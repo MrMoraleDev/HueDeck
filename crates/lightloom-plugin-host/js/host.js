@@ -981,6 +981,8 @@ function nativeBusMembers(fixed) {
   const kind = info.kind;
   const bound = info.address ?? 0;
   const MAX_BLOCK = 32;
+  // Lightloom: a register-less write may be longer on NvAPI buses (140 bytes, MSI's per-LED GPU frame).
+  const MAX_RAW_WRITE = typeof info.maxRawWrite === "number" ? info.maxRawWrite : MAX_BLOCK;
   // Free buses take the address first; fixed buses use the bound one.
   const call = (method, args, count, body) => {
     if (fixed) {
@@ -1019,7 +1021,7 @@ function nativeBusMembers(fixed) {
       ),
     WriteBlockWithoutRegister: (...args) =>
       call("WriteBlockWithoutRegister", args, 2, (a, len, data) =>
-        native.busWriteNoReg(a, busData("WriteBlockWithoutRegister", len, data, MAX_BLOCK)),
+        native.busWriteNoReg(a, busData("WriteBlockWithoutRegister", len, data, MAX_RAW_WRITE)),
       ),
     ReadBlockWithoutRegister: (...args) =>
       call("ReadBlockWithoutRegister", args, 1, (a, len) =>

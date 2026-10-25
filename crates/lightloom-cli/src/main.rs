@@ -22,6 +22,7 @@ use std::process::ExitCode;
 mod action;
 mod compat;
 mod devices;
+mod probe;
 mod run;
 mod shm;
 mod udev;
@@ -150,11 +151,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Supervised hardware probes (stop lightloomd first; the user watches the device).
+    Probe {
+        #[command(subcommand)]
+        command: ProbeCommand,
+    },
     /// Linux udev rules for the devices the plugins claim.
     Udev {
         #[command(subcommand)]
         command: UdevCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProbeCommand {
+    /// MSI GPU per-LED stream (0x2E/0x49) on the RTX 3060 Gaming X Trio LHR: identify, step
+    /// through the 34 slots, colour order, short frame; always leaves with 0x2E <- 0.
+    MsiGpuPerled(probe::PerLedArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -238,6 +251,9 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
             dry_run,
             json,
         } => run::list_plugins(&catalog, !no_smbus, dry_run, json).map(|_| run::Outcome::Clean),
+        Command::Probe {
+            command: ProbeCommand::MsiGpuPerled(args),
+        } => probe::run_cli(&args),
         Command::Udev {
             command: UdevCommand::Generate { plugins, out, check },
         } => {

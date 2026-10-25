@@ -1764,6 +1764,7 @@ dependencies = [
  "lightloom-engine",
  "lightloom-hal",
  "lightloom-hal-windows",
+ "lightloom-nvapi",
  "lightloom-plugin-host",
  "lightloom-render",
  "lightloom-renderer",

@@ -9,6 +9,9 @@
 //     buses have no WriteQuick). Bad arguments throw RangeError / TypeError like the host.
 //   * WriteBlock(reg, len, data) sends exactly `len` bytes: longer data is clipped, shorter
 //     data zero-padded. The log records the count byte: { op: "WriteBlock", data: [len, ...] }.
+//   * WriteBlockWithoutRegister(len, data) is one raw write of `len` bytes (at most 32, or 140 on
+//     NVIDIA buses, as the host allows); its first byte is the register, as the host's
+//     SmbusDeniedRegisters() check sees it: { op: "WriteBlockWithoutRegister", reg: data[0], data }.
 //   * `indexed` devices model the ENE-style indexed register file of DRAM RGB controllers
 //     (Crucial, ENE): WriteWord(0x00, swapped reg) sets the 16-bit pointer, ReadByte(0x81) /
 //     WriteByte(0x01) / WriteBlock(0x03) go through it (the pointer does not advance), other
@@ -59,6 +62,8 @@ export function createMockBus(options = {}) {
   const nack = new Set(options.nack ?? []);
   const dryRun = options.dryRun === true;
   const batchWrites = options.batchWrites === true;
+  // The host's longest register-less write: 140 bytes on NVIDIA buses (MSI's per-LED GPU frame).
+  const maxRawWrite = kind === "nvidia" ? 140 : 32;
   const queue = [];
   let queueStatus;
   const ops = [];
@@ -85,9 +90,9 @@ export function createMockBus(options = {}) {
     }
     return Math.trunc(v);
   };
-  const block = (method, len, data) => {
+  const block = (method, len, data, max = 32) => {
     if (!Array.isArray(data)) throw new TypeError(`${method}(): Data must be an array.`);
-    const n = num(method, "Length", len, 32);
+    const n = num(method, "Length", len, max);
     return Array.from({ length: n }, (_, i) => (i < data.length ? Number(data[i]) & 0xFF : 0));
   };
   const record = (op, addr, reg, data) => ops.push({ op, addr, reg, data, locked });
@@ -172,6 +177,12 @@ export function createMockBus(options = {}) {
       data.forEach((b, i) => regsOf(a).set((r + i) & 0xFF, b));
       return 0;
     },
+    WriteBlockWithoutRegister(a, data) {
+      record("WriteBlockWithoutRegister", a, data[0], data);
+      if (!present(a) || ix(a) || data.length === 0) return -1;
+      data.slice(1).forEach((b, i) => regsOf(a).set((data[0] + 1 + i) & 0xFF, b));
+      return 0;
+    },
     ReadBlockBytes(a, r, len) {
       record("ReadBlockBytes", a, r, [len]);
       if (!present(a) || ix(a)) return [-1, []];
@@ -192,6 +203,8 @@ export function createMockBus(options = {}) {
     ReadWord: (a, r) => read(() => raw.ReadWord(a, r)),
     WriteWord: (a, r, w) => write(() => raw.WriteWord(a, r, w), "WriteWord", a, r, [w & 0xFF, (w >> 8) & 0xFF]),
     WriteBlock: (a, r, data) => write(() => raw.WriteBlock(a, r, data), "WriteBlock", a, r, [data.length, ...data]),
+    WriteBlockWithoutRegister: (a, data) =>
+      write(() => raw.WriteBlockWithoutRegister(a, data), "WriteBlockWithoutRegister", a, data[0], data),
     ReadBlockBytes: (a, r, len) => (flush() < 0 ? [-1, []] : raw.ReadBlockBytes(a, r, len)),
     ReadByteWithoutRegister: (a) => read(() => raw.ReadByteWithoutRegister(a)),
   };
@@ -245,6 +258,11 @@ export function createMockBus(options = {}) {
       io.WriteWord(num("WriteWord", "Address", a, 255), num("WriteWord", "Register", r, 255), num("WriteWord", "Word", w, 65535)),
     WriteBlock: (a, r, len, data) =>
       io.WriteBlock(num("WriteBlock", "Address", a, 255), num("WriteBlock", "Register", r, 255), block("WriteBlock", len, data)),
+    WriteBlockWithoutRegister: (a, len, data) =>
+      io.WriteBlockWithoutRegister(
+        num("WriteBlockWithoutRegister", "Address", a, 255),
+        block("WriteBlockWithoutRegister", len, data, maxRawWrite),
+      ),
     ReadByteWithoutRegister: (a) => io.ReadByteWithoutRegister(num("ReadByteWithoutRegister", "Address", a, 255)),
   };
 
@@ -255,6 +273,8 @@ export function createMockBus(options = {}) {
     ReadWord: (r) => io.ReadWord(address, num("ReadWord", "Register", r, 255)),
     WriteWord: (r, w) => io.WriteWord(address, num("WriteWord", "Register", r, 255), num("WriteWord", "Word", w, 65535)),
     WriteBlock: (r, len, data) => io.WriteBlock(address, num("WriteBlock", "Register", r, 255), block("WriteBlock", len, data)),
+    WriteBlockWithoutRegister: (len, data) =>
+      io.WriteBlockWithoutRegister(address, block("WriteBlockWithoutRegister", len, data, maxRawWrite)),
     ReadBlockBytes: (r, len) => io.ReadBlockBytes(address, num("ReadBlockBytes", "Register", r, 255), num("ReadBlockBytes", "Length", len, 32)),
     ReadByteWithoutRegister: () => io.ReadByteWithoutRegister(address),
   };

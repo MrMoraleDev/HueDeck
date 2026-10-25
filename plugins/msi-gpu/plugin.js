@@ -21,8 +21,17 @@
 // RGBController_MSIGPU (every mode but "Direct", which is the canvas, and "Off", which OpenRGB
 // never writes), set live with DeviceUpdateMode() and DeviceUpdateLEDs(): never register 0x3F, so
 // the card forgets the mode at the next power cycle.
+//
+// Per-LED mode (experimental, UNVERIFIED on any card, off by default: the "Per-LED (experimental)"
+// parameter). The sequence MSI's LEDKeeper2 sends to non-"NV5000" NVIDIA cards, read from MSI's
+// installed files (facts only, docs/research/msi-gpu-perled.md): identify with reads of 0xEC (4
+// bytes) and 0xED (2 bytes), enter with 0x2E <- 1, then per frame one raw I2C write of 0x49 and 4
+// bytes per LED for 34 slots, and leave with 0x2E <- 0. In this mode the plugin writes only 0x2E
+// and 0x49 until Shutdown(), which leaves first and then restores as usual. Which slot is which
+// LED, and the colour order (B, G, R is the best guess), are unknown: `lightloom probe
+// msi-gpu-perled` exists to find out with the user watching.
 
-/* global device, bus, shutdownColor */
+/* global device, bus, shutdownColor, perLed */
 
 export function Name() { return "MSI GPU"; }
 export function Publisher() { return "Lightloom"; }
@@ -45,6 +54,14 @@ export function ControllableParameters() {
       description: "Colour shown after Lightloom stops when the card's own state could not be read back",
       type: "color",
       default: "#000000",
+    },
+    {
+      property: "perLed",
+      group: "lighting",
+      label: "Per-LED (experimental)",
+      description: "Colour the card's LEDs one by one with MSI's per-LED stream (registers 0x2E/0x49). Unverified: the LED order and colour order are guesses. Off: one colour for the whole card.",
+      type: "boolean",
+      default: "false",
     },
   ];
 }
@@ -75,6 +92,18 @@ export function ShutdownModes() { return ["restore", "keep", "off"]; }
 export function HardwareModes() {
   return HW_MODES.map((m) => ({ id: m.id, name: m.name, colors: m.colors, speed: m.speed, brightness: true }));
 }
+
+// Per-LED stream (docs/research/msi-gpu-perled.md section 1.3): 0x2E = 1 on, 0 off; 0x49 the frame.
+const REG_DIRECT = 0x2E;
+const REG_FRAME = 0x49;
+// Identification reads (read only): firmware info (LED type, module type 2 bytes, firmware
+// version) and chip id. "NV5000" cards take a different protocol: never driven per LED here.
+const REG_FW_INFO = 0xEC;
+const REG_CHIP_ID = 0xED;
+const NV5000_MODULE = 0x5000;
+const NV5000_LED_TYPE = 0x81;
+// MSI always streams 34 records of 4 bytes; laid out as a 34 x 1 strip until the mapping is known.
+const PER_LED_SLOTS = 34;
 
 // Registers (MSIGPUController.h).
 const REG_BRIGHTNESS = 0x36;
@@ -165,6 +194,11 @@ let framesSinceSend = 0;
 let failureLogged = false;
 // The hardware mode the card runs (null: Direct, the canvas).
 let hwMode = null;
+// Per-LED stream on (0x2E <- 1 sent), the last frame sent, and the identification result
+// (null: not read yet; true: the card takes the v1 stream; false: refused).
+let perLedOn = false;
+let lastFrame = null;
+let perLedOk = null;
 
 // The colour is sent again after this many unchanged frames (about 2 s at 30 fps), so a register
 // the card dropped, or another program changed, does not stay wrong until the colour changes.
@@ -209,17 +243,141 @@ function restore(reg) {
   }
 }
 
+// RGBController_MSIGPU::DeviceUpdateMode() for "Direct": brightness, then the mode.
+function enterDirect() {
+  write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
+  write(REG_MODE, MODE_STATIC);
+  lastColor = null;
+}
+
 export function Initialize() {
   const gpu = GPUS.find((g) => matches(bus, g));
   if (gpu) {
     device.setName(gpu.Name);
   }
   saved = readStartupState();
-  // RGBController_MSIGPU::DeviceUpdateMode() for "Direct": brightness, then the mode.
-  write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
-  write(REG_MODE, MODE_STATIC);
   lastColor = null;
   hwMode = null;
+  perLedOn = false;
+  perLedOk = null;
+  if (perLedWanted() && startPerLed()) {
+    return;
+  }
+  enterDirect();
+}
+
+// --- Per-LED mode (experimental) ------------------------------------------------------------
+
+function truthy(value) {
+  return value === true || value === 1 || value === "true" || value === "1";
+}
+
+function perLedWanted() {
+  return typeof perLed !== "undefined" && truthy(perLed);
+}
+
+const hex2 = (v) => `0x${v.toString(16).padStart(2, "0")}`;
+
+// The two read-only identification reads; true when the card is not "NV5000" (MSI's v1 stream).
+function identifyPerLed() {
+  if (perLedOk !== null) {
+    return perLedOk;
+  }
+  const [s1, info] = bus.ReadBlockBytes(REG_FW_INFO, 4);
+  const [s2, chip] = bus.ReadBlockBytes(REG_CHIP_ID, 2);
+  if (s1 < 0 || s2 < 0 || info.length < 4 || chip.length < 2) {
+    device.log(`MSI GPU per-LED: identification reads failed (${s1}, ${s2}); staying in one-colour mode`);
+    perLedOk = false;
+    return false;
+  }
+  const ledType = info[0];
+  const moduleType = (info[1] << 8) | info[2];
+  device.log(`MSI GPU per-LED: LED type ${hex2(ledType)}, module type 0x${moduleType.toString(16)}, firmware ${hex2(info[3])}, chip id 0x${((chip[0] << 8) | chip[1]).toString(16)}`);
+  perLedOk = moduleType !== NV5000_MODULE && ledType !== NV5000_LED_TYPE;
+  if (!perLedOk) {
+    device.log("MSI GPU per-LED: an NV5000 controller (another protocol); staying in one-colour mode");
+  }
+  return perLedOk;
+}
+
+function layout(strip) {
+  const n = strip ? PER_LED_SLOTS : 1;
+  const names = [];
+  const positions = [];
+  for (let i = 0; i < n; i++) {
+    names.push(strip ? `LED ${i + 1}` : "GPU");
+    positions.push([i, 0]);
+  }
+  device.setSize([n, 1]);
+  device.setControllableLeds(names, positions);
+}
+
+// Identify, lay out the strip and enter the stream (0x2E <- 1). False: one-colour mode stays.
+function startPerLed() {
+  if (!identifyPerLed()) {
+    return false;
+  }
+  layout(true);
+  // Left on Shutdown() even if this write failed: the card may have taken it.
+  perLedOn = true;
+  lastFrame = null;
+  if (!write(REG_DIRECT, 0x01)) {
+    device.log("MSI GPU per-LED: entering the stream (0x2E <- 1) failed");
+  }
+  return true;
+}
+
+// 0x2E <- 0: the card goes back to its own effect. Nothing else is written here.
+function leavePerLed() {
+  if (!perLedOn) {
+    return;
+  }
+  write(REG_DIRECT, 0x00);
+  perLedOn = false;
+  lastFrame = null;
+}
+
+// One 0x49 frame: 34 records of [B, G, R, 0] (MSI reverses the colour bytes; R, G, B input is the
+// likely reading, unverified), sampled along the strip.
+function perLedFrame() {
+  const frame = [REG_FRAME];
+  for (let i = 0; i < PER_LED_SLOTS; i++) {
+    const [r, g, b] = device.color(i, 0);
+    frame.push(b & 0xFF, g & 0xFF, r & 0xFF, 0x00);
+  }
+  return frame;
+}
+
+function renderPerLed() {
+  const frame = perLedFrame();
+  const same = lastFrame && lastFrame.every((v, i) => v === frame[i]);
+  if (same && ++framesSinceSend < RESEND_FRAMES) {
+    return;
+  }
+  framesSinceSend = 0;
+  let status = bus.WriteBlockWithoutRegister(frame.length, frame);
+  if (status < 0) {
+    status = bus.WriteBlockWithoutRegister(frame.length, frame);
+  }
+  if (status < 0 && !failureLogged) {
+    failureLogged = true;
+    device.log(`MSI GPU per-LED: frame write failed with ${status} (further failures are not logged)`);
+  }
+  lastFrame = status >= 0 ? frame : null;
+}
+
+// The parameter changed while running: switch modes now (in a hardware mode, on the way back).
+export function onperLedChanged() {
+  if (hwMode !== null) {
+    return;
+  }
+  if (perLedWanted() && !perLedOn) {
+    startPerLed();
+  } else if (!perLedWanted() && perLedOn) {
+    leavePerLed();
+    layout(false);
+    enterDirect();
+  }
 }
 
 // RGBController_MSIGPU::DeviceUpdateLEDs(): register 0x26 cleared, then SetRGB1. True when every
@@ -248,16 +406,18 @@ const percent = (v, fallback) => (Number.isFinite(Number(v)) ? Math.min(100, Mat
 //   request = { id, colors: [[r, g, b], ...], speed: 0-100, brightness: 0-100 }
 export function SetHardwareMode(request) {
   if (!request) {
-    write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
-    write(REG_MODE, MODE_STATIC);
-    lastColor = null;
     hwMode = null;
+    if (perLedWanted() && startPerLed()) {
+      return true;
+    }
+    enterDirect();
     return true;
   }
   const mode = HW_MODES.find((m) => m.id === request.id);
   if (!mode) {
     throw new Error(`MSI GPU: no hardware mode "${request.id}"`);
   }
+  leavePerLed();
   const colors = Array.isArray(request.colors) ? request.colors : [];
   const color = (i) => (Array.isArray(colors[i]) ? colors[i] : [255, 255, 255]);
   // modes[].brightness 0-5 times MSI_GPU_BRIGHTNESS_MULTI; speed index MIN / MID / MAX.
@@ -283,6 +443,10 @@ export function SetHardwareMode(request) {
 export function Render() {
   // The host stops calling Render() in a hardware mode; nothing to send then anyway.
   if (hwMode !== null) {
+    return;
+  }
+  if (perLedOn) {
+    renderPerLed();
     return;
   }
   const [r, g, b] = device.color(0, 0);
@@ -322,6 +486,8 @@ export function SaveToDevice(request) {
   if (!request || request.action !== "save") {
     return result;
   }
+  const resumePerLed = perLedOn;
+  leavePerLed();
   write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
   if (plan.speed) {
     write(REG_SPEED, SPEED_MID);
@@ -348,6 +514,9 @@ export function SaveToDevice(request) {
   write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
   write(REG_MODE, MODE_STATIC);
   lastColor = null;
+  if (resumePerLed) {
+    startPerLed();
+  }
   // (A hardware mode the card ran is set again by the host after the save.)
   hwMode = null;
   return result;
@@ -373,6 +542,8 @@ function hex(r, g, b) {
 //     in a hardware mode, that mode stays (it is not stored either).
 //   "off": static black (not stored).
 export function Shutdown(SystemSuspending, mode) {
+  // Per-LED mode: leave the stream (0x2E <- 0) before anything else.
+  leavePerLed();
   if (mode === "keep" && hwMode !== null) {
     return;
   }

@@ -8,3 +8,6 @@
 embedded-library
 # lightloom-renderer finds libcef.so through its $ORIGIN RUNPATH, inside /usr/lib/lightloom.
 custom-library-search-path
+# The CEF minimal distribution ships libcef.so, SwiftShader and the Vulkan loader with their
+# symbols (Lightloom's own binaries are stripped and would still be flagged).
+unstripped-binary-or-object

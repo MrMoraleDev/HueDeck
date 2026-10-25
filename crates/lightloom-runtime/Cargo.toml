@@ -21,6 +21,7 @@ lightloom-hal-windows = { path = "../lightloom-hal-windows" }
 # hidraw backend and udev hotplug (its pure parts build everywhere).
 lightloom-hal-linux = { path = "../lightloom-hal-linux" }
 lightloom-nvapi = { path = "../lightloom-nvapi" }
+lightloom-protocol = { path = "../lightloom-protocol" }
 lightloom-plugin-host = { path = "../lightloom-plugin-host" }
 lightloom-engine = { path = "../lightloom-engine" }
 lightloom-effects = { path = "../lightloom-effects" }

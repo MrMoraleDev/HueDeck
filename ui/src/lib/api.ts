@@ -5,6 +5,7 @@
 import type {
   EffectTimer,
   LibraryComponent,
+  PawnIoView,
   Placement,
   Playlist,
   SaveResult,
@@ -106,6 +107,9 @@ export const api = {
   ),
   exportState: () => request<unknown>("GET", "/v1/export"),
   importState: (state: unknown) => request("POST", "/v1/import", state),
+  pawnio: () => request<PawnIoView>("GET", "/v1/pawnio"),
+  pawnioInstall: () => request<PawnIoView>("POST", "/v1/pawnio/install"),
+  pawnioRemove: () => request<PawnIoView>("POST", "/v1/pawnio/remove"),
   rescan: () => request("POST", "/v1/rescan"),
   /** What "Save to devices" would store (nothing is written); every device when `devices` is empty. */
   savePreview: (devices: Record<string, { effect: string | null }> = {}) =>

@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
+  import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { daemon } from "../lib/store.svelte";
   import type { Snapshot } from "../lib/types";
@@ -38,6 +39,20 @@
     // lightloomd serves the page (with its token) on the new port; the old one closes in a few seconds.
     setTimeout(() => location.assign(r.url), 300);
   }
+
+  // PawnIO / RAM lighting: read the facts again whenever this page opens.
+  onMount(() => {
+    void daemon.run(() => api.pawnio());
+  });
+  const pawnio = $derived(snapshot.pawnio);
+  const busy = $derived(pawnio.job?.running ?? false);
+  const serviceNames: Record<string, string> = {
+    notInstalled: "not installed",
+    stopped: "installed, stopped",
+    pending: "starting or stopping",
+    running: "running",
+    unknown: "unknown",
+  };
 
   async function exportState() {
     const state = await daemon.run(() => api.exportState());
@@ -125,6 +140,47 @@
       does so while SignalRGB, OpenRGB or a vendor lighting service is running. Turn it off to leave these devices
       alone.
     </p>
+  </section>
+
+  <section class="panel">
+    <h2>PawnIO / RAM lighting</h2>
+    <p class="muted">{pawnio.status}</p>
+    <dl>
+      <dt>PawnIO driver</dt>
+      <dd>
+        {pawnio.installed ? `installed${pawnio.version ? ` (${pawnio.version})` : ""}` : "not installed"}{pawnio.installed &&
+        !pawnio.versionOk
+          ? " · needs 2.2.0 or later"
+          : ""}{pawnio.edition ? ` · ${pawnio.edition} edition` : ""}
+      </dd>
+      <dt>Lightloom I/O service</dt>
+      <dd>
+        {serviceNames[pawnio.service] ?? pawnio.service}{pawnio.brokerHealthy
+          ? ` · in use, ${pawnio.ramBuses} RAM bus${pawnio.ramBuses === 1 ? "" : "es"}`
+          : ""}
+      </dd>
+    </dl>
+    {#if pawnio.supported}
+      <div class="row">
+        <button disabled={busy} onclick={() => daemon.run(() => api.pawnioInstall())}
+          >{pawnio.service === "notInstalled" ? "Install" : "Repair / update"}</button
+        >
+        <button
+          class="danger"
+          disabled={busy || pawnio.service === "notInstalled"}
+          onclick={() => daemon.run(() => api.pawnioRemove())}>Remove</button
+        >
+      </div>
+      <p class="muted">
+        Each button asks Windows for permission once (UAC prompt); a window shows each step. Install downloads the
+        official PawnIO 2.2.0 installer from its GitHub release (checked against a pinned SHA-256 and its signature)
+        when PawnIO is missing or too old, and sets up the Lightloom I/O service. Remove takes the service away and
+        leaves PawnIO installed, since other programs may use it.
+      </p>
+    {/if}
+    {#if pawnio.job}
+      <p class:message={pawnio.job.ok === true} class:failed={pawnio.job.ok === false}>{pawnio.job.message}</p>
+    {/if}
   </section>
 
   <section class="panel">
@@ -277,6 +333,21 @@
   }
   .message {
     color: var(--good);
+  }
+  .failed {
+    color: var(--bad);
+  }
+  dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    margin: 0 0 12px;
+  }
+  dt {
+    color: var(--muted);
+  }
+  dd {
+    margin: 0;
   }
   .bad {
     color: var(--bad);

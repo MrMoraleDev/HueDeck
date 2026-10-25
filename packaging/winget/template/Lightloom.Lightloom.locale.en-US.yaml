@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Template: packaging/winget/render.ps1 fills ${...} and writes manifests/h/Lightloom/Lightloom/<version>/.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: Lightloom.Lightloom
+PackageVersion: ${VERSION}
+PackageLocale: en-US
+Publisher: Lightloom contributors
+PublisherUrl: https://github.com/MrMoraleDev/Lightloom
+PublisherSupportUrl: https://github.com/MrMoraleDev/Lightloom/issues
+PackageName: Lightloom
+PackageUrl: https://github.com/MrMoraleDev/Lightloom
+License: GPL-3.0-or-later
+LicenseUrl: https://github.com/MrMoraleDev/Lightloom/blob/main/LICENSE
+ShortDescription: Open source RGB lighting manager. No account, no telemetry, no ads.
+Description: |-
+  Lightloom drives the RGB lighting of keyboards, mice, fans, graphics cards and RAM from one
+  dashboard, with SignalRGB-format plugins and effects. It installs for the current user without
+  administrator rights. RAM and motherboard lighting needs the PawnIO driver: a silent install
+  (winget) does not set it up; use Settings > PawnIO / RAM lighting > Install in the dashboard
+  (one Windows permission prompt).
+Moniker: lightloom
+Tags:
+- rgb
+- lighting
+- led
+- signalrgb
+- open-source
+ReleaseNotesUrl: https://github.com/MrMoraleDev/Lightloom/releases/tag/v${VERSION}
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -330,8 +330,9 @@ Lightloom implements the surface above in `crates/lightloom-plugin-host` (`js/ho
   buses are used only while the broker answers and reports itself healthy (protocol 3,
   official PawnIO 2.2.0 or later, `SmbusPIIX4` loaded); otherwise the run says what is
   missing and drives the other devices. Installing PawnIO and registering the broker are
-  the user's steps (an option of the Lightloom installer and an install / remove button in
-  Settings are planned).
+  the user's choice: the installer's RAM lighting option or Settings → PawnIO / RAM
+  lighting in the dashboard, both through `lightloom-setup` behind one UAC prompt
+  (packaging/README.md).
 - **Batched writes (`SmbusBatchWrites()`, Lightloom extension, optional).** A plugin whose
   `SmbusBatchWrites()` returns `true` (manifest `smbus.batchWrites`) gets its writes inside
   a `TransactionLock` queued after every policy check (a refused write still answers its

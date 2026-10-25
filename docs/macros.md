@@ -13,7 +13,7 @@ Macros page of the dashboard.
 ## Where scripts live
 
 - `<config>/macroscripts/Actions/*.js` and `<config>/macroscripts/Inputs/*.js`
-  (`%LOCALAPPDATA%\Lightloom\config\macroscripts` on Windows by default; the folders are
+  (`%APPDATA%\Lightloom\macroscripts` on Windows by default; the folders are
   created at start). The page shows the exact paths.
 - SignalRGB's bundled `Macroscripts` folder, while **Use the SignalRGB library** is on
   (Lightloom runs those files in place; it ships none of them).

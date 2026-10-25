@@ -10,8 +10,11 @@
   /** The playlist being edited (`id` empty: a new one). */
   let draft = $state<Playlist | null>(null);
   let interval = $state(300);
+  // Follows the daemon's interval, except while the field has the focus (typing).
+  let typing = false;
   $effect(() => {
-    interval = snapshot.lighting.timer.interval;
+    const v = snapshot.lighting.timer.interval;
+    if (!typing) interval = v;
   });
 
   const playing = $derived(snapshot.lighting.playlist ?? null);
@@ -83,6 +86,8 @@
       min="1"
       max="86400"
       bind:value={interval}
+      onfocus={() => (typing = true)}
+      onblur={() => (typing = false)}
       onchange={() => daemon.run(() => api.setTimer({ interval: Math.max(1, Math.round(interval)) }))}
     />
     <span class="muted">s</span>
@@ -124,7 +129,7 @@
             title="Preset loaded when the entry starts"
           >
             <option value="">current values</option>
-            {#each presetsOf(e.effect) as name}<option value={name}>{name}</option>{/each}
+            {#each presetsOf(e.effect) as name (name)}<option value={name}>{name}</option>{/each}
           </select>
           <input
             class="secs"

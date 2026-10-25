@@ -38,6 +38,10 @@ axum = { workspace = true }
 arc-swap = { workspace = true }
 uuid = { workspace = true }
 toml = { workspace = true }
+# Settings → Updates: the GitHub release check and the verified download.
+ureq = { workspace = true }
+semver = { workspace = true }
+sha2 = { workspace = true }
 lightloom-api = { path = "../lightloom-api" }
 lightloom-effects = { path = "../lightloom-effects" }
 lightloom-engine = { path = "../lightloom-engine" }

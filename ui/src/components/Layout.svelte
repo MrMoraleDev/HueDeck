@@ -21,8 +21,11 @@
   let snap = $state(true);
   let newName = $state("");
   let layoutBrightness = $state(100);
+  // Follows the daemon's value, except while the slider is held.
+  let sliding = false;
   $effect(() => {
-    layoutBrightness = snapshot.lighting.layoutBrightness;
+    const b = snapshot.lighting.layoutBrightness;
+    if (!sliding) layoutBrightness = b;
   });
 
   const GRID = 4;
@@ -93,7 +96,7 @@
 <div class="bar panel row">
   <span class="muted">Layout</span>
   <select value={snapshot.lighting.layout} onchange={(e) => daemon.run(() => api.applyLayout((e.target as HTMLSelectElement).value))}>
-    {#each snapshot.layouts as l}
+    {#each snapshot.layouts as l (l)}
       <option value={l}>{l}</option>
     {/each}
   </select>
@@ -112,8 +115,19 @@
   }}>Delete this layout</button>
   <label class="row">
     <span class="muted">Layout brightness</span>
-    <input type="range" min="0" max="100" bind:value={layoutBrightness} onchange={() => daemon.run(() => api.setLayoutBrightness(layoutBrightness))} />
-    <span>{layoutBrightness}</span>
+    <input
+      type="range"
+      min="0"
+      max="100"
+      bind:value={layoutBrightness}
+      oninput={() => (sliding = true)}
+      onblur={() => (sliding = false)}
+      onchange={() => {
+        sliding = false;
+        void daemon.run(() => api.setLayoutBrightness(layoutBrightness));
+      }}
+    />
+    <span class="num">{layoutBrightness}</span>
   </label>
   <label class="row"><input type="checkbox" bind:checked={snap} /> <span class="muted">Snap to {GRID} px</span></label>
 </div>
@@ -193,6 +207,11 @@
 <style>
   .bar {
     margin-bottom: 12px;
+  }
+  .num {
+    width: 2.5em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
   .editor {
     display: flex;

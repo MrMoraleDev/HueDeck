@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "test": "node --conditions=browser --test src/lib/reconcile.test.ts src/lib/report.test.ts src/lib/store-reactivity.test.ts"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",

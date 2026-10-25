@@ -55,9 +55,11 @@
   const s = $derived(daemon.snapshot);
   const batteries = $derived(s ? s.devices.filter((d) => d.connected && d.battery) : []);
   let brightness = $state(100);
+  // Follows the daemon's brightness, except while the slider is held (pointer or keys).
   let dragging = false;
   $effect(() => {
-    if (s && !dragging) brightness = s.lighting.brightness;
+    const b = s?.lighting.brightness;
+    if (b !== undefined && !dragging) brightness = b;
   });
 </script>
 
@@ -85,6 +87,8 @@
           max="100"
           bind:value={brightness}
           onpointerdown={() => (dragging = true)}
+          oninput={() => (dragging = true)}
+          onblur={() => (dragging = false)}
           onchange={() => {
             dragging = false;
             void daemon.run(() => api.setLighting({ brightness }));
@@ -115,7 +119,7 @@
 </header>
 
 <nav>
-  {#each tabs as t}
+  {#each tabs as t (t.id)}
     <button class:active={tab === t.id} onclick={() => select(t.id)}>{t.label}</button>
   {/each}
 </nav>
@@ -127,7 +131,8 @@
     <div class="banner bad">{daemon.error}</div>
   {/if}
   {#if daemon.toast}
-    <div class="banner">
+    <!-- Floats over the page: showing and hiding it does not move the content. -->
+    <div class="banner toast" role="status">
       <strong>{daemon.toast.title}</strong>
       {daemon.toast.message}
     </div>
@@ -181,6 +186,10 @@
   .num {
     width: 2.5em;
     text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .now .badge {
+    font-variant-numeric: tabular-nums;
   }
   .batteries {
     gap: 12px;
@@ -221,6 +230,16 @@
     padding: 8px 12px;
     margin-bottom: 10px;
     border: 1px solid;
+  }
+  .toast {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 20;
+    max-width: 420px;
+    margin: 0;
+    background: var(--panel);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   }
   .banner.warn {
     border-color: var(--warn);

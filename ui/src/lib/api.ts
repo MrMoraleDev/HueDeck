@@ -15,7 +15,8 @@ import type {
   Snapshot,
 } from "./types";
 
-function token(): string {
+/** The API token (exported only so device reports can make sure it is never in them). */
+export function token(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="lightloom-token"]')?.content ?? "";
   if (meta && !meta.includes("%")) return meta;
   // `npm run dev`: the page does not come from lightloomd; paste the api-token file into localStorage.

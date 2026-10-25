@@ -12,6 +12,33 @@
   let canvas: HTMLCanvasElement;
   let ws: WebSocket | null = null;
   let closed = false;
+  // Frames are drawn once per animation frame (the latest wins), into one reused
+  // ImageData: no 256 KB allocation per frame for the garbage collector to pause on.
+  let latest: Uint8Array | null = null;
+  let raf = 0;
+  let image: ImageData | null = null;
+  let ctx: CanvasRenderingContext2D | null = null;
+
+  function draw() {
+    raf = 0;
+    const buf = latest;
+    latest = null;
+    if (!buf || !canvas) return;
+    const w = buf[0] | (buf[1] << 8);
+    const h = buf[2] | (buf[3] << 8);
+    if (!image || image.width !== w || image.height !== h) image = new ImageData(w, h);
+    const px = image.data;
+    for (let i = 0, o = 4; i < w * h * 4; i += 4, o += 4) {
+      px[i] = buf[o + 2];
+      px[i + 1] = buf[o + 1];
+      px[i + 2] = buf[o];
+      px[i + 3] = 255;
+    }
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    ctx ??= canvas.getContext("2d");
+    ctx?.putImageData(image, 0, 0);
+  }
 
   function open() {
     ws = new WebSocket(wsUrl("/v1/preview?fps=20&step=1"));
@@ -22,16 +49,8 @@
       const w = buf[0] | (buf[1] << 8);
       const h = buf[2] | (buf[3] << 8);
       if (buf.length < 4 + w * h * 4) return;
-      const img = new ImageData(w, h);
-      for (let i = 0, o = 4; i < w * h * 4; i += 4, o += 4) {
-        img.data[i] = buf[o + 2];
-        img.data[i + 1] = buf[o + 1];
-        img.data[i + 2] = buf[o];
-        img.data[i + 3] = 255;
-      }
-      if (canvas.width !== w) canvas.width = w;
-      if (canvas.height !== h) canvas.height = h;
-      canvas.getContext("2d")?.putImageData(img, 0, 0);
+      latest = buf;
+      if (!raf) raf = requestAnimationFrame(draw);
     };
     ws.onclose = () => {
       if (!closed) setTimeout(open, 2000);
@@ -41,6 +60,7 @@
   onMount(open);
   onDestroy(() => {
     closed = true;
+    if (raf) cancelAnimationFrame(raf);
     ws?.close();
   });
 

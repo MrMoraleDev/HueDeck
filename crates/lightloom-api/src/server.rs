@@ -53,6 +53,28 @@ pub trait Backend: Send + Sync + 'static {
     fn sensors(&self) -> crate::model::SensorsView {
         crate::model::SensorsView::default()
     }
+    /// The update check (`/v1/update`); `None`: not supported (503).
+    fn updates(&self) -> Option<Arc<dyn Updates>> {
+        None
+    }
+}
+
+/// The update check of Settings → Updates (docs/privacy.md). Calls may block
+/// on the network (with a timeout), so the router makes them off the async runtime.
+pub trait Updates: Send + Sync + 'static {
+    /// The state as it is (no network).
+    fn view(&self) -> crate::model::UpdateView;
+    /// Ask GitHub for the latest release now and answer with the result.
+    fn check(&self) -> Result<crate::model::UpdateView, ApiError>;
+    /// Change the weekly check and the beta channel.
+    fn set_options(
+        &self,
+        check_weekly: Option<bool>,
+        beta: Option<bool>,
+    ) -> Result<crate::model::UpdateView, ApiError>;
+    /// Start downloading the release found by the last check (verified
+    /// against its SHA256SUMS), then open its installer; answers at once.
+    fn install(&self) -> Result<crate::model::UpdateView, ApiError>;
 }
 
 /// Shared by every router.
@@ -231,6 +253,9 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/pawnio/remove", post(pawnio_remove))
         .route("/v1/rescan", post(rescan))
         .route("/v1/sensors", get(sensors))
+        .route("/v1/update", get(update).patch(patch_update))
+        .route("/v1/update/check", post(check_update))
+        .route("/v1/update/install", post(install_update))
         .route("/v1/network", get(network))
         .route("/v1/network/{plugin}/add", post(network_add))
         .route(
@@ -256,7 +281,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
 
 async fn health(State(ctx): State<ApiContext>) -> Response {
     let s = ctx.backend.snapshot();
-    Json(json!({ "status": "ok", "version": s.version, "state": s.state })).into_response()
+    Json(json!({ "status": "ok", "version": s.version, "state": s.state, "os": s.os })).into_response()
 }
 
 async fn state(State(ctx): State<ApiContext>) -> Response {
@@ -750,6 +775,47 @@ async fn rescan(State(ctx): State<ApiContext>) -> Response {
 
 async fn shutdown(State(ctx): State<ApiContext>) -> Response {
     reply(ctx.call(Request::Shutdown).await)
+}
+
+/// Run `f` on the update checker off the async runtime (it may wait on the network).
+async fn with_updates<F>(ctx: &ApiContext, f: F) -> Response
+where
+    F: FnOnce(&dyn Updates) -> Result<crate::model::UpdateView, ApiError> + Send + 'static,
+{
+    let Some(updates) = ctx.backend.updates() else {
+        return error_response(&ApiError::unavailable("this daemon does not check for updates"));
+    };
+    match tokio::task::spawn_blocking(move || f(&*updates)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => error_response(&e),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
+}
+
+async fn update(State(ctx): State<ApiContext>) -> Response {
+    with_updates(&ctx, |u| Ok(u.view())).await
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct UpdatePatch {
+    #[serde(default)]
+    check_weekly: Option<bool>,
+    #[serde(default)]
+    beta: Option<bool>,
+}
+
+async fn patch_update(State(ctx): State<ApiContext>, body: Option<Json<UpdatePatch>>) -> Response {
+    let p = body.map(|Json(p)| p).unwrap_or_default();
+    with_updates(&ctx, move |u| u.set_options(p.check_weekly, p.beta)).await
+}
+
+async fn check_update(State(ctx): State<ApiContext>) -> Response {
+    with_updates(&ctx, |u| u.check()).await
+}
+
+async fn install_update(State(ctx): State<ApiContext>) -> Response {
+    with_updates(&ctx, |u| u.install()).await
 }
 
 #[derive(Deserialize)]

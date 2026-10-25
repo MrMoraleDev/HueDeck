@@ -12,14 +12,11 @@
   let presetName = $state("");
 
   const current = $derived(snapshot.effects.find((e) => e.id === snapshot.lighting.effect) ?? null);
-  const shown = $derived(
-    snapshot.effects.filter(
-      (e) =>
-        !filter ||
-        e.title.toLowerCase().includes(filter.toLowerCase()) ||
-        e.description.toLowerCase().includes(filter.toLowerCase()),
-    ),
-  );
+  const shown = $derived.by(() => {
+    const f = filter.toLowerCase();
+    if (!f) return snapshot.effects;
+    return snapshot.effects.filter((e) => e.title.toLowerCase().includes(f) || e.description.toLowerCase().includes(f));
+  });
 
   const SOURCES: Record<EffectView["source"], string> = {
     lightloom: "Lightloom",
@@ -82,7 +79,7 @@
         {/each}
         <h3>Presets</h3>
         <div class="row">
-          {#each current.presets as p}
+          {#each current.presets as p (p)}
             <span class="preset">
               <button onclick={() => daemon.run(() => api.applyPreset(current.id, p))}>{p}</button>
               <button class="x" title="Delete" onclick={() => daemon.run(() => api.deletePreset(current.id, p))}>×</button>

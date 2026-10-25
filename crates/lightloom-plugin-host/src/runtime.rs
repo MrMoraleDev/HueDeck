@@ -1327,7 +1327,7 @@ mod tests {
             r.resolve_name(base, "@SignalRGB/base64").unwrap(),
             "lightloom:prelude/base64.js"
         );
-        // Sockets and serial: the device host's implementation when it has one, else the facade.
+        // Sockets, serial and LCD: the device host's implementation when it has one, else the facade.
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/udp").unwrap(),
             "lightloom:native/udp.js"
@@ -1338,7 +1338,7 @@ mod tests {
         );
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/lcd").unwrap(),
-            "lightloom:prelude/modules/lcd.js"
+            "lightloom:native/lcd.js"
         );
         assert_eq!(
             r.resolve_name("lightloom:prelude/modules/udp.js", "../HostApiMissing.js")
@@ -1388,6 +1388,10 @@ mod tests {
             host_shim_module("permissions", false),
             "lightloom:native/permissions.js"
         );
-        assert_eq!(host_shim_module("lcd", false), "lightloom:prelude/modules/lcd.js");
+        assert_eq!(host_shim_module("lcd", false), "lightloom:native/lcd.js");
+        assert_eq!(
+            host_shim_module("DeviceDiscovery", false),
+            "lightloom:prelude/modules/DeviceDiscovery.js"
+        );
     }
 }

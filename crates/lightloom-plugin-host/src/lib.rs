@@ -59,6 +59,7 @@ pub mod lamparray;
 pub mod lcd;
 pub mod loader;
 pub mod manager;
+pub mod manifest;
 pub mod meta;
 pub mod net;
 pub mod plugin_ui;

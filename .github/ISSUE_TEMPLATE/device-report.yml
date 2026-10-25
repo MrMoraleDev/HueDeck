@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for testing! The fastest way to fill this in is the **Report** button next to the
+        Thanks for testing! The fastest way to fill this in is the **Works** or **Report a problem** button next to the
         device in the dashboard's Devices tab: it fills in everything below for you.
   - type: dropdown
     id: result

@@ -25,6 +25,7 @@ pub mod scheme;
 pub mod screen;
 pub mod sensors;
 pub mod store;
+pub mod update;
 
 use lightloom_api::ApiContext;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -116,6 +117,10 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
     };
     let engine = engine::start_with(engine_opts, url_scheme)?;
     let shared = engine.shared();
+    // The weekly update check acts only when the user turned it on (off by default).
+    if !opts.ephemeral {
+        shared.updater().start_schedule();
+    }
     let data_dir = opts.paths.data.clone();
     let native = Arc::new(
         lightloom_api::NativeListener::new(lightloom_api::listener::DEFAULT_GRACE)

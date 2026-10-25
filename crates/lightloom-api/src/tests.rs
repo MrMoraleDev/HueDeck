@@ -883,3 +883,101 @@ fn preview_frames_are_downscaled_bgra_with_a_size_header() {
     assert_eq!(p.len(), 4 + 160 * 100 * 4);
     assert_eq!(&p[4..8], &[30, 20, 10, 255]);
 }
+
+/// An update checker that records what the router asked.
+#[derive(Default)]
+struct FakeUpdates {
+    calls: Mutex<Vec<String>>,
+}
+
+impl crate::Updates for FakeUpdates {
+    fn view(&self) -> crate::model::UpdateView {
+        crate::model::UpdateView {
+            current_version: "0.0.1".into(),
+            ..Default::default()
+        }
+    }
+    fn check(&self) -> Result<crate::model::UpdateView, ApiError> {
+        self.calls.lock().unwrap().push("check".into());
+        Ok(self.view())
+    }
+    fn set_options(
+        &self,
+        check_weekly: Option<bool>,
+        beta: Option<bool>,
+    ) -> Result<crate::model::UpdateView, ApiError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("options {check_weekly:?} {beta:?}"));
+        Ok(self.view())
+    }
+    fn install(&self) -> Result<crate::model::UpdateView, ApiError> {
+        self.calls.lock().unwrap().push("install".into());
+        Err(ApiError::conflict("no newer release"))
+    }
+}
+
+/// [`Scripted`] with an update checker.
+struct WithUpdates(Arc<Scripted>, Arc<FakeUpdates>);
+
+impl Backend for WithUpdates {
+    fn snapshot(&self) -> Arc<Snapshot> {
+        self.0.snapshot()
+    }
+    fn call(&self, request: Request) -> oneshot::Receiver<Result<Value, ApiError>> {
+        self.0.call(request)
+    }
+    fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.0.subscribe()
+    }
+    fn frames(&self) -> Arc<FrameStore> {
+        self.0.frames()
+    }
+    fn updates(&self) -> Option<Arc<dyn crate::Updates>> {
+        Some(self.1.clone())
+    }
+}
+
+#[tokio::test]
+async fn update_routes_reach_the_checker() {
+    // A backend without one answers 503.
+    let b = backend();
+    let r = native_router(ctx(&b, false), NATIVE_PORT);
+    let (s, v) = send(&r, "GET", "/v1/update", HOST, false, None).await;
+    assert_eq!(
+        (s, v["error"]["code"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("unavailable"))
+    );
+
+    let fake = Arc::new(FakeUpdates::default());
+    let mut c = ctx(&b, false);
+    c.backend = Arc::new(WithUpdates(b.clone(), fake.clone()));
+    let r = native_router(c, NATIVE_PORT);
+    let (s, v) = send(&r, "GET", "/v1/update", HOST, false, None).await;
+    assert_eq!((s, v["currentVersion"].as_str()), (StatusCode::OK, Some("0.0.1")));
+    // Checking, the options and the download change state: the token is needed.
+    let (s, _) = send(&r, "POST", "/v1/update/check", HOST, false, None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, _) = send(&r, "POST", "/v1/update/check", HOST, true, None).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = send(
+        &r,
+        "PATCH",
+        "/v1/update",
+        HOST,
+        true,
+        Some(json!({"checkWeekly": true})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = send(&r, "POST", "/v1/update/install", HOST, true, None).await;
+    assert_eq!(
+        (s, v["error"]["code"].as_str()),
+        (StatusCode::CONFLICT, Some("conflict"))
+    );
+    assert_eq!(
+        *fake.calls.lock().unwrap(),
+        ["check", "options Some(true) None", "install"]
+    );
+}

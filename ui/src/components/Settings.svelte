@@ -4,6 +4,7 @@
   import { api } from "../lib/api";
   import { daemon } from "../lib/store.svelte";
   import type { SignalRgbImport, Snapshot } from "../lib/types";
+  import UpdateCheck from "./UpdateCheck.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let message = $state<string | null>(null);
@@ -404,6 +405,8 @@
       <code>[api] port</code> in config.toml. The SignalRGB-compatible ports 16038 and 16034 do not change.
     </p>
   </section>
+
+  <UpdateCheck />
 
   <section class="panel">
     <h2>Daemon</h2>

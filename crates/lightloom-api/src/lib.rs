@@ -21,7 +21,7 @@ pub mod server;
 
 pub use listener::NativeListener;
 pub use model::{ApiError, Event, Request, Snapshot};
-pub use server::{canvas_event_router, compat_router, native_router, ApiContext, Backend};
+pub use server::{canvas_event_router, compat_router, native_router, ApiContext, Backend, Updates};
 
 /// Native REST + WS (dashboard, CLI): the default port, the same on every OS.
 /// The dashboard setting (Settings → Port) and `config.toml` `[api] port`
@@ -173,6 +173,10 @@ pub const NATIVE_ROUTES: &[Route] = &[
     r("POST", "/pawnio/remove", true),
     r("POST", "/rescan", true),
     r("GET", "/sensors", false),
+    r("GET", "/update", false),
+    r("PATCH", "/update", true),
+    r("POST", "/update/check", true),
+    r("POST", "/update/install", true),
     r("GET", "/network", false),
     r("POST", "/network/{plugin}/add", true),
     r("POST", "/network/{plugin}/controllers/{id}/{action}", true),

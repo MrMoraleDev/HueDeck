@@ -121,9 +121,24 @@ says so; the dashboard offers such a device only "its own lighting".
 |---|---|---|---|
 | `msi-gpu` | startup registers back (or as last saved) | static, last colour | static black |
 | `msi-mystic-light-7c91`, `msi-mystic-light`, `-common` | startup 0x52 image back (or as last saved) | Static mode, last colour per zone, save byte 0 | Static black, save byte 0 |
-| `razer` | spectrum cycle / hardware mode (recorded DeathAdder V2 Pro: black frame, hardware mode) | last frame, left in custom-frame mode | black frame |
-| `crucial-ballistix` | `shutdownColor` (default black) | through `shutdownColor` | through `shutdownColor` |
-| `nzxt-hue2`, `sony-gamepad`, `steelseries-*`, `razer-hanbo`, `razer-kraken`, `hid-lamparray`, `evision-keyboard` | their usual exit (black, or the device's hardware effect / autonomous mode) | not supported: as restore | not supported: as restore |
+| `razer` | spectrum cycle / hardware mode (recorded DeathAdder V2 Pro: black frame, hardware mode); after a "Save to devices" in the same session, what was saved instead (the stored static colour or spectrum, storage `0x00`) | last frame, left in custom-frame mode | black frame |
+| `nzxt-hue2` | black (the protocol has no read-back of the device's own effect) | last frame again, Direct reports | black frame |
+| `crucial-ballistix` | `shutdownColor` (default black): no controller state can be read back | last frame, one static effect colour per LED | static black |
+| `sony-gamepad` | light bar black, player LEDs off | last frame again, one output report | the same, black |
+| `steelseries-*` (aerox, apex-3, apex-m, apex-old, arctis, arctis-5, qck, rival, rival-3, sensei, siberia) | black; Apex 3 TKL: its rainbow wave | last frame again, the reports of a frame | black, the reports of a frame (Apex 3 TKL too) |
+| `razer-hanbo` | spectrum cycle | last frame again, Direct | black frame, Direct |
+| `razer-kraken` | Kraken 7.1: spectrum cycle; V3: wave | 7.1: custom colour and effect byte "on"; V3: Direct colours | 7.1: effect byte 0 (OpenRGB `SetModeOff()`); V3: black Direct colours |
+| `hid-lamparray` | AutonomousMode on (the device's own lighting) | last frame again; AutonomousMode stays off | black; AutonomousMode stays off |
+| `evision-keyboard` | "end dynamic colours" (`0x13`): its stored lighting | not offered (`ShutdownModes()` is `["restore"]`): as restore | not offered: as restore |
+
+`keep` and `off` send colours with the reports a frame uses (Crucial: its static effect mode) and
+never a save path; suspend (`Shutdown(true, mode)`) keeps each plugin's old exit. The colours stay
+only while the device's firmware holds host colours with no host. For every plugin above that
+offers `keep`, OpenRGB sends no keepalive to the device either, so the colours are expected to stay
+until the device loses power or other software (a game, Windows Dynamic Lighting, the vendor's
+app) takes it over; this is unverified on hardware. The EVision V2 keyboards are the exception:
+OpenRGB refreshes their direct colours every 200 ms, so they fall back to their stored lighting
+when the host stops, and Lightloom offers them only `restore`.
 
 ## Hardware modes
 

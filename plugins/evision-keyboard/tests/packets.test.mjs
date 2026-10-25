@@ -123,15 +123,19 @@ for (const model of MODELS) {
   });
 
   for (const suspending of [false, true]) {
-    test(`${model.file}: Shutdown(${suspending}) hands the keyboard back with "end dynamic colours"`, async () => {
+    test(`${model.file}: Shutdown(${suspending}, every exit mode) hands the keyboard back with "end dynamic colours"`, async () => {
       const clock = fakeClock();
       const { device, plugin, restore } = await setup(model);
       try {
-        plugin.Initialize();
-        plugin.Render();
-        device.written.length = 0;
-        plugin.Shutdown(suspending);
-        assert.deepEqual(written(device), [hex(expected.end)]);
+        // The keyboard cannot hold colours without the host: only "restore" is offered.
+        assert.deepEqual(plugin.ShutdownModes(), ["restore"]);
+        for (const mode of [undefined, "restore", "keep", "off"]) {
+          plugin.Initialize();
+          plugin.Render();
+          device.written.length = 0;
+          plugin.Shutdown(suspending, mode);
+          assert.deepEqual(written(device), [hex(expected.end)], String(mode));
+        }
         assert.equal(hex(expected.end).slice(0, 23), "04 13 00 13 00 00 00 00", "Query(0x13)");
       } finally {
         restore();

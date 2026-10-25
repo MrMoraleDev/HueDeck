@@ -96,12 +96,20 @@ export function Render() {
 
 // OpenRGB has no exit step and no command that gives these mice their own lighting back: the
 // lights are switched off (black, in the static-colour command).
-export function Shutdown(SystemSuspending) {
+// Exit modes (Lightloom extension): "keep" sends the last frame once more with the same reports.
+// OpenRGB sends no keepalive, so the device is expected to hold the colours until it loses power
+// (unverified on hardware); nothing is stored. "off" is black; "restore" (and SignalRGB's call
+// without a mode) is the exit above; suspend stays as it was.
+export function Shutdown(SystemSuspending, mode) {
   if (!enabled) {
     return;
   }
-  updateLeds(LEDS.map(() => [0, 0, 0]));
+  const keep = !SystemSuspending && mode === "keep";
+  updateLeds(LEDS.map((l) => (keep ? device.color(l.cell[0], l.cell[1]) : [0, 0, 0])));
 }
+
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
 
 // DeviceUpdateLEDs: DeviceUpdateZoneLEDs(0), then (1); Direct mode -> SetColor(zone, r, g, b).
 function updateLeds(colours) {

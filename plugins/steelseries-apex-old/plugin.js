@@ -97,12 +97,23 @@ export function Render() {
 
 // OpenRGB has no exit step and no other mode for these keyboards: the zones are switched off
 // (black, in Direct).
-export function Shutdown(SystemSuspending) {
+// Exit modes (Lightloom extension): "keep" sends the last frame once more in Direct. OpenRGB sends
+// no keepalive, so the device is expected to hold the colours until it loses power (unverified on
+// hardware); nothing is stored. "off" is black; "restore" (and SignalRGB's call without a mode) is
+// the exit above; suspend stays as it was.
+export function Shutdown(SystemSuspending, mode) {
   if (!enabled) {
     return;
   }
-  setColorDetailed(LEDS.map(() => [0, 0, 0]));
+  const keep = !SystemSuspending && mode === "keep";
+  setColorDetailed(LEDS.map((l) => {
+    const [r, g, b] = keep ? device.color(l.cell[0], l.cell[1]) : [0, 0, 0];
+    return [r & 0xFF, g & 0xFF, b & 0xFF];
+  }));
 }
+
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
 
 // RGBController_SteelSeriesOldApex::DeviceUpdateLEDs -> SteelSeriesOldApexController::
 // SetColorDetailed: a 32-byte buffer behind report id 0x00 (send_usb_msg, 33 bytes).

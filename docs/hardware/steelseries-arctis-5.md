@@ -33,7 +33,13 @@ long, report `0x04` 39 bytes. Nothing is read back.
 | `06 8a 42 20 05` | commit |
 
 Every frame sends zone 0 then zone 1: 12 reports, about 2 ms each. At the end of a
-session the recorded plugin sent both zones black.
+session the recorded plugin sent both zones black. Lightloom's `Shutdown()` does the same.
+
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more with the same packets, `off` both zones black; `restore` (and
+SignalRGB's call without a mode) and suspend are the black exit. Nothing is stored. The recordings
+show no keepalive, so the headset is expected to hold the colours until it loses power (unverified
+on hardware).
 
 ## Known behaviour
 

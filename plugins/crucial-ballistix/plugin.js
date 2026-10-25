@@ -396,12 +396,31 @@ function hexColor(text) {
   return [(v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF];
 }
 
-// Leave the modules in static mode with the shutdown colour (black when the system suspends),
-// in DeviceUpdateLEDs() order for "Static": the effect colours, then the mode that applies them.
-export function Shutdown(suspending) {
+// Lightloom extension (docs/host-api/save-shutdown.md): the exit modes Shutdown() carries out.
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
+
+// Leave the modules in static mode, in DeviceUpdateLEDs() order for "Static": the effect colours,
+// then the mode that applies them. Which colours:
+//   "restore" (and SignalRGB's call without a mode): the shutdown colour (default black). The
+//     modules' own lighting cannot be given back: OpenRGB reads no state from the controller (its
+//     mode is CRUCIAL_MODE_UNKNOWN until set), the effect colours go in through a write-only
+//     mailbox (0x82E9..0x82F0), and there is no save register, so nothing was read at start to put
+//     back. Their own effect returns at the next power cycle.
+//   "keep": the last frame, one effect colour per LED (volatile: static mode stores nothing).
+//   "off": black.
+//   Suspend: black, whatever the mode.
+export function Shutdown(suspending, mode) {
   const io = fixedOps(bus);
-  const color = suspending ? [0, 0, 0] : hexColor(typeof shutdownColor === "string" ? shutdownColor : "#000000");
-  setAllColorsEffect(io, LEDS.map(() => color));
+  let colors;
+  if (!suspending && mode === "keep") {
+    colors = ledColors().map(([r, g, b]) => [r & 0xFF, g & 0xFF, b & 0xFF]);
+  } else {
+    const color = suspending || mode === "off"
+      ? [0, 0, 0]
+      : hexColor(typeof shutdownColor === "string" ? shutdownColor : "#000000");
+    colors = LEDS.map(() => color);
+  }
+  setAllColorsEffect(io, colors);
   sendEffectMode(io, MODE_STATIC);
   lastColors = null;
 }

@@ -115,12 +115,23 @@ export function Render() {
 // OpenRGB has no exit step and no other mode for the mat: the lights are switched off (black),
 // one 0x0E + 0x0D pair. If 0x0D stores the colours, the mat keeps black after Lightloom exits (the
 // docs say so).
-export function Shutdown(SystemSuspending) {
+// Exit modes (Lightloom extension): "keep" sends the last frame once more as one 0x0E + 0x0D pair,
+// the reports of every frame. OpenRGB sends no keepalive, so the device is expected to hold the
+// colours until it loses power (unverified on hardware); nothing is stored. "off" is black;
+// "restore" (and SignalRGB's call without a mode) is the exit above; suspend stays as it was.
+export function Shutdown(SystemSuspending, mode) {
   if (!enabled) {
     return;
   }
-  setColors(LEDS.map(() => [0, 0, 0]));
+  const keep = !SystemSuspending && mode === "keep";
+  setColors(LEDS.map((l) => {
+    const [r, g, b] = keep ? device.color(l.cell[0], l.cell[1]) : [0, 0, 0];
+    return [r & 0xFF, g & 0xFF, b & 0xFF];
+  }));
 }
+
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
 
 // SteelSeriesQCKMatController::SetColors.
 function setColors(colours) {

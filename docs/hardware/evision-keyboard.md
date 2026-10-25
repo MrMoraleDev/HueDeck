@@ -139,6 +139,12 @@ suspended the keyboard shows its own stored effect (not black). The end request 
 when the capabilities read failed, as OpenRGB's keepalive thread does on exit; it is volatile
 and stores nothing.
 
+Exit modes (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): only
+`restore` (`ShutdownModes()` is `["restore"]`). The keyboard does not hold direct colours without
+the refreshes (see "Keepalive"), and the only colours or lights-off it keeps by itself are its
+stored modes, which Lightloom never writes. So `keep` and `off` send the same end request, and the
+dashboard tells the user this device only goes back to its own lighting.
+
 ### Keepalive
 
 OpenRGB refreshes the direct colours whenever 200 ms pass without an update (a thread checks

@@ -43,6 +43,12 @@ offsets in the buffer, after the report id). Unchanged frames are resent after 1
 **Shutdown.** OpenRGB has no exit step; its other modes (Breathing, Rainbow) are effects, not the
 mouse's own saved lighting: both zones are set black in Direct.
 
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more with the reports of a frame (never the save command `0x59`), `off`
+the same black; `restore` (and SignalRGB's call without a mode) and suspend are the shutdown
+above. Nothing is stored. OpenRGB sends no keepalive, so the device is expected to hold the
+colours until it loses power or other software takes it over (unverified on hardware).
+
 ## Left out
 
 - `Save()` (`00 59 ...`, "Saves to the internal configuration"): never sent.

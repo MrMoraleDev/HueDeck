@@ -128,8 +128,8 @@ LEDs, then the apply report. A channel with no LEDs still gets an empty group 0 
 apply report, as OpenRGB sends for a zone of 0 LEDs. A frame identical to the last one sent is
 skipped until 1 s has passed (OpenRGB itself sends only when colours change).
 
-**Shutdown** (both `Shutdown(false)` and `Shutdown(true)`): the same reports with every LED
-black. OpenRGB has no exit step. The protocol has hardware effects, but no way to read back the
+**Shutdown** (`restore`, SignalRGB's `Shutdown(false)` without a mode, `off`, and suspend
+`Shutdown(true)`): the same reports with every LED black. OpenRGB has no exit step. The protocol has hardware effects, but no way to read back the
 one the device showed before Lightloom started, so there is nothing to restore. OpenRGB also marks
 this family `@save :robot:` (S3), which in OpenRGB's supported-devices legend means saving
 happens automatically (the legend is not part of the checkout; not verified on hardware), so a
@@ -138,8 +138,16 @@ reports every frame already uses.
 
 "Save to devices" (Lightloom extension) is not offered: OpenRGB's controller has no save command
 for this family, and its "automatic" save marking is unverified, so there is no documented
-persistent store to write deliberately (the Kraken X3 has none either). Exit modes: only the
-black exit above ("its own lighting" in the dashboard); "keep" and "off" fall back to it.
+persistent store to write deliberately (the Kraken X3 has none either).
+
+Exit mode `keep` (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)) sends
+the last frame once more with the same colour and apply reports and stops. The controller holds
+Direct colours with no host: OpenRGB sends a frame only when the colours change and has no
+keepalive for this family, so the colours stay until the device loses power (or NZXT CAM takes
+it over); unverified on hardware. If the "automatic" save above is real, the device would remember
+the last frame as it would any frame; Lightloom sends nothing extra for it. `restore` stays black,
+since there is no read-back of the device's own effect: to keep the lights as they are after
+Lightloom closes, the user picks "Keep".
 
 ## Lightloom mapping
 

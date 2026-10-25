@@ -86,6 +86,12 @@ Lightloom skips a frame whose colours did not change, resending them after 1 s.
 **Shutdown.** OpenRGB has no exit step and no "back to onboard lighting" command for these mice
 (its other mode, Pulsate, is an effect): every LED is set black in Direct.
 
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more with the reports of a frame (never the save command `0x09`), `off`
+the same black; `restore` (and SignalRGB's call without a mode) and suspend are the shutdown
+above. Nothing is stored. OpenRGB sends no keepalive, so the device is expected to hold the
+colours until it loses power or other software takes it over (unverified on hardware).
+
 ## Left out
 
 - `SaveMode()` (`00 09 ...`, "Saves to the internal configuration"): a write to the mouse's

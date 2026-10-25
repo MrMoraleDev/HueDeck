@@ -15,7 +15,8 @@
 //   * Every frame, for every OpenRGB zone i in order (RGBController_NZXTHue2::DeviceUpdateLEDs ->
 //     NZXTHue2Controller::SetChannelLEDs): 22 10 <1<<i> 00 + up to 20 LEDs as G R B, 22 11 <1<<i> 00
 //     + LEDs 21..40 only when the zone has more than 20 LEDs, then the apply report 22 A0 <1<<i> ...
-//   * Shutdown: the same reports with every LED black (OpenRGB has no exit step).
+//   * Shutdown: the same reports with every LED black (OpenRGB has no exit step), or with the last
+//     frame for Lightloom's "keep" exit mode.
 // Zones: OpenRGB makes one linear zone per RGB channel. On the Kraken X3 ids zone 0 is the RGB header
 // on the pump, zone 1 the pump ring (8 LEDs), zone 2 the logo (1 LED); Lightloom puts the ring (on a
 // circle) and the logo (in its centre) on the device's own LED grid and every other zone is an ARGB channel
@@ -246,14 +247,24 @@ export function Render() {
   }
 }
 
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
+
 // OpenRGB has no exit step and keeps no copy of what the device showed before (the protocol has
-// hardware effects, but no read-back of the active one), so every zone is set to black with the same
-// reports as a frame, on exit and on suspend alike.
-export function Shutdown(SystemSuspending) {
+// hardware effects, but no read-back of the active one), so "restore" (and SignalRGB's call without
+// a mode) and "off" set every zone to black with the same reports as a frame, and so does suspend.
+// "keep" sends the last frame once more with the same reports. The controller holds Direct colours
+// without a host (OpenRGB sends a frame only when the colours change and has no keepalive), so the
+// frame stays until the device loses power; nothing is stored (the family has no save command).
+export function Shutdown(SystemSuspending, mode) {
   if (zones.length === 0) {
     return;
   }
-  send(frameReports(true));
+  if (!SystemSuspending && mode === "keep") {
+    send(lastFrame ?? frameReports(false));
+  } else {
+    send(frameReports(true));
+  }
   lastFrame = null;
 }
 

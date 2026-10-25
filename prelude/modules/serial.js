@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Facade for "@SignalRGB/serial" (Rust-backed via the `serialport` crate).
+// Facade for "@SignalRGB/serial". A serial device session (`Type() == "serial"`)
+// gets the real module instead (crates/lightloom-plugin-host src/serial.rs, the
+// `serialport` crate); every other context keeps this throwing facade.
 //
 // Corpus (2026-10-17, 1006 plugin .js files): 7 files import it
 // (`import Serial from` 5, `import serial from` 2). Member calls:
@@ -25,7 +27,7 @@ export const MEMBERS = Object.freeze([
 ]);
 
 const serial = createFacade("@SignalRGB/serial", MEMBERS, {
-  hint: "serial transport arrives with lightloom-hal serial backend (M2)",
+  hint: "only Type() == \"serial\" device sessions have a serial port",
 });
 
 export default serial;

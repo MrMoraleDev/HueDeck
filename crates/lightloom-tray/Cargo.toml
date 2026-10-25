@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+publish = false
+name = "lightloom-tray"
+description = "lightloom-tray: the Lightloom notification-area icon (open the dashboard, pause, brightness, profiles, start at sign-in, quit); a StatusNotifierItem on Linux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "lightloom-tray"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+lightloom-api = { path = "../lightloom-api" }
+lightloom-runtime = { path = "../lightloom-runtime" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
+
+# StatusNotifierItem + dbusmenu over the session bus; the icon's PNGs decoded for IconPixmap.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { workspace = true }
+image = { workspace = true }
+lightloom-hal = { path = "../lightloom-hal" }
+lightloom-hal-linux = { path = "../lightloom-hal-linux" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { workspace = true, features = ["p2p"] }
+serde = { workspace = true }
+
+[build-dependencies]
+lightloom-winres = { path = "../lightloom-winres" }

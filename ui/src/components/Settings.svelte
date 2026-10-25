@@ -1,12 +1,61 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
+  import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { daemon } from "../lib/store.svelte";
-  import type { Snapshot } from "../lib/types";
+  import type { SignalRgbImport, Snapshot } from "../lib/types";
+  import InputDevices from "./InputDevices.svelte";
+  import Logs from "./Logs.svelte";
+  import UpdateCheck from "./UpdateCheck.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let message = $state<string | null>(null);
   let file: HTMLInputElement;
+  let low = $state(15);
+  let critical = $state(5);
+  // Follow the daemon's values only when they change (a refresh must not undo typing).
+  let seen = "";
+  $effect(() => {
+    const now = `${snapshot.settings.batteryLow}/${snapshot.settings.batteryCritical}`;
+    if (now !== seen) {
+      seen = now;
+      low = snapshot.settings.batteryLow;
+      critical = snapshot.settings.batteryCritical;
+    }
+  });
+  const thresholdsValid = $derived(low >= 1 && low <= 95 && critical >= 0 && critical < low);
+
+  function saveThresholds() {
+    if (thresholdsValid) void daemon.run(() => api.setSettings({ batteryLow: low, batteryCritical: critical }));
+  }
+
+  let port = $state<number | null>(null);
+  let moving = $state<string | null>(null);
+  const portValue = $derived(port ?? snapshot.settings.port);
+  const portValid = $derived(Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535);
+
+  async function changePort() {
+    if (!portValid || portValue === snapshot.settings.port) return;
+    const r = await daemon.run(() => api.setPort(portValue));
+    if (!r) return;
+    moving = r.url;
+    // lightloomd serves the page (with its token) on the new port; the old one closes in a few seconds.
+    setTimeout(() => location.assign(r.url), 300);
+  }
+
+  // PawnIO / RAM lighting: read the facts again whenever this page opens.
+  onMount(() => {
+    void daemon.run(() => api.pawnio());
+  });
+  const pawnio = $derived(snapshot.pawnio);
+  const busy = $derived(pawnio.job?.running ?? false);
+  const serviceNames: Record<string, string> = {
+    notInstalled: "not installed",
+    stopped: "installed, stopped",
+    pending: "starting or stopping",
+    running: "running",
+    unknown: "unknown",
+  };
 
   async function exportState() {
     const state = await daemon.run(() => api.exportState());
@@ -17,6 +66,24 @@
     a.download = `lightloom-settings-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
+  }
+
+  let preview = $state<SignalRgbImport | null>(null);
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+  async function previewSignalRgb() {
+    preview = (await daemon.run(() => api.previewSignalRgb())) ?? null;
+  }
+
+  async function importSignalRgb() {
+    const r = await daemon.run(() => api.importSignalRgb());
+    if (!r) return;
+    preview = null;
+    message =
+      `Imported ${plural(r.placements, "placement")} as layout "${r.layout ?? "-"}", ` +
+      `${plural(r.channels, "channel setup")}, ${plural(r.valuesImported ?? 0, "effect value")} and ` +
+      `${plural(r.presetsImported ?? 0, "preset")}.` +
+      (r.notes.length ? ` ${plural(r.notes.length, "note")}: ${r.notes.slice(0, 3).join("; ")}` : "");
   }
 
   async function importState() {
@@ -49,18 +116,78 @@
         /> Use my SignalRGB plugins, effects and components</label
       >
       <p class="muted">
-        Import copies SignalRGB's device placements into a new layout and its component setup of each channel into
-        Lightloom's settings.
+        Import copies SignalRGB's setup into Lightloom's settings: device placements as a new layout (with the layout
+        and device brightness), the component setup of each channel, effect settings and presets, the selected
+        effect, the global brightness and which devices are on. SignalRGB's settings are only read. Its effects and
+        plugins stay third-party files in its folders.
       </p>
-      <button
-        onclick={async () => {
-          const r = await daemon.run(() => api.importSignalRgb());
-          if (r) message = `Imported ${r.placements} placements as layout "${r.layout}" and ${r.channels} channel setups.`;
-        }}>Import SignalRGB layout and channels</button
-      >
+      <div class="row">
+        <button onclick={previewSignalRgb}>Preview import…</button>
+        {#if preview}
+          <button onclick={importSignalRgb} disabled={!preview.available}>Import</button>
+          <button onclick={() => (preview = null)}>Cancel</button>
+        {/if}
+      </div>
+      {#if preview}
+        {#if !preview.available}
+          <p class="muted">SignalRGB has no settings to import.</p>
+        {:else}
+          <ul class="preview">
+            <li>
+              Layout "{preview.layout ?? "-"}": {plural(preview.placements, "placement")}{preview.layoutBrightness !==
+              null
+                ? `, brightness ${preview.layoutBrightness}%`
+                : ""}
+            </li>
+            {#if preview.globalBrightness !== null}<li>Global brightness {preview.globalBrightness}%</li>{/if}
+            <li>{plural(preview.channels, "channel setup")}</li>
+            <li>
+              {plural(preview.effects.length, "effect")} with settings ({plural(
+                preview.effects.reduce((n, e) => n + e.presets.length, 0),
+                "preset",
+              )}), third-party
+            </li>
+            {#if preview.selectedEffect}
+              <li>
+                Selected effect: {preview.selectedEffect.title ?? preview.selectedEffect.id}
+                {#if !preview.selectedEffect.available}<span class="warn">
+                    (not in the library: turn on the SignalRGB option above to play it)</span
+                  >{/if}
+              </li>
+            {/if}
+            {#if preview.devices.length}
+              <li>
+                Devices:
+                {#each preview.devices as d, i (d.key)}{i ? ", " : ""}{d.name ?? d.key}{d.enabled === false
+                    ? " off"
+                    : ""}{d.brightness !== null ? ` ${d.brightness}%` : ""}{/each}
+              </li>
+            {/if}
+            {#if preview.notes.length}<li class="muted">{plural(preview.notes.length, "note")}: {preview.notes
+                  .slice(0, 3)
+                  .join("; ")}</li>{/if}
+          </ul>
+        {/if}
+      {/if}
     {:else}
       <p class="muted">No SignalRGB installation was found on this computer.</p>
     {/if}
+  </section>
+
+  <section class="panel">
+    <h2>Network lights</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.network}
+        onchange={(e) => daemon.run(() => api.setSettings({ network: (e.target as HTMLInputElement).checked }))}
+      /> Look for lights on my network</label
+    >
+    <p class="muted">
+      Off by default. When on, Lightloom's network plugins look for WLED, Philips Hue, Nanoleaf, LIFX, Govee and Yeelight
+      lights on your local network (mDNS and broadcasts; nothing is sent outside it). Found lights, pairing and "add by
+      IP" are on the Devices tab.
+    </p>
   </section>
 
   <section class="panel">
@@ -81,6 +208,115 @@
   </section>
 
   <section class="panel">
+    <h2>PawnIO / RAM lighting</h2>
+    <p class="muted">{pawnio.status}</p>
+    <dl>
+      <dt>PawnIO driver</dt>
+      <dd>
+        {pawnio.installed ? `installed${pawnio.version ? ` (${pawnio.version})` : ""}` : "not installed"}{pawnio.installed &&
+        !pawnio.versionOk
+          ? " · needs 2.2.0 or later"
+          : ""}{pawnio.edition ? ` · ${pawnio.edition} edition` : ""}
+      </dd>
+      <dt>Lightloom I/O service</dt>
+      <dd>
+        {serviceNames[pawnio.service] ?? pawnio.service}{pawnio.brokerHealthy
+          ? ` · in use, ${pawnio.ramBuses} RAM bus${pawnio.ramBuses === 1 ? "" : "es"}`
+          : ""}
+      </dd>
+    </dl>
+    {#if pawnio.supported}
+      <div class="row">
+        <button disabled={busy} onclick={() => daemon.run(() => api.pawnioInstall())}
+          >{pawnio.service === "notInstalled" ? "Install" : "Repair / update"}</button
+        >
+        <button
+          class="danger"
+          disabled={busy || pawnio.service === "notInstalled"}
+          onclick={() => daemon.run(() => api.pawnioRemove())}>Remove</button
+        >
+      </div>
+      <p class="muted">
+        Each button asks Windows for permission once (UAC prompt); a window shows each step. Install downloads the
+        official PawnIO 2.2.0 installer from its GitHub release (checked against a pinned SHA-256 and its signature)
+        when PawnIO is missing or too old, and sets up the Lightloom I/O service. Remove takes the service away and
+        leaves PawnIO installed, since other programs may use it.
+      </p>
+    {/if}
+    {#if pawnio.job}
+      <p class:message={pawnio.job.ok === true} class:failed={pawnio.job.ok === false}>{pawnio.job.message}</p>
+    {/if}
+  </section>
+
+  <section class="panel">
+    <h2>When Lightloom closes</h2>
+    {#each [["restore", "Give each device its own lighting back (its built-in effect, or what it showed before Lightloom)"], ["keep", "Keep the last colours Lightloom showed (until the device is switched off)"], ["off", "Turn the lights off"]] as [mode, label] (mode)}
+      <label class="check"
+        ><input
+          type="radio"
+          name="shutdown-mode"
+          value={mode}
+          checked={snapshot.settings.shutdownMode === mode}
+          onchange={() => daemon.run(() => api.setSettings({ shutdownMode: mode as "restore" | "keep" | "off" }))}
+        /> {label}</label
+      >
+    {/each}
+    <p class="muted">
+      Nothing is stored in the devices: after a power cycle they show what they keep in their own memory (see Devices →
+      Save to devices). A device can have its own choice in its settings; devices whose plugin cannot do it fall back to
+      their own lighting.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Sleep and lock</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.lightsOffWhenIdle}
+        onchange={(e) =>
+          daemon.run(() => api.setSettings({ lightsOffWhenIdle: (e.target as HTMLInputElement).checked }))}
+      /> Lights off when the PC locks or the screen turns off</label
+    >
+    <p class="muted">
+      Before the PC sleeps or hibernates every device is shut down as for a system suspend (most go dark); on wake they
+      are found again and the effect comes back.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>OpenRGB SDK</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.openrgbSdk}
+        onchange={(e) => daemon.run(() => api.setSettings({ openrgbSdk: (e.target as HTMLInputElement).checked }))}
+      /> Let OpenRGB SDK clients drive Lightloom's devices (127.0.0.1:6742)</label
+    >
+  </section>
+
+  <section class="panel">
+    <h2>lightloom:// links</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.urlScheme ?? false}
+        disabled={!snapshot.settings.urlSchemeAvailable && !snapshot.settings.urlScheme}
+        onchange={(e) => daemon.run(() => api.setSettings({ urlScheme: (e.target as HTMLInputElement).checked }))}
+      /> Open lightloom:// links with Lightloom (stream decks, shortcuts, browsers)</label
+    >
+    <p class="muted">
+      Registers the lightloom:// URL scheme for your Windows user (HKCU\Software\Classes\lightloom, no administrator
+      rights); turning it off removes the key. Links such as lightloom://effect/apply/Rainbow or lightloom://brightness/50
+      then run in Lightloom. {#if !snapshot.settings.urlSchemeAvailable}Not available here (it needs Windows and the
+        lightloom command-line client next to lightloomd).{/if}
+    </p>
+    {#if snapshot.settings.urlSchemeNotice}
+      <p class="warn">{snapshot.settings.urlSchemeNotice}</p>
+    {/if}
+  </section>
+
+  <section class="panel">
     <h2>Effects</h2>
     <label class="check"
       ><input
@@ -96,6 +332,40 @@
   </section>
 
   <section class="panel">
+    <h2>Battery</h2>
+    <div class="row">
+      <label class="row"
+        >Low below <input type="number" min="1" max="95" style="width:70px" bind:value={low} onchange={saveThresholds} />
+        %</label
+      >
+      <label class="row"
+        >Critical below
+        <input type="number" min="0" max="94" style="width:70px" bind:value={critical} onchange={saveThresholds} /> %</label
+      >
+    </div>
+    {#if !thresholdsValid}
+      <p class="bad">The low level must be 1 to 95 %, and the critical level below it.</p>
+    {/if}
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.batteryNotifications}
+        disabled={!snapshot.settings.notificationsAvailable}
+        onchange={(e) =>
+          daemon.run(() => api.setSettings({ batteryNotifications: (e.target as HTMLInputElement).checked }))}
+      /> Show a system notification when a battery runs low or critical</label
+    >
+    <p class="muted">
+      For wireless devices whose plugin reports a battery. The dashboard warns while a device on battery is at or under
+      the low level. Notifications come once per discharge, at the low and at the critical level, and again after the
+      device was charged or climbed 5 points above the level.{snapshot.settings.notificationsAvailable
+        ? ""
+        : " System notifications are not available on this system yet."} Each device can also pulse red while its battery
+      is low (Devices).
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>Backup</h2>
     <div class="row">
       <button onclick={exportState}>Export settings</button>
@@ -104,6 +374,42 @@
     </div>
     <p class="muted">Settings are kept in Lightloom's database; the export is one JSON file you can import again.</p>
   </section>
+
+  <section class="panel">
+    <h2>Port</h2>
+    <div class="row">
+      <input
+        type="number"
+        min="1024"
+        max="65535"
+        step="1"
+        aria-label="Port of the dashboard and the API"
+        value={portValue}
+        oninput={(e) => (port = (e.target as HTMLInputElement).valueAsNumber)}
+        onkeydown={(e) => e.key === "Enter" && changePort()}
+      />
+      <button disabled={!portValid || portValue === snapshot.settings.port || moving !== null} onclick={changePort}
+        >Change port</button
+      >
+    </div>
+    {#if moving}
+      <p class="message">Moving to {moving}…</p>
+    {:else if !portValid}
+      <p class="warn">Choose a port from 1024 to 65535.</p>
+    {/if}
+    {#if snapshot.settings.portNotice}
+      <p class="warn">{snapshot.settings.portNotice}</p>
+    {/if}
+    <p class="muted">
+      The dashboard and the API listen on http://127.0.0.1:{snapshot.settings.port} (default 53000). Only this
+      computer can connect: Lightloom listens on the loopback address, never on the network. A new port is used right
+      away and this page moves there; bookmarks need the new address. The port saved here wins over
+      <code>[api] port</code> in config.toml. The SignalRGB-compatible ports 16038 and 16034 do not change.
+    </p>
+  </section>
+
+  <InputDevices {snapshot} />
+  <UpdateCheck />
 
   <section class="panel">
     <h2>Daemon</h2>
@@ -119,10 +425,7 @@
   <p class="message">{message}</p>
 {/if}
 
-<section class="panel logs">
-  <h2>Log</h2>
-  <pre>{daemon.logs.join("\n") || "Nothing logged since this page opened."}</pre>
-</section>
+<Logs />
 
 <style>
   .cols {
@@ -133,14 +436,33 @@
   .message {
     color: var(--good);
   }
-  .logs {
-    margin-top: 16px;
+  .failed {
+    color: var(--bad);
   }
-  pre {
-    max-height: 320px;
-    overflow: auto;
-    font-size: 12px;
-    white-space: pre-wrap;
+  dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    margin: 0 0 12px;
+  }
+  dt {
+    color: var(--muted);
+  }
+  dd {
     margin: 0;
+  }
+  .bad {
+    color: var(--bad);
+  }
+  .warn {
+    color: var(--warn);
+  }
+  input[type="number"] {
+    width: 9em;
+  }
+  .preview {
+    margin: 8px 0 0;
+    padding-left: 1.2em;
+    font-size: 13px;
   }
 </style>

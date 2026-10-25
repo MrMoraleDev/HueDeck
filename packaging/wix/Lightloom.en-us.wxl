@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Lightloom installer strings, English (the stock dialogs come with WixToolset.UI.wixext). -->
+<WixLocalization Culture="en-US" Codepage="1252" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="Language" Value="1033" />
+  <String Id="Downgrade" Value="A newer version of Lightloom is already installed." />
+  <String Id="ShortcutDescription" Value="Open the Lightloom dashboard" />
+  <String Id="LaunchLightloom" Value="Start Lightloom now" />
+  <String Id="ExitNote" Value="If you chose RAM and motherboard lighting, Windows asks for permission once after you press Finish; a window shows each step." />
+  <String Id="OptionsDlg_Title" Value="[ProductName] Setup" />
+  <String Id="OptionsDlgTitle" Value="{\WixUI_Font_Title}Options" />
+  <String Id="OptionsDlgDescription" Value="Choose what Lightloom sets up for you." />
+  <String Id="PawnIoCheck" Value="RAM and motherboard lighting (installs the PawnIO driver)" />
+  <String Id="PawnIoText" Value="Lighting on the RAM and the motherboard needs the PawnIO driver, which is downloaded from its official release (checked against a pinned SHA-256 and its signature) and installed with one Windows permission prompt. Without it, everything else works; you can add it later from Settings." />
+  <String Id="AutostartCheck" Value="Start Lightloom when I sign in" />
+  <String Id="AutostartText" Value="Lightloom then runs in the background, without a window." />
+  <String Id="ShortcutText" Value="A Lightloom shortcut in the Start menu opens the dashboard. Lightloom is installed for you only, in your user folder, without administrator rights." />
+</WixLocalization>

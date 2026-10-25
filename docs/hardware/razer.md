@@ -50,6 +50,7 @@ and the Synapse 3 / Synapse executables). `007C`, `007D` and `007E` are marked t
 | S7 | OpenRGB `KeyboardLayoutManager/KeyboardLayoutManager.cpp`, `.h`; `RGBController/RGBControllerKeyNames.cpp` | GPL-2.0-or-later | Key names of keyboard zones (simulated by the table generator, see below) |
 | S8 | OpenRGB `Controllers/RazerController/RazerDeviceGuard.cpp`, `DetectionManager.cpp` | GPL-2.0-or-later | Read only, nothing taken: the global mutex OpenRGB shares with Synapse; how detectors run per HID collection |
 | S9 | Lightloom's recordings `trace_1532_007c.json` (`#00ff00`) and `trace_multi.json` (`#ff8000`) of the user's DeathAdder V2 Pro, and the retired plugin `razer-deathadder-v2-pro` (Lightloom, GPL-3.0-or-later; `docs/hardware/razer-deathadder-v2-pro.md`, `fixtures/deathadder-v2-pro-recorded.json`) | data / Lightloom | The DeathAdder V2 Pro packets |
+| S10 | OpenRazer kernel driver, https://github.com/openrazer/openrazer (`driver/razerchromacommon.c`, `driver/razermouse_driver.c` and `.h`, `driver/razerkbd_driver.c` and `.h`, master as read on 2026-10-22) | GPL-2.0-or-later | Protocol facts only, no code: the battery queries (class, ids, size, answer byte), which products answer them and with which transaction id |
 
 All OpenRGB files are at commit `d4798c120659ec5ba2e664a9e87bedff8d36f880`
 (https://gitlab.com/CalcProgrammer1/OpenRGB); every one carries
@@ -133,7 +134,7 @@ the plugin picks interface 0's 91-byte collection for the Razer reports and inte
 | 89 | crc | XOR of bytes 3..88 |
 | 90 | reserved | 0 |
 
-Commands the plugin sends (storage byte always `0x00`, "no save"; `led` = the product's LED id,
+Commands the plugin sends (storage byte `0x00`, "no save", except in "Save to devices" below; `led` = the product's LED id,
 `0x00` for the products of the `RAZER_LED_ID_ZERO` case list, else `0x05`):
 
 | Command | Class, id, size | Arguments | When |
@@ -217,6 +218,29 @@ their per-LED effect 4), then brightness at the maximum (`DeviceUpdateMode()` ap
 brightness). The three products switched to software mode at start go back to hardware mode
 (`00 04 00 00`). Nothing is saved: the device's own stored effect returns at its next power-up.
 
+Exit modes (Lightloom extension, [docs/host-api/save-shutdown.md](../host-api/save-shutdown.md)):
+`Shutdown(false, "keep")` sends the last frame again and `"off"` a black frame, through the
+device's own frame reports, and leaves it in custom-frame (or software) mode: no spectrum cycle,
+no hardware mode, nothing stored.
+
+## Save to devices (Lightloom extension, untested on hardware)
+
+OpenRGB never sets the storage byte (`RAZER_STORAGE_SAVE = 0x01`, OpenRazer's `VARSTORE`; OpenRGB
+always sends `RAZER_STORAGE_NO_SAVE`). Effects set with it are the ones the device keeps across
+power cycles (OpenRazer sends its effects with `VARSTORE`). "Save to devices" sends, for the device
+and each extended-matrix device paired to it:
+
+* `0F 02`, size `09`, `[01, led, 01, 00, 00, 01, r, g, b]`: `razer_create_mode_static_extended_matrix_report()`
+  with storage `01` (static: one colour, the average of the device's LEDs on the frame shown), or
+  `0F 02`, size `06`, `[01, led, 03]`: the spectrum-cycle extended report with storage `01`;
+* `0F 04`, size `03`, `[01, led, max]`: the extended brightness report with storage `01`, full brightness.
+
+Only extended-matrix devices are offered: the standard-matrix effect reports
+(`razer_create_mode_*_standard_matrix_report()`) have no storage byte, and the ARGB controller and
+the Kraken V4 family use other reports. The DeathAdder V2 Pro (recorded profile) gets LED id `0x00`,
+the LED id of its recorded effect report (OpenRGB would use `0x05`), and the frame-mode request
+again afterwards; the other devices go back to custom frames with the next `Render()`.
+
 ## Chroma Addressable RGB Controller (`0F1F`, S5)
 
 Six channels, `Channel 1` .. `Channel 6`, up to 80 LEDs each (Lightloom channels). The colour
@@ -273,6 +297,61 @@ The single-device plugin `plugins/razer-deathadder-v2-pro/` that claimed them to
 on 2026-10-22, after this plugin was tested on the mouse (see "Tested on hardware"), so there is
 no double claim.
 
+## Battery (S10)
+
+OpenRGB reads no battery. The two read-only queries below are protocol facts from OpenRazer
+(S10): `razer_chroma_misc_get_battery_level()` and `razer_chroma_misc_get_charging_status()` in
+`razerchromacommon.c`, and the `charge_level` / `charge_status` readers in `razermouse_driver.c`
+and `razerkbd_driver.c`, which print argument 1 of the answer. No OpenRazer code was copied; the
+plugin builds both with its own `razer-protocol.js` `report()`.
+
+| Query | Class, id, size | Arguments | Answer |
+|-------|-----------------|-----------|--------|
+| battery level | `07 80`, `02` | none | argument 1 (byte 10 with the report id at byte 0): 0..255 |
+| charging status | `07 84`, `02` | none | argument 1: `1` while charging, `0` otherwise |
+
+Both are ordinary 91-byte reports (report id, transaction id, size, class, id, crc as in "The
+90-byte report"). Neither changes anything on the device; the plugin never sends a battery or
+power setting.
+
+Which products: `plugins/razer/battery.js`, hand-written (`devices.js` is generated from OpenRGB,
+which has no battery data). It lists the products of this plugin that OpenRazer's level reader
+accepts, with OpenRazer's transaction id for the battery queries, which can differ from the
+lighting one in OpenRGB's table (Viper Ultimate and Mamba: `0xFF`; DeathAdder V2 Pro, Lancehead
+2017, Mamba 2018, BlackWidow V3 Pro wired: `0x3F`; the wireless keyboards: `0x9F`; the rest
+`0x1F`):
+
+- mice: `0024` `0025` `003E` `0044` `0045` `0059` `005A` `006F` `0070` `0072` `0073` `007A`
+  `007B` `007C` `007D` `0086` `0088` `008F` `0090` `00A7` `00A8` `00AA` `00AB` `00AF` `00B0`
+  `00B9` `00CC` `00CD` `00D6` `00D7`;
+- keyboards: `0258` `0271` `025A` `025C` `0290` `0292` `0296` `0298` `02D5` `02D7`.
+
+The Basilisk V3 X HyperSpeed (`00B9`) gets the level query only: OpenRazer answers a fixed 0 for
+its charging status without asking. Docks, receivers without a battery of their own (Mouse Dock
+Chroma `007E`, Mouse Dock Pro `00A4`), the Charging Pad, headsets (the Kraken V4 family uses other
+reports) and products OpenRazer does not list (Naga Pro V3 `00E7`/`00E8`, the Bluetooth PIDs
+`00AC`/`00D8`, the BlackWidow V4 Pro 75% `02B3`/`02B4`, the BlackWidow V4 Low Profile TKL
+`02D2`/`02D4`) are not asked. A receiver whose paired device is in the table (a Mouse Dock Pro with
+a Basilisk V3 Pro) reports that device's battery, asked with the paired device's report id and
+OpenRazer's transaction id; with several such devices the first one counts (one battery per
+Lightloom device).
+
+How the plugin polls (`plugin.js`, "battery"):
+
+1. `Initialize()` calls `device.addFeature("battery")` for a product with a battery and sends
+   nothing more.
+2. The first query goes out 2 s after `Initialize()`, then every 45 s (wall clock,
+   `Date.now()`), after the frame of that `Render()`. The level query and the charging query go
+   out on two consecutive frames, so a frame carries at most one query: one send and at most 10
+   reads 2 ms apart (OpenRazer itself reads once, about 1 ms after the request). Only an answer
+   with the same transaction id, class and id and status success (`0x02`) counts.
+3. Percent = `round(level * 100 / 255)`. State (SignalRGB numbers): charging and 100 % -> 4
+   (full), charging -> 2 (charging), else 1 (draining). Level and state go to
+   `battery.setBatteryLevel()` / `battery.setBatteryState()` only when they changed.
+4. No usable answer (device asleep or off, status failure / timeout, empty or foreign replies):
+   the last level stays, the state becomes 0 (unknown) once, one log line until the device
+   answers again. Status 5 (not supported): one log line and polling stops for the session.
+
 ## Geometry
 
 Zones are stacked top to bottom in table order; LED (row, col) of a zone is the cell
@@ -289,13 +368,13 @@ Everything except the DeathAdder V2 Pro (`007C`, `007D`) and the Mouse Dock Chro
 "Tested on hardware"): no other product of this plugin has run on hardware (`tested` in
 `manifest.json` lists those three only). In particular the paired-device path,
 the ARGB controller's interface selection, the Kraken V4 reports and the custom-matrix devices
-are unverified.
+are unverified. The battery queries are untested on hardware for every product.
 
 ## Left out, and why
 
 - Hardware effects other than the exit's spectrum cycle / wave (static, breathing, wave,
   reactive, starlight, ripple, fire): Lightloom drives LEDs per frame.
-- Anything with the save storage flag: OpenRGB sends none; neither does Lightloom.
+- Anything with the save storage flag, outside "Save to devices" (above).
 - Firmware, serial, variant and supported-effect queries (see "Start").
 - The Bluetooth detector lines OpenRGB comments out (Blackwidow V3 Pro, Basilisk V3 Pro and
   Basilisk V3 Pro 35K Phantom Green over Bluetooth, vendor `068E`): not detectors at this commit.

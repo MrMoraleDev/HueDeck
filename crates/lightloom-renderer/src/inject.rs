@@ -20,13 +20,16 @@ pub const INJECT_URL: &str = "lightloom://renderer/inject.js";
 
 /// `window.engine` with every input zeroed; `getSensorValue(name)` reads
 /// `engine.sensors[name]` (filled by `engine` control commands).
+/// `engine.audio.freq` is a plain Array, replaced on every push as SignalRGB
+/// does (`engine.audio.freq = [...]`): `freq.map(v => v / 127)` must yield
+/// fractions, which an `Int8Array` would truncate to 0.
 pub fn engine_bootstrap_js() -> String {
     let cells = ZONE_COLS * ZONE_ROWS;
     let image = ZONE_IMAGE_WIDTH * ZONE_IMAGE_HEIGHT * 4;
     format!(
         "(function () {{\n\
          \x20 var e = window.engine = window.engine || {{}};\n\
-         \x20 e.audio = {{ freq: new Int8Array({AUDIO_FREQ_BINS}), level: -100, rawlevel: 0, width: 0, density: 0 }};\n\
+         \x20 e.audio = {{ freq: new Array({AUDIO_FREQ_BINS}).fill(0), level: -100, rawlevel: 0, width: 0, density: 0 }};\n\
          \x20 e.zone = {{ hue: new Int16Array({cells}), saturation: new Int8Array({cells}), \
          lightness: new Int8Array({cells}), imagedata: new Uint8ClampedArray({image}) }};\n\
          \x20 e.vision = {{}};\n\
@@ -134,10 +137,25 @@ pub fn call_hooks_js(names: &[String]) -> String {
     )
 }
 
+/// The hook a lightscript's load sequence ends with.
+pub const EFFECT_READY_HOOK: &str = "onEngineReady";
+/// The hook an LCD face's load sequence ends with (effects-engine.md §4: `onReady()` entry).
+pub const FACE_READY_HOOK: &str = "onReady";
+
 /// Full injection script for an effect: engine bootstrap, control globals, load sequence.
 /// `values` overrides control defaults (unknown names and values of the wrong type are
 /// ignored). Returns the script and the controls skipped (names that cannot be page globals).
 pub fn injection_script(meta: &EffectMeta, values: &Map<String, Value>) -> (String, Vec<String>) {
+    injection_script_with(meta, values, EFFECT_READY_HOOK)
+}
+
+/// [`injection_script`] whose load sequence ends with `ready` ([`FACE_READY_HOOK`] for LCD
+/// faces) instead of `onEngineReady()`.
+pub fn injection_script_with(
+    meta: &EffectMeta,
+    values: &Map<String, Value>,
+    ready: &str,
+) -> (String, Vec<String>) {
     let mut js = engine_bootstrap_js();
     let mut skipped = Vec::new();
     let mut assigns = String::new();
@@ -156,7 +174,7 @@ pub fn injection_script(meta: &EffectMeta, values: &Map<String, Value>) -> (Stri
         assigns.push_str(&format!("  {} = {literal};\n", control.property));
         hooks.push(control.change_hook());
     }
-    hooks.push("onEngineReady".to_string());
+    hooks.push(ready.to_string());
     // After the page scripts: values win over what the page declared, then the hooks.
     js.push_str(&format!(
         "window.addEventListener(\"load\", function () {{\n{assigns}{}}});\n",
@@ -221,9 +239,20 @@ mod tests {
     }
 
     #[test]
+    fn faces_end_with_on_ready() {
+        let html = r##"<head><title>Clock</title>
+            <meta property="tint" label="Tint" type="color" default="#ffffff"/></head>"##;
+        let meta = lightloom_effects::parse_effect_meta(html);
+        let (js, _) = injection_script_with(&meta, &Map::new(), FACE_READY_HOOK);
+        assert!(js.contains("[\"ontintChanged\", \"onReady\"]"));
+        assert!(!js.contains("onEngineReady"));
+        assert!(js.contains("e.getSensorValue"), "faces read sensors too");
+    }
+
+    #[test]
     fn bootstrap_shapes() {
         let js = engine_bootstrap_js();
-        assert!(js.contains("freq: new Int8Array(200)"));
+        assert!(js.contains("freq: new Array(200).fill(0)"));
         assert!(js.contains("hue: new Int16Array(560)"));
         assert!(js.contains("imagedata: new Uint8ClampedArray(64000)"));
         assert!(js.contains("level: -100"));

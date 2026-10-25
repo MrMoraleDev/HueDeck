@@ -9,7 +9,14 @@ targets = [
 
 [advisories]
 version = 2
-ignore = []
+# zvariant, zvariant_derive and zbus_names: "unmaintained" notices (merged into zbus 6),
+# not vulnerabilities. They come with zbus 5 through ashpd 0.13 (the Wayland ScreenCast
+# portal, Linux only); no ashpd release uses zbus 6 yet. Drop these once one does.
+ignore = [
+  { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained (merged into zbus 6); via ashpd 0.13, no upgrade yet" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained (merged into zbus 6); via ashpd 0.13, no upgrade yet" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained (merged into zbus 6); via ashpd 0.13, no upgrade yet" },
+]
 
 [licenses]
 version = 2
@@ -23,8 +30,10 @@ allow = [
   "BSL-1.0",
 ]
 confidence-threshold = 0.8
-# Build-only dependencies of cef-dll-sys -> download-cef (fetches and unpacks the CEF binary
-# distribution at build time; nothing of them ships in a Lightloom binary).
+# libbz2-rs-sys: a build-only dependency of cef-dll-sys -> download-cef (fetches and unpacks
+# the CEF binary distribution at build time; nothing of it ships in a Lightloom binary).
+# webpki-roots (Mozilla's CA certificates as data, CDLA-Permissive-2.0): the same build
+# dependency, and the root store of lightloomd's update check (ureq + rustls).
 exceptions = [
   { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" },
   { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },

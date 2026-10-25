@@ -22,9 +22,9 @@ pub enum LifecycleState {
     LoadingEffects,
     /// Steady state.
     Running,
-    /// `Shutdown(true)` on every plugin (system sleep).
+    /// `Shutdown(true)` on every plugin (system sleep); held until resume.
     Suspending,
-    /// Re-`Initialize()` after resume.
+    /// Re-enumerate and re-`Initialize()` after resume, then `Running` again.
     Resuming,
     /// Orderly exit: stop seq → `Shutdown(false)` → close handles → stop renderer.
     ShuttingDown,

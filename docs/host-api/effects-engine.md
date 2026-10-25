@@ -72,9 +72,9 @@ engine.vision = engine.vision || {}; engine.vision.%1 = %2;  engine.vision.%1 = 
 | `engine.zone.saturation` | Int8Array(560) | 0-100 | 1 | `:160` |
 | `engine.zone.lightness` | Int8Array(560) | 0-100 | 1 | `:159` |
 | `engine.zone.imagedata` | Uint8ClampedArray(64000) | 160×100 RGBA downscaled screen (`nSmpIdx < 16000` assert in `ExEngineBindings::BuildZones`) | 1 | `:138` |
-| `engine.audio.freq` | Array(200) numbers (may be negative) | per-band spectrum | 0 (17 catalog "Audio" effects) | docs |
+| `engine.audio.freq` | Array(200) numbers (may be negative) | per-band spectrum; Lightloom: integers 0..127, log 20 Hz-20 kHz by default (`docs/audio.md`) | 0 (17 catalog "Audio" effects) | docs |
 | `engine.audio.level` | number −100..0 dB | loudness | 0 | docs |
-| `engine.audio.rawlevel` | number | UNKNOWN scale | 0 | exe only |
+| `engine.audio.rawlevel` | number | UNKNOWN scale; Lightloom: unsmoothed RMS 0..1 | 0 | exe only |
 | `engine.audio.width` | 0..1 | stereo width | 0 | docs meter-tags |
 | `engine.audio.density` | 0..1 | 0=pure tone,1=noise | 0 | docs |
 | `engine.vision.<meter>` | float 0..1 (linear/area), int (ocr_numeric), 1/0/−1 (ocr_textmatch), `[a,b,c]` form exists | screen meters | 0 (62 Game Integration effects) | exe/docs |
@@ -107,6 +107,9 @@ Per entry: `name`(str), `description`, `publisher`(25 distinct; SignalRGB 256), 
 - Screen capture for `engine.zone`: 28×20 HSL grid + 160×100 RGBA (`ExEngineBindings::BuildZones`); capture method UNKNOWN (log only shows DISPLAY1 monitor interface warning).
 
 ## 4. LCD model
+
+> Lightloom's implementation of this model (encoders, face renderer per device, face selection, what is not implemented): [`lcd-lightloom.md`](lcd-lightloom.md).
+
 - Module `import LCD from "@SignalRGB/lcd"` (42 files; other modules: Errors.js 44, DeviceDiscovery 32, permissions 29, systeminfo 21, serial 7, udp 3, base64 1). `LCDModule` moc: `initialize(settings)`, `getFrame(options)`, `getImageBuffer(x,y,w,h)`, `getSlicedFrame(...)`, prop `initialized`.
 - `LCD.initialize({width:int, height:int, circular?:bool, circularPreview?:bool})` (45 calls; keys width 45, height 45, circular 5, circularPreview 3). Validation strings: "Settings must be an object", "Width must be provided and must be a number", "Height…", "Circular must be a boolean", "Invalid dimensions"; grid `{columns|cols, rows}` "Invalid grid dimensions" (for getSlicedFrame, PLAUSIBLE). Sizes seen: 480×480 (Corsair XC7/Capellix/ICUE Link, Lian Li GA II, ASRock, Thermalright), 240×240/640×640 (NZXT Kraken Elite `NZXT_Kraken_Elite.js:50-52`), 320×480 (Turzx), 128×40 (SteelSeries OLED), 1920×462, 1600×720, 854×480, 640×480, 320×320.
 - `LCD.getFrame({format, quality?}) → byte array` (52 calls): formats `"JPEG"`/`"jpeg"` (+`quality:50`, `ASRock LCD.js:138`), `"RGB"`, `"RGBA"`, `"RGB565"`, `"NZXT::Q565"`, `"NZXT::RGB565"`; Thermalright normalizes "plain array or {data,length}". `device.getImageBuffer` format `"BMP"`. Plugin flow: `Initialize → device.setFrameRateTarget(40) → LCD.initialize` ; `Render → LCD.getFrame → chunked device.write/bulk_transfer` (`NZXT_Kraken_Elite.js:93-110`). Toggle param `enableLcd`/`LCDToggle`, `device.setProtocol("hybrid")`.

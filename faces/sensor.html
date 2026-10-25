@@ -1,0 +1,118 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Lightloom starter LCD face. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Sensor</title>
+  <meta description="One hardware sensor as a big number on a gauge: CPU temperature by default, else GPU temperature or CPU load." />
+  <meta publisher="Lightloom" />
+  <meta property="sensor" label="Sensor" type="sensor" default="CPU Temperature" />
+  <meta property="textColor" label="Text Colour" type="color" default="#ffffff" />
+  <meta property="coolColor" label="Low Colour" type="color" default="#00c8ff" />
+  <meta property="hotColor" label="High Colour" type="color" default="#ff3b30" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="face" style="display:block;width:100vw;height:100vh"></canvas>
+  <script>
+    // An LCD face reading a sensor through engine.getSensorValue(name), which answers
+    // {value, units, min, max, type} or null (docs/sensors.md). The engine sizes the page to the
+    // LCD, assigns the controls as globals, calls on<control>Changed() once each, then onReady().
+    var canvas = document.getElementById("face");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var wanted = "CPU Temperature", text = "#ffffff", cool = [0, 200, 255], hot = [255, 59, 48];
+    var shown = 0, started = false;
+    var FALLBACKS = ["GPU Temperature", "CPU Load"];
+
+    function rgb(v, fallback) {
+      if (typeof v !== "string" || !/^#[0-9a-fA-F]{6}$/.test(v)) return fallback;
+      return [parseInt(v.substr(1, 2), 16), parseInt(v.substr(3, 2), 16), parseInt(v.substr(5, 2), 16)];
+    }
+    function onsensorChanged() { if (typeof sensor === "string" && sensor.trim()) wanted = sensor.trim(); }
+    function ontextColorChanged() { if (typeof textColor === "string" && /^#[0-9a-fA-F]{6}$/.test(textColor)) text = textColor; }
+    function oncoolColorChanged() { cool = rgb(coolColor, cool); }
+    function onhotColorChanged() { hot = rgb(hotColor, hot); }
+
+    function fit() {
+      canvas.width = Math.max(1, window.innerWidth);
+      canvas.height = Math.max(1, window.innerHeight);
+    }
+    window.addEventListener("resize", fit);
+
+    // The wanted sensor, else the first fallback that has a value.
+    function read() {
+      var names = [wanted].concat(FALLBACKS);
+      if (!window.engine || typeof engine.getSensorValue !== "function") return null;
+      for (var i = 0; i < names.length; i++) {
+        var s = engine.getSensorValue(names[i]);
+        if (s && typeof s.value === "number" && isFinite(s.value)) return { name: names[i], s: s };
+      }
+      return null;
+    }
+
+    function mix(t) {
+      t = Math.max(0, Math.min(1, t));
+      var c = [0, 1, 2].map(function (i) { return Math.round(cool[i] + (hot[i] - cool[i]) * t); });
+      return "rgb(" + c.join(",") + ")";
+    }
+
+    function draw() {
+      var w = canvas.width, h = canvas.height;
+      var cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2;
+      var font = "Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+      var got = read();
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, w, h);
+
+      var lo = 0, hi = 100, t = 0, label = wanted, value = "--", units = "";
+      if (got) {
+        var s = got.s;
+        lo = typeof s.min === "number" && isFinite(s.min) ? s.min : 0;
+        hi = typeof s.max === "number" && isFinite(s.max) && s.max > lo ? s.max : lo + 100;
+        // Temperatures: a 20-100 scale reads better than the sensor's own range.
+        if (/temp/i.test(got.name)) { lo = 20; hi = 100; }
+        shown += (s.value - shown) * 0.15;
+        t = (shown - lo) / (hi - lo);
+        label = got.name;
+        value = Math.round(shown).toString();
+        units = s.units || "";
+      }
+
+      // Gauge: a 270 degree track with the value arc on top.
+      var start = Math.PI * 0.75, sweep = Math.PI * 1.5, rad = r * 0.8;
+      ctx.lineCap = "round";
+      ctx.lineWidth = Math.max(3, r * 0.1);
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, rad, start, start + sweep);
+      ctx.stroke();
+      if (got) {
+        ctx.strokeStyle = mix(t);
+        ctx.beginPath();
+        ctx.arc(cx, cy, rad, start, start + sweep * Math.max(0.001, Math.min(1, t)));
+        ctx.stroke();
+      }
+      ctx.lineCap = "butt";
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = text;
+      ctx.font = "600 " + Math.max(8, Math.floor(r * 0.5)) + "px " + font;
+      ctx.fillText(value, cx, cy - r * 0.04);
+      ctx.font = Math.max(6, Math.floor(r * 0.16)) + "px " + font;
+      ctx.fillStyle = got ? mix(t) : "rgba(255,255,255,0.5)";
+      ctx.fillText(got ? units : "no data", cx, cy + r * 0.3);
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.font = Math.max(6, Math.floor(r * 0.11)) + "px " + font;
+      ctx.fillText(label.length > 22 ? label.substr(0, 21) + "..." : label, cx, cy + r * 0.62);
+      window.requestAnimationFrame(draw);
+    }
+
+    function onReady() {
+      if (started) return;
+      started = true;
+      fit();
+      window.requestAnimationFrame(draw);
+    }
+  </script>
+</body>
+</html>

@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-<!-- One effect control or plugin parameter: number, hue, boolean, color, combobox, text. -->
+<!-- One effect control or plugin parameter: number, hue, boolean, color, combobox, text, keycode. -->
 <script lang="ts">
+  import { keyCombo, passesFilter } from "../lib/params";
+
   interface Props {
     kind: string;
     label: string;
@@ -10,9 +12,13 @@
     step?: number | null;
     values?: string[];
     tooltip?: string | null;
+    /** Sliders: send while dragging (throttled), not only on release. */
+    live?: boolean;
+    /** Textfields: a regex the whole value must match before it is sent. */
+    filter?: string | null;
     onchange: (value: unknown) => void;
   }
-  let { kind, label, value, min, max, step, values = [], tooltip, onchange }: Props = $props();
+  let { kind, label, value, min, max, step, values = [], tooltip, live = false, filter, onchange }: Props = $props();
 
   const asNumber = (v: unknown, fallback = 0) => {
     const n = Number(v);
@@ -21,12 +27,65 @@
   const asBool = (v: unknown) => v === true || v === 1 || v === "true" || v === "1";
   const asColor = (v: unknown) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v) ? v : "#000000");
 
+  // What the control shows. It follows `value` (the daemon's) except while the user holds
+  // it: a refresh that lands mid-drag (carrying a value the daemon got a moment ago) must not
+  // pull the thumb back, and a picked option shows at once instead of after the round trip.
   let local = $state<unknown>(null);
+  let holding = false;
   $effect(() => {
-    local = value;
+    const v = value;
+    if (!holding) local = v;
   });
   const lo = $derived(kind === "hue" ? 0 : (min ?? 0));
   const hi = $derived(kind === "hue" ? 360 : (max ?? 100));
+
+  // Live sliders: at most one value per LIVE_EVERY ms while dragging; the release sends the last.
+  const LIVE_EVERY = 100;
+  let lastSent = 0;
+  let sentValue: unknown = undefined;
+  function slide(v: number) {
+    holding = true;
+    local = v;
+    const now = Date.now();
+    if (live && now - lastSent >= LIVE_EVERY) {
+      lastSent = now;
+      sentValue = v;
+      onchange(v);
+    }
+  }
+  function release() {
+    holding = false;
+    if (!live || sentValue !== local) {
+      sentValue = local;
+      onchange(local);
+    }
+  }
+
+  let text = $state("");
+  let typing = false;
+  $effect(() => {
+    const v = String(value ?? "");
+    if (!typing) text = v;
+  });
+  const textOk = $derived(passesFilter(filter, text));
+
+  let recording = $state(false);
+  /** A discrete choice (option, checkbox, colour): shown now, sent once. */
+  function pick(v: unknown) {
+    local = v;
+    onchange(v);
+  }
+
+  function record(e: KeyboardEvent) {
+    // Plain Tab still moves the focus.
+    if (e.code === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) return;
+    e.preventDefault();
+    const combo = keyCombo(e);
+    if (combo === null) return;
+    local = combo;
+    recording = false;
+    onchange(combo);
+  }
 </script>
 
 <label class="control" title={tooltip ?? ""}>
@@ -39,8 +98,9 @@
         max={hi}
         step={step ?? 1}
         value={asNumber(local, lo)}
-        oninput={(e) => (local = asNumber((e.target as HTMLInputElement).value))}
-        onchange={() => onchange(local)}
+        oninput={(e) => slide(asNumber((e.target as HTMLInputElement).value))}
+        onchange={release}
+        onblur={() => (holding = false)}
       />
       {#if kind === "hue"}
         <span class="swatch" style={`background:hsl(${asNumber(local)},100%,50%)`}></span>
@@ -48,17 +108,36 @@
       <span class="num">{asNumber(local, lo)}</span>
     </span>
   {:else if kind === "boolean"}
-    <input type="checkbox" checked={asBool(local)} onchange={(e) => onchange((e.target as HTMLInputElement).checked)} />
+    <input type="checkbox" checked={asBool(local)} onchange={(e) => pick((e.target as HTMLInputElement).checked)} />
   {:else if kind === "color"}
-    <input type="color" value={asColor(local)} onchange={(e) => onchange((e.target as HTMLInputElement).value)} />
+    <input type="color" value={asColor(local)} onchange={(e) => pick((e.target as HTMLInputElement).value)} />
   {:else if kind === "combobox" || kind === "list"}
-    <select value={String(local ?? "")} onchange={(e) => onchange((e.target as HTMLSelectElement).value)}>
+    <select value={String(local ?? "")} onchange={(e) => pick((e.target as HTMLSelectElement).value)}>
       {#each values as v}
         <option value={v}>{v}</option>
       {/each}
     </select>
+  {:else if kind === "keycode"}
+    <span class="row">
+      <button
+        type="button"
+        class="keycode"
+        class:recording
+        onclick={() => (recording = !recording)}
+        onkeydown={(e) => recording && record(e)}
+        onblur={() => (recording = false)}>{recording ? "Press a key…" : String(local ?? "") || "None"}</button
+      >
+    </span>
   {:else}
-    <input type="text" value={String(local ?? "")} onchange={(e) => onchange((e.target as HTMLInputElement).value)} />
+    <input
+      type="text"
+      class:invalid={!textOk}
+      title={textOk ? (tooltip ?? "") : `Must match ${filter}`}
+      bind:value={text}
+      onfocus={() => (typing = true)}
+      onblur={() => (typing = false)}
+      onchange={() => textOk && onchange(text)}
+    />
   {/if}
 </label>
 
@@ -82,6 +161,16 @@
     height: 16px;
     border-radius: 4px;
     display: inline-block;
+  }
+  .keycode {
+    min-width: 140px;
+    text-align: left;
+  }
+  .keycode.recording {
+    outline: 2px solid var(--accent);
+  }
+  .invalid {
+    outline: 2px solid var(--bad);
   }
   input[type="range"] {
     flex: 1;

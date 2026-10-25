@@ -27,6 +27,17 @@
 //   `bus*` natives (src/bus.rs): the global `bus` is then the fixed-address bus.
 // * "scan" (`Scan(bus)` of an SMBus plugin): only the `bus*`, `log` and
 //   `pause` natives exist; `freeBus()` hands `Scan` the free-address bus.
+// * "service" (the discovery side of a network plugin): `service.*` over the
+//   `svc*` natives (src/service.rs), `discovery` = `new DiscoveryService()`.
+//
+// A network service or network device session also gets the `net*` / `http*`
+// natives (src/net): real `@SignalRGB/udp` / `tcp` sockets, `XMLHttpRequest`,
+// the `udp` feature; `controller` is then the announced controller data
+// (docs/host-api/network-lightloom.md).
+//
+// A serial device session (`Type() == "serial"`) also gets the `serial*`
+// natives (src/serial.rs): `@SignalRGB/serial` is then the real module, bound
+// to the ports of the matched USB device (docs/host-api/hid-usb.md §3).
 //
 // The Rust side reads state back through `globalThis.__lightloomHost`
 // (non-writable, non-configurable: plugin code cannot replace it).
@@ -53,8 +64,11 @@ const freeze = Object.freeze;
 const cfg = globalThis.__lightloomConfig ?? {};
 
 // Device mode: capture the natives and take them out of plugin reach.
-const native = cfg.mode === "device" || cfg.mode === "scan" ? globalThis.__lightloomNative : undefined;
+const native =
+  cfg.mode === "device" || cfg.mode === "scan" || cfg.mode === "service" ? globalThis.__lightloomNative : undefined;
 const deviceMode = cfg.mode === "device";
+const serviceMode = cfg.mode === "service";
+const netNative = native !== undefined && typeof native.netCreate === "function";
 delete globalThis.__lightloomNative;
 const strictGaps = native !== undefined;
 
@@ -70,6 +84,8 @@ const state = {
   channels: new Map(),
   subdevices: [],
   notifyId: 0,
+  // The `battery` feature: undefined until added; level -1 until set.
+  battery: undefined,
   namespace: undefined,
   gapsLogged: new Set(),
 };
@@ -314,23 +330,84 @@ const featureFactories = {
     }),
   keyboard: () => recording("keyboard", { sendHid: noop, sendKey: noop, sendEvent: noop }),
   mouse: () => recording("mouse", { sendHid: noop, sendEvent: noop }),
-  battery: () =>
-    recording("battery", {
-      disabled: 0,
-      unknown: 0,
-      draining: 1,
-      charging: 2,
-      fullCharging: 3,
-      full: 4,
-      wirelessCharging: 5,
-      batteryLevel: 0,
-      batteryState: 0,
-      stateString: "Unknown",
-      lowBatteryWarningLevel: 15,
-      setBatteryLevel: noop,
-      setBatteryState: noop,
-    }),
+  battery: () => batteryFeature(),
 };
+
+// ---------------------------------------------------------------- battery
+// hid-usb.md §addFeature (battery gap): numeric states 0 unknown, 1 draining,
+// 2 charging, 3 full (charging), 4 full, 5 wireless charging; the named
+// constants carry the same numbers (`disabled` has none in the corpus: 0).
+const BATTERY_STATES = ["Unknown", "Draining", "Charging", "Full (charging)", "Full", "Wireless charging"];
+const DEFAULT_BATTERY_WARNING_LEVEL = 15;
+
+/** A `setBatteryLevel` argument as 0..100 (rounded), or undefined when not a finite number. */
+function batteryLevelArg(level) {
+  const n = Number(level);
+  return isFiniteNumber(n) ? Math.min(100, Math.max(0, Math.round(n))) : undefined;
+}
+
+/** A `setBatteryState` argument: 0..5, anything else is 0 (unknown). */
+function batteryStateArg(value) {
+  const n = Math.trunc(Number(value));
+  return n >= 0 && n < BATTERY_STATES.length ? n : 0;
+}
+
+/**
+ * The `battery` global. Device mode: the natives keep the level and state
+ * (the daemon reads them) and report the user's low-battery warning level.
+ * Stub mode: kept here and listed in the dry-run report.
+ */
+function batteryFeature() {
+  let read;
+  let setLevel;
+  let setState;
+  if (deviceMode) {
+    native.batteryEnable();
+    read = () => {
+      const [level, st, warn] = native.batteryGet();
+      return { level, state: st, warn };
+    };
+    setLevel = (n) => native.batterySetLevel(n);
+    setState = (n) => native.batterySetState(n);
+  } else {
+    state.battery ??= { level: -1, state: 0 };
+    read = () => ({ ...state.battery, warn: DEFAULT_BATTERY_WARNING_LEVEL });
+    setLevel = (n) => {
+      state.battery.level = n;
+    };
+    setState = (n) => {
+      state.battery.state = n;
+    };
+  }
+  return recording("battery", {
+    disabled: 0,
+    unknown: 0,
+    draining: 1,
+    charging: 2,
+    fullCharging: 3,
+    full: 4,
+    wirelessCharging: 5,
+    get batteryLevel() {
+      return Math.max(0, read().level);
+    },
+    get batteryState() {
+      return read().state;
+    },
+    get stateString() {
+      return BATTERY_STATES[read().state] ?? "Unknown";
+    },
+    get lowBatteryWarningLevel() {
+      return read().warn;
+    },
+    setBatteryLevel: (level) => {
+      const n = batteryLevelArg(level);
+      if (n !== undefined) {
+        setLevel(n);
+      }
+    },
+    setBatteryState: (value) => setState(batteryStateArg(value)),
+  });
+}
 
 // ---------------------------------------------------------------- device
 const deviceTarget = {
@@ -357,7 +434,8 @@ const deviceTarget = {
   productId: () => state.productId,
   bulk_transfer: (endpoint, data, length) =>
     Number(endpoint) >= 0x80 ? zeros(length) : Number(length) || (data && data.length) || 0,
-  control_transfer: (_rt, _rq, _v, _i, _data, length) => zeros(length),
+  control_transfer: (requestType, _rq, _v, _i, data, length) =>
+    Number(requestType) & 0x80 ? zeros(length) : Number(length) || (data && data.length) || 0,
   setProtocol: noop,
   pause: noop,
   setFrameRateTarget: noop,
@@ -598,15 +676,53 @@ function deviceLog(value, ...rest) {
 
 const channelObjects = new Map();
 
+/**
+ * The `keyboard` / `mouse` feature of a device session: events go to the macro
+ * runtime (crates/lightloom-plugin-host/src/input.rs). Plain objects: members
+ * SignalRGB lacks (`keyboard.sendKey`) stay `undefined` for plugins that test them.
+ */
+function inputFeature(kind) {
+  const send = (what, data) => native.inputEvent(what, JSON.stringify(data));
+  const opts = (o) => (o !== null && typeof o === "object" ? o : {});
+  const hid = (what, vk, options, extra) => {
+    if (typeof vk !== "number") {
+      throw new TypeError("sendHid(): vkCode must be a number!");
+    }
+    const o = opts(options);
+    if (o.released === undefined) {
+      throw new TypeError("sendHid(): released option must be specified!");
+    }
+    send(what, { vk, released: Boolean(o.released), ...extra(o) });
+  };
+  if (kind === "keyboard") {
+    return {
+      sendEvent: (data) => {
+        const d = opts(data);
+        send("key", { key: d.key === undefined ? "" : String(d.key), keyCode: Number(d.keyCode) || 0, released: Boolean(d.released) });
+      },
+      sendHid: (vk, options) => hid("keyHid", vk, options, () => ({})),
+    };
+  }
+  return {
+    sendEvent: (data) => {
+      const d = opts(data);
+      send("button", {
+        name: d.name === undefined ? "" : String(d.name),
+        buttonCode: Number(d.buttonCode) || 0,
+        released: Boolean(d.released),
+      });
+    },
+    sendHid: (vk, options) =>
+      hid("buttonHid", vk, options, (o) => (o.XButton === undefined ? {} : { XButton: Number(o.XButton) })),
+  };
+}
+
 if (deviceMode) {
   const stubAddFeature = deviceTarget.addFeature;
   Object.assign(deviceTarget, {
     // Not implemented in device sessions yet: these throw instead of answering
-    // with stub data (libusb transfers: M2, fans: M5, LCD: M6).
+    // with stub data (fans: M5, LCD: M6).
     ...unimplemented("device", [
-      "bulk_transfer",
-      "control_transfer",
-      "setProtocol",
       "createFanControl",
       "removeFanControl",
       "setRPM",
@@ -650,15 +766,59 @@ if (deviceMode) {
     },
     getLedCount: () => native.ledCount(),
     getChannelPulseColor: () => PULSE_COLOR,
-    // Lightloom does not drive fans yet; plugins that check this skip fan control.
+    // Lightloom never drives fans (fan control is a future opt-in feature,
+    // docs/sensors.md); plugins that check this skip fan control and their
+    // temperature probes, and the fan API below stays a no-op.
     fanControlDisabled: () => true,
-    // Network features need sockets Lightloom does not provide to device plugins yet.
+    // Network device sessions get the real `udp` and `dtls` features.
     addFeature: (name) => {
       const key = String(name);
+      if ((key === "udp" || key === "dtls") && netNative) {
+        const current = globalThis[key];
+        if (current === undefined || current.__lightloomFeature !== key) {
+          const feature = recording(key, key === "udp" ? { ...udpFeatureMembers() } : dtlsFeatureMembers());
+          defineProperty(feature, "__lightloomFeature", { value: key });
+          globalThis[key] = feature;
+        }
+        return;
+      }
       if (key === "udp" || key === "dtls") {
         unimplementedMember(`device.addFeature(${key})`)();
       }
+      if (key === "keyboard" || key === "mouse") {
+        const current = globalThis[key];
+        if (current === undefined || current.__lightloomFeature !== key) {
+          const feature = inputFeature(key);
+          defineProperty(feature, "__lightloomFeature", { value: key });
+          globalThis[key] = feature;
+        }
+        return;
+      }
       return stubAddFeature(name);
+    },
+    // Raw USB (hid-usb.md §2): the direction comes from bit 7 of the endpoint /
+    // bmRequestType. OUT returns the bytes sent or -1, IN the bytes received
+    // (empty on timeout or failure, getLastReadSize() of them). Default timeout 1000 ms.
+    bulk_transfer: (endpoint, data, length, timeout) => {
+      const ep = toInt(endpoint) & 0xff;
+      return ep & 0x80
+        ? native.usbBulkIn(ep, lengthArg(data, length), timeoutArg(timeout, -1))
+        : native.usbBulkOut(ep, bytesArg(data, length), timeoutArg(timeout, -1));
+    },
+    control_transfer: (requestType, request, value, index, data, length, timeout) => {
+      const setup = [
+        toInt(requestType) & 0xff,
+        toInt(request) & 0xff,
+        toInt(value) & 0xffff,
+        toInt(index) & 0xffff,
+        timeoutArg(timeout, -1),
+      ];
+      return setup[0] & 0x80
+        ? native.usbControlIn(setup, Math.min(lengthArg(data, length), 0xffff))
+        : native.usbControlOut(setup, bytesArg(data, length));
+    },
+    setProtocol: (name) => {
+      native.setProtocol(strArg(name));
     },
     write: (data, length) => native.hidWrite(bytesArg(data, length)),
     send_report: (data, length) => native.hidSendFeature(bytesArg(data, length)),
@@ -697,13 +857,41 @@ if (deviceMode) {
         native.setSize(toInt(size[0]), toInt(size[1]));
       }
     },
-    setControllableLeds: (_names, positions) => native.setLeds(flatPositions(positions)),
-    log: deviceLog,
-    notify: (title, text) => {
-      hostLog(`notify: ${String(title ?? "")}: ${String(text ?? "")}`);
-      state.notifyId += 1;
-      return String(state.notifyId);
+    setControllableLeds: (names, positions) => {
+      native.setLeds(flatPositions(positions));
+      native.setLedNames(isArray(names) ? names.map(strArg) : []);
     },
+    log: deviceLog,
+    // Properties and messages (components-channels.md §2, hid-usb.md "notify"):
+    // the natives keep the device's lists for the dashboard; the JS objects stay
+    // the plugin's (`getProperty(name)`, mutate, `addProperty(obj)` updates).
+    addProperty: (obj) => {
+      if (obj === null || typeof obj !== "object") {
+        native.propAdd("null");
+        return;
+      }
+      if (typeof obj.property === "string" && obj.property !== "") {
+        state.properties.set(obj.property, obj);
+        if (!(obj.property in globalThis)) {
+          globalThis[obj.property] = coerceDefault(obj);
+        }
+      }
+      native.propAdd(stringify(plain(obj)));
+    },
+    removeProperty: (name) => {
+      state.properties.delete(strArg(name));
+      native.propRemove(strArg(name));
+    },
+    addMessage: (id, message, tooltip) => native.msgAdd(strArg(id), strArg(message), strArg(tooltip)),
+    removeMessage: (id) => native.msgRemove(strArg(id)),
+    notify: (title, text, priority) => {
+      hostLog(`notify: ${strArg(title)}: ${strArg(text)}`);
+      state.notifyId += 1;
+      const id = `lightloom-alert-${state.notifyId}`;
+      native.msgNotify(id, strArg(title), strArg(text), toInt(priority));
+      return id;
+    },
+    denotify: (id) => native.msgRemove(strArg(id)),
   });
 }
 
@@ -1034,6 +1222,607 @@ const modules = {
   appInfo: recording("@SignalRGB/appInfo", { version: "0.0.1", compat: "signalrgb-2.5", name: "Lightloom" }),
 };
 
+// ---------------------------------------------------------------- network (native)
+// docs/host-api/network-lightloom.md: sockets and XMLHttpRequest over the `net*`
+// / `http*` natives. What arrives is queued on the Rust side and delivered by
+// `pumpNet()`, which the host calls between plugin calls.
+
+const SOCKET_STATES = {
+  UnconnectedState: 0,
+  HostLookupState: 1,
+  ConnectingState: 2,
+  ConnectedState: 3,
+  BoundState: 4,
+  ListeningState: 5,
+  ClosingState: 6,
+};
+const SOCKET_EVENTS = ["message", "close", "listening", "connection", "error"];
+const MAX_PAYLOAD = 65536;
+
+/** UTF-8 bytes of a string. */
+function utf8(text) {
+  const out = [];
+  for (let i = 0; i < text.length; i++) {
+    let cp = text.codePointAt(i);
+    if (cp > 0xffff) {
+      i++;
+    }
+    if (cp >= 0xd800 && cp <= 0xdfff) {
+      cp = 0xfffd; // lone surrogate
+    }
+    if (cp < 0x80) {
+      out.push(cp);
+    } else if (cp < 0x800) {
+      out.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+    } else if (cp < 0x10000) {
+      out.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+    } else {
+      out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+    }
+  }
+  return out;
+}
+
+/** A send payload as bytes: a string (UTF-8), byte array, typed array or ArrayBuffer. */
+function payloadBytes(data) {
+  if (typeof data === "string") {
+    return utf8(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return arrayFrom(new Uint8Array(data));
+  }
+  if (isView(data)) {
+    return arrayFrom(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+  }
+  if (data != null && typeof data.length === "number") {
+    const n = Math.min(data.length >>> 0, MAX_PAYLOAD);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      out[i] = Number(data[i]) & 0xff;
+    }
+    return out;
+  }
+  hostLog(`Message type is not supported: [${typeof data}]`);
+  return [];
+}
+
+const socketEntries = new Map();
+
+/** A socket object over native socket `existing` (an accepted client) or a new one. */
+function makeSocket(tcp, existing) {
+  const id = existing ?? native.netCreate(tcp);
+  const handlers = { message: [], close: [], listening: [], connection: [], error: [] };
+  const target = {
+    ...SOCKET_STATES,
+    get state() {
+      return id < 0 ? 0 : native.netState(id);
+    },
+    on(event, cb) {
+      if (typeof cb !== "function") {
+        throw new TypeError("on(): callback must be a function!");
+      }
+      const name = String(event);
+      if (!SOCKET_EVENTS.includes(name)) {
+        hostLog(`on(): unknown event type: ${name}`);
+        return;
+      }
+      handlers[name].push(cb);
+    },
+    bind: (port) => id >= 0 && !tcp && native.netBind(id, toInt(port)),
+    connect: (host, port) => id >= 0 && native.netConnect(id, strArg(host), toInt(port)),
+    send: (data) => (id < 0 ? -1 : native.netSend(id, payloadBytes(data))),
+    write: (data, host, port) =>
+      id < 0 || tcp ? -1 : native.netSendTo(id, payloadBytes(data), strArg(host), toInt(port)),
+    // Lightloom extension: listen on the LAN address facing `peer`, accepting `peer` only.
+    listen: (port, peer) => {
+      if (id < 0 || !tcp) {
+        return null;
+      }
+      const at = native.netListen(id, toInt(port), strArg(peer));
+      return at === "" ? null : parseJson(at);
+    },
+    close: () => {
+      if (id >= 0) {
+        native.netClose(id);
+      }
+    },
+    disconnect: () => {
+      if (id >= 0) {
+        native.netDisconnect(id);
+      }
+    },
+    address: () => parseJson(native.netAddress(id)),
+    remoteAddress: () => parseJson(native.netRemote(id)),
+  };
+  if (id < 0) {
+    hostLog("createSocket(): no socket (too many open)");
+  }
+  const socket = recording("socket", target);
+  if (id >= 0) {
+    socketEntries.set(id, { socket, handlers });
+  }
+  return socket;
+}
+
+/** `udp.send(host, port, data, endianness)` over one socket made on first use. */
+function udpFeatureMembers() {
+  let socket;
+  return {
+    send: (host, port, data) => {
+      socket ??= makeSocket(false);
+      return socket.write(data, host, port);
+    },
+  };
+}
+
+// `device.addFeature("dtls")` (network-lightloom.md, "DTLS"): one DTLS 1.2 PSK
+// connection per device context. The handshake runs on a host thread; its
+// outcome and a close by the peer arrive through pumpNet() as callbacks.
+const dtlsCallbacks = Object.assign(Object.create(null), { dtlsOpen: null, dtlsClose: null, dtlsError: null });
+
+function dtlsFeatureMembers() {
+  const setter = (name, slot) => (cb) => {
+    if (typeof cb !== "function") {
+      throw new TypeError(`${name}(): callback must be a function!`);
+    }
+    dtlsCallbacks[slot] = cb;
+  };
+  return {
+    createConnection: (host, port, identity, key) =>
+      native.dtlsConnect(strArg(host), toInt(port), strArg(identity), strArg(key)),
+    // `endianness` only matters for multi-byte numbers; payloads are bytes.
+    send: (data) => native.dtlsSend(payloadBytes(data)),
+    hasEncryptedConnection: () => native.dtlsState() === 2,
+    CloseConnection: () => native.dtlsClose(),
+    onConnectionEstablished: setter("onConnectionEstablished", "dtlsOpen"),
+    onConnectionClosed: setter("onConnectionClosed", "dtlsClose"),
+    onConnectionError: setter("onConnectionError", "dtlsError"),
+    // A pre-shared key involves no certificate: nothing to ignore.
+    ignoreSslErrors: () => {},
+  };
+}
+
+function callSafely(fn, self, args, what) {
+  try {
+    fn.apply(self, args);
+  } catch (e) {
+    const d = describeError(e);
+    hostLog(`${what}: ${d.name}: ${d.message}`);
+  }
+}
+
+const pendingXhr = new Map();
+const xhrState = new WeakMap();
+
+function finishXhr(x, r, guarded) {
+  const st = xhrState.get(x);
+  if (st === undefined || st.aborted) {
+    return;
+  }
+  st.responseHeaders = isArray(r.headers) ? r.headers : [];
+  x.status = Number(r.status) | 0;
+  x.statusText = String(r.statusText ?? "");
+  x.responseText = String(r.body ?? "");
+  x.responseURL = st.url;
+  x.tlsFingerprint = String(r.tlsFingerprint ?? "");
+  if (x.responseType === "json") {
+    try {
+      x.response = parseJson(x.responseText);
+    } catch {
+      x.response = null;
+    }
+  } else {
+    x.response = x.responseText;
+  }
+  x.readyState = 4;
+  const fire = (name) => {
+    const f = x[name];
+    if (typeof f === "function") {
+      const ev = { type: name.slice(2), target: x };
+      if (guarded) {
+        callSafely(f, x, [ev], `XMLHttpRequest.${name}`);
+      } else {
+        f.call(x, ev);
+      }
+    }
+  };
+  fire("onreadystatechange");
+  if (x.status === 0) {
+    fire(r.timedOut ? "ontimeout" : "onerror");
+  } else {
+    fire("onload");
+  }
+  fire("onloadend");
+}
+
+/**
+ * XMLHttpRequest over the host's HTTP client (http:// and https:// on the LAN; sync or async).
+ * Lightloom extensions for https: `tlsPin` (SHA-256 of the expected certificate, hex),
+ * `tlsName` (its expected common name) and, after the request, `tlsFingerprint`.
+ */
+class NetXMLHttpRequest {
+  constructor() {
+    this.readyState = 0;
+    this.status = 0;
+    this.statusText = "";
+    this.response = "";
+    this.responseText = "";
+    this.responseType = "";
+    this.responseURL = "";
+    this.timeout = 0;
+    this.withCredentials = false;
+    this.onreadystatechange = null;
+    this.onload = null;
+    this.onerror = null;
+    this.ontimeout = null;
+    this.onloadend = null;
+    this.onabort = null;
+    this.tlsPin = "";
+    this.tlsName = "";
+    this.tlsFingerprint = "";
+    xhrState.set(this, { method: "GET", url: "", async: true, headers: [], responseHeaders: [], aborted: false });
+  }
+  open(method, url, async = true) {
+    const st = xhrState.get(this);
+    st.method = String(method ?? "GET").toUpperCase();
+    st.url = String(url ?? "");
+    st.async = async !== false;
+    st.headers = [];
+    st.responseHeaders = [];
+    st.aborted = false;
+    this.readyState = 1;
+    this.status = 0;
+    this.responseText = "";
+    this.response = "";
+  }
+  setRequestHeader(name, value) {
+    xhrState.get(this).headers.push([String(name), String(value)]);
+  }
+  getResponseHeader(name) {
+    const key = String(name).toLowerCase();
+    const h = xhrState.get(this).responseHeaders.find(([n]) => n === key);
+    return h ? h[1] : null;
+  }
+  getAllResponseHeaders() {
+    return xhrState
+      .get(this)
+      .responseHeaders.map(([n, v]) => `${n}: ${v}\r\n`)
+      .join("");
+  }
+  abort() {
+    const st = xhrState.get(this);
+    st.aborted = true;
+    if (typeof this.onabort === "function") {
+      callSafely(this.onabort, this, [{ type: "abort", target: this }], "XMLHttpRequest.onabort");
+    }
+  }
+  send(body = null) {
+    const st = xhrState.get(this);
+    if (this.readyState !== 1) {
+      throw new Error("XMLHttpRequest.send(): call open() first");
+    }
+    const t = Number(this.timeout);
+    const req = stringify({
+      method: st.method,
+      url: st.url,
+      headers: st.headers,
+      body: body === null || body === undefined ? null : typeof body === "string" ? body : String(body),
+      timeout: Number.isFinite(t) && t > 0 ? Math.trunc(t) : 0,
+      tlsPin: this.tlsPin ? String(this.tlsPin) : null,
+      tlsName: this.tlsName ? String(this.tlsName) : null,
+    });
+    if (st.async) {
+      this.readyState = 2;
+      pendingXhr.set(native.httpAsync(req), this);
+    } else {
+      finishXhr(this, parseJson(native.httpSync(req)), false);
+    }
+  }
+}
+NetXMLHttpRequest.UNSENT = 0;
+NetXMLHttpRequest.OPENED = 1;
+NetXMLHttpRequest.HEADERS_RECEIVED = 2;
+NetXMLHttpRequest.LOADING = 3;
+NetXMLHttpRequest.DONE = 4;
+
+const udpModule = netNative ? freeze({ createSocket: () => makeSocket(false), ...udpFeatureMembers() }) : undefined;
+const tcpModule = netNative ? freeze({ createSocket: () => makeSocket(true) }) : undefined;
+
+// ---------------------------------------------------------------- network service (native)
+// network-services.md §1.4 over the `svc*` natives; dashboard conventions in
+// network-lightloom.md.
+
+const controllerWrappers = [];
+const wrapperSet = new WeakSet();
+let controllersDirty = false;
+let controllerWarning = false;
+let discoveryInstance;
+const missingWarned = new Set();
+
+const controllerOf = (obj) => (obj !== null && typeof obj === "object" && wrapperSet.has(obj) ? obj.obj : obj);
+
+function settingPart(what, v) {
+  const text = String(v);
+  if (text.includes("/") || text.includes("..")) {
+    throw new Error(`${what} cannot contain a '/' or '..'`);
+  }
+  return text;
+}
+
+const nativeService = {
+  name: "",
+  icon: "",
+  ui: "",
+  view: null,
+  pluginDir: "",
+  controllersReady: true,
+  get controllers() {
+    return controllerWrappers;
+  },
+  devices: [],
+  console: consoleStub,
+  log: (msg, options) => {
+    if (typeof msg === "string") {
+      hostLog(msg);
+    } else {
+      try {
+        hostLog(options && options.pretty ? stringify(msg, null, 2) : stringify(msg));
+      } catch {
+        hostLog(String(msg));
+      }
+    }
+  },
+  addController: (obj) => {
+    const target = controllerOf(obj);
+    if (target === null || typeof target !== "object") {
+      throw new TypeError("addController(): instance must be an object!");
+    }
+    if (target.id === undefined) {
+      throw new TypeError("addController(): instance must have an 'id' property!");
+    }
+    controllersDirty = true;
+    if (controllerWrappers.some((w) => w.obj === target || w.id === target.id)) {
+      return;
+    }
+    const wrapper = { id: target.id, obj: target };
+    wrapperSet.add(wrapper);
+    controllerWrappers.push(wrapper);
+    if (controllerWrappers.length > 50 && !controllerWarning) {
+      controllerWarning = true;
+      hostLog("Warning: Controller list size exceeds 50! There may be a memory leak in the plugin");
+    }
+  },
+  removeController: (obj) => {
+    const target = controllerOf(obj);
+    const id = target !== null && typeof target === "object" ? target.id : undefined;
+    const i = controllerWrappers.findIndex((w) => w.obj === target || (id !== undefined && w.id === id));
+    if (i >= 0) {
+      controllerWrappers.splice(i, 1);
+      controllersDirty = true;
+    }
+  },
+  updateController: () => {
+    controllersDirty = true;
+  },
+  hasController: (id) => controllerWrappers.some((w) => w.id === id),
+  getController: (id) => {
+    const w = controllerWrappers.find((x) => x.id === id);
+    return w ? w.obj : undefined;
+  },
+  announceController: (obj) => {
+    const target = controllerOf(obj);
+    if (target === null || typeof target !== "object" || target.id === undefined) {
+      throw new TypeError("announceController(): instance must have an 'id' property!");
+    }
+    controllersDirty = true;
+    return native.svcAnnounce(String(target.id), stringify(plain(target) ?? {}));
+  },
+  suppressController: (obj) => {
+    const target = controllerOf(obj);
+    const id = target !== null && typeof target === "object" ? target.id : target;
+    if (id !== undefined && id !== null) {
+      native.svcSuppress(String(id));
+    }
+  },
+  getSetting: (id, key) =>
+    native.svcGetSetting(settingPart("getSetting(): id", id), settingPart("getSetting(): key", key)) ?? undefined,
+  saveSetting: (id, key, value) => {
+    const i = settingPart("saveSetting(): id", id);
+    const k = settingPart("saveSetting(): key", key);
+    const text = value === undefined || value === null ? undefined : typeof value === "string" ? value : stringify(value);
+    native.svcSaveSetting(i, k, text);
+  },
+  removeSetting: (id, key) =>
+    native.svcSaveSetting(settingPart("removeSetting(): id", id), settingPart("removeSetting(): key", key), undefined),
+  broadcast: (payload) => native.netBroadcast(payloadBytes(payload)),
+  resolve: (hostname, cb) => {
+    const ips = native.netResolve(strArg(hostname));
+    if (typeof cb === "function") {
+      for (const ip of ips) {
+        cb({ protocol: ip.includes(":") ? "IPV6" : "IPV4", ip });
+      }
+    }
+  },
+};
+
+function publishControllers(force) {
+  if (!serviceMode || (!controllersDirty && !force)) {
+    return;
+  }
+  controllersDirty = false;
+  const list = controllerWrappers.map((w) => ({
+    id: String(w.id),
+    data: plain(w.obj) ?? {},
+    canPair: w.obj !== null && typeof w.obj === "object" && typeof w.obj.startLink === "function",
+  }));
+  native.svcControllers(stringify(list));
+}
+
+function discoveryCall(name, args) {
+  const d = discoveryInstance;
+  const f = d === undefined ? undefined : d[name];
+  if (typeof f !== "function") {
+    if (!missingWarned.has(name)) {
+      missingWarned.add(name);
+      hostLog(`${name}() not implemented!`);
+    }
+    return undefined;
+  }
+  return f.apply(d, args);
+}
+
+/** Deliver what arrived on the sockets and the finished asynchronous requests. */
+function pumpNet() {
+  if (!netNative) {
+    return;
+  }
+  const events = parseJson(native.netPoll());
+  for (const ev of events) {
+    if (ev.kind === "http") {
+      const x = pendingXhr.get(ev.socket);
+      if (x !== undefined) {
+        pendingXhr.delete(ev.socket);
+        finishXhr(x, ev.http ?? {}, true);
+      }
+      continue;
+    }
+    if (ev.kind in dtlsCallbacks) {
+      const cb = dtlsCallbacks[ev.kind];
+      if (typeof cb === "function") {
+        callSafely(cb, undefined, ev.message === undefined ? [] : [ev.message], `dtls ${ev.kind}`);
+      }
+      continue;
+    }
+    if (ev.discovery && ev.kind === "message") {
+      const value = { id: ev.address, ip: ev.address, port: ev.port, response: ev.text ?? "", buffer: ev.data ?? [] };
+      callSafely(discoveryCall, undefined, ["Discovered", [value]], "Discovered");
+      continue;
+    }
+    const entry = socketEntries.get(ev.socket);
+    if (entry === undefined) {
+      continue;
+    }
+    const { socket, handlers } = entry;
+    switch (ev.kind) {
+      case "message": {
+        const text = ev.text ?? "";
+        const msg = { data: text, utf16: text, buffer: ev.data ?? [], address: ev.address ?? "", port: ev.port ?? 0, timestamp: Date.now() };
+        for (const cb of handlers.message) {
+          callSafely(cb, socket, [msg], "socket 'message' callback");
+        }
+        break;
+      }
+      case "connection": {
+        const args = ev.client === undefined ? [] : [makeSocket(true, ev.client)];
+        for (const cb of handlers.connection) {
+          callSafely(cb, socket, args, "socket 'connection' callback");
+        }
+        break;
+      }
+      case "error":
+        for (const cb of handlers.error) {
+          callSafely(cb, socket, [-1, ev.message ?? ""], "socket 'error' callback");
+        }
+        break;
+      case "close":
+        socketEntries.delete(ev.socket);
+        for (const cb of handlers.close) {
+          callSafely(cb, socket, [], "socket 'close' callback");
+        }
+        break;
+      default:
+        for (const cb of handlers.listening) {
+          callSafely(cb, socket, [], "socket 'listening' callback");
+        }
+    }
+  }
+  publishControllers(false);
+}
+
+/** Service: `discovery = new DiscoveryService()`; returns what the host reads from it (JSON). */
+function startService() {
+  const ns = state.namespace;
+  const Ctor = ns === undefined ? undefined : ns.DiscoveryService;
+  if (typeof Ctor !== "function") {
+    throw new TypeError("DiscoveryService is not exported as a function or class");
+  }
+  const inst = new Ctor();
+  discoveryInstance = inst;
+  globalThis.discovery = inst;
+  try {
+    nativeService.name = String(typeof ns.Name === "function" ? ns.Name() : (ns.Name ?? ""));
+  } catch {
+    // Name() was read by the catalog already; the service works without it.
+  }
+  const port = (v) => {
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 && n < 65536 ? n : 0;
+  };
+  const mdns = isArray(inst.MDns) ? inst.MDns.filter((t) => typeof t === "string") : [];
+  if (inst.UdpBroadcastAddress !== undefined && typeof inst.UdpBroadcastAddress !== "string") {
+    hostLog("UdpBroadcastAddress must be a string!");
+  }
+  return stringify({
+    iconUrl: typeof inst.IconUrl === "string" ? inst.IconUrl : "",
+    mdns,
+    broadcastAddress: typeof inst.UdpBroadcastAddress === "string" ? inst.UdpBroadcastAddress : "255.255.255.255",
+    broadcastPort: port(inst.UdpBroadcastPort),
+    listenPort: port(inst.UdpListenPort),
+    canForget: typeof inst.forgetController === "function",
+  });
+}
+
+/** Service: call a `discovery` member (`{ name, args }` as JSON). */
+function callDiscovery(json) {
+  const { name, args } = parseJson(json);
+  try {
+    discoveryCall(String(name), isArray(args) ? args : []);
+  } finally {
+    publishControllers(name === "Update");
+  }
+}
+
+/** Service, dashboard "Add by IP". */
+function addByIp(ip) {
+  try {
+    if (discoveryInstance !== undefined && typeof discoveryInstance.forceDiscover === "function") {
+      discoveryInstance.forceDiscover(ip);
+    } else {
+      discoveryCall("Discovered", [{ id: ip, ip, port: 0, response: "", manual: true }]);
+    }
+  } finally {
+    publishControllers(true);
+  }
+}
+
+function wrapperById(id) {
+  return controllerWrappers.find((w) => String(w.id) === String(id));
+}
+
+/** Service, dashboard "Pair": the controller's `startLink()`. */
+function pairController(id) {
+  try {
+    const w = wrapperById(id);
+    if (w !== undefined && w.obj !== null && typeof w.obj.startLink === "function") {
+      w.obj.startLink();
+    } else {
+      hostLog(`controller ${id} cannot be paired`);
+    }
+  } finally {
+    publishControllers(true);
+  }
+}
+
+/** Service, dashboard "Forget": `discovery.forgetController(id)`. */
+function forgetController(id) {
+  try {
+    const w = wrapperById(id);
+    discoveryCall("forgetController", [w === undefined ? id : w.id]);
+  } finally {
+    publishControllers(true);
+  }
+}
+
 // ---------------------------------------------------------------- device-session modules
 // Real `@SignalRGB/*` modules of a device session (the loader falls back to the
 // throwing facade for the others).
@@ -1076,7 +1865,176 @@ const systeminfoModule = freeze({
   },
 });
 
-const nativeModules = deviceMode ? { permissions: permissionsModule, systeminfo: systeminfoModule } : {};
+// `@SignalRGB/serial` (hid-usb.md §3) over the `serial*` natives. The Rust
+// side only opens the ports of the device's own USB parent; here the options
+// are checked and mapped. Settings the backends cannot do (1.5 stop bits,
+// mark / space parity) make `connect` return false with a log line.
+const serialNative = native !== undefined && typeof native.serialConnect === "function";
+const STOP_BITS = { one: 1, two: 2 };
+const PARITIES = { none: 0, odd: 1, even: 2 };
+const MAX_SERIAL_WRITE = 1 << 20;
+
+/** Bytes of a serial write: a byte array, typed array, ArrayBuffer or string (UTF-8). */
+function serialBytes(data) {
+  if (typeof data === "string") {
+    return utf8(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return arrayFrom(new Uint8Array(data, 0, Math.min(data.byteLength, MAX_SERIAL_WRITE)));
+  }
+  if (isView(data)) {
+    return arrayFrom(new Uint8Array(data.buffer, data.byteOffset, Math.min(data.byteLength, MAX_SERIAL_WRITE)));
+  }
+  if (data != null && typeof data.length === "number") {
+    const n = Math.min(data.length >>> 0, MAX_SERIAL_WRITE);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      out[i] = Number(data[i]) & 0xff;
+    }
+    return out;
+  }
+  return [];
+}
+
+function serialOption(value, table, name) {
+  const key = typeof value === "number" ? { 1: "one", 2: "two" }[value] : String(value).toLowerCase();
+  if (key === undefined || !hasOwn(table, key)) {
+    hostLog(`serial.connect: ${name} ${stringify(value)} is not supported by this host`);
+    return undefined;
+  }
+  return table[key];
+}
+
+function serialJson(text) {
+  return text === "" ? undefined : parseJson(text);
+}
+
+const serialModule = serialNative
+  ? freeze({
+      connect(options) {
+        const o = options ?? {};
+        const stop = serialOption(o.stopBits ?? "One", STOP_BITS, "stopBits");
+        const parity = serialOption(o.parity ?? "None", PARITIES, "parity");
+        if (stop === undefined || parity === undefined) {
+          return false;
+        }
+        const port = o.portName === undefined || o.portName === null ? "" : String(o.portName);
+        const baud = Number(o.baudRate ?? 115200);
+        const dataBits = Number(o.dataBits ?? 8);
+        return native.serialConnect(port, isFiniteNumber(baud) ? baud : 0, dataBits | 0, stop, parity);
+      },
+      disconnect: () => {
+        native.serialDisconnect();
+      },
+      isConnected: () => native.serialIsConnected(),
+      write: (data) => native.serialWrite(serialBytes(data)),
+      read: (maxBytes, timeoutMs = 1000) => {
+        const max = maxBytes === undefined || maxBytes === null ? -1 : Math.max(0, Number(maxBytes) | 0);
+        return native.serialRead(max, Number(timeoutMs) || 0);
+      },
+      readAll: () => native.serialRead(-1, 0),
+      availablePorts: () => parseJson(native.serialPorts()),
+      getDeviceInfo: (portName) => serialJson(native.serialInfo(portName == null ? "" : String(portName))),
+      getPortName: () => native.serialPortName(),
+      getBaudRate: () => native.serialBaudRate(),
+    })
+  : undefined;
+
+// `@SignalRGB/lcd` (effects-engine.md §4, docs/host-api/lcd-lightloom.md) over the
+// `lcd*` natives (src/lcd.rs): frames of the device's LCD face, encoded in Rust. A
+// native answers bytes as a Uint8Array (handed to the plugin as a plain array: plugins
+// use `.length`, `.slice` and `concat`), or `{code, message}`, thrown as an `LcdError`.
+const lcdNative = native !== undefined && typeof native.lcdGetFrame === "function";
+
+class LcdError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "LcdError";
+    this.code = code;
+  }
+}
+
+function lcdBytes(r) {
+  if (isView(r)) {
+    return arrayFrom(r);
+  }
+  throw new LcdError(String(r?.code ?? "LCD_ERROR"), String(r?.message ?? "LCD call failed"));
+}
+
+function lcdFormat(o, member) {
+  const f = o?.format;
+  if (typeof f !== "string") {
+    throw new LcdError(
+      "INVALID_FORMAT",
+      `LCD.${member}(): Invalid image format: ${stringify(f)}. Valid formats are: JPEG, PNG, BMP, RGBA, RGB, RGB565, NZXT::RGB565, NZXT::Q565`,
+    );
+  }
+  return f;
+}
+
+function lcdQuality(o) {
+  const q = Number(o?.quality);
+  return isFiniteNumber(q) ? q : -1;
+}
+
+const lcdModule = lcdNative
+  ? freeze({
+      initialize(settings) {
+        if (settings === null || typeof settings !== "object") {
+          throw new LcdError("INVALID_SETTINGS", "Settings must be an object");
+        }
+        if (typeof settings.width !== "number") {
+          throw new LcdError("INVALID_SETTINGS", "Width must be provided and must be a number");
+        }
+        if (typeof settings.height !== "number") {
+          throw new LcdError("INVALID_SETTINGS", "Height must be provided and must be a number");
+        }
+        // Both spellings are accepted (hid-usb.md Gap resolution).
+        const circular = settings.circular ?? settings.circularPreview;
+        if (circular !== undefined && typeof circular !== "boolean") {
+          throw new LcdError("INVALID_SETTINGS", "Circular must be a boolean");
+        }
+        const r = native.lcdInitialize(settings.width, settings.height, circular === true);
+        if (r !== "") {
+          throw new LcdError(String(r.code), String(r.message));
+        }
+      },
+      get initialized() {
+        return native.lcdInitialized();
+      },
+      getFrame(options) {
+        return lcdBytes(native.lcdGetFrame(lcdFormat(options, "getFrame"), lcdQuality(options)));
+      },
+      getSlicedFrame(options) {
+        const o = options ?? {};
+        const columns = Number(o.columns ?? o.cols);
+        const rows = Number(o.rows);
+        const r = native.lcdGetSlicedFrame(columns, rows, lcdFormat(o, "getSlicedFrame"), lcdQuality(o));
+        if (isArray(r)) {
+          return r.map(lcdBytes);
+        }
+        return lcdBytes(r);
+      },
+      getImageBuffer(x, y, width, height, options) {
+        const o = options ?? {};
+        const out = (v) => (v === undefined || v === null ? NaN : Number(v));
+        const format = o.format === undefined ? "RGB" : lcdFormat(o, "getImageBuffer");
+        return lcdBytes(
+          native.lcdGetImageBuffer(
+            [Number(x), Number(y), Number(width), Number(height), out(o.outputWidth), out(o.outputHeight)],
+            format,
+          ),
+        );
+      },
+    })
+  : undefined;
+
+const netModules = netNative ? { udp: udpModule, tcp: tcpModule } : {};
+const serialModules = serialModule === undefined ? {} : { serial: serialModule };
+const lcdModules = lcdModule === undefined ? {} : { lcd: lcdModule };
+const nativeModules = deviceMode
+  ? { permissions: permissionsModule, systeminfo: systeminfoModule, ...netModules, ...serialModules, ...lcdModules }
+  : { ...netModules };
 
 // ---------------------------------------------------------------- install
 const g = globalThis;
@@ -1104,13 +2062,14 @@ if (deviceMode) {
 } else {
   g.bus = recording("bus", busMembers(true));
 }
-g.service = recording("service", serviceTarget);
+g.service = recording("service", serviceMode && netNative ? nativeService : serviceTarget);
 // Plain-data snapshot of the plugin's own controller object / the plugin's
 // DiscoveryService instance: unknown fields are plugin data, not host API.
-g.controller = recording("controller", controllerTarget, { data: true });
+g.controller =
+  typeof cfg.controller === "string" ? parseJson(cfg.controller) : recording("controller", controllerTarget, { data: true });
 g.discovery = recording("discovery", {}, { data: true });
 g.XmlHttp = recording("XmlHttp", xmlHttpTarget);
-g.XMLHttpRequest = XMLHttpRequestStub;
+g.XMLHttpRequest = netNative ? NetXMLHttpRequest : XMLHttpRequestStub;
 g.BinaryUtils = BinaryUtils;
 
 // ---------------------------------------------------------------- host-side helpers (called from Rust)
@@ -1148,8 +2107,11 @@ const METADATA = [
   "SmbusDeniedRegisters",
   "SpdManufacturers",
   "SmbusBatchWrites",
+  "SaveCapabilities",
+  "ShutdownModes",
+  "HardwareModes",
 ];
-const LIFECYCLE = ["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService"];
+const LIFECYCLE = ["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService", "SaveToDevice", "SetHardwareMode"];
 
 function describeError(e) {
   if (e && typeof e === "object") {
@@ -1246,6 +2208,8 @@ function applyParameters(params) {
   for (const p of params) {
     if (p && typeof p.property === "string" && p.property.length > 0) {
       g[p.property] = coerceDefault(p);
+      // `getProperty` / `removeProperty` / `getPropertyNames` see the exports too.
+      state.properties.set(p.property, p);
       n += 1;
     }
   }
@@ -1292,6 +2256,9 @@ function report() {
     calls: fromEntries(state.calls),
     consoleLines: state.consoleLines,
     logTail: state.logTail,
+    ...(state.battery === undefined
+      ? {}
+      : { battery: { level: state.battery.level < 0 ? null : state.battery.level, state: state.battery.state } }),
   });
 }
 
@@ -1305,6 +2272,12 @@ defineProperty(g, "__lightloomHost", {
     namespace,
     freeBus,
     report,
+    pumpNet,
+    startService,
+    callDiscovery,
+    addByIp,
+    pairController,
+    forgetController,
     describeError,
     modules: freeze(modules),
     nativeModules: freeze(nativeModules),

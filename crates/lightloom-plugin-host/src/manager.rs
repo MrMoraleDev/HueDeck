@@ -17,12 +17,17 @@
 //! A session that ended on its own (a fault) is not restarted while its
 //! device stays plugged in, so a broken plugin does not loop; unplugging and
 //! replugging the device starts it afresh.
+//!
+//! [`DeviceManager::save`] hands a `SaveToDevice(request)` to a device's session,
+//! at most once per [`crate::save::SAVE_INTERVAL`] per device (previews are free).
 
 use crate::catalog::CatalogEntry;
-use crate::session::{self, SessionDevice, SessionHandle, SessionOptions, SessionReport};
+use crate::save::{SaveAction, SaveChoice, SaveLimiter, SaveOutcome, SaveRefused};
+use crate::session::{self, Control, SaveCall, SessionDevice, SessionHandle, SessionOptions, SessionReport};
 use lightloom_engine::FrameStore;
 use lightloom_hal::hid::HidBackend;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -99,6 +104,7 @@ pub struct DeviceManager {
     failed: Vec<String>,
     stop_timeout: Duration,
     restart_after: Duration,
+    saves: SaveLimiter,
 }
 
 impl std::fmt::Debug for DeviceManager {
@@ -126,7 +132,50 @@ impl DeviceManager {
             failed: Vec::new(),
             stop_timeout: STOP_TIMEOUT,
             restart_after: RESTART_AFTER,
+            saves: SaveLimiter::default(),
         }
+    }
+
+    /// Shortest time between two saves to one device (default
+    /// [`crate::save::SAVE_INTERVAL`]; tests shorten it).
+    pub fn with_save_interval(mut self, interval: Duration) -> Self {
+        self.saves = SaveLimiter::new(interval);
+        self
+    }
+
+    /// Hand `SaveToDevice(request)` to the running session of `key`; the outcome
+    /// arrives on the receiver once the session ran it (between two frames). A
+    /// save (not a preview) counts against the device's rate limit as soon as it
+    /// is handed over, whatever its outcome.
+    pub fn save(
+        &mut self,
+        key: &str,
+        action: SaveAction,
+        choice: SaveChoice,
+    ) -> Result<Receiver<SaveOutcome>, SaveRefused> {
+        let Some(h) = self.sessions.get(key).filter(|h| !h.is_finished()) else {
+            return Err(SaveRefused::NotRunning(key.to_string()));
+        };
+        if action == SaveAction::Save {
+            self.saves.check(key)?;
+        }
+        let (reply, rx) = channel();
+        if !h.control(Control::Save(SaveCall {
+            action,
+            choice,
+            reply,
+        })) {
+            return Err(SaveRefused::NotRunning(key.to_string()));
+        }
+        if action == SaveAction::Save {
+            self.saves.take(key)?;
+        }
+        Ok(rx)
+    }
+
+    /// Seconds until `key` may be saved again (0: now).
+    pub fn save_wait_secs(&self, key: &str) -> u64 {
+        self.saves.wait_secs(key)
     }
 
     /// Minimum age of a session restarted for a lost device (default
@@ -284,6 +333,34 @@ impl DeviceManager {
             self.collect(h, removed);
         }
         (self.reports, self.failed)
+    }
+
+    /// System sleep: stop every session with `Shutdown(true)`
+    /// ([`SessionHandle::stop_for_suspend`]), all at once, waiting at most
+    /// `wait` (the OS gives sleep handlers only a few seconds). A session still
+    /// shutting down then stays among the stopping ones: no new session for its
+    /// device until it ends. The manager stays usable: the next
+    /// [`DeviceManager::reconcile`] starts fresh sessions (`Initialize()`).
+    /// Returns the keys of the sessions stopped.
+    pub fn suspend(&mut self, wait: Duration) -> Vec<String> {
+        let all: Vec<SessionHandle> = std::mem::take(&mut self.sessions).into_values().collect();
+        self.backoff.clear();
+        let keys = all.iter().map(|h| h.key().to_string()).collect();
+        for h in &all {
+            h.stop_for_suspend();
+        }
+        let deadline = Instant::now() + wait.min(self.stop_timeout);
+        while all.iter().any(|h| !h.is_finished()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for h in all {
+            if h.is_finished() {
+                self.collect(h, false);
+            } else {
+                self.stopping.push((h, false));
+            }
+        }
+        keys
     }
 
     /// Collect the earlier sessions that have ended since they were asked to stop.

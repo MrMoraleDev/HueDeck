@@ -3,6 +3,21 @@
 
 Evidence base (all read-only): 48 macroscript files (`%USERPROFILE%\AppData\Local\VortxEngine\app-2.5.80\Signal-x64\Macroscripts\{Actions (32), Inputs (16)}`), 10 log files in `%USERPROFILE%\AppData\Local\WhirlwindFX\SignalRgb\Logs\`, Sentry breadcrumb store `...\SignalRgb\cache\.sentry-native\`, string extraction (ASCII + UTF-16) of `Signal-x64\SignalRgb.exe` (118 MB), `C:\ProgramData\WhirlwindFX\SignalRgb\service\SignalRgbService.exe` (12.26 MB, Rust), `C:\Windows\System32\drivers\SignalRgbDriver.sys` (55,768 B, KMDF), registry `HKCU\Software\WhirlwindFX\SignalRgb`, `HKLM\SYSTEM\CurrentControlSet\Services\{SignalRgb.Service,SignalRgbDriver}`, `C:\Program Files\WindowsApps\SignalRGB_1.0.2.6_x64__4n6rtbnm9e9y2\AppxManifest.xml`, docs pages application-urls, signalrgb-api/{introduction,lighting,layouts}, guides/advanced-features/macros. Paths below abbreviated: `A/` = Macroscripts\Actions, `I/` = Macroscripts\Inputs, `L17` = Logs\SignalRGB_20261017_112248.log, `L10` = SignalRGB_20261010_193126.old.9.log, `L11` = SignalRGB_20261011_144508.old.8.log, `L16` = SignalRGB_20261016_182307.old.3.log, `L17b` = SignalRGB_20261017_114741.old.2.log (elevated `--installsignalio` child). Frequencies are exhaustive counts over all 48 macroscripts (regex over every file; nothing sampled).
 
+> **Lightloom's implementation** (`crates/lightloom-macros`, user guide `docs/macros.md`): every
+> Action and Input runs in its own QuickJS runtime on its own thread; globals `system`
+> (`action`, `openUrl` for http/https/mailto and a few app schemes, `openApplication` behind an
+> opt-in switch, `prompt` through a dashboard dialog, `copyToClipboard`; `elevateWindow` and
+> `cycleWindow` throw `MacroError`, `getForegroundExplorerPath` answers `""`), all 18 `signalrgb.*`
+> methods mapped onto the engine, `keys`, `mouse.click`, `block.trigger`, `console`. Refused calls
+> throw `MacroRefused`. Events carry `EventHandler`, `Sender`, `SenderType`, `EventType` and the
+> payload under both `data` and `Data`. Emitted: Effect Changed, Layout Changed, Session Lock,
+> System Suspend / Resume / Logoff, System Idle Time, System Time (each new minute), Process
+> Started / Ended, Foreground App Changed (`exe`, `title`; never logged), key and mouse events
+> from the opt-in hooks and from device plugins' `keyboard` / `mouse` features, and
+> `onSensorUpdate` from the sensor poller (Lightloom's own shape, `{sensors: {...}}`; SignalRGB
+> 2.5.80 has no emitter). Not implemented: layers, Tier-1 native rules, Audio Capture. User scripts live in `<config>/macroscripts/{Actions,Inputs}`; an Input's chain of
+> Actions replaces SignalRGB's macroblocks. Emergency stop: `Ctrl + Alt + Shift + F12`.
+
 ---
 
 ## 1. Macro script contract (Macroscripts/Actions + Macroscripts/Inputs)

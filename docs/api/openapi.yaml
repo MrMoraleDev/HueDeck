@@ -1,0 +1,2523 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The native Lightloom API of lightloomd (crates/lightloom-api src/server.rs `native_router`, the
+# shapes in src/model.rs, the answers in crates/lightloom-daemon src/engine.rs). Every route of
+# `lightloom_api::NATIVE_ROUTES` and of the router appears here: crates/lightloom-api/tests/openapi.rs
+# checks it. The SignalRGB-compatible API (ports 16038 / 16034, `/api/v1/*`) is described in
+# docs/api/compat-openapi.yaml.
+openapi: 3.1.0
+info:
+  title: Lightloom native API
+  version: "1"
+  license:
+    name: GPL-3.0-or-later
+    identifier: GPL-3.0-or-later
+  description: |
+    REST and WebSocket API of `lightloomd`, the per-user Lightloom daemon, and of its dashboard.
+
+    * **Loopback only.** The daemon binds `127.0.0.1`. Every request must name a loopback
+      `Host` (`127.0.0.1:<port>`, `localhost:<port>`, `[::1]:<port>`), else `403 forbidden_host`
+      (DNS rebinding); an `Origin`, when sent, must be the same loopback origin, else
+      `403 forbidden_origin` (other web pages cannot drive the API).
+    * **Token.** Requests that change state (`POST`, `PUT`, `PATCH`, `DELETE`) need
+      `Authorization: Bearer <token>`, the contents of the `api-token` file in Lightloom's data
+      directory; else `401 unauthorized`. Reads need no token. The dashboard page gets the token
+      embedded when it is served (`<meta name="lightloom-token">`).
+    * **Port.** 53000 by default; `config.toml` `[api] port` or the dashboard setting
+      (`PATCH /v1/settings {"port"}`) moves it. The daemon writes the port it serves on to
+      `api-port` in the data directory (`lightloom url` prints it).
+    * **Errors** are `{"error": {"status", "code", "message"}}` with the HTTP status of `status`.
+    * JSON field names are camelCase.
+servers:
+  - url: http://127.0.0.1:53000
+    description: default port
+tags:
+  - name: daemon
+  - name: devices
+  - name: effects
+  - name: lighting
+  - name: playlists
+  - name: layouts
+  - name: profiles
+  - name: settings
+  - name: network
+  - name: sensors
+  - name: backup
+  - name: canvas
+  - name: actions
+  - name: macros
+  - name: streams
+paths:
+  /v1/health:
+    get:
+      tags: [daemon]
+      operationId: health
+      summary: Liveness, version and lifecycle state
+      responses:
+        "200":
+          description: The daemon answers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version, state]
+                properties:
+                  status: { const: ok }
+                  version: { type: string, examples: ["0.1.0"] }
+                  state: { type: string, description: "Lifecycle state (`Running`, `ScanningHardware`, ...)." }
+                  os: { type: string, description: "Operating system and build, as device reports show it.", examples: ["Windows 11 Pro 25H2 (build 26200.6899)"] }
+  /v1/state:
+    get:
+      tags: [daemon]
+      operationId: getState
+      summary: Everything a client shows, as of one moment
+      description: Clients refetch this when the `/v1/events` stream says `state`.
+      responses:
+        "200":
+          description: The snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Snapshot" }
+  /v1/devices:
+    get:
+      tags: [devices]
+      operationId: listDevices
+      summary: Devices (running sessions first, then disabled or absent known devices)
+      responses:
+        "200":
+          description: The devices.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DeviceView" }
+  /v1/devices/{key}:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    get:
+      tags: [devices]
+      operationId: getDevice
+      summary: One device (key compared case-insensitively)
+      responses:
+        "200":
+          description: The device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceView" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [devices]
+      operationId: patchDevice
+      summary: Enable or disable a device, or set its plugin parameters
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean, description: Drive the device or not. }
+                parameters:
+                  type: object
+                  additionalProperties: true
+                  description: "Parameter values by property (`ControllableParameters` and run-time `device.addProperty` names), coerced to the control type (`\"800\"` -> 800 for a number), applied live and stored."
+                blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low. }
+                shutdownMode: { enum: [restore, keep, off, default], description: "This device's exit mode (\"When Lightloom closes\"); `default`: the setting's. See docs/host-api/save-shutdown.md." }
+      responses:
+        "200":
+          description: Done.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/channels/{channel}:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+      - name: channel
+        in: path
+        required: true
+        schema: { type: string }
+        description: Channel name (as the plugin's `device.addChannel` named it).
+    put:
+      tags: [devices]
+      operationId: putChannel
+      summary: Assign component instances to a channel (the device session restarts)
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              description: |
+                Component instances in chain order, SignalRGB's component JSON shape. An entry
+                `{"ProductName": ...}` taken from `/v1/components` gets a new `ComponentId`.
+              items: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Done.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device: { type: string }
+                  channel: { type: string }
+                  components: { type: array, items: { type: object } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/lcd:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    put:
+      tags: [devices]
+      operationId: putLcd
+      summary: Choose a device's LCD face, frame rate and face control values (kept per device)
+      description: |
+        The face is an HTML page from `GET /v1/lcd/faces`, rendered at the size the device's
+        plugin gave `LCD.initialize` (docs/host-api/lcd-lightloom.md). Every field may be
+        left out; `face: ""` goes back to the default face. A running face restarts on a new
+        `face` or `framerate`; `values` (the face's `<meta property>` controls, `LcdFaceView.controls`)
+        are kept per device and face, for the face the device shows after `face`, and reach the
+        running page without a restart. An unknown control or a value that does not fit is a 400.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                face: { type: string, description: "Face id, e.g. `lightloom:clock`" }
+                framerate: { type: integer, minimum: 1, maximum: 60 }
+                values: { type: object, additionalProperties: true, description: "Control values by property" }
+      responses:
+        "200":
+          description: The device's LCD choice.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key: { type: string }
+                  face: { type: [string, "null"] }
+                  framerate: { type: integer }
+                  values: { type: object, additionalProperties: true, description: "The control values of the face shown (empty while no LCD runs)" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/lcd/preview:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    get:
+      tags: [devices]
+      operationId: getLcdPreview
+      summary: The device's latest LCD face frame as a PNG (the dashboard's preview)
+      description: |
+        Encoded on request from the face renderer's newest frame, at the LCD's own size; the dashboard
+        asks about twice a second while the preview is on screen. `Cache-Control: no-store`.
+      responses:
+        "200":
+          description: A PNG image.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/mode:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    put:
+      tags: [devices]
+      operationId: putHardwareMode
+      summary: Put a device in one of its hardware modes, or back on the effect
+      description: |
+        A hardware mode is one of the device's built-in effects (`DeviceView.hardwareModes`, the plugin's
+        `HardwareModes()`), set live with `SetHardwareMode(request)`: never stored in the device (no flash
+        write; "Save to devices" stays the only way to store lighting). While a device runs one, Lightloom
+        sends it no frames. `{"id": null}` (or `{}`) is "Follow effect". The choice is kept by Lightloom
+        and set again when the device's session starts (docs/host-api/hardware-modes.md).
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: [string, "null"], description: "A mode id of `DeviceView.hardwareModes`; null: follow the effect" }
+                colors: { type: array, items: { type: string, pattern: "^#[0-9a-fA-F]{6}$" }, description: One per colour of the mode (missing ones are white) }
+                speed: { type: integer, minimum: 0, maximum: 100 }
+                brightness: { type: integer, minimum: 0, maximum: 100 }
+      responses:
+        "200":
+          description: The device and the mode chosen now (null when it follows the effect).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device: { type: string }
+                  hardwareMode: { oneOf: [{ $ref: "#/components/schemas/DeviceHardwareMode" }, { type: "null" }] }
+                  applied: { type: boolean, description: A running session took it (false while the device is absent or disabled) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/leds:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    get:
+      tags: [devices]
+      operationId: getLedMap
+      summary: The LED painter's view of a running device (its endpoints' LEDs, custom colours and zones)
+      description: |
+        Every endpoint of the device's session (the device, its subdevices and channel
+        components) with its LEDs at their cells (`LedPositions()`, `setSubdeviceLeds`,
+        `LedCoordinates`) and names, whether it shows custom colours, the custom colour of
+        every slot and the zones. Colours are kept per slot: the LED index for devices and
+        components, the grid cell (`y * width + x`) for subdevices. docs/custom-leds.md.
+      responses:
+        "200":
+          description: The device's LED map.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LedMapView" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/devices/{key}/leds/{uid}:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+      - $ref: "#/components/parameters/EndpointUid"
+    patch:
+      tags: [devices]
+      operationId: patchLeds
+      summary: Paint an endpoint's LEDs and switch it between "custom LEDs" and following the effect
+      description: |
+        Applied in this order: `colors` (slot 0 on), `fill`, `set`, `zones`, then `mode`.
+        The device shows the change from its next frame (brightness still applies); the
+        database gets it shortly after the last change of a burst. Refused as a whole when a
+        colour, a slot or a zone is wrong.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LedEdit" }
+      responses:
+        "200":
+          description: The endpoint's mode, and whether anything changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uid: { type: string }
+                  custom: { type: boolean }
+                  changed: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/devices/{key}/leds/{uid}/zones/{name}:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+      - $ref: "#/components/parameters/EndpointUid"
+      - name: name
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 64 }
+        description: Zone name.
+    put:
+      tags: [devices]
+      operationId: putLedZone
+      summary: Save a zone (a named set of LED slots) of an endpoint, replacing one of that name
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                leds: { type: array, items: { type: integer, minimum: 0 }, description: Slots. }
+      responses:
+        "200": { $ref: "#/components/responses/LedZones" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [devices]
+      operationId: deleteLedZone
+      summary: Delete a zone of an endpoint
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/LedZones" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/lcd/faces:
+    get:
+      tags: [devices]
+      operationId: listLcdFaces
+      summary: The LCD faces (Lightloom's starter faces, then the user's `faces` directory)
+      responses:
+        "200":
+          description: Faces by id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LcdFaceView" }
+  /v1/effects:
+    get:
+      tags: [effects]
+      operationId: listEffects
+      summary: The effect library
+      responses:
+        "200":
+          description: Effects by id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EffectView" }
+  /v1/effects/next:
+    post:
+      tags: [effects]
+      operationId: nextEffect
+      summary: Show the next effect of the library
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/EffectApplied" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/effects/previous:
+    post:
+      tags: [effects]
+      operationId: previousEffect
+      summary: Show the previous effect of the library
+      description: While a playlist plays, next and previous move within the playlist.
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/EffectApplied" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/effects/shuffle:
+    post:
+      tags: [effects]
+      operationId: shuffleEffect
+      summary: Show a random effect of the library
+      description: Game integrations (effects with screen meters) and developer effects are left out; a playing playlist stops.
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/EffectApplied" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/effects/{id}:
+    parameters:
+      - $ref: "#/components/parameters/EffectId"
+    get:
+      tags: [effects]
+      operationId: getEffect
+      summary: One effect
+      responses:
+        "200":
+          description: The effect.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EffectView" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/effects/{id}/apply:
+    parameters:
+      - $ref: "#/components/parameters/EffectId"
+    post:
+      tags: [effects]
+      operationId: applyEffect
+      summary: Show an effect, optionally with control values (which are stored)
+      security: [{ bearer: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values: { $ref: "#/components/schemas/ControlValues" }
+      responses:
+        "200": { $ref: "#/components/responses/EffectApplied" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/effects/{id}/values:
+    parameters:
+      - $ref: "#/components/parameters/EffectId"
+    patch:
+      tags: [effects]
+      operationId: setEffectValues
+      summary: Store control values of an effect; the current effect gets them live
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ControlValues" }
+      responses:
+        "200": { $ref: "#/components/responses/EffectApplied" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/effects/{id}/presets/{name}:
+    parameters:
+      - $ref: "#/components/parameters/EffectId"
+      - $ref: "#/components/parameters/PresetName"
+    put:
+      tags: [effects]
+      operationId: savePreset
+      summary: Save the effect's stored values as a preset
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/PresetDone" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [effects]
+      operationId: deletePreset
+      summary: Delete a preset
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/effects/{id}/presets/{name}/apply:
+    parameters:
+      - $ref: "#/components/parameters/EffectId"
+      - $ref: "#/components/parameters/PresetName"
+    post:
+      tags: [effects]
+      operationId: applyPreset
+      summary: Load a preset into the effect's values and show the effect
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/EffectApplied" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/lighting:
+    get:
+      tags: [lighting]
+      operationId: getLighting
+      summary: What is on the canvas
+      responses:
+        "200":
+          description: Effect, brightness, layout, renderer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lighting" }
+    patch:
+      tags: [lighting]
+      operationId: patchLighting
+      summary: Global brightness and the canvas pause
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                brightness: { type: integer, minimum: 0, maximum: 100 }
+                enabled: { type: boolean, description: "`false` pauses the canvas: every device shows black." }
+      responses:
+        "200":
+          description: The new values.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  brightness: { type: integer }
+                  enabled: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/lighting/timer:
+    patch:
+      tags: [playlists]
+      operationId: setEffectTimer
+      summary: The auto-next timer (SignalRGB's "Effect Timer Interval")
+      description: |
+        While no playlist plays and the timer is enabled, the next effect of the library is shown
+        every `interval` seconds (game integrations and developer effects skipped). The interval is
+        also the duration of playlist entries that have none. Off by default, 300 s by default.
+        Nothing switches while the canvas is paused.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                interval: { type: integer, minimum: 1, maximum: 86400 }
+      responses:
+        "200":
+          description: The timer now.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EffectTimer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/playlists:
+    get:
+      tags: [playlists]
+      operationId: listPlaylists
+      summary: Effect playlists
+      responses:
+        "200":
+          description: Playlists by id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Playlist" }
+    post:
+      tags: [playlists]
+      operationId: createPlaylist
+      summary: Create a playlist (its id is made from the name)
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Playlist" }
+      responses:
+        "200": { $ref: "#/components/responses/PlaylistSaved" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/playlists/stop:
+    post:
+      tags: [playlists]
+      operationId: stopPlaylist
+      summary: Stop the playing playlist (the effect stays)
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Whether one was playing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stopped: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/playlists/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PlaylistId"
+    get:
+      tags: [playlists]
+      operationId: getPlaylist
+      summary: One playlist
+      responses:
+        "200":
+          description: The playlist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Playlist" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [playlists]
+      operationId: savePlaylist
+      summary: Create or replace the playlist with this id
+      description: Editing the playing playlist keeps the entry shown when it still exists.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Playlist" }
+      responses:
+        "200": { $ref: "#/components/responses/PlaylistSaved" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      tags: [playlists]
+      operationId: deletePlaylist
+      summary: Delete a playlist (it stops when it plays)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/playlists/{id}/play:
+    parameters:
+      - $ref: "#/components/parameters/PlaylistId"
+    post:
+      tags: [playlists]
+      operationId: playPlaylist
+      summary: Play a playlist
+      description: |
+        From its first entry (shuffled playlists: a random one), or from the entry showing `start`.
+        Each entry lasts its `duration`, else the timer's interval, and loads its preset and values
+        into the effect (stored, like applying a preset). Entries whose effect is not installed are
+        skipped. Choosing an effect or a preset, or shuffling, ends the playlist.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                start: { type: string, description: Effect id of the entry to start with. }
+      responses:
+        "200":
+          description: Playing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  playlist: { type: string }
+                  effect: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/layouts:
+    get:
+      tags: [layouts]
+      operationId: listLayouts
+      summary: Saved layout names
+      responses:
+        "200":
+          description: Names.
+          content:
+            application/json:
+              schema: { type: array, items: { type: string } }
+  /v1/layouts/{name}:
+    parameters:
+      - $ref: "#/components/parameters/LayoutName"
+    get:
+      tags: [layouts]
+      operationId: getLayout
+      summary: A saved layout with its placements
+      responses:
+        "200":
+          description: The layout (schemas/layout.schema.json).
+          content:
+            application/json:
+              schema: { $ref: "../../schemas/layout.schema.json" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [layouts]
+      operationId: saveLayoutAs
+      summary: Save the current layout under this name and switch to it
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/LayoutDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      tags: [layouts]
+      operationId: deleteLayout
+      summary: Delete a layout (not the current one)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/layouts/{name}/apply:
+    parameters:
+      - $ref: "#/components/parameters/LayoutName"
+    post:
+      tags: [layouts]
+      operationId: applyLayout
+      summary: Switch to a saved layout
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/LayoutDone" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/layout:
+    patch:
+      tags: [layouts]
+      operationId: patchLayout
+      summary: The current layout's brightness
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [brightness]
+              properties:
+                brightness: { type: integer, minimum: 0, maximum: 100 }
+      responses:
+        "200":
+          description: The new brightness.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  layoutBrightness: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/profiles:
+    get:
+      tags: [profiles]
+      operationId: listProfiles
+      summary: Saved profiles (named snapshots of the whole lighting setup), by name
+      responses:
+        "200":
+          description: The profiles.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ProfileView" } }
+    post:
+      tags: [profiles]
+      operationId: importProfile
+      summary: Add a profile from an exported document
+      description: The document is what `GET /v1/profiles/{name}` answers. It gets `name`, else its own name, made unique with " (2)", " (3)", ...
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile: { $ref: "#/components/schemas/Profile" }
+                name: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/ProfileDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [profiles]
+      operationId: patchProfiles
+      summary: The profile applied when Lightloom starts
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                default: { type: [string, "null"], description: "A profile name; null or empty: none (the setup as it was left)" }
+      responses:
+        "200":
+          description: The default profile now.
+          content:
+            application/json:
+              schema: { type: object, properties: { defaultProfile: { type: [string, "null"] } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/profiles/{name}:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    get:
+      tags: [profiles]
+      operationId: getProfile
+      summary: A profile document (what an export file holds)
+      responses:
+        "200":
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [profiles]
+      operationId: saveProfile
+      summary: Save the current lighting setup as this profile (created or replaced)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/ProfileDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      tags: [profiles]
+      operationId: deleteProfile
+      summary: Delete a profile (it stops being the default one)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/profiles/{name}/apply:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    post:
+      tags: [profiles]
+      operationId: applyProfile
+      summary: Apply a profile
+      description: |
+        The effect with its control values, the global brightness and canvas pause, the layout (saved under its
+        name and switched to), then per device: enable, plugin parameters, channel components, exit mode and
+        hardware mode. Devices Lightloom has never seen are skipped (listed in `notes`). A playlist stops.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile: { type: string }
+                  notes: { type: array, items: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/profiles/{name}/rename:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    post:
+      tags: [profiles]
+      operationId: renameProfile
+      summary: Rename a profile
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        "200": { $ref: "#/components/responses/ProfileDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/profiles/{name}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    post:
+      tags: [profiles]
+      operationId: duplicateProfile
+      summary: Copy a profile under a new name
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        "200": { $ref: "#/components/responses/ProfileDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/placements/{uid}:
+    parameters:
+      - name: uid
+        in: path
+        required: true
+        schema: { type: string }
+        description: Endpoint uid (`Endpoint.uid` of a device, subdevice or component).
+    put:
+      tags: [layouts]
+      operationId: putPlacement
+      summary: Move an endpoint in the current layout
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Placement" }
+      responses:
+        "200":
+          description: Done.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uid: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/components:
+    get:
+      tags: [devices]
+      operationId: listComponents
+      summary: The component library for the channel editor
+      responses:
+        "200":
+          description: Components.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    productName: { type: string }
+                    displayName: { type: string }
+                    brand: { type: string }
+                    type: { type: string }
+                    ledCount: { type: integer }
+                    width: { type: integer }
+                    height: { type: integer }
+  /v1/settings:
+    get:
+      tags: [settings]
+      operationId: getSettings
+      summary: User settings
+      responses:
+        "200":
+          description: The settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+    patch:
+      tags: [settings]
+      operationId: patchSettings
+      summary: Change user settings, including the API port
+      description: |
+        A `port` moves the native API and the dashboard. The new port is bound first: when it
+        is busy the answer is `409 port_in_use` and nothing changes. A port outside 1024-65535,
+        or one of Lightloom's own SignalRGB-compatible (16038, 16034) or OpenRGB SDK (6742)
+        ports, is `400 invalid_port`. On success the daemon saves the port, starts serving on
+        it, and keeps the old listener for a grace period so this response and the dashboard's
+        navigation to `url` go through.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                signalrgb: { type: boolean, description: "Use the local SignalRGB installation's plugins, effects, components and channels (read in place)." }
+                gpuCompositing: { type: boolean }
+                smbus: { type: boolean, description: Drive SMBus devices (scans the buses when turned on). }
+                network: { type: boolean, description: "Network lights: start (or stop) the network plugins' discovery services and their LAN devices." }
+                batteryLow: { type: integer, minimum: 1, maximum: 95, description: "Low-battery threshold, percent (plugins see it as `battery.lowBatteryWarningLevel`); above `batteryCritical`, else `400 bad_request`." }
+                batteryCritical: { type: integer, minimum: 0, description: Critical battery threshold, percent; below `batteryLow`. }
+                batteryNotifications: { type: boolean, description: Show low and critical battery alerts as system notifications. }
+                shutdownMode: { enum: [restore, keep, off], description: "What devices show when Lightloom closes: their own lighting, the last colours (not stored) or off; else `400 bad_request`." }
+                port: { type: integer, minimum: 1024, maximum: 65535, description: "Port of the native API and the dashboard (loopback only)." }
+                urlScheme: { type: boolean, description: "Register (or remove) the per-user `lightloom://` URL scheme (`HKCU\\Software\\Classes\\lightloom`; opt-in). Not available: `409 conflict`; the registry refused: `500 url_scheme_failed`; either way nothing else changes." }
+      responses:
+        "200":
+          description: The settings now, and where the API serves.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signalrgb: { type: boolean }
+                  gpuCompositing: { type: boolean }
+                  smbus: { type: boolean }
+                  network: { type: boolean }
+                  batteryLow: { type: integer }
+                  batteryCritical: { type: integer }
+                  batteryNotifications: { type: boolean }
+                  shutdownMode: { enum: [restore, keep, off] }
+                  port: { type: integer }
+                  url: { type: string, examples: ["http://127.0.0.1:53000/"] }
+                  urlScheme: { type: boolean, description: Present when the request changed it. }
+        "400":
+          description: "`invalid_port` (out of range or reserved) or `bad_request`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+              examples:
+                invalid_port:
+                  value: { error: { status: 400, code: invalid_port, message: "port 80 is out of range: choose 1024-65535 (lower ports need administrator rights)" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: "`port_in_use`: the port cannot be bound; nothing was changed."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+              examples:
+                port_in_use:
+                  value: { error: { status: 409, code: port_in_use, message: "port 8080 cannot be used (...); another program probably listens on it. Nothing was changed: choose another port" } }
+  /v1/import/signalrgb:
+    get:
+      tags: [backup]
+      operationId: previewSignalRgb
+      summary: Preview what the SignalRGB import would bring in (read-only, nothing changes)
+      description: >-
+        Reads the local SignalRGB setup in place (`HKCU\Software\WhirlwindFX\SignalRgb`, read-only)
+        and reports what `POST /v1/import/signalrgb` would import. Effects and plugins from
+        SignalRGB are third-party files and stay where they are.
+      parameters:
+        - { name: name, in: query, required: false, schema: { type: string, default: SignalRGB }, description: Layout name. }
+      responses:
+        "200":
+          description: What would be imported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignalRgbImport" }
+    post:
+      tags: [backup]
+      operationId: importSignalRgb
+      summary: Import the local SignalRGB setup (layout, channel components, effect values and presets, selected effect, brightness, per-device enable)
+      security: [{ bearer: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, default: SignalRGB, description: Layout name. }
+      responses:
+        "200":
+          description: What was imported (the preview's shape plus `imported`, `valuesImported` and `presetsImported`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignalRgbImport" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/export:
+    get:
+      tags: [backup]
+      operationId: exportState
+      summary: Everything persisted, as one JSON document
+      responses:
+        "200":
+          description: The export document (input of `POST /v1/import`).
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /v1/import:
+    post:
+      tags: [backup]
+      operationId: importState
+      summary: Replace everything persisted with an export document
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Imported.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported: { const: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/pawnio:
+    get:
+      tags: [daemon]
+      operationId: getPawnIo
+      summary: PawnIO / RAM lighting status, read again now
+      description: >-
+        Reads PawnIO's uninstall entry and the `LightloomIoBroker` service state (read-only; the daemon
+        never opens the PawnIO device) and returns the panel the dashboard shows. Also in the snapshot
+        as `pawnio`.
+      responses:
+        "200":
+          description: The status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PawnIoView" }
+  /v1/pawnio/install:
+    post:
+      tags: [daemon]
+      operationId: installPawnIo
+      summary: Set RAM lighting up (Windows shows one UAC prompt)
+      description: >-
+        Starts `lightloom-setup --pawnio-install --smbus` with the `runas` verb: when PawnIO is missing or
+        older than 2.2.0 it downloads the official installer (SHA-256 and signer pinned) and runs it,
+        then (re)registers the Lightloom I/O service. Answers at once with `job.running`; the outcome
+        arrives as a `state` event (`pawnio.job`). Refused (409) while a run is going on, off Windows,
+        without `lightloom-setup.exe` next to the daemon, or in a no-hardware run.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PawnIoView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/pawnio/remove:
+    post:
+      tags: [daemon]
+      operationId: removePawnIo
+      summary: Remove the Lightloom I/O service (Windows shows one UAC prompt); PawnIO stays
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PawnIoView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/rescan:
+    post:
+      tags: [devices]
+      operationId: rescan
+      summary: Enumerate devices again now (and scan the SMBus buses)
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Devices present.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  devices: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/save/preview:
+    post:
+      tags: [devices]
+      operationId: savePreview
+      summary: What "Save to devices" would store in each device (nothing is written)
+      description: "Each device's plugin runs `SaveToDevice({action: \"preview\"})` with every write recorded and never sent. Every device when `devices` is empty. docs/host-api/save-shutdown.md."
+      security: [{ bearer: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                devices: { $ref: "#/components/schemas/SaveChoices" }
+      responses:
+        "200":
+          description: One entry per device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SaveAnswer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/save:
+    post:
+      tags: [devices]
+      operationId: saveToDevices
+      summary: Store lighting in the devices' own memory (flash / EEPROM)
+      description: "Needs `confirm: true` (ask the user first) and named devices, else `400 bad_request`. At most one save per device per minute: a device saved sooner gets `ok: false` with the wait. Every attempt is written to `save-audit.log`."
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm, devices]
+              properties:
+                confirm: { const: true }
+                devices: { $ref: "#/components/schemas/SaveChoices" }
+      responses:
+        "200":
+          description: One entry per device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SaveAnswer" }
+        "400":
+          description: "`bad_request`: no confirmation, or no device named."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/sensors:
+    get:
+      tags: [sensors]
+      operationId: getSensors
+      summary: Hardware sensors (read-only)
+      description: |
+        Temperatures, loads, fan speeds and clocks from the system (CPU/RAM load), NvAPI (NVIDIA
+        GPUs, Windows), hwmon (Linux) and, when `[sensors] lhm_url` is set, LibreHardwareMonitor.
+        Each request keeps polling on for 10 s (at most once a second, `[sensors] interval_ms`);
+        with no request and no effect reading sensors nothing is polled. The first request waits
+        up to 1.5 s for a first poll. Names are what `engine.getSensorValue(name)` takes
+        (docs/sensors.md). Nothing is ever written: there is no fan control.
+      responses:
+        "200":
+          description: The values of the last poll.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SensorsView" }
+  /v1/update:
+    get:
+      tags: [daemon]
+      operationId: getUpdate
+      summary: The update check (Settings → Updates), as it is; no network
+      responses:
+        "200":
+          description: The state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateView" }
+    patch:
+      tags: [daemon]
+      operationId: setUpdateOptions
+      summary: Turn the weekly check or the beta channel on or off (both off by default)
+      description: Kept in `update.json` in the data directory. Changing the channel forgets the release found.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checkWeekly: { type: boolean }
+                beta: { type: boolean }
+      responses:
+        "200":
+          description: The new state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/update/check:
+    post:
+      tags: [daemon]
+      operationId: checkUpdate
+      summary: Ask GitHub for the latest release now
+      description: >-
+        One anonymous `GET https://api.github.com/repos/MrMoraleDev/Lightloom/releases/latest`
+        (`.../releases?per_page=20` with the beta channel on) with `User-Agent: Lightloom/<version>`
+        and nothing else that identifies the user (docs/privacy.md); 20 s timeout. Answers when it ends;
+        a failure is in `error`, not an HTTP error.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: The result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/update/install:
+    post:
+      tags: [daemon]
+      operationId: installUpdate
+      summary: Download, verify and open the installer of the release found
+      description: >-
+        Windows, per-user MSI install only (`installable`). Downloads the release's `SHA256SUMS` and its
+        `Lightloom-<x.y.z>-x64.msi` to `%TEMP%\lightloom-update`, checks size and SHA-256 (a release
+        without checksums is refused) and runs `msiexec /i` on it; the installer stops the daemon before it
+        replaces files. Answers at once with `job.running`; read `GET /v1/update` for the progress. 409 when
+        nothing was found, the release has no installer for this system, a download runs, or the copy is
+        not installable here.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/inputs:
+    get:
+      tags: [settings]
+      operationId: getInputs
+      summary: Audio output devices and displays the inputs can capture, and the choice
+      description: |
+        `engine.audio` captures an output device through WASAPI loopback (microphones and other
+        capture endpoints are never opened, so they are not listed); `engine.zone` and the meters
+        capture one display through DXGI duplication. Windows only today: elsewhere `supported` is
+        `false` and both lists are empty. The choice made here wins over `[audio] device` and
+        `[screen] display` in config.toml (docs/audio.md, docs/screen.md).
+      responses:
+        "200":
+          description: The devices and the choice.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InputsView" }
+    patch:
+      tags: [settings]
+      operationId: setInputs
+      summary: Choose the audio output device and the display
+      description: |
+        A field left out is not changed; `null` or `""` goes back to the system default output
+        device / the primary display. The choice is saved in the settings database and the
+        running effect's capture restarts on the new device.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                audioDevice: { type: [string, "null"], maxLength: 256, description: "An `audioDevices` name." }
+                display: { type: [string, "null"], maxLength: 256, description: "A `displays[].name`." }
+      responses:
+        "200":
+          description: The choice now.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  audioDevice: { type: [string, "null"] }
+                  display: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/logs:
+    get:
+      tags: [daemon]
+      operationId: getLogs
+      summary: The daemon's log history, filtered
+      description: |
+        `from=file`: `lightloomd.old.log` (the previous run) and `lightloomd.log` (this run) from
+        the `logs` folder of the data directory, which `lightloomw` writes (the installed
+        Lightloom). `from=memory`: this run's in-memory buffer (the last 5000 lines, including
+        the plugins' own `device.log` lines). The default is the files when the daemon runs under
+        `lightloomw`, else memory. The API token and any bearer credential are replaced by
+        `[redacted]` in every line.
+      parameters:
+        - { name: from, in: query, schema: { enum: [file, memory] } }
+        - { name: level, in: query, schema: { enum: [error, warn, info, debug, trace] }, description: Lowest level shown. }
+        - { name: q, in: query, schema: { type: string }, description: Text the line contains (case-insensitive). }
+        - { name: source, in: query, schema: { type: string }, description: "Device or plugin: part of its key or name (case-insensitive)." }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1000 }, description: Newest lines answered. }
+      responses:
+        "200":
+          description: The matching lines, oldest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogsView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /v1/network:
+    get:
+      tags: [network]
+      operationId: getNetwork
+      summary: The network plugins' discovery services and the lights they found
+      description: Empty while network lights are off (`settings.network`).
+      responses:
+        "200":
+          description: One entry per network plugin.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/NetworkServiceView" } }
+  /v1/network/{plugin}/add:
+    post:
+      tags: [network]
+      operationId: networkAdd
+      summary: Add a light by IP address
+      description: |
+        Calls the plugin's `discovery.forceDiscover(ip)` (or its `Discovered()` with
+        `{ id: ip, ip, port: 0, manual: true }`). The address must be on the local network.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: plugin, in: path, required: true, schema: { type: string }, description: "The plugin's `Name()`." }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ip]
+              properties:
+                ip: { type: string, examples: ["192.168.1.50"] }
+      responses:
+        "200":
+          description: Passed to the plugin (what it finds shows in `GET /v1/network`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugin: { type: string }
+                  ip: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/network/{plugin}/controllers/{id}/{action}:
+    post:
+      tags: [network]
+      operationId: networkAction
+      summary: Pair or forget a network light
+      description: "`pair` calls the controller's `startLink()` (then press the button on the device, as the plugin's status says); `forget` calls `discovery.forgetController(id)`."
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: plugin, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: action, in: path, required: true, schema: { enum: [pair, forget] } }
+      responses:
+        "200":
+          description: Passed to the plugin.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugin: { type: string }
+                  id: { type: string }
+                  action: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/shutdown:
+    post:
+      tags: [daemon]
+      operationId: shutdown
+      summary: Stop the daemon (every plugin restores its device first)
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Stopping.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stopping: { const: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/canvas/event:
+    post:
+      tags: [canvas]
+      operationId: canvasEvent
+      summary: "`onCanvasApiEvent({sender, event})` in the current effect"
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: sender, in: query, required: true, schema: { type: string } }
+        - { name: event, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/canvas/tap:
+    post:
+      tags: [canvas]
+      operationId: canvasTap
+      summary: "`onCanvasTapped(x, y)` in the current effect"
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [x, y]
+              properties:
+                x: { type: number, description: Canvas pixels from the left. }
+                y: { type: number, description: Canvas pixels from the top. }
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/actions:
+    post:
+      tags: [actions]
+      operationId: runAction
+      summary: Run a `lightloom://` action URL
+      description: |
+        The action router (docs/integrations/actions.md): `lightloom://<endpoint>/<verb>[/<arg>][?k=v]`,
+        the paths of SignalRGB's `signalrgb://` router under Lightloom's scheme; a bare path
+        (`brightness/50`) works too. `app/raiseWindow`, `app/restart`, `app/toast?title=&message=`,
+        `view/<page>[?uid=]`, `layout/apply/<name>`, `layout/applyprevious`,
+        `effect/apply/<name>?<property>=<value>` (`_location` and other `_` keys ignored),
+        `device/<uid>/enable|disable`, `playlist/<id>/play|stop`, `brightness/<0-100>`,
+        `canvas/pause|resume`. A malformed URL, or a value an effect control does not take, is
+        `400 invalid_action`; an unknown path is dropped with a warning (`200`, `dropped: true`);
+        `effect/install` and `effect/update` are `409 action_refused` (no marketplace).
+        `app/raiseWindow`, `view` and `app/toast` reach the dashboard as an `action` event.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, maxLength: 2048, examples: ["lightloom://effect/apply/Rainbow%20Rise?speed=3"] }
+      responses:
+        "200":
+          description: Carried out (`result`, what the underlying request answered), or dropped.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [action]
+                properties:
+                  action: { type: string, description: "Canonical name (`effect/apply`, `view`, `unknown`, ...)." }
+                  result: { description: "The underlying request's answer; `effect/apply` adds `effect` (the id) and `ignored` (properties the effect lacks)." }
+                  dropped: { type: boolean, description: An unknown action was dropped. }
+                  warning: { type: string, description: Why it was dropped. }
+        "400":
+          description: "`invalid_action`: the URL is malformed or a value is not valid for its control."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`action_refused` (`effect/install`, `effect/update`) or `conflict` (no previous layout)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+  /v1/macros:
+    get:
+      tags: [macros]
+      operationId: macros
+      summary: The macro runtime
+      description: |
+        Settings and scripts of the macro runtime (docs/macros.md): SignalRGB-shaped Actions and
+        Inputs from `<config>/macroscripts/{Actions,Inputs}` (and SignalRGB's bundled folder while
+        its library is on). Each script lists its options with their current values, its handlers,
+        whether it runs and why it cannot. Everything is off by default.
+      responses:
+        "200":
+          description: The settings and the scripts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MacrosView" }
+    patch:
+      tags: [macros]
+      operationId: setMacros
+      summary: Change the macro settings
+      description: |
+        `enabled` runs macros; `keyboardHook` / `mouseHook` allow the low-level hooks (installed
+        only while an enabled Input listens; they see every key, processed in memory only);
+        `allowLaunch` lets `system.openApplication` start programs. Omitted fields stay.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                keyboardHook: { type: boolean }
+                mouseHook: { type: boolean }
+                allowLaunch: { type: boolean }
+      responses:
+        "200":
+          description: The new state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MacrosView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/macros/scripts/{id}:
+    patch:
+      tags: [macros]
+      operationId: setMacro
+      summary: Change one script's settings
+      description: |
+        `enabled` (Inputs only), `options` (values by property, coerced strictly to the option's
+        type), `actions` (an Input's chain: Action ids run in order by `block.trigger()`).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: "Script id (`user:input:Key Pressed`)." }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                options: { type: object, additionalProperties: true }
+                actions: { type: array, items: { type: string }, maxItems: 16 }
+      responses:
+        "200":
+          description: The new state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MacrosView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`conflict`: the script cannot run."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+  /v1/macros/scripts/{id}/run:
+    post:
+      tags: [macros]
+      operationId: runMacro
+      summary: Run an Action now
+      description: Queues the Action's `onExecute()` (macros must be on). Its console lines arrive as `log` events.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Queued.
+          content:
+            application/json:
+              schema: { type: object, properties: { queued: { type: boolean } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`conflict`: macros are off or the script cannot run."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+  /v1/macros/prompts/{id}:
+    post:
+      tags: [macros]
+      operationId: answerPrompt
+      summary: Answer a macro's prompt
+      description: |
+        Completes a `system.prompt` shown through an `action` event (`{action: "prompt", id, ...}`).
+        `text` absent or `null` cancels it.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: [string, "null"] }
+      responses:
+        "200":
+          description: Delivered.
+          content:
+            application/json:
+              schema: { type: object, properties: { answered: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/events:
+    get:
+      tags: [streams]
+      operationId: events
+      summary: "WebSocket: push events"
+      description: |
+        Upgrade to a WebSocket. The server sends text frames, each one `Event` as JSON; the first
+        is `{"kind": "state"}`. `state` means the snapshot changed (refetch `GET /v1/state`),
+        `stats` that only counters changed, `log` carries a log line in `data`, `battery` a low
+        or critical battery alert (`data`: `{key, name, level, severity}`), `action` an action URL
+        for the dashboard (`data`: `{action: "view", page, tab, uid}`, `{action: "raiseWindow"}` or
+        `{action: "toast", title, message}`; a macro prompt: `{action: "prompt", id, script, title,
+        message, placeholder, confirmText, cancelText}`), `macros` the macro runtime's new view
+        (`data`: what `GET /v1/macros` answers; sent when it changed, while a client listens). A client too slow
+        to keep up gets `state` again instead of the events it missed. Client frames are ignored.
+      responses:
+        "101":
+          description: Switching protocols; then `Event` text frames.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        "400":
+          description: Not a WebSocket upgrade request.
+  /v1/preview:
+    get:
+      tags: [streams]
+      operationId: preview
+      summary: "WebSocket: canvas preview frames"
+      description: |
+        Upgrade to a WebSocket. The server sends a binary frame whenever the canvas changed, at
+        most `fps` per second: width and height as two little-endian `u16`, then BGRA pixels
+        (every `step`-th pixel of the 320x200 canvas, row by row).
+      parameters:
+        - { name: fps, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 30, default: 15 } }
+        - { name: step, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 8, default: 2 } }
+      responses:
+        "101":
+          description: Switching protocols; then binary frames.
+          content:
+            application/octet-stream:
+              schema: { type: string, contentEncoding: binary }
+        "400":
+          description: Not a WebSocket upgrade request.
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: The contents of the `api-token` file in Lightloom's data directory (64 hex digits).
+  parameters:
+    DeviceKey:
+      name: key
+      in: path
+      required: true
+      schema: { type: string }
+      description: "Device key: `vid:pid:serial` for USB devices, `smbus:<vendor>:<device>:<subvendor>:<subdevice>@<instance>:<addr>` for SMBus ones, `net:<plugin>:<controller id>` for network ones."
+    EndpointUid:
+      name: uid
+      in: path
+      required: true
+      schema: { type: string }
+      description: Endpoint uid (`Endpoint.uid`): the device key, `<device key>:<subdevice id>` or a component's id.
+    EffectId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, examples: ["lightloom:plasma"] }
+    PlaylistId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, examples: ["evening"] }
+    PresetName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+    LayoutName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+    ProfileName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    ProfileDone:
+      description: The profile's name.
+      content:
+        application/json:
+          schema: { type: object, properties: { profile: { type: string } } }
+    LedZones:
+      description: The endpoint's zones after the change.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              uid: { type: string }
+              zones: { type: object, additionalProperties: { type: array, items: { type: integer } } }
+    Empty:
+      description: Done.
+      content:
+        application/json:
+          schema: { type: object }
+    EffectApplied:
+      description: The effect now shown or changed.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              effect: { type: string }
+    PresetDone:
+      description: Done.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              effect: { type: string }
+              preset: { type: string }
+    PlaylistSaved:
+      description: The playlist as stored (with its `id` and `updatedAt`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Playlist" }
+    LayoutDone:
+      description: Done.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              layout: { type: string }
+    BadRequest:
+      description: The request is malformed (`bad_request`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Unauthorized:
+      description: A state-changing request without the bearer token (`unauthorized`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    NotFound:
+      description: No such device, effect, preset or layout (`not_found`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Conflict:
+      description: The request conflicts with the current state (`conflict`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+  schemas:
+    ProfileView:
+      type: object
+      properties:
+        name: { type: string }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        effect: { type: [string, "null"] }
+        layout: { type: string }
+        devices: { type: integer }
+    Profile:
+      type: object
+      description: |
+        A profile document (format `lightloom-profile`, version 1). `devices` holds one open object per device
+        key: the keys below are read by this build; any other key (a later build's) is
+        kept through save, export and import, and ignored when applied.
+      required: [format, version, name, lighting, layout]
+      properties:
+        format: { const: lightloom-profile }
+        version: { type: integer }
+        name: { type: string }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        lighting:
+          type: object
+          properties:
+            effect: { type: [string, "null"] }
+            values: { type: object }
+            brightness: { type: integer, minimum: 0, maximum: 100 }
+            enabled: { type: boolean }
+        layout: { $ref: "../../schemas/layout.schema.json" }
+        devices:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: true
+            properties:
+              enabled: { type: boolean }
+              parameters: { type: object }
+              channels: { type: object, additionalProperties: { type: array } }
+              shutdownMode: { enum: [restore, keep, off] }
+              hardwareMode: { $ref: "#/components/schemas/DeviceHardwareMode" }
+              customLeds:
+                type: object
+                description: Per-LED custom colours by endpoint uid (as `customLeds` of the state export); endpoints left out follow the effect.
+                additionalProperties: { type: object, properties: { enabled: { type: boolean }, colors: { type: array, items: { type: string } }, zones: { type: object } } }
+    HardwareModeView:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        colors: { type: integer, minimum: 0, maximum: 8 }
+        colorNames: { type: array, items: { type: string } }
+        speed: { type: boolean }
+        brightness: { type: boolean }
+    DeviceHardwareMode:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        colors: { type: array, items: { type: string } }
+        speed: { type: integer, minimum: 0, maximum: 100 }
+        brightness: { type: integer, minimum: 0, maximum: 100 }
+    MacrosView:
+      type: object
+      required: [enabled, keyboardHook, mouseHook, allowLaunch, hooksAvailable, hooks, emergencyStop, folders, scripts]
+      properties:
+        enabled: { type: boolean, description: Macros run (off by default). }
+        keyboardHook: { type: boolean, description: The keyboard hook is allowed (off by default). }
+        mouseHook: { type: boolean, description: The mouse hook is allowed (off by default). }
+        allowLaunch: { type: boolean, description: "`system.openApplication` may start programs (off by default)." }
+        hooksAvailable: { type: boolean, description: This system has low-level hooks (Windows). }
+        hooks: { type: object, properties: { keyboard: { type: boolean }, mouse: { type: boolean } }, description: Installed now. }
+        hookError: { type: [string, "null"] }
+        emergencyStop: { type: string, description: "The key combination that turns macros off (`Ctrl + Alt + Shift + F12`)." }
+        folders:
+          type: array
+          items: { type: object, properties: { source: { type: string }, kind: { type: string, enum: [action, input] }, path: { type: string } } }
+        scripts:
+          type: array
+          items:
+            type: object
+            required: [id, kind, source, name, options, handlers, enabled, actions, running]
+            properties:
+              id: { type: string }
+              kind: { type: string, enum: [action, input] }
+              source: { type: string, enum: [user, signalrgb] }
+              file: { type: string }
+              name: { type: string }
+              description: { type: string }
+              options:
+                type: array
+                description: "SignalRGB option descriptors (`property`, `label`, `type`, `default`, `values`, `filter`, `min`, `max`, `step`, `description`) with the current `value`."
+                items: { type: object, additionalProperties: true }
+              handlers: { type: array, items: { type: string } }
+              enabled: { type: boolean }
+              actions: { type: array, items: { type: string } }
+              running: { type: boolean }
+              error: { type: [string, "null"] }
+              warnings: { type: array, items: { type: string } }
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: "#/components/schemas/ApiError" }
+    ApiError:
+      type: object
+      required: [status, code, message]
+      properties:
+        status: { type: integer, description: HTTP status. }
+        code:
+          type: string
+          description: Machine-readable code.
+          examples: [not_found, bad_request, unauthorized, forbidden_host, forbidden_origin, conflict, invalid_port, port_in_use, unavailable, internal]
+        message: { type: string }
+    ControlValues:
+      type: object
+      additionalProperties: true
+      description: Effect control values by `<meta property>` name.
+    Snapshot:
+      type: object
+      properties:
+        version: { type: string }
+        state: { type: string }
+        lighting: { $ref: "#/components/schemas/Lighting" }
+        devices: { type: array, items: { $ref: "#/components/schemas/DeviceView" } }
+        effects: { type: array, items: { $ref: "#/components/schemas/EffectView" } }
+        layouts: { type: array, items: { type: string } }
+        playlists: { type: array, items: { $ref: "#/components/schemas/Playlist" } }
+        settings: { $ref: "#/components/schemas/Settings" }
+        network: { type: array, items: { $ref: "#/components/schemas/NetworkServiceView" } }
+        conflicts: { type: array, items: { type: string }, description: Running software that holds the same devices (reported, never terminated). }
+        warnings: { type: array, items: { type: string } }
+        pawnio: { $ref: "#/components/schemas/PawnIoView" }
+        os: { type: string, description: "Operating system and build (`Windows 11 Pro 25H2 (build 26200.6899)`, `Ubuntu 24.04.1 LTS (kernel 6.8.0)`), for device reports." }
+        lcdFaces: { type: array, items: { $ref: "#/components/schemas/LcdFaceView" } }
+        profiles: { type: array, items: { $ref: "#/components/schemas/ProfileView" }, description: Saved profiles by name. }
+    PawnIoView:
+      type: object
+      description: PawnIO and the Lightloom I/O service, what RAM lighting needs (Windows).
+      properties:
+        supported: { type: boolean, description: "The Install / Remove buttons can work (Windows, `lightloom-setup.exe` next to the daemon, real hardware)." }
+        installed: { type: boolean, description: PawnIO's uninstall entry exists. }
+        version: { type: [string, "null"], description: Its `DisplayVersion`. }
+        versionOk: { type: boolean, description: 2.2.0 or later. }
+        edition: { type: [string, "null"], enum: [official, unrestricted, unknown, null], description: As the broker reported it; null until the daemon talked to it. }
+        service: { enum: [notInstalled, stopped, pending, running, unknown] }
+        brokerHealthy: { type: boolean }
+        ramBuses: { type: integer, description: Chipset SMBus buses in use. }
+        status: { type: string, description: One line for the user. }
+        job:
+          oneOf:
+            - $ref: "#/components/schemas/PawnIoJob"
+            - type: "null"
+    PawnIoJob:
+      type: object
+      properties:
+        action: { enum: [install, remove] }
+        running: { type: boolean }
+        ok: { type: [boolean, "null"] }
+        message: { type: string }
+    Lighting:
+      type: object
+      properties:
+        effect: { type: [string, "null"] }
+        effectName: { type: [string, "null"] }
+        brightness: { type: integer, minimum: 0, maximum: 100 }
+        enabled: { type: boolean }
+        layout: { type: string }
+        layoutBrightness: { type: integer, minimum: 0, maximum: 100 }
+        renderer: { $ref: "#/components/schemas/RendererView" }
+        playlist:
+          oneOf:
+            - $ref: "#/components/schemas/PlaylistPlayback"
+            - type: "null"
+          description: The playlist playing now.
+        timer: { $ref: "#/components/schemas/EffectTimer" }
+        nextSwitchMs: { type: [integer, "null"], description: "When the playlist or the timer shows the next effect (Unix time, ms); null when nothing switches by itself." }
+        profile: { type: [string, "null"], description: The profile applied or saved last. }
+    EffectTimer:
+      type: object
+      properties:
+        enabled: { type: boolean, description: Advance through the library by itself (off by default). }
+        interval: { type: integer, minimum: 1, maximum: 86400, description: "Seconds per effect (300 by default)." }
+    Playlist:
+      type: object
+      required: [name]
+      properties:
+        id: { type: string, description: Stable id; made from the name on creation (ignored in request bodies). }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        shuffle: { type: boolean, description: Play the entries in a new random order every round. }
+        entries: { type: array, items: { $ref: "#/components/schemas/PlaylistEntry" } }
+        updatedAt: { type: string, description: Last change (RFC 3339); set by the daemon. }
+    PlaylistEntry:
+      type: object
+      required: [effect]
+      properties:
+        effect: { type: string, description: Effect id. }
+        preset: { type: string, description: A preset of the effect loaded when the entry starts. }
+        values: { $ref: "#/components/schemas/ControlValues" }
+        duration: { type: integer, minimum: 1, maximum: 86400, description: "Seconds; absent: the timer's interval." }
+    PlaylistPlayback:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        entry: { type: integer, description: Index into `entries` of the entry shown now. }
+    RendererView:
+      type: object
+      properties:
+        kind: { type: string, description: "`cef` (effects) or `null` (solid colour / test patterns without the renderer)." }
+        running: { type: boolean }
+        fps: { type: integer }
+        status: { type: [string, "null"] }
+    LcdFaceView:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        publisher: { type: string }
+        usesSensors: { type: boolean }
+        controls: { type: array, items: { type: object }, description: "`<meta property>` controls (effect-meta schema shape)" }
+    LcdView:
+      type: object
+      description: A device's LCD while its plugin drives one (`LCD.initialize` was called).
+      properties:
+        width: { type: integer }
+        height: { type: integer }
+        circular: { type: boolean }
+        face: { type: [string, "null"] }
+        framerate: { type: integer }
+        renderer: { enum: [cef, mock] }
+        running: { type: boolean }
+        status: { type: string }
+        values: { type: object, additionalProperties: true, description: "The device's control values for the face shown (the others keep their defaults)" }
+    DeviceView:
+      type: object
+      properties:
+        lcd: { $ref: "#/components/schemas/LcdView" }
+        hardwareModes: { type: array, items: { $ref: "#/components/schemas/HardwareModeView" }, description: The device's built-in effects it can run live }
+        hardwareMode:
+          oneOf:
+            - $ref: "#/components/schemas/DeviceHardwareMode"
+            - type: "null"
+          description: The hardware mode chosen for it; null when it follows the effect.
+        key: { type: string }
+        vid: { type: integer }
+        pid: { type: integer }
+        name: { type: string }
+        plugin: { type: string }
+        pluginPath: { type: string }
+        state: { enum: [running, starting, stopping, stopped, done, disabled, blocked, absent, needs-driver] }
+        enabled: { type: boolean }
+        connected: { type: boolean }
+        frames: { type: integer }
+        renderErrors: { type: integer }
+        ioErrors: { type: integer, description: "Failed HID operations, or failed or refused bus operations of SMBus devices." }
+        bus: { type: [string, "null"], description: "SMBus devices: `<bus name> · 0x<address>`." }
+        defaultScale: { type: number }
+        image: { type: [string, "null"] }
+        parameters:
+          type: array
+          description: >-
+            The plugin's parameters, each with its current `value` (stored, else the default):
+            the `ControllableParameters()` entries, then as the running plugin changes them with
+            `device.addProperty` / `removeProperty`. Fields: `property`, `label`, `group`,
+            `description`, `tooltip`, `type` (color, combobox, number, boolean, hue, textfield,
+            keycode), `values`, `min`, `max`, `step`, `default`, `live` (false: apply on release /
+            commit only), `order`, `filter` (textfield regex), `value`. Numeric and boolean strings
+            of the plugin are coerced.
+          items: { type: object, additionalProperties: true }
+        messages:
+          type: array
+          description: >-
+            Messages on the device card: `DeviceMessages()`, then as the running plugin changes
+            them with `device.addMessage` / `removeMessage` and `device.notify` / `denotify`.
+          items: { $ref: "#/components/schemas/DeviceMessageView" }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/Endpoint" } }
+        channels: { type: array, items: { $ref: "#/components/schemas/ChannelView" } }
+        battery:
+          oneOf:
+            - $ref: "#/components/schemas/BatteryView"
+            - type: "null"
+          description: The last battery report (plugins with the `battery` feature), kept after the device goes away.
+        blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low (user setting). }
+        thirdParty: { type: boolean, description: Driven by a third-party plugin read in place (a local SignalRGB installation's). }
+        driverProblem:
+          type: string
+          description: >-
+            Why the device cannot be driven as plugged in, e.g. "needs WinUSB driver: ..." for a raw USB
+            device Windows bound no WinUSB driver to (Lightloom never installs one). Absent when there is none.
+        helpUrl: { type: string, description: Where to read about `driverProblem`. }
+        tested:
+          type: boolean
+          description: >-
+            The plugin's `manifest.json` lists this very product as tested (`tested` of its USB claim, or
+            the card's PCI ids in its SMBus claim). False for plugins without a manifest.
+        pluginVersion: { type: string, description: "The plugin's version: its manifest's, else its `Version()` export. Absent when unknown." }
+        pluginType: { enum: [hid, rawusb, hybrid, serial, smbus, network, lamparray, ""], description: How the plugin reaches the device (empty for absent devices). }
+        interfaces:
+          type: array
+          items: { type: string }
+          description: >-
+            The device's interfaces as enumeration saw them, one line each (HID collections, USB interfaces
+            and their drivers, serial ports, the SMBus address), for device reports. No paths, no serial numbers.
+        save:
+          oneOf:
+            - $ref: "#/components/schemas/SaveSupport"
+            - type: "null"
+          description: What "Save to devices" can store in this device; null when nothing.
+        shutdownModes:
+          type: array
+          items: { enum: [restore, keep, off] }
+          description: Exit modes the device's plugin carries out, natively or through its `shutdownColor` parameter (`restore` always).
+        shutdownMode: { type: [string, "null"], enum: [restore, keep, off, null], description: "This device's own exit mode; null: the setting's." }
+    SaveSupport:
+      type: object
+      properties:
+        static: { type: boolean, description: The colours of the current frame (as the device stores them). }
+        effects: { type: array, items: { enum: [spectrum, breathing, wave, rainbow] }, description: Built-in effects it can store instead. }
+        waitSecs: { type: integer, description: Seconds before the device may be saved again (one save per device per minute). }
+    SaveChoices:
+      type: object
+      description: Device key -> what to store.
+      additionalProperties:
+        type: object
+        properties:
+          effect: { type: [string, "null"], description: "One of the device's `save.effects`; null: the current colours." }
+    SaveAnswer:
+      type: object
+      properties:
+        preview: { type: boolean }
+        devices:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              name: { type: string }
+              ok: { type: boolean }
+              dryRun: { type: boolean, description: Nothing was sent (a preview, or `--dry-run`). }
+              result:
+                type: [object, "null"]
+                description: "What the plugin returned: `{effect, zones: [{name, color}], note}`."
+                additionalProperties: true
+              error: { type: [string, "null"], description: Why it cannot be (or was not) stored. }
+    DeviceMessageView:
+      type: object
+      properties:
+        id: { type: string, description: "`DeviceMessages()` `property`, `addMessage` id, or the alert id `notify` returned." }
+        title: { type: [string, "null"], description: "`notify` title." }
+        message: { type: string }
+        tooltip: { type: [string, "null"] }
+        priority: { type: [integer, "null"], description: "`notify` priority: 0 info, 1 important, 2 and 3 errors; null for plain messages." }
+    BatteryView:
+      type: object
+      properties:
+        level: { type: [integer, "null"], minimum: 0, maximum: 100, description: Percent; null until the plugin reported a level. }
+        state: { enum: [unknown, discharging, charging, fullCharging, full, wirelessCharging] }
+        charging: { type: boolean, description: On external power. }
+        status: { enum: [ok, low, critical], description: Under the user's thresholds. }
+        updatedMs: { type: integer, description: When the plugin last reported (Unix time, ms). }
+    Endpoint:
+      type: object
+      properties:
+        uid: { type: string, description: Placement key. }
+        kind: { enum: [device, subdevice, component] }
+        name: { type: string }
+        channel: { type: [string, "null"] }
+        size: { type: array, items: { type: integer }, minItems: 2, maxItems: 2 }
+        leds: { type: integer }
+        placement: { $ref: "#/components/schemas/Placement" }
+        customLeds: { type: boolean, description: Shows its custom per-LED colours instead of the effect. }
+    LedMapView:
+      type: object
+      properties:
+        key: { type: string }
+        deviceType: { type: string, description: "The plugin's `DeviceType()` (`keyboard` gets key caps in the painter)." }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/LedEndpointView" } }
+    LedEndpointView:
+      type: object
+      properties:
+        uid: { type: string }
+        kind: { enum: [device, subdevice, component] }
+        name: { type: string }
+        channel: { type: [string, "null"] }
+        size: { type: array, items: { type: integer }, minItems: 2, maxItems: 2 }
+        slots: { type: integer, description: Length of `colors`. }
+        leds:
+          type: array
+          items:
+            type: object
+            properties:
+              slot: { type: integer }
+              x: { type: integer }
+              y: { type: integer }
+              name: { type: string, description: Absent when the plugin named none. }
+        custom: { type: boolean }
+        colors: { type: array, items: { type: string, pattern: "^#[0-9a-f]{6}$" } }
+        zones: { type: object, additionalProperties: { type: array, items: { type: integer } } }
+    LedEdit:
+      type: object
+      properties:
+        mode: { enum: [custom, effect] }
+        colors: { type: array, items: { type: string }, description: "Colours from slot 0 on (`#rrggbb`)." }
+        fill: { type: string, description: One colour for every slot. }
+        set: { type: object, additionalProperties: { type: string }, description: "Slot -> colour." }
+        zones: { type: object, additionalProperties: { type: string }, description: "Zone name -> colour for all its slots." }
+    ChannelView:
+      type: object
+      properties:
+        name: { type: string }
+        ledLimit: { type: integer, description: 0 = no limit. }
+        components: { type: array, items: { type: object, additionalProperties: true } }
+    Placement:
+      type: object
+      description: Where one endpoint sits on the canvas (schemas/layout.schema.json `placement`); missing fields take their defaults.
+      properties:
+        position:
+          type: object
+          properties:
+            x: { type: number }
+            y: { type: number }
+        scale:
+          type: object
+          description: Canvas pixels per LED cell; absent = the plugin's `DefaultScale()`.
+          properties:
+            x: { type: number }
+            y: { type: number }
+        rotation: { type: number, description: "Degrees 0..360, clockwise." }
+        flipX: { type: boolean }
+        flipY: { type: boolean }
+        enabled: { type: boolean }
+        brightness: { type: integer, minimum: 0, maximum: 100 }
+        lightingMode: { enum: [Canvas, Forced] }
+        forcedColor: { type: string, pattern: "^#[0-9A-Fa-f]{6}$" }
+        colorCorrection:
+          type: object
+          properties:
+            red: { type: integer, minimum: 0, maximum: 100 }
+            green: { type: integer, minimum: 0, maximum: 100 }
+            blue: { type: integer, minimum: 0, maximum: 100 }
+            minBrightness: { type: integer, minimum: 0, maximum: 100 }
+    EffectView:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        publisher: { type: string }
+        source: { enum: [lightloom, user, signalrgb, developer] }
+        controls: { type: array, items: { type: object, additionalProperties: true }, description: "`<meta property>` controls (schemas/effect-meta.schema.json shape)." }
+        values: { $ref: "#/components/schemas/ControlValues" }
+        presets: { type: array, items: { type: string } }
+        thirdParty: { type: boolean, description: A third-party effect read in place (`source` `signalrgb`). }
+        uses:
+          type: array
+          items: { enum: [audio, video, meters, engine, sensors, webgl, input] }
+          description: What the effect reads; effects with `meters` are game integrations.
+    SignalRgbImport:
+      type: object
+      description: The SignalRGB import wizard's preview, or the result of the import.
+      properties:
+        available: { type: boolean, description: SignalRGB settings were found. }
+        layout: { type: [string, "null"], description: Name the canvas is imported as; null without placements. }
+        placements: { type: integer }
+        layoutBrightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        globalBrightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        selectedEffect:
+          oneOf:
+            - $ref: "#/components/schemas/SignalRgbImportEffect"
+            - type: "null"
+        effects:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/SignalRgbImportEffect"
+              - type: object
+                properties:
+                  values: { type: integer, description: Stored control values. }
+                  presets: { type: array, items: { type: string } }
+        channels: { type: integer, description: Channel setups. }
+        channelSetups:
+          type: array
+          items:
+            type: object
+            properties:
+              device: { type: string }
+              channel: { type: string }
+              components: { type: integer }
+              leds: { type: integer }
+        devices:
+          type: array
+          description: Per-device enable and brightness (the brightness is the device's placement in the layout).
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              name: { type: [string, "null"] }
+              known: { type: boolean, description: Lightloom has seen this device (its enable state is imported). }
+              enabled: { type: [boolean, "null"] }
+              brightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        notes: { type: array, items: { type: string } }
+        imported: { type: boolean, description: Present (true) on the import's reply. }
+        valuesImported: { type: integer }
+        presetsImported: { type: integer }
+    SignalRgbImportEffect:
+      type: object
+      properties:
+        id: { type: string, description: "Lightloom effect id (`signalrgb:<name>`)." }
+        title: { type: [string, "null"], description: Null when the effect is not in the library. }
+        available: { type: boolean, description: In the library now (the SignalRGB library is on). }
+        thirdParty: { const: true }
+    Settings:
+      type: object
+      properties:
+        signalrgb: { type: boolean }
+        signalrgbAvailable: { type: boolean }
+        gpuCompositing: { type: boolean }
+        smbus: { type: boolean }
+        network: { type: boolean, description: "Network lights are on (off by default)." }
+        port: { type: integer, description: Port the native API and the dashboard serve on now. }
+        portNotice: { type: [string, "null"], description: Why the daemon does not serve on the configured port (it was busy at startup). }
+        fps: { type: integer }
+        dryRun: { type: boolean }
+        batteryLow: { type: integer, description: Low-battery threshold, percent. }
+        batteryCritical: { type: integer, description: Critical battery threshold, percent. }
+        batteryNotifications: { type: boolean }
+        shutdownMode: { enum: [restore, keep, off], description: What devices show when Lightloom closes. }
+        notificationsAvailable: { type: boolean, description: This OS has system notifications Lightloom can show. }
+        urlScheme: { type: boolean, description: "`lightloom://` links are registered for this user (opt-in)." }
+        urlSchemeAvailable: { type: boolean, description: This OS and install can register the URL scheme. }
+        urlSchemeNotice: { type: [string, "null"], description: Why the registration is not what the setting says. }
+        defaultProfile: { type: [string, "null"], description: The profile applied when Lightloom starts (null: the setup as it was left). }
+        audioDevice: { type: [string, "null"], description: "The output device `engine.audio` captures (`null`: the system default); see `/v1/inputs`." }
+        display: { type: [string, "null"], description: "The display screen capture uses (`null`: the primary one); see `/v1/inputs`." }
+    UpdateView:
+      type: object
+      description: Settings → Updates.
+      properties:
+        currentVersion: { type: string }
+        checkWeekly: { type: boolean, description: Check once a week by itself (off by default). }
+        beta: { type: boolean, description: Offer pre-releases too (off by default). }
+        checking: { type: boolean }
+        lastCheck: { type: [integer, "null"], description: When the last check ended (Unix seconds). }
+        error: { type: [string, "null"], description: Why the last check failed. }
+        available:
+          oneOf:
+            - $ref: "#/components/schemas/UpdateRelease"
+            - type: "null"
+          description: A newer release; null when up to date or never checked.
+        installable: { type: boolean, description: "`install` downloads and opens the installer here; otherwise the release page is the way." }
+        installNote: { type: [string, "null"], description: Why not installable. }
+        job:
+          oneOf:
+            - $ref: "#/components/schemas/UpdateJob"
+            - type: "null"
+    UpdateRelease:
+      type: object
+      properties:
+        version: { type: string, examples: ["1.2.0", "1.3.0-beta.1"] }
+        tag: { type: string }
+        name: { type: string }
+        notes: { type: string, description: Release notes as plain text (no HTML), at most 20000 characters. }
+        url: { type: string, description: "The release page, always under https://github.com/MrMoraleDev/Lightloom/releases/." }
+        publishedAt: { type: [string, "null"] }
+        prerelease: { type: boolean }
+        asset:
+          oneOf:
+            - $ref: "#/components/schemas/UpdateAsset"
+            - type: "null"
+          description: The download for this system (per-user MSI on Windows, AppImage or tarball on Linux).
+    UpdateAsset:
+      type: object
+      properties:
+        name: { type: string }
+        size: { type: integer }
+        url: { type: string }
+    UpdateJob:
+      type: object
+      properties:
+        version: { type: string }
+        running: { type: boolean }
+        ok: { type: [boolean, "null"] }
+        downloaded: { type: integer }
+        total: { type: integer }
+        message: { type: string }
+    InputsView:
+      type: object
+      properties:
+        supported: { type: boolean, description: This OS has the capture backends (Windows). }
+        audioDevices: { type: array, items: { type: string }, description: Output devices loopback capture can open. }
+        audioDevice: { type: [string, "null"], description: "The chosen output device; `null`: the system default." }
+        displays:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string, examples: ['\\.\DISPLAY1'] }
+              width: { type: integer }
+              height: { type: integer }
+              primary: { type: boolean }
+              adapter: { type: string }
+        display: { type: [string, "null"], description: "The chosen display; `null`: the primary display." }
+    LogsView:
+      type: object
+      properties:
+        from: { enum: [file, memory] }
+        available: { type: array, items: { enum: [file, memory] } }
+        files: { type: array, items: { type: string }, description: The files read, oldest first. }
+        truncated: { type: boolean, description: More lines matched than `limit`; the oldest were left out. }
+        sources: { type: array, items: { type: string }, description: Every device and plugin the lines name. }
+        entries:
+          type: array
+          items:
+            type: object
+            required: [message]
+            properties:
+              time: { type: string, format: date-time }
+              level: { enum: [ERROR, WARN, INFO, DEBUG, TRACE] }
+              target: { type: string, description: The module that logged it. }
+              source: { type: string, description: The device or plugin the line is about. }
+              message: { type: string }
+              file: { type: string }
+    SensorsView:
+      type: object
+      properties:
+        enabled: { type: boolean, description: "`[sensors] enabled`; `false`: nothing is read." }
+        polling: { type: boolean, description: Polling runs now (an effect or a client reads sensors). }
+        intervalMs: { type: integer, minimum: 1000 }
+        ageMs: { type: [integer, "null"], description: "Milliseconds since the last poll (`null`: never polled)." }
+        sensors: { type: array, items: { $ref: "#/components/schemas/SensorView" } }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string, enum: [system, nvapi, hwmon, lhm] }
+              sensors: { type: integer }
+              error: { type: [string, "null"] }
+    SensorView:
+      type: object
+      description: "`engine.getSensorValue(name)` returns this object without `name`."
+      properties:
+        name: { type: string, examples: ["CPU Load", "CPU Temperature", "GPU Temperature"] }
+        value: { type: number }
+        units: { type: string, examples: ["°C", "%", "RPM", "MHz"] }
+        min: { type: number }
+        max: { type: number }
+        type: { type: string, enum: [Temperature, Fan, Voltage, Load, Clock, Power, Other] }
+    NetworkServiceView:
+      type: object
+      properties:
+        plugin: { type: string, description: "The plugin's `Name()`." }
+        running: { type: boolean }
+        error: { type: [string, "null"] }
+        canForget: { type: boolean }
+        controllers:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+              ip: { type: [string, "null"] }
+              status: { type: [string, "null"] }
+              paired: { type: [boolean, "null"] }
+              canPair: { type: boolean }
+              device: { type: [string, "null"], description: "Device key (`net:<plugin>:<id>`) once announced." }
+        log: { type: array, items: { type: string } }
+    Event:
+      type: object
+      required: [kind]
+      properties:
+        kind: { enum: [state, stats, log, battery, action, macros] }
+        data: { description: "`log`: the line; `battery`: `{key, name, level, severity}`; `action`: `{action, ...}` (see `/v1/events`); `macros`: the `MacrosView`." }

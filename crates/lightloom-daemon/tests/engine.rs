@@ -9,7 +9,7 @@ use lightloom_daemon::config::Config;
 use lightloom_daemon::engine::{self, EngineOptions, HardwareMode};
 use lightloom_daemon::paths::{self, Paths};
 use lightloom_engine::{Placement, Point};
-use lightloom_hal::mock::MockHid;
+use lightloom_hal::mock::{MockHid, MockNotifier};
 use lightloom_hal::{HidBackend, ReportLengths};
 use lightloom_plugin_host::session::SessionDevice;
 use serde_json::{json, Value};
@@ -57,6 +57,10 @@ fn wait_for(backend: &dyn Backend, what: &str, mut done: impl FnMut(&Snapshot) -
     }
 }
 
+fn d_type(b: &dyn Backend) -> String {
+    device(&b.snapshot()).unwrap().device_type.clone()
+}
+
 fn device(s: &Snapshot) -> Option<&lightloom_api::model::DeviceView> {
     s.devices.iter().find(|d| d.key == KEY)
 }
@@ -79,20 +83,29 @@ fn the_engine_drives_a_device_and_follows_requests() {
         hardware: HardwareMode::Fixed {
             backend,
             devices: vec![SessionDevice {
+                usb: None,
                 smbus: None,
+                lamparray: None,
+                serial: None,
                 key: KEY.into(),
                 vid: 0x1234,
                 pid: 0x4D4D,
                 endpoints: vec![info],
+                network: None,
             }],
             smbus: Vec::new(),
+            lamparrays: None,
         },
         ephemeral: true,
         plugins_dir: Some(plugins),
         effects_dir: paths::resource_dir("effects", "effects"),
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
+        notifier: Arc::new(MockNotifier::default()),
+        api_port: lightloom_api::NATIVE_PORT,
+        api_port_notice: None,
     })
     .unwrap();
     let shared = handle.shared();
@@ -113,11 +126,91 @@ fn the_engine_drives_a_device_and_follows_requests() {
         "{:?}",
         s.warnings
     );
+    assert_eq!(
+        (s.settings.port, s.settings.port_notice.as_deref()),
+        (53000, None)
+    );
+
+    // The port from the dashboard is saved and shown (the API side moves the listener).
+    let port = |p| Request::SetSettings {
+        signalrgb: None,
+        gpu_compositing: None,
+        network: None,
+        smbus: None,
+        shutdown_mode: None,
+        battery_low: None,
+        battery_critical: None,
+        battery_notifications: None,
+        port: Some(p),
+        openrgb_sdk: None,
+        lights_off_when_idle: None,
+    };
+    assert_eq!(call(b, port(17000)).unwrap()["port"], 17000);
+    wait_for(b, "the new port in the settings", |s| s.settings.port == 17000);
+    assert_eq!(call(b, port(80)).unwrap_err().status, 400);
     assert!(mock.recorder().writes().iter().any(|w| w[0] == 0x01));
+
+    // OpenRGB SDK: off by default, saved when turned on; direct colours win
+    // over the canvas while they live, then the canvas is back.
+    assert_eq!(d_type(b), "other");
+    assert!(!b.snapshot().settings.openrgb_sdk);
+    let on = Request::SetSettings {
+        signalrgb: None,
+        gpu_compositing: None,
+        network: None,
+        smbus: None,
+        battery_low: None,
+        battery_critical: None,
+        battery_notifications: None,
+        port: None,
+        openrgb_sdk: Some(true),
+        lights_off_when_idle: None,
+        shutdown_mode: None,
+    };
+    assert_eq!(call(b, on).unwrap()["openrgbSdk"], true);
+    assert!(b.snapshot().settings.openrgb_sdk);
+    let direct = b.direct().expect("the daemon supports direct colours");
+    let owner = direct.new_owner();
+    let probe = lightloom_engine::Rgb::new(7, 77, 177);
+    direct.write(owner, KEY, 2, 0, &[probe, probe], Duration::from_secs(30));
+    let lit = |w: &Vec<u8>| w.len() >= 4 && w[..4] == [0x01, 7, 77, 177];
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !mock.recorder().writes().iter().any(lit) {
+        assert!(
+            Instant::now() < deadline,
+            "the direct colour never reached the device"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    direct.release(owner);
+    let seen = mock.recorder().writes().len();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let writes = mock.recorder().writes();
+        if writes.len() > seen + 2 && !lit(writes.last().unwrap()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the canvas never came back");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let s = wait_for(b, "the channel", |s| {
         device(s).is_some_and(|d| !d.channels.is_empty())
     });
     assert_eq!(device(&s).unwrap().channels[0].name, "ARGB");
+
+    // PawnIO / RAM lighting: the status reads; the elevated helper never runs from a mock run.
+    let v = call(b, Request::PawnIoStatus).unwrap();
+    assert_eq!(v["supported"], false, "{v}");
+    assert!(v["status"].as_str().is_some_and(|s| !s.is_empty()));
+    let e = call(
+        b,
+        Request::PawnIoSetup {
+            action: lightloom_api::model::PawnIoAction::Install,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(e.status, 409, "{e}");
+    assert!(b.snapshot().pawnio.job.is_none(), "nothing was started");
 
     // Lighting.
     call(
@@ -240,6 +333,8 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: None,
             parameters: Some(json!({"mode": "Forced"}).as_object().unwrap().clone()),
+            shutdown_mode: None,
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -252,6 +347,8 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: Some(false),
             parameters: None,
+            shutdown_mode: None,
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -264,6 +361,8 @@ fn the_engine_drives_a_device_and_follows_requests() {
             key: KEY.into(),
             enabled: Some(true),
             parameters: None,
+            shutdown_mode: None,
+            blink_low_battery: None,
         },
     )
     .unwrap();
@@ -375,13 +474,18 @@ fn fixed_smbus_device_runs_and_is_listed() {
             backend,
             devices: Vec::new(),
             smbus: vec![BusHandle::new(Box::new(bus))],
+            lamparrays: None,
         },
         ephemeral: true,
         plugins_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")),
         effects_dir: paths::resource_dir("effects", "effects"),
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
+        notifier: Arc::new(MockNotifier::default()),
+        api_port: lightloom_api::NATIVE_PORT,
+        api_port_notice: None,
     })
     .unwrap();
     let shared = handle.shared();
@@ -423,7 +527,15 @@ fn fixed_smbus_device_runs_and_is_listed() {
         Request::SetSettings {
             signalrgb: None,
             gpu_compositing: None,
+            network: None,
             smbus: Some(false),
+            shutdown_mode: None,
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
+            port: None,
+            openrgb_sdk: None,
+            lights_off_when_idle: None,
         },
     )
     .unwrap();
@@ -434,5 +546,377 @@ fn fixed_smbus_device_runs_and_is_listed() {
     assert_eq!(&last[..2], &[0x68, 0x22], "Shutdown() writes the mode last");
     handle.shutdown();
     drop(shared);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// "Save to devices" and the exit modes through the engine, on the MSI GPU plugin
+/// over a mock bus: a preview, the confirm requirement, the save (with its audit
+/// line), the per-device minute, and the exit mode reaching the plugin.
+#[test]
+fn save_to_devices_and_exit_modes() {
+    use lightloom_api::model::DeviceSaveChoice;
+    use lightloom_hal::mock::{MockSmbus, TransactionKind, TransactionRecorder};
+    use lightloom_hal::{PciIds, SmbusBusKind};
+    use lightloom_plugin_host::smbus::BusHandle;
+    use std::collections::BTreeMap;
+
+    let home = std::env::temp_dir().join(format!("lightloom-engine-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let rec = TransactionRecorder::new();
+    let mut bus = MockSmbus::new("NVIDIA GeForce RTX 3060", SmbusBusKind::Nvidia, rec.clone())
+        .with_pci(PciIds {
+            vendor: 0x10DE,
+            device: 0x2504,
+            sub_vendor: 0x1462,
+            sub_device: 0x3903,
+        })
+        .with_instance("pci01");
+    bus.add_device(0x68, []);
+    let mut config = Config::default();
+    config.smbus.enabled = true;
+    let backend: Arc<dyn HidBackend> = Arc::new(MockHid::new());
+    let handle = engine::start(EngineOptions {
+        paths: Paths::under(&home),
+        config,
+        dry_run: false,
+        hardware: HardwareMode::Fixed {
+            backend,
+            devices: Vec::new(),
+            smbus: vec![BusHandle::new(Box::new(bus))],
+            lamparrays: None,
+        },
+        ephemeral: true,
+        plugins_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")),
+        effects_dir: None,
+        components_dir: None,
+        signalrgb_settings: None,
+        renderer: None,
+        plugin_cache: None,
+        api_port: lightloom_api::NATIVE_PORT,
+        api_port_notice: None,
+        notifier: Arc::new(MockNotifier::default()),
+    })
+    .unwrap();
+    let shared = handle.shared();
+    let b: &dyn Backend = &*shared;
+    const GPU: &str = "smbus:10de:2504:1462:3903@pci01:68";
+    let s = wait_for(b, "the GPU rendering", |s| {
+        s.devices
+            .iter()
+            .any(|d| d.key == GPU && d.state == "running" && d.frames > 2)
+    });
+    let d = s.devices.iter().find(|d| d.key == GPU).unwrap();
+    let save = d.save.as_ref().expect("the MSI GPU can save");
+    assert!(save.static_colors && save.effects == ["spectrum", "breathing"]);
+    assert_eq!(d.shutdown_modes, ["restore", "keep", "off"]);
+    assert_eq!(s.settings.shutdown_mode, "restore");
+    let commits = || {
+        rec.payloads(TransactionKind::SmbusWrite)
+            .iter()
+            .filter(|w| w[..2] == [0x68, 0x3F])
+            .count()
+    };
+
+    // A preview of every device writes nothing.
+    let preview = call(
+        b,
+        Request::SaveToDevices {
+            preview: true,
+            confirm: false,
+            devices: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(preview["devices"][0]["key"], GPU);
+    assert_eq!(preview["devices"][0]["ok"], true, "{preview}");
+    assert_eq!(preview["devices"][0]["result"]["zones"][0]["name"], "GPU");
+    assert_eq!(commits(), 0);
+
+    // A save needs the user's confirmation and named devices.
+    let one = |effect: Option<&str>| {
+        BTreeMap::from([(
+            GPU.to_string(),
+            DeviceSaveChoice {
+                effect: effect.map(String::from),
+            },
+        )])
+    };
+    let refused = call(
+        b,
+        Request::SaveToDevices {
+            preview: false,
+            confirm: false,
+            devices: one(None),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(refused.status, 400);
+    assert_eq!(commits(), 0);
+    let saved = call(
+        b,
+        Request::SaveToDevices {
+            preview: false,
+            confirm: true,
+            devices: one(Some("spectrum")),
+        },
+    )
+    .unwrap();
+    assert_eq!(saved["devices"][0]["ok"], true, "{saved}");
+    assert_eq!(commits(), 1);
+    let audit = std::fs::read_to_string(Paths::under(&home).save_audit_log()).unwrap();
+    assert_eq!(audit.lines().count(), 1);
+    assert!(
+        audit.contains(GPU) && audit.contains("spectrum") && audit.contains("stored"),
+        "{audit}"
+    );
+
+    // Once a minute per device; the refusal is in the answer and in the audit log.
+    let again = call(
+        b,
+        Request::SaveToDevices {
+            preview: false,
+            confirm: true,
+            devices: one(None),
+        },
+    )
+    .unwrap();
+    assert_eq!(again["devices"][0]["ok"], false);
+    assert!(
+        again["devices"][0]["error"].as_str().unwrap().contains("wait"),
+        "{again}"
+    );
+    let audit = std::fs::read_to_string(Paths::under(&home).save_audit_log()).unwrap();
+    assert_eq!(audit.lines().count(), 2, "the refusal is audited too: {audit}");
+    assert_eq!(commits(), 1);
+    let s = b.snapshot();
+    let d = s.devices.iter().find(|d| d.key == GPU).unwrap();
+    assert!(d.save.as_ref().unwrap().wait_secs > 0);
+    // An effect the device does not offer.
+    let wave = call(
+        b,
+        Request::SaveToDevices {
+            preview: true,
+            confirm: false,
+            devices: one(Some("wave")),
+        },
+    )
+    .unwrap();
+    assert_eq!(wave["devices"][0]["ok"], false);
+
+    // Exit modes: the setting, a per-device override, validation.
+    call(
+        b,
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            network: None,
+            smbus: None,
+            shutdown_mode: Some("keep".into()),
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
+            port: None,
+            openrgb_sdk: None,
+            lights_off_when_idle: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(b.snapshot().settings.shutdown_mode, "keep");
+    assert_eq!(
+        call(
+            b,
+            Request::SetSettings {
+                signalrgb: None,
+                gpu_compositing: None,
+                network: None,
+                smbus: None,
+                shutdown_mode: Some("explode".into()),
+                battery_low: None,
+                battery_critical: None,
+                battery_notifications: None,
+                port: None,
+                openrgb_sdk: None,
+                lights_off_when_idle: None,
+            },
+        )
+        .unwrap_err()
+        .status,
+        400
+    );
+    call(
+        b,
+        Request::SetDevice {
+            key: GPU.into(),
+            enabled: None,
+            parameters: None,
+            shutdown_mode: Some("off".into()),
+            blink_low_battery: None,
+        },
+    )
+    .unwrap();
+    let s = b.snapshot();
+    assert_eq!(
+        s.devices
+            .iter()
+            .find(|d| d.key == GPU)
+            .unwrap()
+            .shutdown_mode
+            .as_deref(),
+        Some("off")
+    );
+    // Give the session a frame to take the new mode, then stop: the GPU goes static black.
+    let frames = s.devices.iter().find(|d| d.key == GPU).unwrap().frames;
+    wait_for(b, "a frame after the mode change", |s| {
+        s.devices.iter().any(|d| d.key == GPU && d.frames > frames + 1)
+    });
+    handle.shutdown();
+    let sent = rec.payloads(TransactionKind::SmbusWrite);
+    let tail: Vec<[u8; 2]> = sent[sent.len() - 5..].iter().map(|w| [w[1], w[2]]).collect();
+    assert_eq!(
+        tail,
+        [[0x26, 0], [0x30, 0], [0x31, 0], [0x32, 0], [0x22, 0x13]],
+        "Shutdown(false, \"off\")"
+    );
+    assert_eq!(commits(), 1, "exit modes never store anything");
+    drop(shared);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn network_lights_follow_their_service() {
+    let home = std::env::temp_dir().join(format!("lightloom-engine-net-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../lightloom-plugin-host/testdata/network");
+    let handle = engine::start(EngineOptions {
+        paths: Paths::under(&home),
+        config: Config::default(),
+        dry_run: true,
+        hardware: HardwareMode::None,
+        ephemeral: true,
+        plugins_dir: Some(plugins),
+        effects_dir: None,
+        components_dir: None,
+        signalrgb_settings: None,
+        renderer: None,
+        plugin_cache: None,
+        notifier: Arc::new(MockNotifier::default()),
+        api_port: lightloom_api::NATIVE_PORT,
+        api_port_notice: None,
+    })
+    .unwrap();
+    let shared = handle.shared();
+    let b: &dyn Backend = &*shared;
+    let s = wait_for(b, "boot", |s| s.state == "Running");
+    assert!(!s.settings.network && s.network.is_empty(), "off by default");
+    assert!(call(
+        b,
+        Request::NetworkAdd {
+            plugin: "Loopback Lights".into(),
+            ip: "127.0.0.1".into()
+        }
+    )
+    .is_err());
+
+    call(
+        b,
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
+            port: None,
+            openrgb_sdk: None,
+            lights_off_when_idle: None,
+            shutdown_mode: None,
+            smbus: None,
+            network: Some(true),
+        },
+    )
+    .unwrap();
+    wait_for(b, "the service", |s| {
+        s.network
+            .iter()
+            .any(|n| n.plugin == "Loopback Lights" && n.running)
+    });
+    assert!(call(
+        b,
+        Request::NetworkAdd {
+            plugin: "Loopback Lights".into(),
+            ip: "8.8.8.8".into()
+        }
+    )
+    .is_err());
+    call(
+        b,
+        Request::NetworkAdd {
+            plugin: "Loopback Lights".into(),
+            ip: "127.0.0.1".into(),
+        },
+    )
+    .unwrap();
+    const ID: &str = "manual-127.0.0.1";
+    const DEV: &str = "net:loopback-lights:manual-127.0.0.1";
+    let s = wait_for(b, "the controller", |s| {
+        s.network[0].controllers.iter().any(|c| c.id == ID)
+    });
+    let c = &s.network[0].controllers[0];
+    assert!(c.can_pair && c.device.is_none() && s.network[0].can_forget);
+    assert_eq!(c.ip.as_deref(), Some("127.0.0.1"));
+
+    // Pairing announces it: a device session starts and the device list shows it.
+    call(
+        b,
+        Request::NetworkAction {
+            plugin: "Loopback Lights".into(),
+            id: ID.into(),
+            action: "pair".into(),
+        },
+    )
+    .unwrap();
+    let s = wait_for(b, "the network device", |s| {
+        s.devices
+            .iter()
+            .any(|d| d.key == DEV && d.state == "running" && d.frames > 1)
+    });
+    let d = s.devices.iter().find(|d| d.key == DEV).unwrap();
+    assert_eq!(d.name, "Lamp manual-127.0.0.1");
+    assert_eq!(d.bus.as_deref(), Some("network · 127.0.0.1"));
+    assert_eq!(s.network[0].controllers[0].device.as_deref(), Some(DEV));
+
+    // Forget suppresses it: the session ends.
+    call(
+        b,
+        Request::NetworkAction {
+            plugin: "Loopback Lights".into(),
+            id: ID.into(),
+            action: "forget".into(),
+        },
+    )
+    .unwrap();
+    wait_for(b, "the device to go", |s| {
+        s.devices.iter().all(|d| d.key != DEV || d.state == "absent")
+    });
+    // Turning network lights off stops the services.
+    call(
+        b,
+        Request::SetSettings {
+            signalrgb: None,
+            gpu_compositing: None,
+            battery_low: None,
+            battery_critical: None,
+            battery_notifications: None,
+            port: None,
+            openrgb_sdk: None,
+            lights_off_when_idle: None,
+            shutdown_mode: None,
+            smbus: None,
+            network: Some(false),
+        },
+    )
+    .unwrap();
+    let s = b.snapshot();
+    assert!(s.network.is_empty() && !s.settings.network);
+    handle.shutdown();
     let _ = std::fs::remove_dir_all(&home);
 }

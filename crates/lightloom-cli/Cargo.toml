@@ -31,7 +31,17 @@ lightloom-engine = { path = "../lightloom-engine" }
 lightloom-render = { path = "../lightloom-render" }
 lightloom-effects = { path = "../lightloom-effects" }
 lightloom-runtime = { path = "../lightloom-runtime" }
+# NATIVE_PORT (the daemon's default port).
+lightloom-api = { path = "../lightloom-api" }
+# `shm-dump`: the renderer's frame ring reader and PNG snapshots (no CEF).
+lightloom-renderer = { path = "../lightloom-renderer" }
+
+[dev-dependencies]
+image = { workspace = true }
 
 # Ctrl-C on Unix; Windows uses lightloom_hal_windows::console (close/log-off/shutdown too).
 [target.'cfg(not(windows))'.dependencies]
 ctrlc = { workspace = true }
+
+[build-dependencies]
+lightloom-winres = { path = "../lightloom-winres" }

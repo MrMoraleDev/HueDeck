@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.hyperx-mouse-hp",
+  "name": "HyperX Pulsefire mice (HP ids)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-LED lighting of the HyperX Pulsefire mice with HP product ids: Surge, Core, Dart (wired and wireless), Haste. Same code as plugins/hyperx-mouse (a plugin has one vendor id). Adapted from OpenRGB's HyperXMouseController (GPL-2.0-or-later); untested on hardware. Only Direct colour reports are sent: never the Dart's save-to-memory command, never DPI, polling rate or profile settings. Protocol notes: docs/hardware/hyperx-mouse.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "mouse",
+  "devices": [
+    {
+      "vid": "0x03F0",
+      "pids": ["0x0490", "0x0D8F", "0x068E", "0x088E", "0x0F8F"],
+      "transport": "hid",
+      "interfaces": [1, 2, 3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["NGenuity2.exe", "HyperX NGENUITY.exe"],
+  "keywords": ["hyperx", "hp", "pulsefire", "mouse", "openrgb"]
+}

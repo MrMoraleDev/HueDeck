@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! HID arrival/removal notifications.
+//! HID and USB device arrival/removal notifications.
 
 use std::time::Duration;
 
@@ -7,11 +7,13 @@ use std::time::Duration;
 /// produces a burst of events, one per HID collection).
 pub const HOTPLUG_SETTLE: Duration = Duration::from_millis(250);
 
-/// HID arrival/removal notifications; inactive for mock runs and where the
+/// HID and USB arrival/removal notifications; inactive for mock runs and where the
 /// platform has none yet.
 pub struct Hotplug {
     #[cfg(windows)]
     _source: Option<lightloom_hal_windows::hotplug::HidHotplug>,
+    #[cfg(target_os = "linux")]
+    _source: Option<lightloom_hal_linux::HidrawHotplug>,
     events: Option<std::sync::mpsc::Receiver<lightloom_hal::DeviceEvent>>,
 }
 
@@ -19,7 +21,7 @@ impl Hotplug {
     /// No notifications.
     pub fn inactive() -> Self {
         Self {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             _source: None,
             events: None,
         }
@@ -27,10 +29,13 @@ impl Hotplug {
 
     /// Subscribe; falls back to [`Hotplug::inactive`] (with a warning on stderr)
     /// when the OS refuses.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub fn start() -> Self {
         use lightloom_hal::HotplugSource;
+        #[cfg(windows)]
         let mut source = lightloom_hal_windows::hotplug::HidHotplug::new();
+        #[cfg(target_os = "linux")]
+        let mut source = lightloom_hal_linux::HidrawHotplug::new();
         match source.subscribe() {
             Ok(events) => Self {
                 _source: Some(source),
@@ -43,8 +48,8 @@ impl Hotplug {
         }
     }
 
-    /// No notifications on this OS yet.
-    #[cfg(not(windows))]
+    /// No notifications on this OS.
+    #[cfg(not(any(windows, target_os = "linux")))]
     pub fn start() -> Self {
         Self::inactive()
     }

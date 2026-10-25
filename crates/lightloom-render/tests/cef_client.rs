@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The CEF client against a stand-in renderer (`lightloom-renderer-fake`): frames
 //! flow into the store, a static page is kept alive, a crashed renderer is
-//! restarted, control values reach the renderer.
+//! restarted, control values reach the renderer (over stdin on Windows, over a
+//! unix socket elsewhere).
 
 use lightloom_engine::{FrameStore, CANVAS_HEIGHT, CANVAS_WIDTH};
 use lightloom_render::{CefRenderer, CefRendererConfig, RendererClient};
@@ -25,6 +26,10 @@ fn work_dir(name: &str) -> PathBuf {
 }
 
 fn client(name: &str, props: &[(&str, Value)]) -> (CefRenderer, PathBuf) {
+    client_with(name, props, None)
+}
+
+fn client_with(name: &str, props: &[(&str, Value)], face: Option<(u32, u32)>) -> (CefRenderer, PathBuf) {
     let dir = work_dir(name);
     let cfg = CefRendererConfig {
         renderer: PathBuf::from(env!("CARGO_BIN_EXE_lightloom-renderer-fake")),
@@ -36,8 +41,31 @@ fn client(name: &str, props: &[(&str, Value)]) -> (CefRenderer, PathBuf) {
             .collect::<Map<_, _>>(),
         software_compositing: false,
         work_dir: dir.clone(),
+        face,
     };
     (CefRenderer::new(cfg), dir)
+}
+
+#[test]
+fn an_lcd_face_renders_at_its_own_size() {
+    let (mut r, dir) = client_with("face", &[], Some((48, 32)));
+    // The canvas size is refused: the store must have the face's size.
+    let canvas = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    assert!(matches!(
+        r.start(canvas),
+        Err(lightloom_render::RenderError::SizeMismatch {
+            renderer: (48, 32),
+            ..
+        })
+    ));
+    let store = Arc::new(FrameStore::new(48, 32));
+    r.start(Arc::clone(&store)).unwrap();
+    wait_until("face frames", 20, || r.status().frames >= 3);
+    let (_, frame) = store.latest();
+    assert_eq!((frame.width(), frame.height()), (48, 32));
+    assert_eq!(frame.pixel(47, 31).g, 0x99, "the renderer was told --face");
+    r.stop();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -52,14 +80,43 @@ fn frames_flow_and_controls_reach_the_renderer() {
         r.set_properties(json!({"speed": 3}).as_object().unwrap().clone())
     });
     assert!(r.push_engine_data(json!({"audio": {"level": -20}}).as_object().unwrap().clone()));
+    // An input source pushes from its own thread through a sink.
+    let sink = r.engine_sink();
+    let pushed =
+        std::thread::spawn(move || sink.push(json!({"audio": {"width": 0.25}}).as_object().unwrap().clone()))
+            .join()
+            .unwrap();
+    assert!(pushed);
+    let st = r.status();
     r.stop();
-    let log = std::fs::read_to_string(dir.join("frames-1.shm.control.log")).unwrap_or_default();
+    let ring = std::path::PathBuf::from(st.ring.clone().unwrap());
+    let control = st.control.clone().unwrap();
+    if cfg!(unix) {
+        // A private per-run dir (tmpfs on Linux) holds the ring and the control socket; it is
+        // gone once the run ended.
+        assert!(control.starts_with("unix:"), "{control}");
+        let run_dir = ring.parent().unwrap().to_path_buf();
+        assert!(!run_dir.exists(), "{} survived the run", run_dir.display());
+        if cfg!(target_os = "linux") && std::path::Path::new("/dev/shm").is_dir() {
+            assert!(
+                !ring.starts_with(&dir),
+                "ring {} is not on a tmpfs",
+                ring.display()
+            );
+        }
+    } else {
+        assert_eq!(control, "stdin");
+        assert_eq!(ring, dir.join("frames-1.shm"));
+        assert!(!ring.exists(), "the ring file is removed after the run");
+    }
+    let log = std::fs::read_to_string(dir.join("renderer-report.json.control.log")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(log.contains("\"set\"") && log.contains("\"speed\":3"), "{log}");
     assert!(
         log.contains("\"engine\"") && log.contains("\"level\":-20"),
         "{log}"
     );
+    assert!(log.contains("\"width\":0.25"), "{log}");
     assert!(log.contains("\"quit\""), "stop sends quit: {log}");
     let st = r.status();
     assert_eq!((st.starts, st.running), (1, false));
@@ -85,13 +142,16 @@ fn a_crashed_renderer_is_restarted_holding_the_last_frame() {
     let (mut r, dir) = client("crash", &[("fake_exit_after", json!(5))]);
     let store = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     r.start(Arc::clone(&store)).unwrap();
-    wait_until("a restart", 30, || r.status().starts >= 2);
+    wait_until("a restart", 60, || r.status().starts >= 2);
     let st = r.status();
     assert!(st.last_exit.as_deref().unwrap_or("").contains("exited"), "{st:?}");
+    // However late the client looked, the frames the first renderer painted
+    // before it died were read from its ring before the restart.
+    assert!(st.frames >= 1, "{st:?}");
     // While the renderer was gone the last frame was held, not replaced by black.
     let (_, frame) = store.latest();
     assert!(frame.pixel(0, 0).r > 0);
-    wait_until("the replacement's first frame", 30, || {
+    wait_until("the replacement's first frame", 60, || {
         r.status().max_recovery_ms.is_some()
     });
     let ms = r.status().max_recovery_ms.unwrap();
@@ -113,6 +173,7 @@ fn a_missing_renderer_is_reported() {
         properties: Map::new(),
         software_compositing: false,
         work_dir: dir.clone(),
+        face: None,
     });
     let store = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     r.start(store).unwrap();

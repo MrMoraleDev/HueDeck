@@ -14,7 +14,7 @@
 //!   `Authorization: Bearer <token>`, the token from the user's data directory.
 //!   The dashboard page gets it embedded when it is served (same-origin only).
 
-use crate::model::{ApiError, Event, Request, Snapshot};
+use crate::model::{ApiError, Event, PawnIoAction, Playlist, Request, Snapshot};
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -42,6 +42,64 @@ pub trait Backend: Send + Sync + 'static {
     fn subscribe(&self) -> broadcast::Receiver<Event>;
     /// The canvas (dashboard preview).
     fn frames(&self) -> Arc<FrameStore>;
+    /// Direct LED colours that win over the canvas (the OpenRGB SDK server
+    /// writes them); `None`: the daemon does not support them.
+    fn direct(&self) -> Option<Arc<lightloom_engine::DirectLeds>> {
+        None
+    }
+    /// The hardware sensors (`GET /v1/sensors`). Asking keeps polling on for
+    /// a few seconds and may block briefly for a first poll, so the router
+    /// calls it off the async runtime. Default: sensors are not supported.
+    fn sensors(&self) -> crate::model::SensorsView {
+        crate::model::SensorsView::default()
+    }
+    /// Every log line the daemon has (`GET /v1/logs`, filtered by the router):
+    /// `from` is `file` or `memory`, `None` the files when there are any. It
+    /// may read files, so the router calls it off the async runtime. Default:
+    /// an empty in-memory log.
+    fn logs(&self, from: Option<&str>) -> crate::logs::LogBatch {
+        let _ = from;
+        crate::logs::LogBatch {
+            from: "memory".into(),
+            available: vec!["memory".into()],
+            ..crate::logs::LogBatch::default()
+        }
+    }
+    /// The audio output devices and displays capture can open, and the
+    /// choice (`GET /v1/inputs`). Enumerating may block briefly, so the
+    /// router calls it off the async runtime. Default: no capture.
+    fn inputs(&self) -> crate::model::InputsView {
+        crate::model::InputsView::default()
+    }
+    /// The update check (`/v1/update`); `None`: not supported (503).
+    fn updates(&self) -> Option<Arc<dyn Updates>> {
+        None
+    }
+    /// Device `key`'s latest LCD face frame as a PNG (`GET /v1/devices/{key}/lcd/preview`);
+    /// `None` while its plugin drives no LCD. Encoding takes a moment, so the router
+    /// calls it off the async runtime. Default: no LCDs.
+    fn lcd_preview(&self, key: &str) -> Option<Vec<u8>> {
+        let _ = key;
+        None
+    }
+}
+
+/// The update check of Settings → Updates (docs/privacy.md). Calls may block
+/// on the network (with a timeout), so the router makes them off the async runtime.
+pub trait Updates: Send + Sync + 'static {
+    /// The state as it is (no network).
+    fn view(&self) -> crate::model::UpdateView;
+    /// Ask GitHub for the latest release now and answer with the result.
+    fn check(&self) -> Result<crate::model::UpdateView, ApiError>;
+    /// Change the weekly check and the beta channel.
+    fn set_options(
+        &self,
+        check_weekly: Option<bool>,
+        beta: Option<bool>,
+    ) -> Result<crate::model::UpdateView, ApiError>;
+    /// Start downloading the release found by the last check (verified
+    /// against its SHA256SUMS), then open its installer; answers at once.
+    fn install(&self) -> Result<crate::model::UpdateView, ApiError>;
 }
 
 /// Shared by every router.
@@ -55,6 +113,8 @@ pub struct ApiContext {
     pub ui_dir: Option<PathBuf>,
     /// Let the SignalRGB-compatible API change state without the token.
     pub open_compat_mutations: bool,
+    /// The native listener, when the port can be changed (`PATCH /v1/settings`).
+    pub native: Option<Arc<crate::NativeListener>>,
 }
 
 impl ApiContext {
@@ -165,7 +225,7 @@ fn reply(result: Result<Value, ApiError>) -> Response {
 
 // ------------------------------------------------------------------ native
 
-/// The native API on [`crate::NATIVE_PORT`]: `/v1/...`, the WebSocket streams and the dashboard.
+/// The native API on `port` ([`crate::NATIVE_PORT`] by default): `/v1/...`, the WebSocket streams and the dashboard.
 pub fn native_router(ctx: ApiContext, port: u16) -> Router {
     let g = Guard::new(port, Arc::clone(&ctx.token), true);
     Router::new()
@@ -174,9 +234,22 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/devices", get(devices))
         .route("/v1/devices/{key}", get(device).patch(patch_device))
         .route("/v1/devices/{key}/channels/{channel}", put(put_channel))
+        .route("/v1/devices/{key}/lcd", put(put_lcd))
+        .route("/v1/devices/{key}/lcd/preview", get(lcd_preview))
+        .route("/v1/devices/{key}/mode", put(put_hardware_mode))
+        .route("/v1/devices/{key}/leds", get(led_map))
+        .route("/v1/devices/{key}/leds/{uid}", axum::routing::patch(patch_leds))
+        .route(
+            "/v1/devices/{key}/leds/{uid}/zones/{name}",
+            put(put_led_zone).delete(delete_led_zone),
+        )
+        .route("/v1/lcd/faces", get(lcd_faces))
+        .route("/v1/save/preview", post(save_preview))
+        .route("/v1/save", post(save_to_devices))
         .route("/v1/effects", get(effects))
         .route("/v1/effects/next", post(next_effect))
         .route("/v1/effects/previous", post(previous_effect))
+        .route("/v1/effects/shuffle", post(shuffle_effect))
         .route("/v1/effects/{id}", get(effect))
         .route("/v1/effects/{id}/apply", post(apply_effect))
         .route("/v1/effects/{id}/values", axum::routing::patch(set_effect_values))
@@ -186,6 +259,14 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         )
         .route("/v1/effects/{id}/presets/{name}/apply", post(apply_preset))
         .route("/v1/lighting", get(lighting).patch(patch_lighting))
+        .route("/v1/lighting/timer", axum::routing::patch(patch_timer))
+        .route("/v1/playlists", get(playlists).post(create_playlist))
+        .route("/v1/playlists/stop", post(stop_playlist))
+        .route(
+            "/v1/playlists/{id}",
+            get(get_playlist).put(put_playlist).delete(delete_playlist),
+        )
+        .route("/v1/playlists/{id}/play", post(play_playlist))
         .route("/v1/layouts", get(layouts))
         .route(
             "/v1/layouts/{name}",
@@ -193,16 +274,50 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         )
         .route("/v1/layouts/{name}/apply", post(apply_layout))
         .route("/v1/layout", axum::routing::patch(patch_layout))
+        .route(
+            "/v1/profiles",
+            get(profiles).post(import_profile).patch(patch_profiles),
+        )
+        .route(
+            "/v1/profiles/{name}",
+            get(get_profile).put(save_profile).delete(delete_profile),
+        )
+        .route("/v1/profiles/{name}/apply", post(apply_profile))
+        .route("/v1/profiles/{name}/rename", post(rename_profile))
+        .route("/v1/profiles/{name}/duplicate", post(duplicate_profile))
         .route("/v1/placements/{uid}", put(put_placement))
         .route("/v1/components", get(components))
         .route("/v1/settings", get(settings).patch(patch_settings))
-        .route("/v1/import/signalrgb", post(import_signalrgb))
+        .route(
+            "/v1/import/signalrgb",
+            get(preview_signalrgb).post(import_signalrgb),
+        )
         .route("/v1/export", get(export))
         .route("/v1/import", post(import))
+        .route("/v1/pawnio", get(pawnio))
+        .route("/v1/pawnio/install", post(pawnio_install))
+        .route("/v1/pawnio/remove", post(pawnio_remove))
         .route("/v1/rescan", post(rescan))
+        .route("/v1/sensors", get(sensors))
+        .route("/v1/inputs", get(inputs).patch(patch_inputs))
+        .route("/v1/logs", get(logs))
+        .route("/v1/update", get(update).patch(patch_update))
+        .route("/v1/update/check", post(check_update))
+        .route("/v1/update/install", post(install_update))
+        .route("/v1/network", get(network))
+        .route("/v1/network/{plugin}/add", post(network_add))
+        .route(
+            "/v1/network/{plugin}/controllers/{id}/{action}",
+            post(network_action),
+        )
         .route("/v1/shutdown", post(shutdown))
         .route("/v1/canvas/event", post(canvas_event))
         .route("/v1/canvas/tap", post(canvas_tap))
+        .route("/v1/actions", post(run_action))
+        .route("/v1/macros", get(macros).patch(patch_macros))
+        .route("/v1/macros/scripts/{id}", axum::routing::patch(patch_macro))
+        .route("/v1/macros/scripts/{id}/run", post(run_macro))
+        .route("/v1/macros/prompts/{id}", post(answer_prompt))
         .route("/v1/events", get(events_ws))
         .route("/v1/preview", get(preview_ws))
         .route("/", get(index))
@@ -214,7 +329,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
 
 async fn health(State(ctx): State<ApiContext>) -> Response {
     let s = ctx.backend.snapshot();
-    Json(json!({ "status": "ok", "version": s.version, "state": s.state })).into_response()
+    Json(json!({ "status": "ok", "version": s.version, "state": s.state, "os": s.os })).into_response()
 }
 
 async fn state(State(ctx): State<ApiContext>) -> Response {
@@ -234,9 +349,13 @@ async fn device(State(ctx): State<ApiContext>, Path(key): Path<String>) -> Respo
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DevicePatch {
     enabled: Option<bool>,
     parameters: Option<Map<String, Value>>,
+    shutdown_mode: Option<String>,
+    #[serde(default)]
+    blink_low_battery: Option<bool>,
 }
 
 async fn patch_device(
@@ -249,6 +368,42 @@ async fn patch_device(
             key,
             enabled: p.enabled,
             parameters: p.parameters,
+            shutdown_mode: p.shutdown_mode,
+            blink_low_battery: p.blink_low_battery,
+        })
+        .await,
+    )
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SaveBody {
+    #[serde(default)]
+    confirm: bool,
+    #[serde(default)]
+    devices: std::collections::BTreeMap<String, crate::model::DeviceSaveChoice>,
+}
+
+/// What "Save to devices" would store in each device (nothing is written).
+async fn save_preview(State(ctx): State<ApiContext>, body: Option<Json<SaveBody>>) -> Response {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    reply(
+        ctx.call(Request::SaveToDevices {
+            preview: true,
+            confirm: false,
+            devices: b.devices,
+        })
+        .await,
+    )
+}
+
+/// Store lighting in the devices' own memory; needs `"confirm": true`.
+async fn save_to_devices(State(ctx): State<ApiContext>, Json(b): Json<SaveBody>) -> Response {
+    reply(
+        ctx.call(Request::SaveToDevices {
+            preview: false,
+            confirm: b.confirm,
+            devices: b.devices,
         })
         .await,
     )
@@ -267,6 +422,93 @@ async fn put_channel(
         })
         .await,
     )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LcdBody {
+    face: Option<String>,
+    framerate: Option<u32>,
+    values: Option<Map<String, Value>>,
+}
+
+/// Choose a device's LCD face / frame rate / face control values.
+async fn put_lcd(State(ctx): State<ApiContext>, Path(key): Path<String>, Json(b): Json<LcdBody>) -> Response {
+    reply(
+        ctx.call(Request::SetLcd {
+            key,
+            face: b.face,
+            framerate: b.framerate,
+            values: b.values,
+        })
+        .await,
+    )
+}
+
+/// A device's latest LCD face frame as a PNG (the dashboard preview); 404 while its
+/// plugin drives no LCD.
+async fn lcd_preview(State(ctx): State<ApiContext>, Path(key): Path<String>) -> Response {
+    let backend = Arc::clone(&ctx.backend);
+    match tokio::task::spawn_blocking(move || backend.lcd_preview(&key)).await {
+        Ok(Some(png)) => (
+            [
+                (header::CONTENT_TYPE, "image/png"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            png,
+        )
+            .into_response(),
+        Ok(None) => error_response(&ApiError::not_found("this device has no LCD face running")),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
+}
+
+/// The LED painter's view of a device: its endpoints' LEDs, custom colours and zones.
+async fn led_map(State(ctx): State<ApiContext>, Path(key): Path<String>) -> Response {
+    reply(ctx.call(Request::LedMap { key }).await)
+}
+
+/// Change an endpoint's custom LEDs (colours, mode, zone colours).
+async fn patch_leds(
+    State(ctx): State<ApiContext>,
+    Path((key, uid)): Path<(String, String)>,
+    Json(edit): Json<crate::model::LedEdit>,
+) -> Response {
+    reply(ctx.call(Request::SetLeds { key, uid, edit }).await)
+}
+
+#[derive(Deserialize)]
+struct LedZoneBody {
+    #[serde(default)]
+    leds: Vec<u32>,
+}
+
+/// Create or replace a zone (a named set of LED slots) of an endpoint.
+async fn put_led_zone(
+    State(ctx): State<ApiContext>,
+    Path((key, uid, name)): Path<(String, String, String)>,
+    Json(b): Json<LedZoneBody>,
+) -> Response {
+    reply(
+        ctx.call(Request::SaveLedZone {
+            key,
+            uid,
+            name,
+            leds: b.leds,
+        })
+        .await,
+    )
+}
+
+async fn delete_led_zone(
+    State(ctx): State<ApiContext>,
+    Path((key, uid, name)): Path<(String, String, String)>,
+) -> Response {
+    reply(ctx.call(Request::DeleteLedZone { key, uid, name }).await)
+}
+
+async fn lcd_faces(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().lcd_faces).into_response()
 }
 
 async fn effects(State(ctx): State<ApiContext>) -> Response {
@@ -333,6 +575,10 @@ async fn previous_effect(State(ctx): State<ApiContext>) -> Response {
     reply(ctx.call(Request::StepEffect { previous: true }).await)
 }
 
+async fn shuffle_effect(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::ShuffleEffect).await)
+}
+
 async fn lighting(State(ctx): State<ApiContext>) -> Response {
     Json(&ctx.backend.snapshot().lighting).into_response()
 }
@@ -351,6 +597,74 @@ async fn patch_lighting(State(ctx): State<ApiContext>, Json(p): Json<LightingPat
         })
         .await,
     )
+}
+
+#[derive(Deserialize)]
+struct TimerPatch {
+    enabled: Option<bool>,
+    interval: Option<u32>,
+}
+
+async fn patch_timer(State(ctx): State<ApiContext>, Json(p): Json<TimerPatch>) -> Response {
+    reply(
+        ctx.call(Request::SetEffectTimer {
+            enabled: p.enabled,
+            interval: p.interval,
+        })
+        .await,
+    )
+}
+
+async fn playlists(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().playlists).into_response()
+}
+
+async fn get_playlist(State(ctx): State<ApiContext>, Path(id): Path<String>) -> Response {
+    let s = ctx.backend.snapshot();
+    match s.playlists.iter().find(|p| p.id == id) {
+        Some(p) => Json(p).into_response(),
+        None => error_response(&ApiError::not_found(format!("no playlist {id}"))),
+    }
+}
+
+async fn create_playlist(State(ctx): State<ApiContext>, Json(playlist): Json<Playlist>) -> Response {
+    reply(ctx.call(Request::SavePlaylist { id: None, playlist }).await)
+}
+
+async fn put_playlist(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<String>,
+    Json(playlist): Json<Playlist>,
+) -> Response {
+    reply(
+        ctx.call(Request::SavePlaylist {
+            id: Some(id),
+            playlist,
+        })
+        .await,
+    )
+}
+
+async fn delete_playlist(State(ctx): State<ApiContext>, Path(id): Path<String>) -> Response {
+    reply(ctx.call(Request::DeletePlaylist { id }).await)
+}
+
+#[derive(Deserialize, Default)]
+struct PlayBody {
+    start: Option<String>,
+}
+
+async fn play_playlist(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<String>,
+    body: Option<Json<PlayBody>>,
+) -> Response {
+    let start = body.and_then(|Json(b)| b.start);
+    reply(ctx.call(Request::PlayPlaylist { id, start }).await)
+}
+
+async fn stop_playlist(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::StopPlaylist).await)
 }
 
 async fn layouts(State(ctx): State<ApiContext>) -> Response {
@@ -387,6 +701,93 @@ async fn patch_layout(State(ctx): State<ApiContext>, Json(p): Json<LayoutPatch>)
     )
 }
 
+/// Put a device in a hardware mode (`{"id": "rainbow", "colors": [...], "speed",
+/// "brightness"}`), or back on the effect (`{"id": null}` or `{}`).
+async fn put_hardware_mode(
+    State(ctx): State<ApiContext>,
+    Path(key): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let mode = match body.get("id") {
+        None | Some(Value::Null) => None,
+        Some(_) => match serde_json::from_value(body) {
+            Ok(m) => Some(m),
+            Err(e) => return error_response(&ApiError::bad_request(format!("not a hardware mode: {e}"))),
+        },
+    };
+    reply(ctx.call(Request::SetHardwareMode { key, mode }).await)
+}
+
+async fn profiles(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().profiles).into_response()
+}
+
+async fn get_profile(State(ctx): State<ApiContext>, Path(name): Path<String>) -> Response {
+    reply(ctx.call(Request::GetProfile { name }).await)
+}
+
+async fn save_profile(State(ctx): State<ApiContext>, Path(name): Path<String>) -> Response {
+    reply(ctx.call(Request::SaveProfile { name }).await)
+}
+
+async fn delete_profile(State(ctx): State<ApiContext>, Path(name): Path<String>) -> Response {
+    reply(ctx.call(Request::DeleteProfile { name }).await)
+}
+
+async fn apply_profile(State(ctx): State<ApiContext>, Path(name): Path<String>) -> Response {
+    reply(ctx.call(Request::ApplyProfile { name }).await)
+}
+
+#[derive(Deserialize)]
+struct ProfileNameBody {
+    name: String,
+}
+
+async fn rename_profile(
+    State(ctx): State<ApiContext>,
+    Path(name): Path<String>,
+    Json(b): Json<ProfileNameBody>,
+) -> Response {
+    reply(ctx.call(Request::RenameProfile { name, to: b.name }).await)
+}
+
+async fn duplicate_profile(
+    State(ctx): State<ApiContext>,
+    Path(name): Path<String>,
+    Json(b): Json<ProfileNameBody>,
+) -> Response {
+    reply(ctx.call(Request::DuplicateProfile { name, to: b.name }).await)
+}
+
+#[derive(Deserialize)]
+struct ImportProfileBody {
+    profile: Value,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Add a profile from an exported document (`{profile, name?}`).
+async fn import_profile(State(ctx): State<ApiContext>, Json(b): Json<ImportProfileBody>) -> Response {
+    reply(
+        ctx.call(Request::ImportProfile {
+            profile: b.profile,
+            name: b.name,
+        })
+        .await,
+    )
+}
+
+#[derive(Deserialize)]
+struct ProfilesPatch {
+    #[serde(default)]
+    default: Option<String>,
+}
+
+/// `{"default": "<name>" | null}`: the profile applied at start.
+async fn patch_profiles(State(ctx): State<ApiContext>, Json(p): Json<ProfilesPatch>) -> Response {
+    reply(ctx.call(Request::SetDefaultProfile { name: p.default }).await)
+}
+
 async fn put_placement(
     State(ctx): State<ApiContext>,
     Path(uid): Path<String>,
@@ -409,22 +810,118 @@ struct SettingsPatch {
     signalrgb: Option<bool>,
     gpu_compositing: Option<bool>,
     smbus: Option<bool>,
+    network: Option<bool>,
+    shutdown_mode: Option<String>,
+    #[serde(default)]
+    battery_low: Option<u8>,
+    #[serde(default)]
+    battery_critical: Option<u8>,
+    #[serde(default)]
+    battery_notifications: Option<bool>,
+    /// Wider than `u16` so an out-of-range number gets a clear 400.
+    port: Option<u32>,
+    openrgb_sdk: Option<bool>,
+    /// The per-user `lightloom://` URL-scheme registration (opt-in).
+    #[serde(default)]
+    url_scheme: Option<bool>,
+    #[serde(default)]
+    lights_off_when_idle: Option<bool>,
 }
 
+/// `PATCH /v1/settings`. A `port` moves the native API and the dashboard:
+/// the new port is bound first (busy: 409, nothing changes), the daemon
+/// persists it, the new listener starts and the old one stays for
+/// a grace period ([`crate::listener::DEFAULT_GRACE`]) so this response and the
+/// dashboard's navigation to the returned `url` go through.
 async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPatch>) -> Response {
-    reply(
-        ctx.call(Request::SetSettings {
+    let mut moved = None;
+    let port = match p.port {
+        None => None,
+        Some(raw) => {
+            let port = match crate::check_native_port(raw) {
+                Ok(port) => port,
+                Err(message) => {
+                    return error_response(&ApiError {
+                        status: 400,
+                        code: "invalid_port".into(),
+                        message,
+                    })
+                }
+            };
+            let Some(native) = ctx.native.clone() else {
+                return error_response(&ApiError::bad_request(
+                    "the port can only be changed on the native API",
+                ));
+            };
+            if port != native.port() {
+                match native.bind(port).await {
+                    Ok(listener) => moved = Some((native, listener)),
+                    Err(e) => {
+                        return error_response(&ApiError {
+                            status: 409,
+                            code: "port_in_use".into(),
+                            message: format!(
+                                "port {port} cannot be used ({e}); another program probably listens on it. Nothing was changed: choose another port"
+                            ),
+                        })
+                    }
+                }
+            }
+            Some(port)
+        }
+    };
+    // The URL scheme first: when it cannot be registered nothing else changes.
+    let mut scheme = None;
+    if let Some(enabled) = p.url_scheme {
+        match ctx.call(Request::SetUrlScheme { enabled }).await {
+            Ok(v) => scheme = Some(v),
+            Err(e) => return error_response(&e),
+        }
+    }
+    let result = ctx
+        .call(Request::SetSettings {
             signalrgb: p.signalrgb,
             gpu_compositing: p.gpu_compositing,
             smbus: p.smbus,
+            network: p.network,
+            shutdown_mode: p.shutdown_mode,
+            battery_low: p.battery_low,
+            battery_critical: p.battery_critical,
+            battery_notifications: p.battery_notifications,
+            port,
+            openrgb_sdk: p.openrgb_sdk,
+            lights_off_when_idle: p.lights_off_when_idle,
         })
-        .await,
-    )
+        .await;
+    let mut value = match result {
+        Ok(v) => v,
+        // The new listener (if any) is dropped: nothing changed.
+        Err(e) => return error_response(&e),
+    };
+    let serving = match moved {
+        Some((native, listener)) => {
+            native.serve(listener, ctx.clone());
+            Some(native.port())
+        }
+        None => ctx.native.as_ref().map(|n| n.port()),
+    };
+    if let (Some(Value::Object(extra)), Some(obj)) = (scheme, value.as_object_mut()) {
+        obj.extend(extra);
+    }
+    if let (Some(port), Some(obj)) = (serving, value.as_object_mut()) {
+        obj.insert("port".into(), json!(port));
+        obj.insert("url".into(), json!(crate::native_url(port)));
+    }
+    Json(value).into_response()
 }
 
 #[derive(Deserialize, Default)]
 struct ImportLayoutBody {
     name: Option<String>,
+}
+
+async fn preview_signalrgb(State(ctx): State<ApiContext>, Query(q): Query<ImportLayoutBody>) -> Response {
+    reply(ctx.call(Request::PreviewSignalRgb { name: q.name }).await)
 }
 
 async fn import_signalrgb(State(ctx): State<ApiContext>, body: Option<Json<ImportLayoutBody>>) -> Response {
@@ -440,12 +937,162 @@ async fn import(State(ctx): State<ApiContext>, Json(state): Json<Value>) -> Resp
     reply(ctx.call(Request::Import { state }).await)
 }
 
+async fn sensors(State(ctx): State<ApiContext>) -> Response {
+    let backend = Arc::clone(&ctx.backend);
+    match tokio::task::spawn_blocking(move || backend.sensors()).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
+}
+
+async fn inputs(State(ctx): State<ApiContext>) -> Response {
+    let backend = Arc::clone(&ctx.backend);
+    match tokio::task::spawn_blocking(move || backend.inputs()).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
+}
+
+/// `null` stays apart from a missing field: `Some(None)` is "the default".
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InputsPatch {
+    #[serde(default, deserialize_with = "present")]
+    audio_device: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    display: Option<Option<String>>,
+}
+
+/// `PATCH /v1/inputs`: `{"audioDevice": name | null, "display": name | null}`;
+/// `null` (or `""`) goes back to the system default output / the primary display.
+async fn patch_inputs(State(ctx): State<ApiContext>, Json(p): Json<InputsPatch>) -> Response {
+    let name = |v: Option<Option<String>>| v.map(|n| n.unwrap_or_default().trim().to_string());
+    let (audio_device, display) = (name(p.audio_device), name(p.display));
+    for n in [&audio_device, &display].into_iter().flatten() {
+        if n.len() > 256 {
+            return error_response(&ApiError::bad_request("device names are at most 256 bytes"));
+        }
+    }
+    reply(
+        ctx.call(Request::SetInputs {
+            audio_device,
+            display,
+        })
+        .await,
+    )
+}
+
+/// `GET /v1/logs?from&level&q&source&limit`: the log history, filtered, the
+/// API token redacted.
+async fn logs(State(ctx): State<ApiContext>, Query(q): Query<crate::logs::LogQuery>) -> Response {
+    if let Err(m) = q.validate() {
+        return error_response(&ApiError::bad_request(m));
+    }
+    let backend = Arc::clone(&ctx.backend);
+    let from = q.from.clone().filter(|f| !f.is_empty());
+    match tokio::task::spawn_blocking(move || backend.logs(from.as_deref())).await {
+        Ok(batch) => Json(q.apply(batch, &[&ctx.token])).into_response(),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
+}
+
+async fn pawnio(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::PawnIoStatus).await)
+}
+
+async fn pawnio_install(State(ctx): State<ApiContext>) -> Response {
+    reply(
+        ctx.call(Request::PawnIoSetup {
+            action: PawnIoAction::Install,
+        })
+        .await,
+    )
+}
+
+async fn pawnio_remove(State(ctx): State<ApiContext>) -> Response {
+    reply(
+        ctx.call(Request::PawnIoSetup {
+            action: PawnIoAction::Remove,
+        })
+        .await,
+    )
+}
+
+async fn network(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().network).into_response()
+}
+
+#[derive(Deserialize)]
+struct NetworkAddBody {
+    ip: String,
+}
+
+async fn network_add(
+    State(ctx): State<ApiContext>,
+    Path(plugin): Path<String>,
+    Json(b): Json<NetworkAddBody>,
+) -> Response {
+    reply(ctx.call(Request::NetworkAdd { plugin, ip: b.ip }).await)
+}
+
+async fn network_action(
+    State(ctx): State<ApiContext>,
+    Path((plugin, id, action)): Path<(String, String, String)>,
+) -> Response {
+    reply(ctx.call(Request::NetworkAction { plugin, id, action }).await)
+}
+
 async fn rescan(State(ctx): State<ApiContext>) -> Response {
     reply(ctx.call(Request::Rescan).await)
 }
 
 async fn shutdown(State(ctx): State<ApiContext>) -> Response {
     reply(ctx.call(Request::Shutdown).await)
+}
+
+/// Run `f` on the update checker off the async runtime (it may wait on the network).
+async fn with_updates<F>(ctx: &ApiContext, f: F) -> Response
+where
+    F: FnOnce(&dyn Updates) -> Result<crate::model::UpdateView, ApiError> + Send + 'static,
+{
+    let Some(updates) = ctx.backend.updates() else {
+        return error_response(&ApiError::unavailable("this daemon does not check for updates"));
+    };
+    match tokio::task::spawn_blocking(move || f(&*updates)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => error_response(&e),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
+}
+
+async fn update(State(ctx): State<ApiContext>) -> Response {
+    with_updates(&ctx, |u| Ok(u.view())).await
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct UpdatePatch {
+    #[serde(default)]
+    check_weekly: Option<bool>,
+    #[serde(default)]
+    beta: Option<bool>,
+}
+
+async fn patch_update(State(ctx): State<ApiContext>, body: Option<Json<UpdatePatch>>) -> Response {
+    let p = body.map(|Json(p)| p).unwrap_or_default();
+    with_updates(&ctx, move |u| u.set_options(p.check_weekly, p.beta)).await
+}
+
+async fn check_update(State(ctx): State<ApiContext>) -> Response {
+    with_updates(&ctx, |u| u.check()).await
+}
+
+async fn install_update(State(ctx): State<ApiContext>) -> Response {
+    with_updates(&ctx, |u| u.install()).await
 }
 
 #[derive(Deserialize)]
@@ -472,6 +1119,92 @@ struct Tap {
 
 async fn canvas_tap(State(ctx): State<ApiContext>, Json(t): Json<Tap>) -> Response {
     reply(ctx.call(Request::CanvasTap { x: t.x, y: t.y }).await)
+}
+
+#[derive(Deserialize)]
+struct ActionBody {
+    url: String,
+}
+
+/// `POST /v1/actions {url}`: run a `lightloom://` action URL
+/// (docs/integrations/actions.md).
+async fn run_action(State(ctx): State<ApiContext>, Json(b): Json<ActionBody>) -> Response {
+    reply(ctx.call(Request::Action { url: b.url }).await)
+}
+
+// ------------------------------------------------------------------- macros
+
+async fn macros(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::Macros).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MacrosBody {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    keyboard_hook: Option<bool>,
+    #[serde(default)]
+    mouse_hook: Option<bool>,
+    #[serde(default)]
+    allow_launch: Option<bool>,
+}
+
+async fn patch_macros(State(ctx): State<ApiContext>, Json(b): Json<MacrosBody>) -> Response {
+    reply(
+        ctx.call(Request::SetMacros {
+            enabled: b.enabled,
+            keyboard_hook: b.keyboard_hook,
+            mouse_hook: b.mouse_hook,
+            allow_launch: b.allow_launch,
+        })
+        .await,
+    )
+}
+
+#[derive(Deserialize)]
+struct MacroBody {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    options: Option<serde_json::Map<String, Value>>,
+    #[serde(default)]
+    actions: Option<Vec<String>>,
+}
+
+async fn patch_macro(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<String>,
+    Json(b): Json<MacroBody>,
+) -> Response {
+    reply(
+        ctx.call(Request::SetMacro {
+            id,
+            enabled: b.enabled,
+            options: b.options,
+            actions: b.actions,
+        })
+        .await,
+    )
+}
+
+async fn run_macro(State(ctx): State<ApiContext>, Path(id): Path<String>) -> Response {
+    reply(ctx.call(Request::RunMacro { id }).await)
+}
+
+#[derive(Deserialize)]
+struct PromptBody {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+async fn answer_prompt(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<u64>,
+    Json(b): Json<PromptBody>,
+) -> Response {
+    reply(ctx.call(Request::AnswerPrompt { id, text: b.text }).await)
 }
 
 // --------------------------------------------------------------- websockets
@@ -660,6 +1393,11 @@ static COMPAT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// SignalRGB's envelope: `{api_version, id, method, params, status, data | errors}`.
 fn envelope(method: &Method, path: &str, result: Result<Value, ApiError>) -> Response {
+    envelope_with(method, path, json!({}), result)
+}
+
+/// [`envelope`] with the request's parameters (path parameters, the body's fields).
+fn envelope_with(method: &Method, path: &str, params: Value, result: Result<Value, ApiError>) -> Response {
     let id = COMPAT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let method = format!("{method} {path}");
     match result {
@@ -667,7 +1405,7 @@ fn envelope(method: &Method, path: &str, result: Result<Value, ApiError>) -> Res
             "api_version": crate::COMPAT_API_VERSION,
             "id": id,
             "method": method,
-            "params": {},
+            "params": params,
             "status": "ok",
             "data": data,
         }))
@@ -678,7 +1416,7 @@ fn envelope(method: &Method, path: &str, result: Result<Value, ApiError>) -> Res
                 "api_version": crate::COMPAT_API_VERSION,
                 "id": id,
                 "method": method,
-                "params": {},
+                "params": params,
                 "status": "error",
                 "errors": [{ "code": e.code, "title": e.code, "detail": e.message }],
             })),
@@ -692,6 +1430,8 @@ pub fn compat_router(ctx: ApiContext, port: u16) -> Router {
     let g = Guard::new(port, Arc::clone(&ctx.token), !ctx.open_compat_mutations);
     Router::new()
         .route("/api/v1/app", get(compat_app))
+        .route("/api/v1/new", get(compat_new))
+        .route("/api/v1/partners/{id}", get(compat_partner))
         .route("/api/v1/lighting", get(compat_lighting))
         .route(
             "/api/v1/lighting/global_brightness",
@@ -700,6 +1440,7 @@ pub fn compat_router(ctx: ApiContext, port: u16) -> Router {
         .route("/api/v1/lighting/enabled", axum::routing::patch(compat_enabled))
         .route("/api/v1/lighting/effects", get(compat_effects))
         .route("/api/v1/lighting/effects/{id}", get(compat_effect))
+        .route("/api/v1/lighting/effects/{id}/image", get(compat_effect_image))
         .route("/api/v1/lighting/effects/{id}/apply", post(compat_apply))
         .route(
             "/api/v1/lighting/effects/{id}/presets",
@@ -710,7 +1451,14 @@ pub fn compat_router(ctx: ApiContext, port: u16) -> Router {
             "/api/v1/lighting/previous",
             get(compat_previous).post(compat_previous),
         )
+        .route(
+            "/api/v1/lighting/shuffle",
+            get(compat_shuffle).post(compat_shuffle),
+        )
+        .route("/api/v1/lighting/loadEffect", post(compat_load_effect))
         .route("/api/v1/lighting/playlists", get(compat_playlists))
+        .route("/api/v1/lighting/playlists/{id}", get(compat_playlist))
+        .route("/api/v1/lighting/playlists/{id}/play", post(compat_play_playlist))
         .route(
             "/api/v1/scenes/current_layout",
             get(compat_current_layout).patch(compat_set_layout),
@@ -732,11 +1480,41 @@ async fn compat_not_found(method: Method, uri: axum::http::Uri) -> Response {
     )
 }
 
-async fn compat_app(method: Method) -> Response {
+async fn compat_app(State(ctx): State<ApiContext>, method: Method) -> Response {
+    let s = ctx.backend.snapshot();
     envelope(
         &method,
         "/api/v1/app",
-        Ok(json!({ "name": "Lightloom", "version": env!("CARGO_PKG_VERSION") })),
+        Ok(json!({
+            "name": "Lightloom",
+            "version": env!("CARGO_PKG_VERSION"),
+            "api_version": crate::COMPAT_API_VERSION,
+            "compatible_with": "SignalRGB local API",
+            "platform": std::env::consts::OS,
+            "state": s.state,
+            "links": {
+                "self": "/api/v1/app",
+                "lighting": "/api/v1/lighting",
+                "effects": "/api/v1/lighting/effects",
+                "playlists": "/api/v1/lighting/playlists",
+                "layouts": "/api/v1/scenes/layouts",
+            },
+        })),
+    )
+}
+
+/// SignalRGB's "what's new" feed: Lightloom has none.
+async fn compat_new(method: Method) -> Response {
+    envelope(&method, "/api/v1/new", Ok(json!({ "items": [], "type": "new" })))
+}
+
+/// SignalRGB's partner permission grants: Lightloom grants none.
+async fn compat_partner(method: Method, Path(id): Path<String>) -> Response {
+    envelope_with(
+        &method,
+        &format!("/api/v1/partners/{id}"),
+        json!({ "id": id }),
+        Ok(json!({ "id": id, "permissions": {}, "type": "partner" })),
     )
 }
 
@@ -746,6 +1524,7 @@ fn compat_lighting_data(s: &Snapshot) -> Value {
         "global_brightness": s.lighting.brightness,
         "name": s.lighting.effect_name.clone().unwrap_or_default(),
         "id": s.lighting.effect.clone().unwrap_or_default(),
+        "playlist": s.lighting.playlist.as_ref().map(|p| json!({ "id": p.id, "name": p.name })),
         "links": { "self": "/api/v1/lighting" },
     })
 }
@@ -775,7 +1554,12 @@ async fn compat_brightness(
         })
         .await
         .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
-    envelope(&method, "/api/v1/lighting/global_brightness", r)
+    envelope_with(
+        &method,
+        "/api/v1/lighting/global_brightness",
+        json!({ "global_brightness": b.global_brightness }),
+        r,
+    )
 }
 
 #[derive(Deserialize)]
@@ -795,7 +1579,12 @@ async fn compat_enabled(
         })
         .await
         .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
-    envelope(&method, "/api/v1/lighting/enabled", r)
+    envelope_with(
+        &method,
+        "/api/v1/lighting/enabled",
+        json!({ "enabled": b.enabled }),
+        r,
+    )
 }
 
 async fn compat_effects(State(ctx): State<ApiContext>, method: Method) -> Response {
@@ -821,15 +1610,16 @@ async fn compat_effects(State(ctx): State<ApiContext>, method: Method) -> Respon
     )
 }
 
+fn effect_not_found() -> ApiError {
+    ApiError::not_found("The requested effect was not found")
+}
+
 async fn compat_effect(State(ctx): State<ApiContext>, method: Method, Path(id): Path<String>) -> Response {
     let s = ctx.backend.snapshot();
     let path = format!("/api/v1/lighting/effects/{id}");
+    let params = json!({ "id": id });
     let Some(e) = s.effects.iter().find(|e| e.id == id) else {
-        return envelope(
-            &method,
-            &path,
-            Err(ApiError::not_found("The requested effect was not found")),
-        );
+        return envelope_with(&method, &path, params, Err(effect_not_found()));
     };
     let mut parameters = Map::new();
     for c in &e.controls {
@@ -847,21 +1637,73 @@ async fn compat_effect(State(ctx): State<ApiContext>, method: Method, Path(id): 
             json!({ "label": c.get("label"), "type": c.get("type"), "value": value }),
         );
     }
-    envelope(
+    let uses = |what: &str| e.uses.iter().any(|u| u == what);
+    envelope_with(
         &method,
         &path,
+        params,
         Ok(json!({
             "id": e.id,
             "name": e.title,
             "description": e.description,
             "publisher": e.publisher,
-            "developer_effect": false,
+            "image": format!("{path}/image"),
+            "developer_effect": e.source == "developer",
             "favorite": false,
+            "uses_audio": uses("audio"),
+            "uses_input": uses("input"),
+            "uses_video": uses("video"),
+            "uses_meters": uses("meters"),
+            "uses_webgl": uses("webgl"),
             "parameters": parameters,
             "presets": e.presets,
-            "links": { "apply": format!("{path}/apply"), "self": path },
+            "links": { "apply": format!("{path}/apply"), "image": format!("{path}/image"), "self": path },
         })),
     )
+}
+
+/// Largest effect picture served.
+const MAX_IMAGE_BYTES: u64 = 8 << 20;
+
+/// The effect's picture itself (not an envelope); errors come in the envelope.
+async fn compat_effect_image(
+    State(ctx): State<ApiContext>,
+    method: Method,
+    Path(id): Path<String>,
+) -> Response {
+    let path = format!("/api/v1/lighting/effects/{id}/image");
+    let params = json!({ "id": id });
+    let found = match ctx.call(Request::EffectImage { id: id.clone() }).await {
+        Ok(v) => v,
+        Err(e) => return envelope_with(&method, &path, params, Err(e)),
+    };
+    let (Some(file), Some(mime)) = (
+        found.get("path").and_then(Value::as_str),
+        found.get("contentType").and_then(Value::as_str),
+    ) else {
+        return envelope_with(
+            &method,
+            &path,
+            params,
+            Err(ApiError::not_found("The requested effect has no image")),
+        );
+    };
+    let small = tokio::fs::metadata(file)
+        .await
+        .is_ok_and(|m| m.len() <= MAX_IMAGE_BYTES);
+    match tokio::fs::read(file).await {
+        Ok(bytes) if small => {
+            let mime =
+                HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream"));
+            ([(header::CONTENT_TYPE, mime)], Body::from(bytes)).into_response()
+        }
+        _ => envelope_with(
+            &method,
+            &path,
+            params,
+            Err(ApiError::not_found("The requested effect has no image")),
+        ),
+    }
 }
 
 async fn compat_apply(State(ctx): State<ApiContext>, method: Method, Path(id): Path<String>) -> Response {
@@ -872,19 +1714,21 @@ async fn compat_apply(State(ctx): State<ApiContext>, method: Method, Path(id): P
         })
         .await
         .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
-    envelope(&method, &format!("/api/v1/lighting/effects/{id}/apply"), r)
+    envelope_with(
+        &method,
+        &format!("/api/v1/lighting/effects/{id}/apply"),
+        json!({ "id": id }),
+        r,
+    )
 }
 
 async fn compat_presets(State(ctx): State<ApiContext>, method: Method, Path(id): Path<String>) -> Response {
     let s = ctx.backend.snapshot();
     let path = format!("/api/v1/lighting/effects/{id}/presets");
+    let params = json!({ "id": id });
     match s.effects.iter().find(|e| e.id == id) {
-        Some(e) => envelope(&method, &path, Ok(json!({ "items": e.presets }))),
-        None => envelope(
-            &method,
-            &path,
-            Err(ApiError::not_found("The requested effect was not found")),
-        ),
+        Some(e) => envelope_with(&method, &path, params, Ok(json!({ "items": e.presets }))),
+        None => envelope_with(&method, &path, params, Err(effect_not_found())),
     }
 }
 
@@ -899,13 +1743,19 @@ async fn compat_apply_preset(
     Path(id): Path<String>,
     Json(p): Json<CompatPreset>,
 ) -> Response {
+    let params = json!({ "id": id, "preset": p.preset });
     let r = ctx
         .call(Request::ApplyPreset {
             effect: id.clone(),
             name: p.preset,
         })
         .await;
-    envelope(&method, &format!("/api/v1/lighting/effects/{id}/presets"), r)
+    envelope_with(
+        &method,
+        &format!("/api/v1/lighting/effects/{id}/presets"),
+        params,
+        r,
+    )
 }
 
 async fn compat_next(State(ctx): State<ApiContext>, method: Method) -> Response {
@@ -924,11 +1774,143 @@ async fn compat_previous(State(ctx): State<ApiContext>, method: Method) -> Respo
     envelope(&method, "/api/v1/lighting/previous", r)
 }
 
-async fn compat_playlists(method: Method) -> Response {
+/// A random effect, game integrations and developer effects excluded.
+async fn compat_shuffle(State(ctx): State<ApiContext>, method: Method) -> Response {
+    let r = ctx
+        .call(Request::ShuffleEffect)
+        .await
+        .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
+    envelope(&method, "/api/v1/lighting/shuffle", r)
+}
+
+#[derive(Deserialize)]
+struct CompatLoadEffect {
+    uid: String,
+    html: String,
+}
+
+/// SignalRGB's developer endpoint: always needs the token (it runs a page the
+/// caller wrote), even when the compatible API's other changes are open.
+async fn compat_load_effect(
+    State(ctx): State<ApiContext>,
+    method: Method,
+    headers: HeaderMap,
+    body: Option<Json<CompatLoadEffect>>,
+) -> Response {
+    let path = "/api/v1/lighting/loadEffect";
+    if !has_token(&headers, &ctx.token) {
+        return envelope(
+            &method,
+            path,
+            Err(ApiError {
+                status: 401,
+                code: "unauthorized".into(),
+                message: "loadEffect is a developer endpoint: send Authorization: Bearer <token> (the \
+                          api-token file in Lightloom's data directory)"
+                    .into(),
+            }),
+        );
+    }
+    let Some(Json(b)) = body else {
+        return envelope(
+            &method,
+            path,
+            Err(ApiError::bad_request("send {\"uid\": <name>, \"html\": <page>}")),
+        );
+    };
+    let params = json!({ "uid": b.uid });
+    let r = ctx
+        .call(Request::LoadEffect {
+            uid: b.uid,
+            html: b.html,
+        })
+        .await
+        .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
+    envelope_with(&method, path, params, r)
+}
+
+fn compat_playlist_item(p: &Playlist) -> Value {
+    let path = format!("/api/v1/lighting/playlists/{}", p.id);
+    json!({
+        "id": p.id,
+        "name": p.name,
+        "effects_count": p.entries.len(),
+        "last_update_time": p.updated_at,
+        "image_url": Value::Null,
+        "shuffle": p.shuffle,
+        "type": "playlist",
+        "links": { "play": format!("{path}/play"), "self": path },
+    })
+}
+
+async fn compat_playlists(State(ctx): State<ApiContext>, method: Method) -> Response {
+    let s = ctx.backend.snapshot();
+    let items: Vec<Value> = s.playlists.iter().map(compat_playlist_item).collect();
     envelope(
         &method,
         "/api/v1/lighting/playlists",
-        Ok(json!({ "items": [], "type": "playlists" })),
+        Ok(json!({ "items": items, "type": "playlists" })),
+    )
+}
+
+fn playlist_not_found() -> ApiError {
+    ApiError::not_found("The requested playlist was not found")
+}
+
+async fn compat_playlist(State(ctx): State<ApiContext>, method: Method, Path(id): Path<String>) -> Response {
+    let s = ctx.backend.snapshot();
+    let path = format!("/api/v1/lighting/playlists/{id}");
+    let params = json!({ "id": id });
+    let Some(p) = s.playlists.iter().find(|p| p.id == id) else {
+        return envelope_with(&method, &path, params, Err(playlist_not_found()));
+    };
+    let mut data = compat_playlist_item(p);
+    data["playing"] = json!(s.lighting.playlist.as_ref().is_some_and(|now| now.id == p.id));
+    data["effects"] = p
+        .entries
+        .iter()
+        .map(|entry| {
+            let name = s
+                .effects
+                .iter()
+                .find(|e| e.id == entry.effect)
+                .map(|e| e.title.clone());
+            json!({
+                "id": entry.effect,
+                "name": name,
+                "preset": entry.preset,
+                "duration": entry.duration,
+            })
+        })
+        .collect();
+    envelope_with(&method, &path, params, Ok(data))
+}
+
+#[derive(Deserialize, Default)]
+struct CompatPlay {
+    starting_effect_id: Option<String>,
+}
+
+async fn compat_play_playlist(
+    State(ctx): State<ApiContext>,
+    method: Method,
+    Path(id): Path<String>,
+    body: Option<Json<CompatPlay>>,
+) -> Response {
+    let start = body.and_then(|Json(b)| b.starting_effect_id);
+    let params = json!({ "id": id, "starting_effect_id": start });
+    let r = ctx
+        .call(Request::PlayPlaylist {
+            id: id.clone(),
+            start,
+        })
+        .await
+        .map(|_| compat_lighting_data(&ctx.backend.snapshot()));
+    envelope_with(
+        &method,
+        &format!("/api/v1/lighting/playlists/{id}/play"),
+        params,
+        r,
     )
 }
 
@@ -954,11 +1936,12 @@ async fn compat_set_layout(
     method: Method,
     Json(l): Json<CompatLayout>,
 ) -> Response {
+    let params = json!({ "layout": l.layout });
     let r = ctx
         .call(Request::ApplyLayout { name: l.layout })
         .await
         .map(|_| compat_layout_data(&ctx.backend.snapshot()));
-    envelope(&method, "/api/v1/scenes/current_layout", r)
+    envelope_with(&method, "/api/v1/scenes/current_layout", params, r)
 }
 
 async fn compat_layouts(State(ctx): State<ApiContext>, method: Method) -> Response {

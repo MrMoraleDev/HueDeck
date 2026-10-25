@@ -4,6 +4,7 @@
   import { daemon } from "../lib/store.svelte";
   import type { EffectView, Snapshot } from "../lib/types";
   import ControlInput from "./ControlInput.svelte";
+  import Playlists from "./Playlists.svelte";
   import Preview from "./Preview.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
@@ -11,14 +12,18 @@
   let presetName = $state("");
 
   const current = $derived(snapshot.effects.find((e) => e.id === snapshot.lighting.effect) ?? null);
-  const shown = $derived(
-    snapshot.effects.filter(
-      (e) =>
-        !filter ||
-        e.title.toLowerCase().includes(filter.toLowerCase()) ||
-        e.description.toLowerCase().includes(filter.toLowerCase()),
-    ),
-  );
+  const shown = $derived.by(() => {
+    const f = filter.toLowerCase();
+    if (!f) return snapshot.effects;
+    return snapshot.effects.filter((e) => e.title.toLowerCase().includes(f) || e.description.toLowerCase().includes(f));
+  });
+
+  const SOURCES: Record<EffectView["source"], string> = {
+    lightloom: "Lightloom",
+    user: "yours",
+    signalrgb: "SignalRGB",
+    developer: "developer",
+  };
 
   function valueOf(e: EffectView, property: string, fallback: unknown) {
     return property in e.values ? e.values[property] : fallback;
@@ -30,12 +35,17 @@
     <div class="row head">
       <h2>Effects</h2>
       <input type="text" placeholder="Filter" bind:value={filter} />
+      <button onclick={() => daemon.run(() => api.shuffleEffect())} title="A random effect (game integrations left out)">Shuffle</button>
       <button onclick={() => daemon.run(() => api.state())} title="Reload">↻</button>
     </div>
     {#each shown as e (e.id)}
       <button class="effect" class:active={e.id === snapshot.lighting.effect} onclick={() => daemon.run(() => api.applyEffect(e.id))}>
         <span class="title">{e.title}</span>
-        <span class="badge">{e.source === "signalrgb" ? "SignalRGB" : e.source === "user" ? "yours" : "Lightloom"}</span>
+        <span class="badge" title={e.thirdParty ? "Third-party effect, read from your SignalRGB installation" : undefined}
+          >{SOURCES[e.source] ?? e.source}{e.thirdParty ? " · third-party" : ""}{e.uses?.includes("meters")
+            ? " · game"
+            : ""}</span
+        >
         {#if e.description}<span class="desc muted">{e.description}</span>{/if}
       </button>
     {:else}
@@ -47,6 +57,7 @@
     <div class="panel">
       <Preview width={480} />
     </div>
+    <Playlists {snapshot} />
     {#if current}
       <div class="panel">
         <h2>{current.title}</h2>
@@ -68,7 +79,7 @@
         {/each}
         <h3>Presets</h3>
         <div class="row">
-          {#each current.presets as p}
+          {#each current.presets as p (p)}
             <span class="preset">
               <button onclick={() => daemon.run(() => api.applyPreset(current.id, p))}>{p}</button>
               <button class="x" title="Delete" onclick={() => daemon.run(() => api.deletePreset(current.id, p))}>×</button>

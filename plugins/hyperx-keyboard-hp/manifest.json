@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.hyperx-keyboard-hp",
+  "name": "HyperX keyboards (HP ids)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Per-LED lighting of the HyperX keyboards with HP product ids: Alloy Elite 2, Alloy Origins, Alloy Origins 60, Alloy Origins 65, Eve 1800, Origins 2 65. Same code as plugins/hyperx-keyboard (a plugin has one vendor id). Adapted from OpenRGB's HyperXKeyboardController (GPL-2.0-or-later); untested on hardware. Only Direct reports are sent: never brightness or other settings. The Alloy Origins Core (HP) (03F0:098F) is held back. Protocol notes: docs/hardware/hyperx-keyboard.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "keyboard",
+  "devices": [
+    {
+      "vid": "0x03F0",
+      "pids": ["0x058F", "0x0C8E", "0x038F", "0x0591", "0x08C2", "0x0CC2"],
+      "transport": "hid",
+      "interfaces": [2, 3],
+      "tested": []
+    }
+  ],
+  "permissions": ["hid"],
+  "conflictingProcesses": ["NGenuity2.exe", "HyperX NGENUITY.exe"],
+  "keywords": ["hyperx", "hp", "alloy", "origins", "keyboard", "openrgb"]
+}

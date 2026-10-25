@@ -20,6 +20,16 @@ tracing = { workspace = true }
 lightloom-hal = { path = "../lightloom-hal" }
 lightloom-hid-desc = { path = "../lightloom-hid-desc" }
 lightloom-engine = { path = "../lightloom-engine" }
+# `@SignalRGB/lcd`: frame encoders and the face-renderer provider.
+lightloom-lcd = { path = "../lightloom-lcd" }
+# https:// for XMLHttpRequest (net/tls.rs) and DTLS-PSK (net/dtls.rs).
+rustls = { workspace = true }
+ring = { workspace = true }
+
+[features]
+# The loopback DTLS-PSK server of the tests (net/dtls.rs `test_server`); never in a release.
+test-support = []
 
 [dev-dependencies]
+lightloom-plugin-host = { path = ".", features = ["test-support"] }
 lightloom-hal = { path = "../lightloom-hal", features = ["mock"] }

@@ -19,28 +19,82 @@
 //!    session;
 //!    Changes sent through [`SessionHandle::control`] apply before the next
 //!    `Render()`: parameter values (then `on<name>Changed()`), brightness,
-//!    placement (then `onBrightnessChanged()` for a new device brightness);
-//! 6. on stop calls `Shutdown(false)` (unless told not to), repeats the
-//!    feature-report reads and returns a [`SessionReport`].
+//!    placement (then `onBrightnessChanged()` for a new device brightness),
+//!    the alert override and `battery.lowBatteryWarningLevel`. What the plugin
+//!    reports through the `battery` feature is readable meanwhile
+//!    ([`LiveSnapshot::battery`]), and so are its parameters and messages
+//!    ([`SessionHandle::plugin_ui`]): `device.addProperty` / `addMessage` /
+//!    `notify` change them at run time, and each change is announced on the
+//!    session's events channel ([`SessionHandle::events`]);
+//! 6. on stop calls `Shutdown(false, mode)` (unless told not to; `mode` is the
+//!    [`ShutdownMode`], a Lightloom extension, with the `shutdownColor` fallback of
+//!    [`crate::save::shutdown_fallback`] for plugins that do not implement it),
+//!    repeats the feature-report reads and returns a [`SessionReport`].
+//!
+//! Between two `Render()` calls a [`Control::Save`] runs the plugin's
+//! `SaveToDevice(request)` (Lightloom extension, [`crate::save`]): a preview with
+//! every write recorded and never sent, or a save with the SMBus
+//! `SmbusDeniedRegisters()` writable for that one call.
+//!
+//! A [`Control::HardwareMode`] (or [`SessionOptions::hardware_mode`], right after
+//! `Initialize()`) runs the plugin's `SetHardwareMode(request)` (Lightloom
+//! extension, [`crate::hwmode`]): live commands only, the SMBus denied registers
+//! stay refused. While the device is in a hardware mode the session calls no
+//! `Render()` (controls are still applied); `SetHardwareMode(null)` ("Follow
+//! effect") hands it back to the canvas.
+//!
+//! A raw USB device ([`SessionDevice::usb`], WinUSB through [`UsbTarget`]):
+//! a `rawusb` plugin skips steps 3 and 4 and opens the USB device instead (a
+//! device Windows bound no WinUSB driver to faults with "needs WinUSB driver");
+//! a `hybrid` plugin opens its HID collection as usual, then the USB device
+//! (without it, transfers fail but HID I/O goes on). Any plugin may switch
+//! with `device.setProtocol("hid" | "hybrid")`.
+//!
+//! A LampArray of the OS backend ([`SessionDevice::lamparray`]) runs the
+//! built-in session of [`crate::lamparray`] instead of a plugin.
 //!
 //! An SMBus device ([`SessionDevice::smbus`]) has no HID collections: steps 3
 //! and 4 are skipped, `bus` is the fixed-address bus of its address (through a
 //! [`GuardedBus`]), a `TransactionLock` still held when `Render()` returns is
 //! released by the host, and `Render()` runs at most once per
 //! [`SMBUS_FRAME_INTERVAL`] whatever the canvas rate.
+//!
+//! A network device ([`SessionDevice::network`], announced by a network
+//! service) has no HID collections either: `controller` is the announced data,
+//! sockets and `XMLHttpRequest` go through its own [`NetContext`] (closed when
+//! the session ends), socket events are delivered before each `Render()`, and
+//! `Render()` runs at most once per [`NETWORK_FRAME_INTERVAL`].
+//!
+//! A serial device ([`SessionDevice::serial`], `Type() == "serial"`) has no
+//! HID collections either: `Validate(endpoint)` is offered each of its ports
+//! as `{interface: <USB interface>, usage: 0, usage_page: 0, collection: 0}`
+//! and the first accepted one is the port `serial.connect()` binds without a
+//! `portName`; `@SignalRGB/serial` opens only the device's own ports
+//! ([`crate::serial`]), and `Render()` runs at most once per
+//! [`SERIAL_FRAME_INTERVAL`].
 
+use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::bus::{lock_guard, SharedGuard};
 use crate::catalog::CatalogEntry;
 use crate::children::ChildSetup;
 pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
+use crate::device::Protocol;
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
+use crate::hwmode::HardwareModeChoice;
+use crate::lcd::{lock_lcd, LcdContext, SharedLcd};
+use crate::meta::{PluginMeta, PluginType};
+use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
+use crate::plugin_ui::PluginUi;
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
+use crate::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode, ShutdownPlan};
+use crate::serial::{lock_serial, SerialContext, SerialReport, SharedSerial};
 use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
 use crate::stats::LatencyHistogram;
-use lightloom_engine::{ComponentInstance, FrameStore, Placement, SamplerConfig};
+use lightloom_engine::{ComponentInstance, FrameStore, Placement, Rgb, SamplerConfig};
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, NoHid};
+use lightloom_hal::usb::{UsbBackend, UsbDeviceInfo};
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -55,6 +109,13 @@ use std::time::{Duration, Instant};
 /// (`RGBController_MSIGPU::TimeToSend`, 33 ms). The latest frame is rendered
 /// when the time comes, so nothing is lost but the frames in between.
 pub const SMBUS_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// Shortest time between two `Render()` calls of a network device (about 30
+/// fps); plugins pace their protocol further themselves.
+pub const NETWORK_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// Shortest time between two `Render()` calls of a serial device (about 30
+/// fps): a 115200 baud link carries about 11 KB/s, so a faster pace only
+/// queues frames in the port.
+pub const SERIAL_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 /// One physical device: every HID collection that belongs to it, or the
 /// SMBus address it answers at.
@@ -70,6 +131,65 @@ pub struct SessionDevice {
     pub endpoints: Vec<HidEndpointInfo>,
     /// An SMBus device: its bus and address.
     pub smbus: Option<SmbusTarget>,
+    /// The device's raw USB side (the USB device the HID collections belong
+    /// to, or a USB device without HID): `rawusb` / `hybrid` plugins and
+    /// `device.setProtocol("hybrid")` use it.
+    pub usb: Option<UsbTarget>,
+    /// A LampArray of the OS backend, driven by the built-in session
+    /// ([`crate::lamparray`]) instead of a plugin.
+    pub lamparray: Option<crate::lamparray::LampArrayTarget>,
+    /// A network device: the controller a network service announced.
+    pub network: Option<NetworkTarget>,
+    /// A serial device (`Type() == "serial"`): its ports and their backend.
+    pub serial: Option<crate::serial::SerialTarget>,
+}
+
+/// A network device: what its service announced.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetworkTarget {
+    /// The plugin's `Name()`.
+    pub service: String,
+    /// The controller's id.
+    pub id: String,
+    /// The controller's data (bound to `controller` in the device context).
+    pub controller: serde_json::Value,
+}
+
+impl NetworkTarget {
+    /// The controller's `ip`, when it has one.
+    pub fn ip(&self) -> Option<&str> {
+        self.controller.get("ip").and_then(serde_json::Value::as_str)
+    }
+}
+
+/// `text` as a key segment: lowercase letters, digits, `-` and `.`.
+pub fn key_slug(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() || c == '.' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').chars().take(64).collect()
+}
+
+/// A raw USB device and the backend that opens it.
+#[derive(Clone)]
+pub struct UsbTarget {
+    /// The backend (WinUSB on Windows, [`lightloom_hal::mock::MockUsb`] in tests).
+    pub backend: Arc<dyn UsbBackend>,
+    /// The device as enumeration saw it.
+    pub info: UsbDeviceInfo,
+}
+
+impl std::fmt::Debug for UsbTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UsbTarget")
+            .field("info", &self.info)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Where an SMBus device lives.
@@ -90,7 +210,38 @@ impl SessionDevice {
             pid,
             endpoints,
             smbus: None,
+            usb: None,
+            lamparray: None,
+            serial: None,
+            network: None,
         }
+    }
+
+    /// A raw USB device without HID collections (`rawusb` plugins), keyed `key`.
+    pub fn usb(key: impl Into<String>, target: UsbTarget) -> Self {
+        Self {
+            key: key.into(),
+            vid: target.info.vid,
+            pid: target.info.pid,
+            endpoints: Vec::new(),
+            smbus: None,
+            usb: Some(target),
+            network: None,
+            lamparray: None,
+            serial: None,
+        }
+    }
+
+    /// The same device with its raw USB side.
+    pub fn with_usb(mut self, target: Option<UsbTarget>) -> Self {
+        self.usb = target;
+        self
+    }
+
+    /// Why the device's raw USB side is unreachable ("needs WinUSB driver",
+    /// with a docs link); `None` without a raw USB side or when WinUSB is bound.
+    pub fn driver_problem(&self) -> Option<String> {
+        self.usb.as_ref()?.info.driver_problem()
     }
 
     /// The SMBus device at `addr` on `bus`: key `smbus:<bus key>:<addr>`,
@@ -103,6 +254,47 @@ impl SessionDevice {
             pid: d.pci.device,
             endpoints: Vec::new(),
             smbus: Some(SmbusTarget { bus, addr }),
+            usb: None,
+            lamparray: None,
+            serial: None,
+            network: None,
+        }
+    }
+
+    /// The USB serial device whose ports are `target.ports` (never empty):
+    /// key `vid:pid:<USB serial number, else the first port name>`.
+    pub fn serial(vid: u16, pid: u16, target: crate::serial::SerialTarget) -> Self {
+        let serial = target
+            .ports
+            .first()
+            .map(crate::serial::port_key_serial)
+            .unwrap_or_default();
+        Self {
+            key: format!("{vid:04x}:{pid:04x}:{serial}"),
+            vid,
+            pid,
+            endpoints: Vec::new(),
+            smbus: None,
+            usb: None,
+            lamparray: None,
+            network: None,
+            serial: Some(target),
+        }
+    }
+
+    /// The network device `target`: key `net:<plugin slug>:<controller id>`, VID:PID 0.
+    pub fn network(target: NetworkTarget) -> Self {
+        let id: String = target.id.chars().filter(|c| !c.is_control()).take(128).collect();
+        Self {
+            key: format!("net:{}:{id}", key_slug(&target.service)),
+            vid: 0,
+            pid: 0,
+            endpoints: Vec::new(),
+            smbus: None,
+            usb: None,
+            lamparray: None,
+            serial: None,
+            network: Some(target),
         }
     }
 }
@@ -121,6 +313,8 @@ pub struct Budgets {
     pub render: Duration,
     /// `Shutdown()`.
     pub shutdown: Duration,
+    /// `SaveToDevice(request)` (a save or a preview).
+    pub save: Duration,
     /// Wall-clock cap of one `Render()`, blocked time included (plugins set
     /// devices up lazily from `Render()`, taking seconds once).
     pub render_wall: Duration,
@@ -136,6 +330,7 @@ impl Default for Budgets {
             initialize: Duration::from_secs(10),
             render: Duration::from_millis(250),
             shutdown: Duration::from_secs(5),
+            save: Duration::from_secs(10),
             render_wall: Duration::from_secs(30),
             call_wall: Duration::from_secs(30),
         }
@@ -210,6 +405,26 @@ pub struct SessionOptions {
     pub placements: BTreeMap<String, Placement>,
     /// Motherboard / BIOS / memory facts for `@SignalRGB/systeminfo`.
     pub system_info: Option<Arc<lightloom_hal::SystemInfo>>,
+    /// What `Shutdown(false, mode)` leaves the device showing (changed live by
+    /// [`Control::ShutdownMode`]).
+    pub shutdown_mode: ShutdownMode,
+    /// Direct LED colours (OpenRGB SDK clients), read once per frame; they
+    /// win over the canvas for the endpoints they name.
+    pub direct: Option<Arc<lightloom_engine::DirectLeds>>,
+    /// `battery.lowBatteryWarningLevel` (percent).
+    pub battery_warning_level: u8,
+    /// Where the plugin's `keyboard` / `mouse` feature events go (the macro
+    /// runtime); `None` drops them.
+    pub input_sink: Option<crate::input::InputSink>,
+    /// Renders the LCD faces of `@SignalRGB/lcd` plugins; `None`: their LCDs show black.
+    pub lcd: Option<Arc<dyn lightloom_lcd::LcdProvider>>,
+    /// A hardware mode to put the device in right after `Initialize()` (the
+    /// user's choice survives restarts and sleep); `None`: follow the canvas.
+    pub hardware_mode: Option<HardwareModeChoice>,
+    /// Network devices: the settings store of their plugin, where `https`
+    /// trust-on-first-use pins live (net/tls.rs); `None`: `https` needs
+    /// `tlsPin` or `tlsName`.
+    pub plugin_settings: Option<Arc<dyn crate::service::PluginSettings>>,
 }
 
 impl Default for SessionOptions {
@@ -227,6 +442,13 @@ impl Default for SessionOptions {
             channel_components: BTreeMap::new(),
             placements: BTreeMap::new(),
             system_info: None,
+            shutdown_mode: ShutdownMode::Restore,
+            direct: None,
+            battery_warning_level: DEFAULT_WARNING_LEVEL,
+            input_sink: None,
+            lcd: None,
+            hardware_mode: None,
+            plugin_settings: None,
         }
     }
 }
@@ -239,6 +461,7 @@ impl std::fmt::Debug for SessionOptions {
             .field("write_mode", &self.write_mode)
             .field("skip_shutdown", &self.skip_shutdown)
             .field("restore_check", &self.restore_check)
+            .field("shutdown_mode", &self.shutdown_mode)
             .field(
                 "channel_components",
                 &self.channel_components.keys().collect::<Vec<_>>(),
@@ -379,8 +602,15 @@ pub struct SessionReport {
     pub restore_notes: Vec<String>,
     /// Worth knowing, not failures: calls a stop request cut short.
     pub notes: Vec<String>,
-    /// `Shutdown(false)` ran.
+    /// `Shutdown(systemSuspending)` ran.
     pub shutdown_called: bool,
+    /// It was `Shutdown(true)`: the session stopped for system sleep
+    /// ([`SessionHandle::stop_for_suspend`]).
+    pub suspended: bool,
+    /// The mode it was given.
+    pub shutdown_mode: ShutdownMode,
+    /// `SaveToDevice(request)` calls that stored (not previews), successful or not.
+    pub saves: u64,
     /// Subdevices at the end of the session.
     pub subdevices: Vec<SubdeviceSummary>,
     /// Channels at the end of the session.
@@ -396,12 +626,20 @@ pub struct SessionReport {
     pub device_removed: bool,
     /// SMBus counters (SMBus devices only).
     pub smbus: Option<SmbusStats>,
+    /// Network counters (network devices only).
+    pub network: Option<NetStats>,
+    /// Serial counters and records (serial devices only).
+    pub serial: Option<SerialReport>,
+    /// LCD counters (plugins that called `LCD.initialize` only).
+    pub lcd: Option<crate::lcd::LcdStats>,
+    /// The last battery report (plugins with the `battery` feature only).
+    pub battery: Option<BatteryStatus>,
     /// Session wall time.
     pub elapsed_ms: f64,
 }
 
 impl SessionReport {
-    fn new(device: &SessionDevice, plugin: &CatalogEntry) -> Self {
+    pub(crate) fn new(device: &SessionDevice, plugin: &CatalogEntry) -> Self {
         Self {
             device: device.key.clone(),
             plugin: plugin.meta.source_path.clone(),
@@ -427,6 +665,9 @@ impl SessionReport {
             restore_notes: Vec::new(),
             notes: Vec::new(),
             shutdown_called: false,
+            suspended: false,
+            shutdown_mode: ShutdownMode::Restore,
+            saves: 0,
             subdevices: Vec::new(),
             channels: Vec::new(),
             log_tail: Vec::new(),
@@ -434,11 +675,15 @@ impl SessionReport {
             memory_bytes: 0,
             device_removed: false,
             smbus: None,
+            network: None,
+            serial: None,
+            lcd: None,
+            battery: None,
             elapsed_ms: 0.0,
         }
     }
 
-    fn fail(&mut self, phase: impl Into<String>, error: JsFailure) {
+    pub(crate) fn fail(&mut self, phase: impl Into<String>, error: JsFailure) {
         self.failures.push(PhaseFailure {
             phase: phase.into(),
             error,
@@ -481,19 +726,43 @@ pub enum SessionState {
 }
 
 #[derive(Debug)]
-struct LiveStats {
+pub(crate) struct LiveStats {
     state: AtomicU8,
-    frames: AtomicU64,
+    pub(crate) frames: AtomicU64,
     render_errors: AtomicU64,
-    io_errors: AtomicU64,
-    hid_disconnects: AtomicU64,
-    hid_disconnected: AtomicBool,
+    pub(crate) io_errors: AtomicU64,
+    pub(crate) hid_disconnects: AtomicU64,
+    pub(crate) hid_disconnected: AtomicBool,
+    /// The device does not take writes now (a LampArray Windows gives to another app).
+    pub(crate) paused: AtomicBool,
+    /// The stop is for system sleep: `Shutdown(true)`.
+    pub(crate) suspending: AtomicBool,
+    /// The device runs one of its hardware modes (no `Render()`).
+    pub(crate) hardware_mode: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
-    first_write_us: AtomicU64,
+    pub(crate) first_write_us: AtomicU64,
     /// The device and its children as canvas endpoints (empty until `Initialize()` ran).
     endpoints: std::sync::Mutex<Arc<Vec<EndpointView>>>,
     /// The device's channels (empty until `Initialize()` ran).
     channels: std::sync::Mutex<Arc<Vec<ChannelInfo>>>,
+    /// The plugin's last battery report.
+    battery: std::sync::Mutex<Option<BatteryStatus>>,
+    /// The plugin's parameters and messages (`None` until `Initialize()` ran).
+    ui: std::sync::Mutex<Option<Arc<PluginUi>>>,
+    /// Announces changes to the session's owner.
+    events: Sender<SessionEvent>,
+}
+
+/// Something a running session announces on its events channel
+/// ([`SessionHandle::events`]); the new state is read from the handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionEvent {
+    /// The parameter list changed ([`SessionHandle::plugin_ui`]): exports
+    /// bound after `Initialize()`, or `device.addProperty` / `removeProperty`.
+    Properties,
+    /// The message list changed: `device.addMessage` / `removeMessage` /
+    /// `notify` / `denotify`.
+    Messages,
 }
 
 /// Counters readable while the session runs.
@@ -514,10 +783,17 @@ pub struct LiveSnapshot {
     pub disconnected: bool,
     /// Session start to the first successful (or dry-run) write.
     pub first_write_ms: Option<f64>,
+    /// What the plugin reports through the `battery` feature (`None`: no battery).
+    pub battery: Option<BatteryStatus>,
+    /// The device does not take writes now: a LampArray that Windows gives
+    /// to another app ([`crate::lamparray`]).
+    pub paused: bool,
+    /// The device runs one of its hardware modes: the canvas does not reach it.
+    pub hardware_mode: bool,
 }
 
 impl LiveStats {
-    fn set_state(&self, s: SessionState) {
+    pub(crate) fn set_state(&self, s: SessionState) {
         self.state.store(s as u8, Ordering::Release);
     }
 
@@ -526,7 +802,7 @@ impl LiveStats {
     }
 
     /// Replace the endpoint views and channel list when they changed.
-    fn publish_endpoints(&self, (views, channels): (Vec<EndpointView>, Vec<ChannelInfo>)) {
+    pub(crate) fn publish_endpoints(&self, (views, channels): (Vec<EndpointView>, Vec<ChannelInfo>)) {
         let mut slot = self.endpoints.lock().unwrap_or_else(|e| e.into_inner());
         if **slot != views {
             *slot = Arc::new(views);
@@ -535,6 +811,36 @@ impl LiveStats {
         let mut slot = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         if **slot != channels {
             *slot = Arc::new(channels);
+        }
+    }
+
+    /// Publish the plugin's parameters and messages when they changed, and
+    /// announce what changed.
+    fn publish_ui(&self, ui: &PluginUi) {
+        let mut slot = self.ui.lock().unwrap_or_else(|e| e.into_inner());
+        let (properties, messages) = match slot.as_deref() {
+            Some(old) if old.revision() == ui.revision() => return,
+            Some(old) => (
+                old.properties() != ui.properties(),
+                old.messages() != ui.messages(),
+            ),
+            None => (true, true),
+        };
+        *slot = Some(Arc::new(ui.clone()));
+        drop(slot);
+        if properties {
+            let _ = self.events.send(SessionEvent::Properties);
+        }
+        if messages {
+            let _ = self.events.send(SessionEvent::Messages);
+        }
+    }
+
+    /// Publish the device's battery report when it changed.
+    fn publish_battery(&self, battery: Option<BatteryStatus>) {
+        let mut slot = self.battery.lock().unwrap_or_else(|e| e.into_inner());
+        if *slot != battery {
+            *slot = battery;
         }
     }
 
@@ -556,6 +862,9 @@ impl LiveStats {
                 0 => None,
                 us => Some(us as f64 / 1000.0),
             },
+            battery: *self.battery.lock().unwrap_or_else(|e| e.into_inner()),
+            paused: self.paused.load(Ordering::Relaxed),
+            hardware_mode: self.hardware_mode.load(Ordering::Relaxed),
         }
     }
 }
@@ -579,6 +888,39 @@ pub enum Control {
         /// Its placement.
         placement: Placement,
     },
+    /// What `Shutdown()` leaves the device showing from now on.
+    ShutdownMode(ShutdownMode),
+    /// Run `SaveToDevice(request)` on the frame the device showed last (use
+    /// [`crate::manager::DeviceManager::save`], which applies the rate limit).
+    Save(SaveCall),
+    /// Pulse every LED of the device and its children in this colour (`None`:
+    /// back to the canvas); see [`DeviceContext::set_alert`].
+    Alert(Option<Rgb>),
+    /// `battery.lowBatteryWarningLevel` (percent).
+    BatteryWarningLevel(u8),
+    /// Put the device in a hardware mode (`Some`) or back on the canvas (`None`).
+    HardwareMode(HardwareModeCall),
+}
+
+/// One `SetHardwareMode(request)` asked of a session.
+#[derive(Clone, Debug)]
+pub struct HardwareModeCall {
+    /// The mode (checked against the plugin's `HardwareModes()` by the session);
+    /// `None`: follow the canvas again.
+    pub choice: Option<HardwareModeChoice>,
+    /// Receives the outcome (also when the session stops first); `None`: nobody waits.
+    pub reply: Option<Sender<Result<(), String>>>,
+}
+
+/// One `SaveToDevice(request)` call asked of a session.
+#[derive(Clone, Debug)]
+pub struct SaveCall {
+    /// Preview or save.
+    pub action: SaveAction,
+    /// What to store.
+    pub choice: SaveChoice,
+    /// Receives the outcome (also when the session stops first).
+    pub reply: Sender<SaveOutcome>,
 }
 
 /// A running session.
@@ -587,6 +929,7 @@ pub struct SessionHandle {
     key: String,
     started: Instant,
     control: Sender<Control>,
+    events: std::sync::Mutex<Receiver<SessionEvent>>,
     stop: Arc<AtomicBool>,
     live: Arc<LiveStats>,
     thread: JoinHandle<SessionReport>,
@@ -620,9 +963,29 @@ impl SessionHandle {
         Arc::clone(&self.live.channels.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
+    /// The plugin's parameters and messages as of the last change (`None`
+    /// until `Initialize()` ran: the exports' lists then).
+    pub fn plugin_ui(&self) -> Option<Arc<PluginUi>> {
+        self.live.ui.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The events announced since the last call, oldest first.
+    pub fn events(&self) -> Vec<SessionEvent> {
+        let rx = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        rx.try_iter().collect()
+    }
+
     /// Ask the session to finish its current frame, shut down and return.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
+    }
+
+    /// [`SessionHandle::stop`] for system sleep: the plugin gets
+    /// `Shutdown(true, mode)` (SignalRGB's `SystemSuspending`; plugins usually
+    /// leave the device dark) instead of `Shutdown(false, mode)`.
+    pub fn stop_for_suspend(&self) {
+        self.live.suspending.store(true, Ordering::Release);
+        self.stop();
     }
 
     /// Counters so far.
@@ -655,6 +1018,7 @@ pub fn spawn(
     opts: SessionOptions,
 ) -> std::io::Result<SessionHandle> {
     let stop = Arc::new(AtomicBool::new(false));
+    let (events_tx, events) = channel();
     let live = Arc::new(LiveStats {
         state: AtomicU8::new(SessionState::Starting as u8),
         frames: AtomicU64::new(0),
@@ -662,9 +1026,15 @@ pub fn spawn(
         io_errors: AtomicU64::new(0),
         hid_disconnects: AtomicU64::new(0),
         hid_disconnected: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
+        suspending: AtomicBool::new(false),
+        hardware_mode: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
         endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
         channels: std::sync::Mutex::new(Arc::new(Vec::new())),
+        battery: std::sync::Mutex::new(None),
+        ui: std::sync::Mutex::new(None),
+        events: events_tx,
     });
     let key = device.key.clone();
     let started = Instant::now();
@@ -674,7 +1044,11 @@ pub fn spawn(
         .name(format!("lightloom-plugin {key}"))
         .stack_size(PLUGIN_THREAD_STACK)
         .spawn(move || {
-            let report = run(device, plugin, backend, frames, opts, &stop2, &live2, &controls);
+            let report = if device.lamparray.is_some() {
+                crate::lamparray::run(device, plugin, frames, opts, &stop2, &live2, &controls)
+            } else {
+                run(device, plugin, backend, frames, opts, &stop2, &live2, &controls)
+            };
             drop(stop2);
             live2.set_state(SessionState::Done);
             report
@@ -683,6 +1057,7 @@ pub fn spawn(
         key,
         started,
         control,
+        events: std::sync::Mutex::new(events),
         stop,
         live,
         thread,
@@ -705,15 +1080,20 @@ fn run(
     let meta = &plugin.meta;
     let mut report = SessionReport::new(&device, &plugin);
 
-    // SMBus devices never open a HID collection.
-    let backend: Arc<dyn HidBackend> = if device.smbus.is_some() {
-        Arc::new(NoHid)
-    } else {
-        backend
-    };
+    // SMBus, network and serial devices never open a HID collection.
+    let backend: Arc<dyn HidBackend> =
+        if device.smbus.is_some() || device.network.is_some() || device.serial.is_some() {
+            Arc::new(NoHid)
+        } else {
+            backend
+        };
     let mut ctx = DeviceContext::new(backend, device.endpoints.clone(), opts.write_mode);
     ctx.set_name(meta.name.clone());
     ctx.set_log_sink(opts.log_sink.clone());
+    if let Some(sink) = opts.input_sink.clone() {
+        let key = device.key.clone();
+        ctx.set_input_sink(Some(Arc::new(move |event| sink(&key, event))));
+    }
     ctx.set_brightness(opts.brightness);
     ctx.set_sampler(SamplerConfig {
         default_scale: meta.default_scale,
@@ -725,6 +1105,7 @@ fn run(
             .unwrap_or_else(|| Placement::from_defaults(meta.default_position, meta.default_scale)),
     );
     let geometry = ctx.set_geometry(meta.size, meta.led_positions.clone());
+    ctx.set_led_names(meta.led_names.clone());
     ctx.set_child_setup(ChildSetup {
         device_key: device.key.clone(),
         channel_components: opts.channel_components.clone(),
@@ -732,6 +1113,18 @@ fn run(
     });
     ctx.set_subdevice_controller(meta.subdevice_controller || meta.supports_subdevices);
     ctx.set_system_info(opts.system_info.as_deref());
+    if let Some(t) = &device.network {
+        ctx.set_device_info([
+            t.service.clone(),
+            meta.name.clone(),
+            t.ip().unwrap_or_default().to_string(),
+        ]);
+    }
+    ctx.set_battery_warning_level(opts.battery_warning_level);
+    ctx.set_plugin_ui(PluginUi::new(
+        &meta.controllable_parameters,
+        &meta.device_messages,
+    ));
     if let Some(t) = &device.smbus {
         ctx.set_device_info([
             t.bus.descriptor().name.clone(),
@@ -739,7 +1132,39 @@ fn run(
             format!("0x{:02x}", t.addr),
         ]);
     }
+    if let Some(p) = device.serial.as_ref().and_then(|t| t.ports.first()) {
+        ctx.set_device_info([
+            p.manufacturer.clone().unwrap_or_default(),
+            p.product.clone().unwrap_or_else(|| meta.name.clone()),
+            p.serial.clone().unwrap_or_default(),
+        ]);
+    }
+    if let Some(t) = &device.usb {
+        ctx.set_usb(Arc::clone(&t.backend), t.info.clone());
+    }
+    ctx.set_protocol_kind(match meta.plugin_type {
+        PluginType::RawUsb => Protocol::RawUsb,
+        PluginType::Hybrid => Protocol::Hybrid,
+        _ => Protocol::Hid,
+    });
     let shared = ctx.shared();
+    let serial: Option<SharedSerial> = device.serial.as_ref().map(|t| {
+        let mut s = SerialContext::new(t, opts.write_mode);
+        let dev = Arc::clone(&shared);
+        s.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
+        s.shared()
+    });
+    let net: Option<SharedNet> = device.network.as_ref().map(|t| {
+        let mut n = NetContext::new(NetRole::Device, opts.write_mode);
+        n.set_pin_store(
+            opts.plugin_settings
+                .as_ref()
+                .map(|s| crate::net::tls::PinStore::new(t.service.clone(), Arc::clone(s))),
+        );
+        let dev = Arc::clone(&shared);
+        n.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
+        n.shared()
+    });
     let guard: Option<SharedGuard> = device.smbus.as_ref().map(|t| {
         let mut g = GuardedBus::new(t.bus.clone(), Phase::Run { addr: t.addr }, opts.write_mode);
         g.deny_registers(meta.smbus_denied_registers.iter().copied());
@@ -748,6 +1173,7 @@ fn run(
         g.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
         g.shared()
     });
+    let lcd: SharedLcd = LcdContext::new(&device.key, &meta.name, opts.lcd.clone()).shared();
     if let Err(e) = geometry {
         report.faulted = Some(format!("Size() export rejected: {e}"));
         return finish(report, &shared, None, started);
@@ -760,6 +1186,10 @@ fn run(
         device: Some(Arc::clone(&shared)),
         smbus: guard.clone(),
         module_stubs: false,
+        net: net.clone(),
+        controller: device.network.as_ref().map(|t| t.controller.to_string()),
+        serial: serial.clone(),
+        lcd: Some(Arc::clone(&lcd)),
         ..RuntimeOptions::default()
     };
     let rt = match PluginRuntime::new(&meta.source_path, &ropts) {
@@ -772,15 +1202,21 @@ fn run(
 
     // Everything up to the end of the render loop runs under catch_unwind: a
     // panic (in a native, the engine or the host) must not skip Shutdown(false).
-    let mut lifecycle = Lifecycle::default();
+    let mut lifecycle = Lifecycle {
+        shutdown_mode: opts.shutdown_mode,
+        ..Lifecycle::default()
+    };
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         drive(
             &rt,
+            meta,
             &device,
             &shared,
             guard.as_ref(),
             &frames,
             &opts,
+            net.as_ref(),
+            serial.as_ref(),
             stop,
             live,
             controls,
@@ -798,10 +1234,56 @@ fn run(
     report.render = lifecycle.render.summary();
 
     live.set_state(SessionState::Stopping);
+    // Requests that came too late: a pending save is answered, a new shutdown mode applies.
+    while let Ok(control) = controls.try_recv() {
+        match control {
+            Control::ShutdownMode(m) => lifecycle.shutdown_mode = m,
+            Control::Save(call) => {
+                let _ = call.reply.send(SaveOutcome::failed(
+                    &device.key,
+                    call.action,
+                    "the device session is stopping",
+                ));
+            }
+            Control::HardwareMode(call) => {
+                if let Some(reply) = call.reply {
+                    let _ = reply.send(Err("the device session is stopping".into()));
+                }
+            }
+            _ => {}
+        }
+    }
+    report.shutdown_mode = lifecycle.shutdown_mode;
     if lifecycle.initialize_called && !opts.skip_shutdown {
         if healthy {
+            let mode = lifecycle.shutdown_mode;
+            let suspending = live.suspending.load(Ordering::Acquire);
+            report.suspended = suspending;
+            let last = save::average(&lock_device(&shared).led_colors());
+            match save::shutdown_fallback(meta, mode, last) {
+                ShutdownPlan::Native => {}
+                ShutdownPlan::Parameters(values) => {
+                    report.notes.push(format!(
+                        "shutdown mode {}: through the plugin's parameters {}",
+                        mode.as_str(),
+                        serde_json::Value::Object(values.clone())
+                    ));
+                    if let Err(e) = rt.set_globals(&serde_json::Value::Object(values), budgets.validate) {
+                        report.fail("parameters", e);
+                    }
+                }
+                ShutdownPlan::Unsupported => report.notes.push(format!(
+                    "shutdown mode {}: not supported by the plugin (neither ShutdownModes() nor shutdownColor); \
+                     it restores the device as usual",
+                    mode.as_str()
+                )),
+            }
             let shutdown = catch_unwind(AssertUnwindSafe(|| {
-                rt.call_export("Shutdown", CallArgs::Bool(false), budgets.call(budgets.shutdown))
+                rt.call_export(
+                    "Shutdown",
+                    CallArgs::Shutdown { suspending, mode },
+                    budgets.call(budgets.shutdown),
+                )
             }));
             match shutdown {
                 Ok(Ok(called)) => report.shutdown_called = called,
@@ -832,6 +1314,22 @@ fn run(
         g.force_unlock();
         report.smbus = Some(g.stats().clone());
     }
+    if let Some(n) = &net {
+        report.network = Some(lock_net(n).stats().clone());
+    }
+    if let Some(s) = &serial {
+        let mut s = lock_serial(s);
+        report.serial = Some(s.report());
+        s.disconnect();
+    }
+    {
+        // The face renderer stops with the session, not with the runtime.
+        let mut l = lock_lcd(&lcd);
+        if l.stats().spec.is_some() {
+            report.lcd = Some(l.stats().clone());
+        }
+        l.release();
+    }
     for (probe, bytes) in lifecycle.before {
         let after = lock_device(&shared)
             .probe_feature(probe.report_id, probe.len)
@@ -857,17 +1355,22 @@ struct Lifecycle {
     before: Vec<(RestoreProbe, Vec<u8>)>,
     /// `Render()` wall times.
     render: LatencyHistogram,
+    /// What `Shutdown()` leaves the device showing.
+    shutdown_mode: ShutdownMode,
 }
 
 /// Load → parameters → Validate → open → restore probes → Initialize → render loop.
 #[allow(clippy::too_many_arguments)]
 fn drive(
     rt: &PluginRuntime,
+    meta: &PluginMeta,
     device: &SessionDevice,
     shared: &SharedDevice,
     guard: Option<&SharedGuard>,
     frames: &FrameStore,
     opts: &SessionOptions,
+    net: Option<&SharedNet>,
+    serial: Option<&SharedSerial>,
     stop: &Arc<AtomicBool>,
     live: &LiveStats,
     controls: &Receiver<Control>,
@@ -892,10 +1395,52 @@ fn drive(
         }
     }
 
-    if let Some(target) = &device.smbus {
+    if let Some(target) = &device.network {
+        // A network device has nothing to validate: its service announced it.
+        report.endpoint_path = Some(format!(
+            "{} (network, {})",
+            target.ip().unwrap_or("no address"),
+            target.service
+        ));
+    } else if let (Some(target), Some(serial)) = (&device.serial, serial) {
+        // A serial device: Validate picks the port connect() binds by default.
+        let mut validated = Vec::new();
+        for (i, port) in target.ports.iter().enumerate() {
+            let tuple = HidEndpointTuple {
+                interface: port.interface.map_or(0, i32::from),
+                usage: 0,
+                usage_page: 0,
+                collection: 0,
+            };
+            match rt.validate(&tuple, budgets.call(budgets.validate)) {
+                Ok(true) => validated.push(i),
+                Ok(false) => {}
+                Err(e) => report.fail(format!("Validate #{i}"), e),
+            }
+        }
+        report.validated = validated.len();
+        let Some(&index) = validated.first() else {
+            report.faulted = Some("no serial port passed Validate(endpoint)".into());
+            return;
+        };
+        lock_serial(serial).set_default_port(index);
+        report.endpoint_path = Some(format!("{} (serial)", target.ports[index].port_name));
+    } else if let Some(target) = &device.smbus {
         // An SMBus device has no collections to validate or reports to probe:
         // the scan found it, the guard binds the session to its address.
         report.endpoint_path = Some(format!("{} @0x{:02x}", target.bus.descriptor().name, target.addr));
+    } else if meta.plugin_type == PluginType::RawUsb {
+        // A rawusb plugin has no HID collection: the USB device is its endpoint.
+        let Some(target) = &device.usb else {
+            report.faulted =
+                Some("a rawusb plugin needs a raw USB device; none was found for this device".into());
+            return;
+        };
+        if let Err(e) = lock_device(shared).open_usb() {
+            report.faulted = Some(format!("cannot open {}: {e}", target.info.path));
+            return;
+        }
+        report.endpoint_path = Some(target.info.path.clone());
     } else {
         // Validate every collection; the first accepted one becomes the active endpoint,
         // and set_endpoint may later switch among the accepted ones only.
@@ -956,6 +1501,19 @@ fn drive(
                 )),
             }
         }
+
+        if meta.plugin_type == PluginType::Hybrid {
+            // HID I/O works without the raw USB side; its transfers then fail.
+            let opened = match &device.usb {
+                None => Err("no raw USB device was found for it".to_string()),
+                Some(_) => lock_device(shared).open_usb().map_err(|e| e.to_string()),
+            };
+            if let Err(why) = opened {
+                let note = format!("hybrid plugin: bulk/control transfers unavailable: {why}");
+                lock_device(shared).log(&note);
+                report.notes.push(note);
+            }
+        }
     }
 
     if stop.load(Ordering::Acquire) {
@@ -991,16 +1549,34 @@ fn drive(
     {
         let dev = lock_device(shared);
         live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+        live.publish_battery(dev.battery());
+        live.publish_ui(dev.plugin_ui());
+    }
+    // The hardware mode the device runs now (no Render() while there is one).
+    let mut hardware: Option<HardwareModeChoice> = None;
+    if let Some(choice) = &opts.hardware_mode {
+        match set_hardware_mode(rt, meta, Some(choice), &budgets, stop) {
+            Ok(applied) => hardware = applied,
+            Err(e) => report.notes.push(format!("SetHardwareMode at start: {e}")),
+        }
+        live.hardware_mode.store(hardware.is_some(), Ordering::Relaxed);
     }
     let mut last_seq = 0;
     let mut consecutive_timeouts = 0u32;
     let mut lock_warned = false;
     let mut last_render: Option<Instant> = None;
     while !stop.load(Ordering::Acquire) {
-        if device.smbus.is_some() {
-            let left = last_render.map_or(Duration::ZERO, |t| {
-                SMBUS_FRAME_INTERVAL.saturating_sub(t.elapsed())
-            });
+        let min_interval = if device.smbus.is_some() {
+            Some(SMBUS_FRAME_INTERVAL)
+        } else if device.network.is_some() {
+            Some(NETWORK_FRAME_INTERVAL)
+        } else if device.serial.is_some() {
+            Some(SERIAL_FRAME_INTERVAL)
+        } else {
+            None
+        };
+        if let Some(interval) = min_interval {
+            let left = last_render.map_or(Duration::ZERO, |t| interval.saturating_sub(t.elapsed()));
             if !left.is_zero() {
                 std::thread::sleep(left);
                 continue;
@@ -1016,15 +1592,95 @@ fn drive(
         last_seq = seq;
         let mut controlled = false;
         while let Ok(control) = controls.try_recv() {
-            apply_control(rt, shared, control, &budgets, stop, report);
+            match control {
+                Control::ShutdownMode(m) => lifecycle.shutdown_mode = m,
+                Control::Save(call) => {
+                    let SaveCall {
+                        action,
+                        choice,
+                        reply,
+                    } = call;
+                    let outcome = run_save(
+                        rt,
+                        meta,
+                        &device.key,
+                        shared,
+                        guard,
+                        action,
+                        &choice,
+                        &budgets,
+                        stop,
+                    );
+                    if action == SaveAction::Save {
+                        report.saves += 1;
+                    }
+                    if let Some(e) = &outcome.error {
+                        report
+                            .notes
+                            .push(format!("SaveToDevice ({}): {e}", action.as_str()));
+                    }
+                    let _ = reply.send(outcome);
+                    // A save ends in the plugin's streaming mode: back to the hardware mode.
+                    if let Some(choice) = hardware.clone() {
+                        if let Err(e) = set_hardware_mode(rt, meta, Some(&choice), &budgets, stop) {
+                            report.notes.push(format!("SetHardwareMode after the save: {e}"));
+                        }
+                    }
+                }
+                Control::HardwareMode(HardwareModeCall { choice, reply }) => {
+                    let result = match (&choice, &hardware) {
+                        // Already on the canvas: nothing to undo.
+                        (None, None) => Ok(None),
+                        _ => set_hardware_mode(rt, meta, choice.as_ref(), &budgets, stop),
+                    };
+                    let result = result.map(|applied| {
+                        hardware = applied;
+                        live.hardware_mode.store(hardware.is_some(), Ordering::Relaxed);
+                    });
+                    if let Err(e) = &result {
+                        report.notes.push(format!("SetHardwareMode: {e}"));
+                    }
+                    if let Some(reply) = reply {
+                        let _ = reply.send(result);
+                    }
+                }
+                other => apply_control(rt, shared, other, &budgets, stop, report),
+            }
             controlled = true;
+        }
+        if hardware.is_some() {
+            // The device runs its own effect: the canvas does not reach it.
+            if controlled {
+                let dev = lock_device(shared);
+                live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+            }
+            continue;
         }
         if controlled || report.frames.is_multiple_of(30) {
             let dev = lock_device(shared);
             live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
         }
+        if net.is_some() {
+            // Socket events and finished requests first, so Render() sees them.
+            match rt.call_host("pumpNet", None, budgets.render_budget(), Some(stop)) {
+                Ok(_) => {}
+                Err(e) if e.is_stop() => break,
+                Err(e) => {
+                    report.render_errors += 1;
+                    if report.render_errors <= 5 {
+                        report.fail("events", e);
+                    }
+                }
+            }
+        }
         let (_, frame, captured) = frames.latest_stamped();
-        lock_device(shared).set_frame_at(frame, captured);
+        {
+            let mut dev = lock_device(shared);
+            dev.set_frame_at(frame, captured);
+            if let Some(direct) = &opts.direct {
+                dev.apply_direct(direct, &device.key);
+            }
+        }
         let t = Instant::now();
         last_render = Some(t);
         let result = rt.call_export_until("Render", CallArgs::None, budgets.render_budget(), stop);
@@ -1073,14 +1729,24 @@ fn drive(
             }
         }
         let dev = lock_device(shared);
+        let net_errors = net.map(|n| {
+            let n = lock_net(n);
+            n.stats().errors + n.stats().refused + n.stats().http_errors
+        });
+        let serial_errors = serial.map(|s| lock_serial(s).stats().errors());
         live.io_errors.store(
-            bus_errors.unwrap_or_else(|| dev.stats().errors()),
+            bus_errors
+                .or(net_errors)
+                .or(serial_errors)
+                .unwrap_or_else(|| dev.stats().errors()),
             Ordering::Relaxed,
         );
         live.hid_disconnects
             .store(dev.stats().disconnects, Ordering::Relaxed);
         live.hid_disconnected
             .store(dev.stats().disconnected, Ordering::Relaxed);
+        live.publish_battery(dev.battery());
+        live.publish_ui(dev.plugin_ui());
         if let Some(d) = dev.first_write() {
             live.first_write_us
                 .store((d.as_micros() as u64).max(1), Ordering::Relaxed);
@@ -1125,11 +1791,15 @@ fn apply_control(
             }
         }
         Control::Brightness(b) => lock_device(shared).set_brightness(b),
+        Control::Alert(color) => lock_device(shared).set_alert(color),
+        Control::BatteryWarningLevel(level) => lock_device(shared).set_battery_warning_level(level),
         Control::ChildPlacement { uid, placement } => {
             if !lock_device(shared).set_child_placement(&uid, placement) {
                 report.notes.push(format!("no endpoint {uid} to place"));
             }
         }
+        // Handled by the render loop.
+        Control::ShutdownMode(_) | Control::Save(_) | Control::HardwareMode(_) => {}
         Control::Placement(p) => {
             let changed = {
                 let mut dev = lock_device(shared);
@@ -1141,6 +1811,120 @@ fn apply_control(
                 hook("onBrightnessChanged", report);
             }
         }
+    }
+}
+
+/// One `SetHardwareMode(request)` call: `Some` checks the choice against the plugin's
+/// `HardwareModes()` and answers with the mode the device now runs; `None`
+/// (`SetHardwareMode(null)`) puts it back on the canvas. The SMBus denied
+/// registers stay refused (no save window is opened here).
+fn set_hardware_mode(
+    rt: &PluginRuntime,
+    meta: &PluginMeta,
+    choice: Option<&HardwareModeChoice>,
+    budgets: &Budgets,
+    stop: &Arc<AtomicBool>,
+) -> Result<Option<HardwareModeChoice>, String> {
+    if meta.hardware_modes.is_empty() || !meta.lifecycle.set_hardware_mode {
+        return Err("this device's plugin has no hardware modes".into());
+    }
+    let (request, applied) = match choice {
+        Some(c) => {
+            let c = c.normalized(&meta.hardware_modes)?;
+            (c.request_json(), Some(c))
+        }
+        None => (serde_json::Value::Null, None),
+    };
+    let called = catch_unwind(AssertUnwindSafe(|| {
+        rt.call_export_json("SetHardwareMode", &request, budgets.call(budgets.shutdown), stop)
+    }));
+    match called {
+        Ok(Ok(Some(_))) => Ok(applied),
+        Ok(Ok(None)) => Err("the plugin has no SetHardwareMode(request) export".into()),
+        Ok(Err(e)) => Err(format!("SetHardwareMode failed: {e}")),
+        Err(panic) => Err(format!(
+            "SetHardwareMode panicked: {}",
+            panic_text(panic.as_ref())
+        )),
+    }
+}
+
+/// One `SaveToDevice(request)` call (see the module docs): checks the plugin's
+/// capabilities, runs a preview dry, opens the SMBus save window for a save only,
+/// and puts the write mode and the window back whatever happens.
+#[allow(clippy::too_many_arguments)]
+fn run_save(
+    rt: &PluginRuntime,
+    meta: &PluginMeta,
+    key: &str,
+    shared: &SharedDevice,
+    guard: Option<&SharedGuard>,
+    action: SaveAction,
+    choice: &SaveChoice,
+    budgets: &Budgets,
+    stop: &Arc<AtomicBool>,
+) -> SaveOutcome {
+    let Some(caps) = meta.save_caps.as_ref().filter(|_| meta.lifecycle.save_to_device) else {
+        return SaveOutcome::failed(
+            key,
+            action,
+            "this device's plugin cannot store lighting in the device",
+        );
+    };
+    if !caps.allows(choice) {
+        let what = choice.effect.as_deref().map_or_else(
+            || "the current colours".to_string(),
+            |e| format!("the {e} effect"),
+        );
+        return SaveOutcome::failed(key, action, format!("this device's plugin cannot store {what}"));
+    }
+    let colors = lock_device(shared).led_colors();
+    let request = save::request_json(action, choice, &colors);
+    let device_mode = lock_device(shared).write_mode();
+    let bus_mode = guard.map(|g| lock_guard(g).write_mode());
+    let dry = action == SaveAction::Preview || device_mode == WriteMode::DryRun;
+    match action {
+        SaveAction::Preview => {
+            lock_device(shared).set_write_mode(WriteMode::DryRun);
+            if let Some(g) = guard {
+                lock_guard(g).set_write_mode(WriteMode::DryRun);
+            }
+        }
+        SaveAction::Save => {
+            if let Some(g) = guard {
+                lock_guard(g).set_save_window(true);
+            }
+            lock_device(shared).log(&format!(
+                "SaveToDevice: storing {} in the device (asked for by the user)",
+                choice.effect.as_deref().unwrap_or("the current colours")
+            ));
+        }
+    }
+    let called = catch_unwind(AssertUnwindSafe(|| {
+        rt.call_export_json("SaveToDevice", &request, budgets.call(budgets.save), stop)
+    }));
+    // Close the window and put the write modes back before anything else runs.
+    lock_device(shared).set_write_mode(device_mode);
+    if let Some(g) = guard {
+        let mut g = lock_guard(g);
+        g.set_save_window(false);
+        g.force_unlock();
+        if let Some(m) = bus_mode {
+            g.set_write_mode(m);
+        }
+    }
+    match called {
+        Ok(Ok(Some(result))) => SaveOutcome::from_result(key, action, dry, result),
+        Ok(Ok(None)) => SaveOutcome::failed(key, action, "the plugin has no SaveToDevice(request) export"),
+        Ok(Err(e)) => SaveOutcome {
+            dry_run: dry,
+            ..SaveOutcome::failed(key, action, format!("SaveToDevice failed: {e}"))
+        },
+        Err(panic) => SaveOutcome::failed(
+            key,
+            action,
+            format!("SaveToDevice panicked: {}", panic_text(panic.as_ref())),
+        ),
     }
 }
 
@@ -1159,9 +1943,12 @@ fn finish(
     report.canvas_to_wire = dev.canvas_to_wire();
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
-    report.io_errors = match &report.smbus {
-        Some(s) => s.errors + s.denied,
-        None => report.io.errors(),
+    report.battery = dev.battery();
+    report.io_errors = match (&report.smbus, &report.network, &report.serial) {
+        (Some(s), _, _) => s.errors + s.denied,
+        (None, Some(n), _) => n.errors + n.refused,
+        (None, None, Some(s)) => s.stats.errors(),
+        (None, None, None) => report.io.errors(),
     };
     let (tail, lines) = dev.log_tail();
     report.log_tail = tail;

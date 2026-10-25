@@ -97,7 +97,9 @@ fn instance(info: &BusInfo) -> String {
 fn hal_error(e: BrokerError) -> HalError {
     match e {
         BrokerError::Unsupported => HalError::Unsupported("operation not served by the I/O broker"),
-        BrokerError::BusContended => HalError::Timeout(u32::from(lightloom_protocol::broker::BUS_LOCK_MAX_MS)),
+        BrokerError::BusContended => {
+            HalError::Timeout(u32::from(lightloom_protocol::broker::BUS_LOCK_MAX_MS))
+        }
         _ => HalError::Bus { status: -1 },
     }
 }
@@ -188,19 +190,31 @@ impl BrokerSmbus {
     }
 }
 
+/// The broker's `Health` answer.
+pub fn broker_health(transport: &SharedTransport) -> Result<HealthReport, BrokerError> {
+    match call(transport, BrokerOp::Health)? {
+        BrokerPayload::Health(h) => Ok(h),
+        other => Err(BrokerError::BadRequest(format!("unexpected answer {other:?}"))),
+    }
+}
+
 /// Every bus the broker serves, once its `Health` shows it healthy
 /// ([`health_problem`]; an unhealthy one is a `Backend` error saying why).
 pub fn broker_buses(transport: SharedTransport) -> Result<Vec<BrokerSmbus>, BrokerError> {
-    match call(&transport, BrokerOp::Health)? {
-        BrokerPayload::Health(h) => {
-            if let Some(problem) = health_problem(&h) {
-                return Err(BrokerError::Backend {
-                    status: -1,
-                    message: format!("not healthy: {problem}"),
-                });
-            }
-        }
-        other => return Err(BrokerError::BadRequest(format!("unexpected answer {other:?}"))),
+    let health = broker_health(&transport)?;
+    broker_buses_after(&health, transport)
+}
+
+/// [`broker_buses`] with the `Health` answer already in hand.
+pub fn broker_buses_after(
+    health: &HealthReport,
+    transport: SharedTransport,
+) -> Result<Vec<BrokerSmbus>, BrokerError> {
+    if let Some(problem) = health_problem(health) {
+        return Err(BrokerError::Backend {
+            status: -1,
+            message: format!("not healthy: {problem}"),
+        });
     }
     match call(&transport, BrokerOp::ListBuses)? {
         BrokerPayload::Buses(list) => Ok(list

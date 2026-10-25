@@ -2,9 +2,27 @@
 // The daemon's native API (crates/lightloom-api/src/server.rs). Requests that change
 // state carry the token lightloomd embeds in the page it serves.
 
-import type { LibraryComponent, Placement, Snapshot } from "./types";
+import type {
+  DeviceHardwareMode,
+  EffectTimer,
+  InputsView,
+  LedEdit,
+  LedMapView,
+  LogQuery,
+  LogsView,
+  LibraryComponent,
+  PawnIoView,
+  Placement,
+  Playlist,
+  SaveResult,
+  SensorsView,
+  ShutdownMode,
+  SignalRgbImport,
+  Snapshot,
+} from "./types";
 
-function token(): string {
+/** The API token (exported only so device reports can make sure it is never in them). */
+export function token(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="lightloom-token"]')?.content ?? "";
   if (meta && !meta.includes("%")) return meta;
   // `npm run dev`: the page does not come from lightloomd; paste the api-token file into localStorage.
@@ -25,7 +43,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (method !== "GET") headers["Authorization"] = `Bearer ${token()}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -47,33 +65,129 @@ const enc = encodeURIComponent;
 
 export const api = {
   state: () => request<Snapshot>("GET", "/v1/state"),
+  sensors: () => request<SensorsView>("GET", "/v1/sensors"),
+  /** The log history (the log files under lightloomw, else this run's memory), filtered. */
+  logs: (q: LogQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") params.set(k, String(v));
+    const qs = params.toString();
+    return request<LogsView>("GET", `/v1/logs${qs ? `?${qs}` : ""}`);
+  },
+  inputs: () => request<InputsView>("GET", "/v1/inputs"),
+  /** null goes back to the system default output / the primary display. */
+  setInputs: (patch: { audioDevice?: string | null; display?: string | null }) =>
+    request<{ audioDevice: string | null; display: string | null }>("PATCH", "/v1/inputs", patch),
   applyEffect: (id: string) => request("POST", `/v1/effects/${enc(id)}/apply`),
   setEffectValues: (id: string, values: Record<string, unknown>) =>
     request("PATCH", `/v1/effects/${enc(id)}/values`, values),
   savePreset: (id: string, name: string) => request("PUT", `/v1/effects/${enc(id)}/presets/${enc(name)}`),
   applyPreset: (id: string, name: string) => request("POST", `/v1/effects/${enc(id)}/presets/${enc(name)}/apply`),
   deletePreset: (id: string, name: string) => request("DELETE", `/v1/effects/${enc(id)}/presets/${enc(name)}`),
+  shuffleEffect: () => request("POST", "/v1/effects/shuffle"),
+  createPlaylist: (p: Omit<Playlist, "id" | "updatedAt">) => request<Playlist>("POST", "/v1/playlists", p),
+  savePlaylist: (p: Playlist) => request<Playlist>("PUT", `/v1/playlists/${enc(p.id)}`, p),
+  deletePlaylist: (id: string) => request("DELETE", `/v1/playlists/${enc(id)}`),
+  playPlaylist: (id: string, start?: string) => request("POST", `/v1/playlists/${enc(id)}/play`, { start }),
+  stopPlaylist: () => request("POST", "/v1/playlists/stop"),
+  setTimer: (patch: Partial<EffectTimer>) => request<EffectTimer>("PATCH", "/v1/lighting/timer", patch),
   setLighting: (patch: { brightness?: number; enabled?: boolean }) => request("PATCH", "/v1/lighting", patch),
-  setDevice: (key: string, patch: { enabled?: boolean; parameters?: Record<string, unknown> }) =>
+  setDevice: (
+    key: string,
+    patch: { enabled?: boolean; parameters?: Record<string, unknown>; blinkLowBattery?: boolean; shutdownMode?: ShutdownMode | "default" },
+  ) =>
     request("PATCH", `/v1/devices/${enc(key)}`, patch),
   setChannel: (key: string, channel: string, components: unknown[]) =>
     request("PUT", `/v1/devices/${enc(key)}/channels/${enc(channel)}`, components),
+  /** Choose a device's LCD face (`""`: the default) and/or frame rate (1-60). */
+  setLcd: (key: string, patch: { face?: string; framerate?: number; values?: Record<string, unknown> }) =>
+    request<{ key: string; face: string | null; framerate: number; values: Record<string, unknown> }>(
+      "PUT",
+      `/v1/devices/${enc(key)}/lcd`,
+      patch,
+    ),
+  /** The device's latest LCD face frame (PNG); null while no LCD runs. */
+  lcdPreview: async (key: string): Promise<Blob | null> => {
+    const res = await fetch(`/v1/devices/${enc(key)}/lcd/preview`, { cache: "no-store" });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`preview: ${res.status}`);
+    return res.blob();
+  },
+  /** Put a device in one of its hardware modes; null: back to the effect. */
+  setHardwareMode: (key: string, mode: DeviceHardwareMode | null) =>
+    request<{ device: string; hardwareMode: DeviceHardwareMode | null; applied: boolean }>(
+      "PUT",
+      `/v1/devices/${enc(key)}/mode`,
+      mode ?? { id: null },
+    ),
+  /** Save the whole lighting setup as a profile (created or replaced). */
+  saveProfile: (name: string) => request<{ profile: string }>("PUT", `/v1/profiles/${enc(name)}`),
+  applyProfile: (name: string) => request<{ profile: string; notes: string[] }>("POST", `/v1/profiles/${enc(name)}/apply`),
+  deleteProfile: (name: string) => request("DELETE", `/v1/profiles/${enc(name)}`),
+  renameProfile: (name: string, to: string) =>
+    request<{ profile: string }>("POST", `/v1/profiles/${enc(name)}/rename`, { name: to }),
+  duplicateProfile: (name: string, to: string) =>
+    request<{ profile: string }>("POST", `/v1/profiles/${enc(name)}/duplicate`, { name: to }),
+  /** The profile document (what an export file holds). */
+  getProfile: (name: string) => request<unknown>("GET", `/v1/profiles/${enc(name)}`),
+  importProfile: (profile: unknown, name?: string) => request<{ profile: string }>("POST", "/v1/profiles", { profile, name }),
+  /** The profile applied at start (null: none). */
+  setDefaultProfile: (name: string | null) => request("PATCH", "/v1/profiles", { default: name }),
+  /** The LED painter's view of a running device: its endpoints' LEDs, custom colours and zones. */
+  ledMap: (key: string) => request<LedMapView>("GET", `/v1/devices/${enc(key)}/leds`),
+  /** Paint an endpoint's LEDs and/or switch it between "custom" and following the effect. */
+  setLeds: (key: string, uid: string, edit: LedEdit) =>
+    request<{ uid: string; custom: boolean; changed: boolean }>("PATCH", `/v1/devices/${enc(key)}/leds/${enc(uid)}`, edit),
+  saveLedZone: (key: string, uid: string, name: string, leds: number[]) =>
+    request<{ uid: string; zones: Record<string, number[]> }>(
+      "PUT",
+      `/v1/devices/${enc(key)}/leds/${enc(uid)}/zones/${enc(name)}`,
+      { leds },
+    ),
+  deleteLedZone: (key: string, uid: string, name: string) =>
+    request<{ uid: string; zones: Record<string, number[]> }>(
+      "DELETE",
+      `/v1/devices/${enc(key)}/leds/${enc(uid)}/zones/${enc(name)}`,
+    ),
   setPlacement: (uid: string, placement: Placement) => request("PUT", `/v1/placements/${enc(uid)}`, placement),
   applyLayout: (name: string) => request("POST", `/v1/layouts/${enc(name)}/apply`),
   saveLayoutAs: (name: string) => request("PUT", `/v1/layouts/${enc(name)}`),
   deleteLayout: (name: string) => request("DELETE", `/v1/layouts/${enc(name)}`),
   setLayoutBrightness: (brightness: number) => request("PATCH", "/v1/layout", { brightness }),
   components: () => request<LibraryComponent[]>("GET", "/v1/components"),
-  setSettings: (patch: { signalrgb?: boolean; gpuCompositing?: boolean; smbus?: boolean }) =>
+  setSettings: (patch: {
+    signalrgb?: boolean;
+    gpuCompositing?: boolean;
+    smbus?: boolean;
+    network?: boolean;
+    batteryLow?: number;
+    batteryCritical?: number;
+    batteryNotifications?: boolean;
+    shutdownMode?: ShutdownMode;
+    openrgbSdk?: boolean;
+    urlScheme?: boolean;
+    lightsOffWhenIdle?: boolean;
+  }) =>
     request("PATCH", "/v1/settings", patch),
-  importSignalRgb: () => request<{ placements: number; channels: number; layout: string }>(
-    "POST",
-    "/v1/import/signalrgb",
-    {},
-  ),
+  /** Move the dashboard and the API to `port`; answers with the new address. */
+  setPort: (port: number) => request<{ port: number; url: string }>("PATCH", "/v1/settings", { port }),
+  networkAdd: (plugin: string, ip: string) => request("POST", `/v1/network/${enc(plugin)}/add`, { ip }),
+  networkAction: (plugin: string, id: string, action: "pair" | "forget") =>
+    request("POST", `/v1/network/${enc(plugin)}/controllers/${enc(id)}/${action}`),
+  /** What the SignalRGB import would bring in (read-only). */
+  previewSignalRgb: () => request<SignalRgbImport>("GET", "/v1/import/signalrgb"),
+  importSignalRgb: () => request<SignalRgbImport>("POST", "/v1/import/signalrgb", {}),
   exportState: () => request<unknown>("GET", "/v1/export"),
   importState: (state: unknown) => request("POST", "/v1/import", state),
+  pawnio: () => request<PawnIoView>("GET", "/v1/pawnio"),
+  pawnioInstall: () => request<PawnIoView>("POST", "/v1/pawnio/install"),
+  pawnioRemove: () => request<PawnIoView>("POST", "/v1/pawnio/remove"),
   rescan: () => request("POST", "/v1/rescan"),
+  /** What "Save to devices" would store (nothing is written); every device when `devices` is empty. */
+  savePreview: (devices: Record<string, { effect: string | null }> = {}) =>
+    request<{ devices: SaveResult[] }>("POST", "/v1/save/preview", { devices }),
+  /** Store lighting in the devices' own memory; only after the user confirmed it. */
+  saveToDevices: (devices: Record<string, { effect: string | null }>) =>
+    request<{ devices: SaveResult[] }>("POST", "/v1/save", { confirm: true, devices }),
   shutdown: () => request("POST", "/v1/shutdown"),
   tap: (x: number, y: number) => request("POST", "/v1/canvas/tap", { x, y }),
 };

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<component type="desktop-application">
+  <id>org.lightloom.Lightloom</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Lightloom</name>
+  <summary>Control the RGB lighting of your PC</summary>
+  <developer id="org.lightloom">
+    <name>Lightloom contributors</name>
+  </developer>
+  <description>
+    <p>
+      Lightloom is an open-source RGB lighting manager. One daemon drives keyboards, mice,
+      headsets, RAM, graphics cards, motherboards, fans and LED strips from many vendors,
+      and a dashboard in your browser arranges them into a layout and plays effects across
+      all of them.
+    </p>
+    <ul>
+      <li>Device support comes from plugins: plain JavaScript files you can read and edit</li>
+      <li>Canvas effects written as web pages, plus audio- and screen-reactive effects</li>
+      <li>A local API and CLI for scripting; nothing leaves your computer</li>
+      <li>Runs as your user, never as root</li>
+    </ul>
+    <p>
+      One-time host setup is required for device access: udev rules, and for RAM and
+      graphics card lighting the i2c group and the i2c-dev module. Run
+      "flatpak run org.lightloom.Lightloom --setup-help" for the commands.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.lightloom.Lightloom.desktop</launchable>
+  <icon type="stock">org.lightloom.Lightloom</icon>
+  <url type="homepage">https://github.com/MrMoraleDev/Lightloom</url>
+  <url type="bugtracker">https://github.com/MrMoraleDev/Lightloom/issues</url>
+  <url type="vcs-browser">https://github.com/MrMoraleDev/Lightloom</url>
+  <categories>
+    <category>Settings</category>
+    <category>HardwareSettings</category>
+    <category>Utility</category>
+  </categories>
+  <keywords>
+    <keyword>RGB</keyword>
+    <keyword>LED</keyword>
+    <keyword>lighting</keyword>
+  </keywords>
+  <!-- Brand colours (docs/brand/README.md): the icon tile and a gradient violet. -->
+  <branding>
+    <color type="primary" scheme_preference="light">#d9c9fd</color>
+    <color type="primary" scheme_preference="dark">#1b1c21</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <provides>
+    <binary>lightloomd</binary>
+    <binary>lightloom</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-10-25" type="development">
+      <description>
+        <p>First public pre-release: plugin host, effects, dashboard, profiles, per-LED colours, macros. Not yet tested on Linux hardware.</p>
+      </description>
+    </release>
+  </releases>
+</component>

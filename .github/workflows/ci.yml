@@ -5,9 +5,14 @@
 # Jobs:
 #   rust     - fmt / clippy / tests on Windows and Ubuntu (mock HAL, no hardware)
 #   renderer-cef - lightloom-renderer with the opt-in `cef` feature (real Chromium host), Windows
+#   renderer-cef-linux - the same on Ubuntu, plus a headless smoke run and the real-renderer client test
 #   deny     - cargo-deny: licenses (copyleft denied in-tree), advisories, bans, sources
-#   node     - prelude JS shims and first-party plugin tests under Node 24 (node:test), dashboard check + build
-#   schemas  - JSON Schema validation of the user-supplied corpus (skipped when absent)
+#   node     - prelude JS shims, first-party plugin and SDK tests under Node 24 (node:test), dashboard check + build, SDK typings
+#   schemas  - JSON Schema validation of the user-supplied corpus (skipped when absent),
+#              conformance runner unit tests
+#   msi      - the WiX MSI sources build (stand-in staged files), Windows
+#   release-dry-run - the whole release build (release-build.yml) without publishing; weekly
+#              schedule and manual dispatch only, never on push or pull request
 #
 # Hardware conformance runs on a self-hosted runner in conformance-selfhosted.yml, not here.
 
@@ -18,13 +23,22 @@ on:
     branches: [main, develop, "feature/**"]
     tags-ignore: ["v*"]
   pull_request:
+  # Weekly (Monday 03:17 UTC, default branch): the regular jobs plus `release-dry-run`.
+  schedule:
+    - cron: "17 3 * * 1"
   workflow_dispatch:
+    inputs:
+      release-dry-run:
+        description: "Also run the release build (release-build.yml, about an hour; nothing is published)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
+# Per event as well as per ref, so a push to the default branch does not cancel the weekly run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -49,8 +63,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+          # libpipewire-0.3-dev, libclang-dev: lightloom-inputs `screencast` (pipewire-sys links
+          # libpipewire and runs bindgen at build time).
           sudo apt-get install -y --no-install-recommends \
-            libudev-dev libusb-1.0-0-dev pkg-config
+            libudev-dev libusb-1.0-0-dev pkg-config libpipewire-0.3-dev libclang-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -102,7 +118,7 @@ jobs:
         run: echo "CEF_PATH=$RUNNER_TEMP\\cef" >> "$GITHUB_ENV"
 
       - name: Cache CEF distribution
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}\cef
           key: cef-154.0.34-windows-x86_64
@@ -113,6 +129,125 @@ jobs:
           . crates/lightloom-renderer/tools/cef-env.sh
           cargo clippy -p lightloom-renderer --features cef --all-targets -- -D warnings
           cargo build -p lightloom-renderer --features cef
+          # rust-cache restores cef-dll-sys's build-script output without rerunning it, so the
+          # CEF runtime files it copies next to the binary can be missing: copy them here.
+          cef_dist=$(ls -d "$CEF_PATH"/*/cef_*_x86_64 | head -1)
+          for f in "$cef_dist"/*; do
+            case "$f" in
+              *.dll|*.so|*.so.*|*.pak|*.bin|*.dat|*.json) cp -f "$f" target/debug/ ;;
+            esac
+          done
+          cp -rf "$cef_dist/locales" target/debug/
+
+      # The daemon-side client (lightloom-render) against the real renderer: frames through the
+      # shm ring, control lines over stdin.
+      - name: Client test against the real renderer
+        shell: bash
+        # Absolute: the test runs with the crate dir as its working directory.
+        run: |
+          export LIGHTLOOM_RENDERER_EXE="$(pwd -W)/target/debug/lightloom-renderer.exe"  # pwd -W: a Windows path
+          cargo test -p lightloom-render --test cef_real -- --ignored --nocapture
+
+  # The real CEF host on Linux. cef-dll-sys needs neither CMake nor a C++ compiler here: on Linux
+  # it only resolves the CEF distribution (linux64 minimal, ~330 MB bz2, cached by version like
+  # the Windows job), links libcef.so and copies the runtime files (libcef.so, icudtl.dat,
+  # v8_context_snapshot.bin, *.pak, locales/, SwiftShader) next to the binary; build.rs adds an
+  # $ORIGIN rpath so no LD_LIBRARY_PATH is needed. The renderer runs windowless with Ozone
+  # `headless` (no X server). CEF does not officially support Ozone headless, so each run that
+  # fails headless is retried once under Xvfb with Ozone X11 and flagged with a warning.
+  renderer-cef-linux:
+    name: renderer (cef, linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # Chromium's runtime libraries (Debian/Ubuntu list from Chromium's dist_package_versions,
+      # 24.04 `t64` names), Xvfb for the fallback, and the workspace's own build dependencies.
+      - name: Install Chromium runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libnss3 libnspr4 libgbm1 libdrm2 libasound2t64 libcups2t64 libdbus-1-3 libexpat1 \
+            libxkbcommon0 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+            libxfixes3 libxrandr2 libxshmfence1 libpango-1.0-0 libcairo2 libatk1.0-0t64 \
+            libatk-bridge2.0-0t64 libatspi2.0-0t64 fonts-liberation xvfb xauth \
+            libudev-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-renderer-cef-linux
+
+      - name: Point CEF_PATH at the cached distribution
+        run: echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
+
+      - name: Cache CEF distribution
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-154.0.34-linux-x86_64
+
+      - name: cargo clippy + build (--features cef)
+        run: |
+          cargo clippy -p lightloom-renderer --features cef --all-targets -- -D warnings
+          cargo build -p lightloom-renderer --features cef
+          # rust-cache restores cef-dll-sys's build-script output without rerunning it, so the
+          # CEF runtime files it copies next to the binary can be missing: copy them here.
+          cef_dist=$(ls -d "$CEF_PATH"/*/cef_*_x86_64 | head -1)
+          for f in "$cef_dist"/*; do
+            case "$f" in
+              *.dll|*.so|*.so.*|*.pak|*.bin|*.dat|*.json) cp -f "$f" target/debug/ ;;
+            esac
+          done
+          cp -rf "$cef_dist/locales" target/debug/
+          ls -la target/debug | grep -E "libcef|icudtl|snapshot|\.pak" || true
+          # libcef.so must resolve through the $ORIGIN rpath, without LD_LIBRARY_PATH.
+          readelf -d target/debug/lightloom-renderer | grep -E "RUNPATH|RPATH|NEEDED.*libcef"
+          if ldd target/debug/lightloom-renderer | grep "not found"; then
+            echo "::error title=renderer-cef-linux::unresolved shared libraries"; exit 1
+          fi
+
+      # The renderer's own run: 60 frames of the spike page, exit 0 only when all arrived in time.
+      - name: Smoke run (headless, Xvfb fallback)
+        run: |
+          set -o pipefail
+          run() {
+            target/debug/lightloom-renderer --effect crates/lightloom-renderer/testdata/spike.html \
+              --out "$RUNNER_TEMP/hd.shm" --png "$RUNNER_TEMP/hd.png" --frames 60 --fps 30 \
+              --software-compositing --timeout-factor 20 "$@" | tee "$RUNNER_TEMP/smoke.json"
+          }
+          if ! run; then
+            echo "::warning title=renderer-cef-linux::Ozone headless run failed; retrying under Xvfb with ozone-platform=x11"
+            tail -50 "$RUNNER_TEMP/hd.shm.cef.log" || true
+            xvfb-run -a -s "-screen 0 1280x800x24" bash -c "set -o pipefail; $(declare -f run); run --chromium-flag=ozone-platform=x11"
+          fi
+          grep -q '"ok": true' "$RUNNER_TEMP/smoke.json"
+
+      # The daemon-side client (lightloom-render) against the real renderer: shm ring on a tmpfs,
+      # control lines over the unix socket.
+      - name: Client test against the real renderer (headless, Xvfb fallback)
+        run: |
+          # Absolute: the test runs with the crate dir as its working directory.
+          export LIGHTLOOM_RENDERER_EXE="$PWD/target/debug/lightloom-renderer"
+          if ! cargo test -p lightloom-render --test cef_real -- --ignored --nocapture; then
+            echo "::warning title=renderer-cef-linux::client test failed headless; retrying under Xvfb with ozone-platform=x11"
+            LIGHTLOOM_OZONE_PLATFORM=x11 xvfb-run -a -s "-screen 0 1280x800x24" \
+              cargo test -p lightloom-render --test cef_real -- --ignored --nocapture
+          fi
+
+      - name: Upload renderer logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: renderer-cef-linux-logs
+          path: |
+            ${{ runner.temp }}/*.json
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/hd.png
+          if-no-files-found: ignore
 
   deny:
     name: cargo-deny
@@ -154,21 +289,30 @@ jobs:
             echo "::notice::no plugin tests found under plugins/ - skipping"
           fi
 
-      # The dashboard lightloomd serves: type-check (svelte-check) and build.
+      # The plugin SDK: lint and simulator tests (sdk/README.md).
+      - name: SDK tests
+        run: node --test "sdk/**/*.test.mjs"
+
+      # The dashboard lightloomd serves: type-check (svelte-check), unit tests (node:test) and build.
       # --ignore-scripts: no package runs install scripts; the bundler ships prebuilt binaries.
       - name: Dashboard
         working-directory: ui
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
+          npm test
           npm run build
+
+      # sdk/lightloom.d.ts, the example plugin (checkJs) and sdk/types-test, with the dashboard's tsc.
+      - name: SDK typings
+        run: ui/node_modules/.bin/tsc -p sdk
 
   schemas:
     name: schemas
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -182,3 +326,48 @@ jobs:
           else
             echo "::notice::tests/schemas/validate_corpus.py not present yet - skipping"
           fi
+
+      # The conformance runner's verdict logic (thresholds, trace detection, PSNR); the runner
+      # itself runs on the reference machine (conformance-selfhosted.yml).
+      - name: Conformance runner unit tests
+        run: python -I -m unittest discover -s tests/conformance -p "test_*.py"
+
+  # The WiX sources compile and pass ICE validation, on a stand-in staged build (empty
+  # programs, the real pinned PawnIO modules); the real MSI is built in release.yml.
+  msi:
+    name: MSI (WiX check)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the MSI from a stand-in stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:RUNNER_TEMP "stage"
+          New-Item -ItemType Directory -Force "$stage/ui", "$stage/plugins/sample", "$stage/locales" | Out-Null
+          foreach ($exe in "lightloomd", "lightloomw", "lightloom-tray", "lightloom", "lightloom-renderer", "lightloom-setup", "lightloom-iobroker") {
+            Set-Content "$stage/$exe.exe" "stand-in"
+          }
+          Set-Content "$stage/ui/index.html" "<!doctype html>"
+          Set-Content "$stage/plugins/sample/manifest.json" "{}"
+          Set-Content "$stage/locales/en-US.pak" "stand-in"
+          Copy-Item LICENSE, LICENSE-EXCEPTION.md, docs/privacy.md $stage
+          tools/package/fetch-pawnio-modules.ps1 -Out "$stage/pawnio-modules"
+          packaging/wix/build.ps1 -Stage $stage -InstallWix -Out "$env:RUNNER_TEMP/check/Lightloom-check.msi"
+          packaging/wix/build.ps1 -Stage $stage -Culture it-IT -Out "$env:RUNNER_TEMP/check/Lightloom-check-it.msi"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msi-check
+          path: ${{ runner.temp }}/check/*.msi
+          retention-days: 3
+
+  # The release build end to end (Windows zip + MSI, Linux tarball + AppImage with the CEF
+  # renderer, SBOMs, reproducibility, SHA256SUMS), so the first tag does not find its bugs.
+  # Its files stay on the run as the `lightloom-release` artifact. release.yml calls the same
+  # workflow on a tag and publishes.
+  release-dry-run:
+    name: release dry run
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.release-dry-run)
+    uses: ./.github/workflows/release-build.yml
+    with:
+      ref: ${{ github.sha }}

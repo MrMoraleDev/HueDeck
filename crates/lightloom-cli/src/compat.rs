@@ -261,11 +261,15 @@ fn replay(
             d.key, plugin.meta.name, d.frames
         );
         let device = SessionDevice {
+            usb: None,
             smbus: None,
+            lamparray: None,
+            serial: None,
             key: d.key.clone(),
             vid: d.vid,
             pid: d.pid,
             endpoints,
+            network: None,
         };
         let mut channel_components = std::collections::BTreeMap::new();
         for (name, array) in &d.channels {

@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 2,
+  "id": "tests.bad-exports",
+  "name": "Bad Exports",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "tests",
+  "entry": "plugin.js",
+  "deviceType": "keyboard",
+  "devices": [{ "vid": "0x1209", "pids": ["0x0002", "0x0003"], "transport": "hid" }],
+  "permissions": []
+}

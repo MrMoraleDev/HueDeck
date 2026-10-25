@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [api]
-//! port = 16138                  # native API and dashboard
+//! port = 53000                  # native API and dashboard (1024-65535; the Port setting saved from the dashboard wins)
 //! compat = true                 # SignalRGB-compatible listeners on 16038 / 16034
 //! compat_open_mutations = false # let 16038 change state without the token
 //! canvas_events_need_token = false
@@ -27,6 +27,24 @@
 //!
 //! [smbus]
 //! enabled = true                # drive SMBus devices (GPU RGB; RAM RGB when the I/O broker is installed); false turns it off (the dashboard setting wins)
+//!
+//! [audio]
+//! enabled = true                # loopback capture while the active effect reads engine.audio (never a microphone)
+//! # device = "Speakers (Realtek(R) Audio)"   # output device to capture (default: the default output)
+//! scale = "log"                 # engine.audio.freq bands: "log" (20 Hz-20 kHz) or "linear" (0-fs/2)
+//!
+//! [network]
+//! enabled = false               # network lights: discovery and LAN devices (WLED, Hue, ...); the dashboard setting wins
+//! [screen]
+//! enabled = true                # capture while the active effect reads engine.zone or declares meters
+//! # display = "DISPLAY2"        # display to capture (default: the primary display)
+//! fps = 30                      # capture rate, 10-60
+//!
+//! [sensors]
+//! enabled = true                # read sensors while an effect or the dashboard uses them (read-only; no fan control)
+//! interval_ms = 1000            # poll interval, at least 1000 (1 Hz)
+//! nvapi = true                  # NVIDIA GPU temperature, load, fan, clocks (Windows)
+//! # lhm_url = "http://127.0.0.1:8085/data.json"   # LibreHardwareMonitor's web server (CPU temperature); loopback only
 //! ```
 
 use anyhow::Context;
@@ -51,13 +69,107 @@ pub struct Config {
     pub devices: DevicesConfig,
     /// SMBus devices.
     pub smbus: SmbusConfig,
+    /// `engine.audio` capture.
+    pub audio: AudioConfig,
+    /// Network lights.
+    pub network: NetworkConfig,
+    /// `engine.zone` / `engine.vision` capture.
+    pub screen: ScreenConfig,
+    /// Hardware sensors.
+    pub sensors: SensorsConfig,
+}
+
+/// `[sensors]`: read-only hardware sensors for `engine.getSensorValue` and
+/// `GET /v1/sensors` (docs/sensors.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SensorsConfig {
+    /// Poll while an effect or the dashboard reads sensors; `false` never
+    /// polls (effects then see `null`).
+    pub enabled: bool,
+    /// Poll interval in milliseconds, at least 1000.
+    pub interval_ms: u64,
+    /// NVIDIA GPU sensors through NvAPI (Windows).
+    pub nvapi: bool,
+    /// LibreHardwareMonitor's `data.json` URL (loopback only); `None`: not read.
+    pub lhm_url: Option<String>,
+}
+
+impl Default for SensorsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_ms: 1000,
+            nvapi: true,
+            lhm_url: None,
+        }
+    }
+}
+
+/// `[screen]`: display capture for `engine.zone` and `engine.vision` (docs/screen.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScreenConfig {
+    /// Capture while the active effect reads `engine.zone` or declares
+    /// meters; `false` never captures (effects then see a black screen).
+    pub enabled: bool,
+    /// Display to capture, by device name (`DISPLAY2` or `\\.\DISPLAY2`;
+    /// `None`: the primary display).
+    pub display: Option<String>,
+    /// Capture rate, clamped to 10..=60.
+    pub fps: u32,
+}
+
+impl Default for ScreenConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            display: None,
+            fps: 30,
+        }
+    }
+}
+
+/// `[audio]`: loopback capture for `engine.audio` (docs/audio.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AudioConfig {
+    /// Capture while the active effect reads `engine.audio`; `false` never
+    /// captures (effects then see silence).
+    pub enabled: bool,
+    /// Output device to capture, by name (`None`: the default output). Only
+    /// output devices are ever captured (what the PC plays), never microphones.
+    pub device: Option<String>,
+    /// `freq` band spacing: `"log"` or `"linear"`.
+    pub scale: String,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            device: None,
+            scale: "log".into(),
+        }
+    }
+}
+
+/// `[network]`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NetworkConfig {
+    /// Run the network plugins' discovery and drive the LAN devices they
+    /// announce, unless the dashboard setting says otherwise. Off by default
+    /// (opt-in): it sends discovery traffic (mDNS, broadcasts) on the LAN.
+    pub enabled: bool,
 }
 
 /// `[smbus]`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SmbusConfig {
-    /// Drive SMBus devices (NVIDIA GPU RGB through NvAPI; RAM RGB through
+    /// Drive SMBus devices (NVIDIA GPU RGB through NvAPI, AMD GPU RGB through
+    /// ADL; RAM RGB through
     /// the Lightloom I/O broker, used only when it is installed and healthy)
     /// unless the dashboard setting says otherwise. On by default (opt-out);
     /// the safety rules hold either way: never alongside SignalRGB, OpenRGB,
@@ -75,8 +187,9 @@ impl Default for SmbusConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ApiConfig {
-    /// Native API and dashboard port.
-    pub port: u16,
+    /// Native API and dashboard port (`None`: [`lightloom_api::NATIVE_PORT`]).
+    /// A port saved from the dashboard (Settings → Port) wins over this one.
+    pub port: Option<u16>,
     /// Start the SignalRGB-compatible listeners (16038, 16034).
     pub compat: bool,
     /// Let the compatible REST API change state without the token.
@@ -88,7 +201,7 @@ pub struct ApiConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
-            port: lightloom_api::NATIVE_PORT,
+            port: None,
             compat: true,
             compat_open_mutations: false,
             canvas_events_need_token: false,
@@ -167,12 +280,33 @@ mod tests {
     fn defaults_and_partial_files() {
         let c: Config = toml::from_str("").unwrap();
         assert_eq!(c, Config::default());
-        assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (16138, true, 30));
+        assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (None, true, 30));
         let c: Config = toml::from_str("[api]\nport = 17000\n[lighting]\nfps = 60\n").unwrap();
-        assert_eq!((c.api.port, c.api.compat, c.lighting.fps), (17000, true, 60));
+        assert_eq!(
+            (c.api.port, c.api.compat, c.lighting.fps),
+            (Some(17000), true, 60)
+        );
         assert!(c.smbus.enabled, "SMBus is on unless turned off");
         let c: Config = toml::from_str("[smbus]\nenabled = false\n").unwrap();
         assert!(!c.smbus.enabled);
+        assert_eq!(
+            (c.screen.enabled, c.screen.fps, c.screen.display),
+            (true, 30, None)
+        );
+        assert_eq!(
+            (c.sensors.enabled, c.sensors.interval_ms, c.sensors.lhm_url),
+            (true, 1000, None)
+        );
+        let c: Config =
+            toml::from_str("[sensors]\ninterval_ms = 2000\nlhm_url = 'http://127.0.0.1:8085/data.json'\n")
+                .unwrap();
+        assert_eq!(c.sensors.interval_ms, 2000);
+        assert!(c.sensors.lhm_url.is_some());
+        let c: Config = toml::from_str("[screen]\nfps = 60\ndisplay = 'DISPLAY2'\n").unwrap();
+        assert_eq!(
+            (c.screen.fps, c.screen.display.as_deref()),
+            (60, Some("DISPLAY2"))
+        );
         assert!(
             toml::from_str::<Config>("[api]\nprot = 1\n").is_err(),
             "typos are reported"

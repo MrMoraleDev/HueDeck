@@ -1,23 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 412 336" role="img" aria-labelledby="t">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 336 336" role="img" aria-labelledby="t">
   <title id="t">Lightloom</title>
   <defs>
-    <linearGradient id="hue" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="412" y2="336">
+    <linearGradient id="hue" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="336" y2="336">
       <stop offset="0" stop-color="#ff0a1a"/>
-      <stop offset=".14" stop-color="#fe1121"/>
-      <stop offset=".24" stop-color="#f61a86"/>
-      <stop offset=".33" stop-color="#ee1be6"/>
-      <stop offset=".42" stop-color="#aa48f7"/>
-      <stop offset=".49" stop-color="#8f5ef8"/>
-      <stop offset=".55" stop-color="#3ea7fa"/>
-      <stop offset=".62" stop-color="#1bd8f8"/>
-      <stop offset=".68" stop-color="#06fff8"/>
-      <stop offset=".77" stop-color="#15ffa6"/>
-      <stop offset=".92" stop-color="#15fe4a"/>
+      <stop offset="0.14" stop-color="#fe1121"/>
+      <stop offset="0.24" stop-color="#f61a86"/>
+      <stop offset="0.33" stop-color="#ee1be6"/>
+      <stop offset="0.42" stop-color="#aa48f7"/>
+      <stop offset="0.49" stop-color="#8f5ef8"/>
+      <stop offset="0.55" stop-color="#3ea7fa"/>
+      <stop offset="0.62" stop-color="#1bd8f8"/>
+      <stop offset="0.68" stop-color="#06fff8"/>
+      <stop offset="0.77" stop-color="#15ffa6"/>
+      <stop offset="0.92" stop-color="#15fe4a"/>
       <stop offset="1" stop-color="#1cff3c"/>
     </linearGradient>
+    <g id="body" fill="none" stroke="url(#hue)" stroke-width="26" stroke-linecap="round"><path d="M13 13V234A90 90 0 0 0 103 323H323"/><path d="M53 13V234A50 50 0 0 0 103 283H323"/><path d="M93 13V234A10 10 0 0 0 103 243H323"/></g>
   </defs>
-  <g fill="url(#hue)">
-    <path opacity=".42" d="M74 84h74v42H74zm190 0h74v42h-74zM74 210h74v42H74zm190 0h74v42h-74z"/>
-    <path d="M42 0h76a30 30 0 0 1 30 30v52a2 2 0 0 1-2 2H42A42 42 0 0 1 42 0zm252 0h76a42 42 0 0 1 0 84H266a2 2 0 0 1-2-2V30a30 30 0 0 1 30-30zM42 126h328a42 42 0 0 1 0 84H42a42 42 0 0 1 0-84zm0 126h104a2 2 0 0 1 2 2v52a30 30 0 0 1-30 30H42a42 42 0 0 1 0-84zm224 0h104a42 42 0 0 1 0 84h-76a30 30 0 0 1-30-30v-52a2 2 0 0 1 2-2z"/>
-  </g>
+  <use href="#body"/>
 </svg>

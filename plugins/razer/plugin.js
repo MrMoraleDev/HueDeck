@@ -26,15 +26,20 @@
 // 0x03 0x0B, extended 0x0F 0x03, linear 0x03 0x0C, or per-LED reports on a few old devices),
 // then the "custom frame" effect (0x03 0x0A / 0x0F 0x02). The ARGB controller takes 321-byte
 // feature reports on its second interface; the Kraken V4 family takes 64-byte output reports.
-// Never sent: anything with the "save" storage flag, DPI, polling rate, battery or power settings.
+// Never sent: DPI, polling rate, battery or power settings, and the "save" storage flag outside
+// SaveToDevice() (Lightloom's "Save to devices", after the user confirmed it; extended-matrix
+// devices only: docs/hardware/razer.md, "Save to devices").
+// Products with a battery (battery.js) are asked for their battery level and charging status
+// (read-only queries 0x07 0x80 / 0x07 0x84, facts from OpenRazer) every 45 seconds.
 
-/* global device */
+/* global device, battery */
 
 import * as rz from "./razer-protocol.js";
 import {
   DETECTORS, DEVICES, KEYMAPS, REPORT_INDEX_7, SOFTWARE_MODE_AT_START, LED_ID_ZERO, KEEPALIVE,
   MAX_BRIGHTNESS_100, KRAKEN_V4_WIRELESS, VENDOR_ID, STANDARD, EXTENDED, LINEAR, EXTENDED_ARGB, CUSTOM,
 } from "./devices.js";
+import { BATTERY } from "./battery.js";
 
 const PRODUCT_IDS = [...new Set(DETECTORS.map((d) => d[1]))];
 
@@ -58,6 +63,17 @@ const RESEND_MS = 1000;
 const KEEPALIVE_MS = 1000;
 
 const LAMPARRAY_USAGE_PAGE = 0x59;
+
+/** Battery queries: the first one this long after Initialize(), then every BATTERY_POLL_MS. */
+const BATTERY_FIRST_MS = 2000;
+const BATTERY_POLL_MS = 45000;
+/** Reads of the answer to a battery query, 2 ms apart (OpenRazer reads once, about 1 ms after). */
+const BATTERY_READS = 10;
+/** SignalRGB battery states (docs/host-api/hid-usb.md section 7). */
+const BATTERY_UNKNOWN = 0;
+const BATTERY_DRAINING = 1;
+const BATTERY_CHARGING = 2;
+const BATTERY_FULL = 4;
 
 // Lightloom's own recording of the DeathAdder V2 Pro (docs/hardware/razer-deathadder-v2-pro.md,
 // the notes of the retired single-device plugin): the wired mouse and its receiver keep exactly
@@ -83,6 +99,9 @@ export function LedPositions() { return [[0, 0]]; }
 export function ImageUrl() { return ""; }
 // Razer's own software drives the lights while it runs; Lightloom reports it, never closes it.
 export function ConflictingProcesses() { return ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"]; }
+// Lightloom extensions (docs/host-api/save-shutdown.md).
+export function SaveCapabilities() { return { static: true, effects: ["spectrum"] }; }
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
 
 let main = null;          // the opened device (a "target", see makeTarget())
 let paired = [];          // devices paired to a receiver, each a target with a subdevice
@@ -90,6 +109,7 @@ let protocol = null;      // "razer" | "razer-argb" | "kraken-v4" | "recorded"
 let argbEndpoints = null; // { report: endpoint, argb: endpoint } for the ARGB controller
 let argbSizes = null;     // channel LED counts last sent with the zone-size report
 let lastKeepaliveAt = 0;
+let power = null;         // battery polling state, see batterySetup()
 
 // --- detection ---------------------------------------------------------------------------------
 
@@ -126,6 +146,7 @@ export function Initialize() {
   argbEndpoints = null;
   argbSizes = null;
   lastKeepaliveAt = 0;
+  power = null;
 
   const pid = device.productId();
   const rows = DETECTORS.filter((row) => row[1] === pid);
@@ -147,6 +168,7 @@ export function Initialize() {
 
   if (protocol === "recorded") {
     recordedInitialize();
+    batterySetup([main]);
     return;
   }
   if (protocol === "kraken-v4") {
@@ -190,6 +212,7 @@ export function Initialize() {
     // carry the user's brightness.
     setBrightness(target, target.maxBrightness);
   }
+  batterySetup([main, ...paired]);
 }
 
 export function Render() {
@@ -199,6 +222,7 @@ export function Render() {
   switch (protocol) {
     case "recorded":
       recordedRender();
+      batteryPoll();
       return;
     case "kraken-v4":
       renderTarget(main, (colours) => krakenV4SetDirect(main, colours));
@@ -211,6 +235,7 @@ export function Render() {
         renderTarget(target, (colours) => setLeds(target, colours));
       }
       keepalive();
+      batteryPoll();
   }
 }
 
@@ -220,8 +245,19 @@ export function Render() {
  * family (SetModeWave()), and the products OpenRGB switches to software mode go back to hardware
  * mode. The DeathAdder V2 Pro keeps its recorded shutdown (black frame, hardware mode).
  */
-export function Shutdown(_systemSuspending) {
+export function Shutdown(_systemSuspending, mode) {
   if (!main) {
+    return;
+  }
+  if (mode === "keep" || mode === "off") {
+    // Lightloom exit modes: the last frame (or a black one) stays on the device, which is left in
+    // its custom-frame / software mode; nothing is stored.
+    for (const target of protocol === "razer-argb" || protocol === "kraken-v4" || protocol === "recorded" ? [main] : [main, ...paired]) {
+      const colours = mode === "keep" && target.lastColours
+        ? target.lastColours
+        : framePixels(target, mode === "keep");
+      sendFrame(target, colours);
+    }
     return;
   }
   switch (protocol) {
@@ -246,6 +282,118 @@ export function Shutdown(_systemSuspending) {
         }
       }
   }
+}
+
+// --- "Save to devices" (Lightloom extension) ------------------------------------------------------
+
+/**
+ * Store a static colour (the average of the device's LEDs on the frame shown) or the spectrum
+ * cycle in the device itself, with OpenRazer's VARSTORE storage flag: the extended-matrix static
+ * or spectrum effect report (razer_create_mode_static/spectrum_cycle_extended_matrix_report) and
+ * the extended brightness report at full brightness, each with storage 0x01 instead of OpenRGB's
+ * 0x00, for the device and each extended-matrix device paired to it. Standard-matrix effect
+ * reports carry no storage byte, so those devices (and the ARGB controller and Kraken V4) are not
+ * offered. Afterwards the device goes back to custom frames for the live effect. A preview only
+ * describes it.
+ */
+export function SaveToDevice(request) {
+  if (!main) {
+    return { unsupported: "the device was not recognised" };
+  }
+  const effect = request && request.effect ? String(request.effect) : null;
+  if (effect !== null && effect !== "spectrum") {
+    return { unsupported: `the device has no "${effect}" effect Lightloom can store` };
+  }
+  const targets = saveTargets();
+  if (targets.length === 0) {
+    return { unsupported: "only Razer devices with the extended matrix protocol can store an effect (standard-matrix effect reports have no storage flag)" };
+  }
+  const plan = targets.map((target) => ({ target, colour: averageColour(framePixels(target, true)) }));
+  const result = {
+    effect: effect ?? "static",
+    zones: effect === null ? plan.map(({ target, colour }) => ({ name: target.name, color: hex(colour) })) : [],
+    note: effect === null ? "One colour for each device (the average of its LEDs)." : "The device's own colour cycle.",
+  };
+  if (!request || request.action !== "save") {
+    return result;
+  }
+  for (const { target, colour } of plan) {
+    const ledId = saveLedId(target);
+    const effectReport = effect === "spectrum"
+      ? rz.spectrumExtended(target.ctx, rz.STORAGE_SAVE, ledId)
+      : rz.staticExtended(target.ctx, rz.STORAGE_SAVE, ledId, colour);
+    if (usbSend(target, effectReport) < 0) {
+      throw new Error(`Razer: storing the effect on ${target.name} failed`);
+    }
+    usbSend(target, rz.brightnessExtended(target.ctx, rz.STORAGE_SAVE, ledId, target.maxBrightness));
+    target.lastColours = null;
+  }
+  // Back to custom frames: the next Render() sends the frame and the custom-frame effect again
+  // (the recorded DeathAdder V2 Pro needs its frame-mode request first).
+  if (protocol === "recorded") {
+    recordedRequest(0x0F, 0x02, [0x00, 0x00, 0x08, 0x00, 0x01, 0x00]);
+  }
+  return result;
+}
+
+/** The targets whose effect reports carry a storage byte (extended matrix). */
+function saveTargets() {
+  if (protocol !== "razer" && protocol !== "recorded") {
+    return [];
+  }
+  return [main, ...paired].filter((t) => t.matrix === EXTENDED);
+}
+
+/** The LED id of a stored effect: the target's own (OpenRGB's dev_led_id); the recorded
+ * DeathAdder V2 Pro uses 0x00, the LED id of its recorded effect report. */
+function saveLedId(target) {
+  return protocol === "recorded" && target === main ? rz.LED_ID_ZERO : target.ledId;
+}
+
+/** A target's colours (OpenRGB order): the frame shown when `keep`, black otherwise. */
+function framePixels(target, keep) {
+  if (protocol === "razer-argb") {
+    const n = main.entry.rows * ARGB_LEDS_PER_CHANNEL;
+    return keep && main.lastColours ? main.lastColours : new Array(n).fill([0, 0, 0]);
+  }
+  const colours = coloursOf(target);
+  return keep ? colours : colours.map(() => [0, 0, 0]);
+}
+
+/** Send one frame through the target's own protocol (as Render() does). */
+function sendFrame(target, colours) {
+  switch (protocol) {
+    case "recorded": {
+      const [r, g, b] = colours[0] ?? [0, 0, 0];
+      recordedSend(0x0F, 0x03, [0x00, 0x00, 0x00, 0x00, 0x00, r, g, b]);
+      return;
+    }
+    case "kraken-v4":
+      krakenV4SetDirect(target, colours);
+      return;
+    case "razer-argb":
+      if (argbEndpoints) {
+        setLeds(main, colours);
+      }
+      return;
+    default:
+      setLeds(target, colours);
+  }
+}
+
+function averageColour(colours) {
+  const lit = colours.length > 0 ? colours : [[0, 0, 0]];
+  const sum = [0, 0, 0];
+  for (const c of lit) {
+    for (let i = 0; i < 3; i++) {
+      sum[i] += c[i] & 0xFF;
+    }
+  }
+  return sum.map((s) => Math.round(s / lit.length));
+}
+
+function hex(rgb) {
+  return `#${rgb.map((v) => (v & 0xFF).toString(16).padStart(2, "0")).join("")}`;
 }
 
 // --- targets and geometry -----------------------------------------------------------------------
@@ -414,6 +562,142 @@ function keepalive() {
   usbSend(main, rz.getDeviceMode(main.ctx));
   device.pause(5);
   device.get_report([main.ctx.reportIndex], rz.REPORT_LENGTH);
+}
+
+// --- battery ---------------------------------------------------------------------------------------
+
+/**
+ * The first target (the opened device, then the paired ones) whose product has a battery gets the
+ * "battery" feature; one battery per Lightloom device. Nothing is sent here.
+ */
+function batterySetup(targets) {
+  const target = targets.find((t) => BATTERY[t.pid]);
+  if (!target) {
+    return;
+  }
+  const info = BATTERY[target.pid];
+  if (typeof device.addFeature === "function") {
+    device.addFeature("battery");
+  }
+  power = {
+    target,
+    chargingStatus: info.chargingStatus,
+    ctx: { reportIndex: target.ctx.reportIndex, transactionId: info.transactionId },
+    nextAt: Date.now() + BATTERY_FIRST_MS,
+    step: "level",
+    level: null,        // last level read, percent
+    reported: null,     // { level, state } last handed to the host
+    silent: false,      // "not answering" already logged
+  };
+}
+
+/**
+ * Called after the frame: on a poll tick one query (the level; the charging status on the next
+ * frame), each a single request and at most BATTERY_READS short reads.
+ */
+function batteryPoll() {
+  if (!power) {
+    return;
+  }
+  const now = Date.now();
+  if (now < power.nextAt) {
+    return;
+  }
+  if (power.step === "level") {
+    const answer = batteryQuery(rz.getBatteryLevel(power.ctx));
+    if (!answer.ok) {
+      batteryUnanswered(answer, now);
+      return;
+    }
+    power.level = Math.min(100, Math.max(0, Math.round((rz.arg(answer.response, 1) * 100) / 255)));
+    if (power.chargingStatus) {
+      power.step = "charging";
+      power.nextAt = now;           // next frame
+      return;
+    }
+    batteryReport(power.level, BATTERY_DRAINING);
+    power.nextAt = now + BATTERY_POLL_MS;
+    return;
+  }
+  power.step = "level";
+  power.nextAt = now + BATTERY_POLL_MS;
+  const answer = batteryQuery(rz.getChargingStatus(power.ctx));
+  if (!answer.ok) {
+    batteryUnanswered(answer, now);
+    return;
+  }
+  const charging = rz.arg(answer.response, 1) === 1;
+  let state = BATTERY_DRAINING;
+  if (charging) {
+    state = power.level >= 100 ? BATTERY_FULL : BATTERY_CHARGING;
+  }
+  batteryReport(power.level, state);
+}
+
+/** One battery request and its answer: { ok, response } or { ok: false, status }. */
+function batteryQuery(request) {
+  if (device.send_report(request, rz.REPORT_LENGTH) < 0) {
+    return { ok: false, status: null };
+  }
+  for (let read = 0; read < BATTERY_READS; read++) {
+    device.pause(2);
+    const response = device.get_report([power.ctx.reportIndex], rz.REPORT_LENGTH);
+    if (!response || response.length < 11) {
+      continue;
+    }
+    if (response[2] !== request[2] || response[7] !== request[7] || response[8] !== request[8]) {
+      continue;
+    }
+    if (response[1] === rz.STATUS_SUCCESS) {
+      return { ok: true, response };
+    }
+    if (response[1] !== rz.STATUS_NEW && response[1] !== rz.STATUS_BUSY) {
+      return { ok: false, status: response[1] };
+    }
+  }
+  return { ok: false, status: null };
+}
+
+/**
+ * No usable answer (asleep, out of range, switched off, or garbage): the level stays, the state
+ * becomes unknown until the next answer; logged once. "Not supported" stops the polling.
+ */
+function batteryUnanswered(answer, now) {
+  power.step = "level";
+  power.nextAt = now + BATTERY_POLL_MS;
+  if (answer.status === rz.STATUS_NOT_SUPPORTED) {
+    device.log(`${power.target.name}: the battery query is not supported; battery polling stopped.`);
+    power = null;
+    return;
+  }
+  if (!power.silent) {
+    device.log(`${power.target.name}: no battery answer (device asleep or off?); state unknown until it answers.`);
+    power.silent = true;
+  }
+  if (power.reported) {
+    batteryReport(power.reported.level, BATTERY_UNKNOWN);
+  }
+}
+
+/** Hand level and state to the host when either changed. */
+function batteryReport(level, state) {
+  if (state !== BATTERY_UNKNOWN) {
+    power.silent = false;
+  }
+  if (power.reported && power.reported.level === level && power.reported.state === state) {
+    return;
+  }
+  power.reported = { level, state };
+  const api = globalThis.battery;
+  if (!api) {
+    return;
+  }
+  if (typeof api.setBatteryLevel === "function") {
+    api.setBatteryLevel(level);
+  }
+  if (typeof api.setBatteryState === "function") {
+    api.setBatteryState(state);
+  }
 }
 
 // --- RazerController: frames and effects ------------------------------------------------------------
@@ -856,4 +1140,4 @@ function hex4(v) {
 }
 
 // Exposed for the tests.
-export const _internals = { layoutOf, layoutVariant };
+export const _internals = { layoutOf, layoutVariant, BATTERY_POLL_MS, BATTERY_FIRST_MS };

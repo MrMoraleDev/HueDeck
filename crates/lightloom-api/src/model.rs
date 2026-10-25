@@ -23,12 +23,474 @@ pub struct Snapshot {
     pub effects: Vec<EffectView>,
     /// Saved layouts, by name.
     pub layouts: Vec<String>,
+    /// Effect playlists, by id.
+    #[serde(default)]
+    pub playlists: Vec<Playlist>,
     /// User settings.
     pub settings: Settings,
+    /// Network plugins' discovery services (while network lights are on).
+    #[serde(default)]
+    pub network: Vec<NetworkServiceView>,
     /// Running software that holds the same devices (reported, never terminated).
     pub conflicts: Vec<String>,
     /// Problems worth showing (renderer missing, plugin directories empty, ...).
     pub warnings: Vec<String>,
+    /// PawnIO / RAM lighting (Settings).
+    pub pawnio: PawnIoView,
+    /// The operating system and its build (`Windows 11 Pro 25H2 (build 26200)`), for device reports.
+    #[serde(default)]
+    pub os: String,
+    /// LCD faces devices with a screen can show, by id.
+    #[serde(default)]
+    pub lcd_faces: Vec<LcdFaceView>,
+    /// Saved profiles (named snapshots of the whole lighting setup), by name.
+    #[serde(default)]
+    pub profiles: Vec<ProfileView>,
+}
+
+/// A saved profile in the list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileView {
+    /// Its name.
+    pub name: String,
+    /// RFC 3339.
+    pub created_at: String,
+    /// RFC 3339.
+    pub updated_at: String,
+    /// The effect it shows.
+    #[serde(default)]
+    pub effect: Option<String>,
+    /// The layout it brings.
+    #[serde(default)]
+    pub layout: String,
+    /// Devices it has settings for.
+    #[serde(default)]
+    pub devices: usize,
+}
+
+/// `format` of a profile document.
+pub const PROFILE_FORMAT: &str = "lightloom-profile";
+/// Profile document version this build writes and reads.
+pub const PROFILE_VERSION: u32 = 1;
+
+/// A profile: a named snapshot of the whole lighting setup (OpenRGB-style), as
+/// kept in the database and as `GET /v1/profiles/{name}` exports it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    /// Always [`PROFILE_FORMAT`].
+    pub format: String,
+    /// [`PROFILE_VERSION`].
+    pub version: u32,
+    /// Its name.
+    pub name: String,
+    /// RFC 3339 (set by the daemon).
+    #[serde(default)]
+    pub created_at: String,
+    /// RFC 3339 (set by the daemon).
+    #[serde(default)]
+    pub updated_at: String,
+    /// The effect, its control values, the global brightness and the canvas pause.
+    pub lighting: ProfileLighting,
+    /// The layout: placements (position, scale, rotation, per-device brightness
+    /// and enable) and the layout brightness. Applying the profile saves it
+    /// under its name and switches to it.
+    pub layout: lightloom_engine::Layout,
+    /// Per-device settings by device key.
+    #[serde(default)]
+    pub devices: std::collections::BTreeMap<String, ProfileDevice>,
+}
+
+/// The canvas part of a profile.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLighting {
+    /// Effect id.
+    #[serde(default)]
+    pub effect: Option<String>,
+    /// That effect's control values.
+    #[serde(default)]
+    pub values: Map<String, Value>,
+    /// Global brightness `0..=100`.
+    pub brightness: u8,
+    /// `false`: the canvas paused.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// One device's settings in a profile: a generic, open blob. The keys below are
+/// the ones this build reads and writes; any other key (a later build's) is kept
+/// as is through saving, exporting and importing, and ignored when applied.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileDevice {
+    /// Driven at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Plugin parameter values (`ControllableParameters`).
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub parameters: Map<String, Value>,
+    /// Component arrays by channel name (SignalRGB's JSON shape).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub channels: std::collections::BTreeMap<String, Value>,
+    /// The device's own exit mode (`None`: the setting's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shutdown_mode: Option<String>,
+    /// A live hardware mode (`None`: the device follows the effect).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware_mode: Option<DeviceHardwareMode>,
+    /// Per-LED custom colours by endpoint uid (`{enabled, colors, zones}`, as in the
+    /// state export's `customLeds`); endpoints left out follow the effect. `None`
+    /// (a document without the key): the device's custom LEDs are left as they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_leds: Option<std::collections::BTreeMap<String, Value>>,
+    /// Keys this build does not know, kept as they are.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// A device's built-in effect, from its plugin's `HardwareModes()`
+/// (docs/host-api/hardware-modes.md).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareModeView {
+    /// Mode id.
+    pub id: String,
+    /// Shown name.
+    pub name: String,
+    /// Colours it takes.
+    pub colors: u8,
+    /// Names of those colours (empty: "Colour 1", ...).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_names: Vec<String>,
+    /// It has a speed (0-100).
+    pub speed: bool,
+    /// It has a brightness (0-100).
+    pub brightness: bool,
+}
+
+/// A hardware mode chosen for a device (live: never stored in the device).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceHardwareMode {
+    /// Mode id.
+    pub id: String,
+    /// `#rrggbb` colours, one per colour of the mode.
+    #[serde(default)]
+    pub colors: Vec<String>,
+    /// 0-100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<u8>,
+    /// 0-100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<u8>,
+}
+
+/// An LCD face (docs/host-api/lcd-lightloom.md): an HTML page with `onReady()`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcdFaceView {
+    /// `<source>:<name>` (`lightloom:clock`, `user:my-face`).
+    pub id: String,
+    /// `<title>`.
+    pub title: String,
+    /// `<meta description>`.
+    #[serde(default)]
+    pub description: String,
+    /// `<meta publisher>`.
+    #[serde(default)]
+    pub publisher: String,
+    /// The face reads hardware sensors (`engine.getSensorValue`).
+    #[serde(default)]
+    pub uses_sensors: bool,
+    /// `<meta property>` controls (effect-meta schema shape), set per device with
+    /// `PUT /v1/devices/{key}/lcd` `{values}`.
+    #[serde(default)]
+    pub controls: Vec<Value>,
+}
+
+/// A device's LCD while its plugin drives it (`LCD.initialize` was called).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcdView {
+    /// Face width in pixels (what the plugin asked for).
+    pub width: u32,
+    /// Face height in pixels.
+    pub height: u32,
+    /// Round screen.
+    pub circular: bool,
+    /// The face shown (`None`: no face is available, a test pattern is shown).
+    pub face: Option<String>,
+    /// Face frame rate (`lcdFramerate`).
+    pub framerate: u32,
+    /// `cef` (the face page in its own browser) or `mock` (a test pattern: no renderer).
+    pub renderer: String,
+    /// The face renderer runs.
+    pub running: bool,
+    /// Renderer status line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// The device's control values for the face shown (the others keep their defaults).
+    #[serde(default)]
+    pub values: Map<String, Value>,
+}
+
+/// PawnIO and the Lightloom I/O broker: what RAM lighting needs (Windows).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PawnIoView {
+    /// The Install / Remove buttons can work: Windows, `lightloom-setup.exe`
+    /// next to `lightloomd.exe`, real hardware mode.
+    pub supported: bool,
+    /// PawnIO's uninstall entry exists.
+    pub installed: bool,
+    /// Its `DisplayVersion`.
+    pub version: Option<String>,
+    /// 2.2.0 or later.
+    pub version_ok: bool,
+    /// `official` / `unrestricted` / `unknown`, as the broker reported it
+    /// (`None` while Lightloom has not talked to the broker).
+    pub edition: Option<String>,
+    /// The `LightloomIoBroker` service: `notInstalled`, `stopped`, `pending`, `running`, `unknown`.
+    pub service: String,
+    /// The broker answered and Lightloom uses it.
+    pub broker_healthy: bool,
+    /// Chipset SMBus buses (RAM) in use.
+    pub ram_buses: usize,
+    /// One line for the user.
+    pub status: String,
+    /// The last Install / Remove run (running or ended).
+    pub job: Option<PawnIoJob>,
+}
+
+/// An Install / Remove run of the elevated helper.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PawnIoJob {
+    /// `install` / `remove`.
+    pub action: String,
+    /// Still running (or the UAC prompt still open).
+    pub running: bool,
+    /// How it ended; `None` while running.
+    pub ok: Option<bool>,
+    /// What to tell the user.
+    pub message: String,
+}
+
+/// What the PawnIO / RAM lighting buttons ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PawnIoAction {
+    /// Install PawnIO when needed (verified download) and (re)register the I/O broker.
+    Install,
+    /// Remove the I/O broker; PawnIO stays.
+    Remove,
+}
+
+/// `GET /v1/update`: the update check (Settings → Updates). Nothing is
+/// fetched unless the user presses *Check for updates* or turned the weekly
+/// check on (docs/privacy.md).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateView {
+    /// The running version.
+    pub current_version: String,
+    /// Check once a week by itself (off by default).
+    pub check_weekly: bool,
+    /// Offer pre-releases too (off by default).
+    pub beta: bool,
+    /// A check runs now.
+    pub checking: bool,
+    /// When the last check ended (Unix seconds); `None`: never.
+    pub last_check: Option<u64>,
+    /// Why the last check failed; `None` when it worked.
+    pub error: Option<String>,
+    /// A newer release found by the last check; `None`: up to date (or never checked).
+    pub available: Option<UpdateRelease>,
+    /// *Download* downloads, verifies and opens the installer here (the
+    /// per-user MSI install on Windows); otherwise it opens the release page.
+    pub installable: bool,
+    /// Why *Download* opens the release page instead (portable copy, Linux, ...).
+    pub install_note: Option<String>,
+    /// The last download (running or ended).
+    pub job: Option<UpdateJob>,
+}
+
+/// A release on GitHub.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRelease {
+    /// Its version (`1.2.3`, `1.3.0-beta.1`).
+    pub version: String,
+    /// Its tag (`v1.2.3`).
+    pub tag: String,
+    /// Its title.
+    pub name: String,
+    /// Release notes as plain text (HTML tags and control characters removed, shortened).
+    pub notes: String,
+    /// The release page (always under `https://github.com/MrMoraleDev/Lightloom/`).
+    pub url: String,
+    /// Publication date (ISO 8601), as GitHub gives it.
+    pub published_at: Option<String>,
+    /// A pre-release (only offered with the beta channel on).
+    pub prerelease: bool,
+    /// The download for this system; `None`: open the release page.
+    pub asset: Option<UpdateAsset>,
+}
+
+/// One file of a release.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAsset {
+    /// File name (`Lightloom-1.2.3-x64.msi`).
+    pub name: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Its download address.
+    pub url: String,
+}
+
+/// The download of an update.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateJob {
+    /// The release's version.
+    pub version: String,
+    /// Still downloading.
+    pub running: bool,
+    /// How it ended; `None` while running.
+    pub ok: Option<bool>,
+    /// Bytes downloaded so far.
+    pub downloaded: u64,
+    /// Bytes in all (`0`: unknown).
+    pub total: u64,
+    /// What to tell the user.
+    pub message: String,
+}
+
+/// `GET /v1/sensors`: the hardware sensors (read-only), as of the last poll.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensorsView {
+    /// Sensors are read at all (`[sensors] enabled`).
+    pub enabled: bool,
+    /// Polling runs now (an effect or a client reads sensors).
+    pub polling: bool,
+    /// Poll interval in milliseconds.
+    pub interval_ms: u64,
+    /// Milliseconds since the last poll (`None`: never polled).
+    pub age_ms: Option<u64>,
+    /// Every sensor, by source then name.
+    pub sensors: Vec<SensorView>,
+    /// How each source did at the last poll.
+    pub sources: Vec<SensorSourceView>,
+}
+
+/// `GET /v1/inputs`: what audio and screen capture can open, and the choice.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputsView {
+    /// This OS has the capture backends (Windows: WASAPI loopback, DXGI duplication).
+    pub supported: bool,
+    /// Output devices loopback capture can open, by name. Microphones and
+    /// other capture endpoints are never opened, so they are not listed.
+    pub audio_devices: Vec<String>,
+    /// The chosen output device; `None`: the system default.
+    pub audio_device: Option<String>,
+    /// Displays screen capture can open.
+    pub displays: Vec<DisplayView>,
+    /// The chosen display; `None`: the primary display.
+    pub display: Option<String>,
+}
+
+/// One display for screen capture.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayView {
+    /// Device name (`\\.\DISPLAY1`), what `display` names.
+    pub name: String,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// The primary display.
+    pub primary: bool,
+    /// Graphics adapter.
+    pub adapter: String,
+}
+
+/// One sensor: what `engine.getSensorValue(name)` returns, plus its name.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensorView {
+    /// Display name (the argument of `engine.getSensorValue`).
+    pub name: String,
+    /// Current value.
+    pub value: f64,
+    /// Unit (`°C`, `%`, `RPM`, `MHz`, …).
+    pub units: String,
+    /// Expected minimum.
+    pub min: f64,
+    /// Expected maximum.
+    pub max: f64,
+    /// `Temperature`, `Fan`, `Load`, `Clock`, `Voltage`, `Power` or `Other`.
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+/// One sensor source.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensorSourceView {
+    /// `system`, `nvapi`, `hwmon` or `lhm`.
+    pub name: String,
+    /// Sensors it reported.
+    pub sensors: usize,
+    /// Why it failed at the last poll.
+    pub error: Option<String>,
+}
+
+/// One network plugin's discovery service.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkServiceView {
+    /// The plugin's `Name()` (the id commands use).
+    pub plugin: String,
+    /// The service runs.
+    pub running: bool,
+    /// Why it stopped, if it did.
+    pub error: Option<String>,
+    /// `discovery.forgetController` exists (dashboard *Forget*).
+    pub can_forget: bool,
+    /// What `service.controllers` holds.
+    pub controllers: Vec<NetworkControllerView>,
+    /// Last service log lines.
+    pub log: Vec<String>,
+}
+
+/// One controller a network service lists.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkControllerView {
+    /// Its id.
+    pub id: String,
+    /// `name` (or the id).
+    pub name: String,
+    /// `ip`.
+    pub ip: Option<String>,
+    /// `status`.
+    pub status: Option<String>,
+    /// `paired`, when the plugin reports it.
+    pub paired: Option<bool>,
+    /// It has `startLink()` and is not paired (dashboard *Pair*).
+    pub can_pair: bool,
+    /// It was announced: the device key it runs as.
+    pub device: Option<String>,
 }
 
 /// The canvas: effect, brightness, layout, renderer.
@@ -49,6 +511,98 @@ pub struct Lighting {
     pub layout_brightness: u8,
     /// Who paints the canvas.
     pub renderer: RendererView,
+    /// The playlist playing now.
+    #[serde(default)]
+    pub playlist: Option<PlaylistPlayback>,
+    /// The auto-next timer (SignalRGB's "Effect Timer Interval").
+    #[serde(default)]
+    pub timer: EffectTimer,
+    /// When the playlist or the timer shows the next effect (Unix time,
+    /// milliseconds); `None` when nothing will switch by itself.
+    #[serde(default)]
+    pub next_switch_ms: Option<u64>,
+    /// The profile applied or saved last (`None`: none yet, or it was deleted).
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+/// The auto-next timer: while no playlist plays, show the next effect of the
+/// library every `interval` seconds. It also is the duration of playlist
+/// entries that have none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EffectTimer {
+    /// Advance through the library by itself (off by default).
+    pub enabled: bool,
+    /// Seconds per effect ([`EffectTimer::DEFAULT_INTERVAL`] by default).
+    pub interval: u32,
+}
+
+impl EffectTimer {
+    /// SignalRGB's default: 300 000 ms.
+    pub const DEFAULT_INTERVAL: u32 = 300;
+    /// Shortest interval or entry duration, seconds.
+    pub const MIN_INTERVAL: u32 = 1;
+    /// Longest interval or entry duration, seconds (one day).
+    pub const MAX_INTERVAL: u32 = 86_400;
+}
+
+impl Default for EffectTimer {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval: Self::DEFAULT_INTERVAL,
+        }
+    }
+}
+
+/// An effect playlist: effects shown one after the other, in order or shuffled.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Playlist {
+    /// Stable id (made from the name when the playlist is created).
+    #[serde(default)]
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Play the entries in a random order (a new one every round).
+    #[serde(default)]
+    pub shuffle: bool,
+    /// The effects, in order.
+    #[serde(default)]
+    pub entries: Vec<PlaylistEntry>,
+    /// Last change (RFC 3339); set by the daemon.
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+/// One entry of a playlist.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntry {
+    /// Effect id.
+    pub effect: String,
+    /// A preset of the effect loaded when the entry starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    /// Control values set when the entry starts (after the preset's).
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub values: Map<String, Value>,
+    /// Seconds the entry lasts; `None`: the timer's interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u32>,
+}
+
+/// The playlist playing now.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistPlayback {
+    /// Playlist id.
+    pub id: String,
+    /// Its name.
+    pub name: String,
+    /// The entry shown now (index into `entries`).
+    pub entry: usize,
 }
 
 /// The canvas renderer.
@@ -79,6 +633,9 @@ pub struct DeviceView {
     pub name: String,
     /// Plugin name.
     pub plugin: String,
+    /// The plugin's `DeviceType()` (`keyboard`, `gpu`, `other`, ...).
+    #[serde(default)]
+    pub device_type: String,
     /// Plugin file.
     pub plugin_path: String,
     /// `running`, `starting`, `stopping`, `done`, `disabled` or `absent`.
@@ -100,12 +657,121 @@ pub struct DeviceView {
     pub default_scale: f32,
     /// `ImageUrl()` or a `data:` URL of `Image()`.
     pub image: Option<String>,
-    /// `ControllableParameters()` entries, each with its current `value`.
+    /// The plugin's parameters, each with its current `value`: the
+    /// `ControllableParameters()` entries, then as changed at run time by
+    /// `device.addProperty` / `removeProperty` while the device runs.
     pub parameters: Vec<Value>,
+    /// Messages on the device card: `DeviceMessages()`, then as changed at run
+    /// time by `device.addMessage` / `removeMessage` / `notify` / `denotify`.
+    #[serde(default)]
+    pub messages: Vec<DeviceMessageView>,
     /// The device and its children as canvas endpoints.
     pub endpoints: Vec<Endpoint>,
     /// Channel names (component editor).
     pub channels: Vec<ChannelView>,
+    /// What "Save to devices" can store in this device (`None`: nothing).
+    pub save: Option<SaveSupport>,
+    /// Exit modes ("When Lightloom closes") this device's plugin carries out,
+    /// natively or through its `shutdownColor` parameter (`restore` always).
+    pub shutdown_modes: Vec<String>,
+    /// This device's own exit mode (`None`: the setting's).
+    pub shutdown_mode: Option<String>,
+    /// The last battery report (devices whose plugin has the `battery` feature),
+    /// kept after the device goes away.
+    pub battery: Option<BatteryView>,
+    /// Pulse the device red while its battery is low (user setting).
+    pub blink_low_battery: bool,
+    /// Driven by a third-party plugin read in place (a local SignalRGB
+    /// installation's), not by one Lightloom ships or the user wrote.
+    #[serde(default)]
+    pub third_party: bool,
+    /// Why the device cannot be driven (or only partly) as it is plugged in:
+    /// "needs WinUSB driver: ..." for a raw USB device Windows bound no
+    /// WinUSB driver to. Lightloom never installs one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_problem: Option<String>,
+    /// Where to read about [`DeviceView::driver_problem`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help_url: Option<String>,
+    /// Someone has run the plugin on this very product: it is in the `tested`
+    /// list of the plugin's `manifest.json` (USB product id, or the card's PCI ids).
+    #[serde(default)]
+    pub tested: bool,
+    /// The plugin's version: its manifest's, else its `Version()` export.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_version: Option<String>,
+    /// How the plugin reaches the device: `hid`, `rawusb`, `hybrid`, `serial`,
+    /// `smbus` or `network` (`lamparray` for Windows Dynamic Lighting devices).
+    #[serde(default)]
+    pub plugin_type: String,
+    /// The device's interfaces as enumeration saw them, one line each (HID
+    /// collections, USB interfaces and their drivers, serial ports), for device
+    /// reports. No paths and no serial numbers.
+    #[serde(default)]
+    pub interfaces: Vec<String>,
+    /// The device's LCD, while its plugin drives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lcd: Option<LcdView>,
+    /// The device's built-in effects it can run live (its plugin's `HardwareModes()`).
+    #[serde(default)]
+    pub hardware_modes: Vec<HardwareModeView>,
+    /// The hardware mode chosen for it (`None`: it follows the effect).
+    #[serde(default)]
+    pub hardware_mode: Option<DeviceHardwareMode>,
+}
+
+/// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSupport {
+    /// The colours of the current frame.
+    #[serde(rename = "static")]
+    pub static_colors: bool,
+    /// Built-in effects (`spectrum`, `breathing`, ...).
+    pub effects: Vec<String>,
+    /// Seconds before the device may be saved again (one save per minute).
+    pub wait_secs: u64,
+}
+
+/// What to store in one device.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceSaveChoice {
+    /// A built-in effect the device advertises; `None`: the current colours.
+    #[serde(default)]
+    pub effect: Option<String>,
+}
+
+/// A message a device plugin shows on its card.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceMessageView {
+    /// `DeviceMessages()` `property`, `addMessage` id, or the alert id `notify` returned.
+    pub id: String,
+    /// `notify` title.
+    pub title: Option<String>,
+    /// The text.
+    pub message: String,
+    /// Hover text.
+    pub tooltip: Option<String>,
+    /// `notify` priority: 0 info, 1 important, 2 and 3 errors; `None` for plain messages.
+    pub priority: Option<i32>,
+}
+
+/// A device's battery, as its plugin last reported it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatteryView {
+    /// Percent; `None` until the plugin reported a level.
+    pub level: Option<u8>,
+    /// `unknown`, `discharging`, `charging`, `fullCharging`, `full` or `wirelessCharging`.
+    pub state: String,
+    /// On external power (charging, or full on the charger).
+    pub charging: bool,
+    /// `ok`, `low` or `critical` under the user's thresholds.
+    pub status: String,
+    /// When the plugin last reported (Unix time, milliseconds).
+    pub updated_ms: u64,
 }
 
 /// A canvas endpoint (device, subdevice or component instance).
@@ -126,6 +792,70 @@ pub struct Endpoint {
     pub leds: usize,
     /// Where it sits.
     pub placement: Placement,
+    /// Shows its custom per-LED colours instead of the effect
+    /// (`PATCH /v1/devices/{key}/leds/{uid}`).
+    #[serde(default)]
+    pub custom_leds: bool,
+}
+
+/// The LED painter's view of a device (`GET /v1/devices/{key}/leds`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedMapView {
+    /// Device key.
+    pub key: String,
+    /// The plugin's `DeviceType()` (`keyboard` gets key caps).
+    pub device_type: String,
+    /// The device and its children, as the session has them now.
+    pub endpoints: Vec<LedEndpointView>,
+}
+
+/// One endpoint of [`LedMapView`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedEndpointView {
+    /// Endpoint uid.
+    pub uid: String,
+    /// `device`, `subdevice` or `component`.
+    pub kind: String,
+    /// Display name.
+    pub name: String,
+    /// The channel of a component.
+    pub channel: Option<String>,
+    /// LED grid in cells (`Size()`).
+    pub size: [u32; 2],
+    /// Length of [`LedEndpointView::colors`].
+    pub slots: usize,
+    /// The LEDs at their cells, with names.
+    pub leds: Vec<lightloom_engine::LedSpot>,
+    /// Custom LEDs mode on (else the endpoint follows the effect).
+    pub custom: bool,
+    /// The custom colour of every slot (`#rrggbb`).
+    pub colors: Vec<String>,
+    /// Named sets of slots.
+    pub zones: std::collections::BTreeMap<String, Vec<u32>>,
+}
+
+/// A change of an endpoint's custom LEDs. Applied in field order: `colors`,
+/// `fill`, `set`, `zones`, then `mode`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedEdit {
+    /// `custom` (show the custom colours) or `effect` (follow the canvas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Every slot's colour (`#rrggbb`), replacing all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colors: Option<Vec<String>>,
+    /// One colour for every slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    /// Colours of single slots.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub set: std::collections::BTreeMap<u32, String>,
+    /// One colour for every slot of a zone, by zone name.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub zones: std::collections::BTreeMap<String, String>,
 }
 
 /// A channel and the component instances assigned to it.
@@ -160,6 +890,13 @@ pub struct EffectView {
     pub values: Map<String, Value>,
     /// Preset names.
     pub presets: Vec<String>,
+    /// A third-party effect read in place (`source` `signalrgb`).
+    #[serde(default)]
+    pub third_party: bool,
+    /// What the effect reads (`audio`, `video`, `meters`, `input`, `webgl`,
+    /// `engine`); effects with `meters` are game integrations.
+    #[serde(default)]
+    pub uses: Vec<String>,
 }
 
 /// User settings.
@@ -173,13 +910,63 @@ pub struct Settings {
     pub signalrgb_available: bool,
     /// Composite effects on the GPU instead of in software.
     pub gpu_compositing: bool,
-    /// Drive SMBus devices (GPU RGB through NvAPI; RAM RGB through the I/O
+    /// Drive SMBus devices (GPU RGB through NvAPI and AMD ADL; RAM RGB through the I/O
     /// broker when it is installed and healthy); on unless turned off.
     pub smbus: bool,
+    /// Network lights: run the network plugins' discovery and drive the LAN
+    /// devices they announce (off unless turned on).
+    #[serde(default)]
+    pub network: bool,
+    /// Port of the native API and the dashboard now (loopback only).
+    pub port: u16,
+    /// Why the daemon does not serve on the configured port (it was busy at
+    /// startup and the default port was used instead); `None` normally.
+    #[serde(default)]
+    pub port_notice: Option<String>,
+    /// Serve the OpenRGB SDK protocol on 127.0.0.1:6742 so OpenRGB SDK
+    /// clients see and drive Lightloom's devices (opt-in).
+    #[serde(default)]
+    pub openrgb_sdk: bool,
     /// Effect frame rate.
     pub fps: u32,
     /// Never write to devices.
     pub dry_run: bool,
+    /// What devices show when Lightloom closes: `restore` (their own lighting),
+    /// `keep` (the last colours, not stored) or `off`.
+    pub shutdown_mode: String,
+    /// Low-battery threshold, percent (warnings, `battery.lowBatteryWarningLevel`).
+    pub battery_low: u8,
+    /// Critical battery threshold, percent.
+    pub battery_critical: u8,
+    /// Show low and critical battery alerts as system notifications.
+    pub battery_notifications: bool,
+    /// This OS has system notifications Lightloom can show.
+    pub notifications_available: bool,
+    /// `lightloom://` links open Lightloom actions: the per-user URL-scheme
+    /// registration (`HKCU\Software\Classes\lightloom`) is on (opt-in).
+    #[serde(default)]
+    pub url_scheme: bool,
+    /// This OS (and install) can register the URL scheme.
+    #[serde(default)]
+    pub url_scheme_available: bool,
+    /// Why the registration is not what the setting says (it failed, or the
+    /// `lightloom` command-line client is missing); `None` normally.
+    #[serde(default)]
+    pub url_scheme_notice: Option<String>,
+    /// Black canvas while the PC is locked or the display is off (off by default).
+    #[serde(default)]
+    pub lights_off_when_idle: bool,
+    /// The output device `engine.audio` captures (chosen in the dashboard, else
+    /// `[audio] device` in config.toml); `None`: the system default.
+    #[serde(default)]
+    pub audio_device: Option<String>,
+    /// The display `engine.zone` and the meters capture (chosen in the dashboard,
+    /// else `[screen] display`); `None`: the primary display.
+    #[serde(default)]
+    pub display: Option<String>,
+    /// The profile applied when Lightloom starts (`None`: the setup as it was left).
+    #[serde(default)]
+    pub default_profile: Option<String>,
 }
 
 /// A state change asked of the daemon.
@@ -224,7 +1011,11 @@ pub enum Request {
         /// Preset name.
         name: String,
     },
-    /// Show the next effect of the library (`previous` goes back).
+    /// Show a random effect of the library, game integrations (effects with
+    /// screen meters) and developer effects excluded; stops a playlist.
+    ShuffleEffect,
+    /// Show the next effect of the library, or of the playing playlist
+    /// (`previous` goes back).
     StepEffect {
         /// `true`: the previous one.
         #[serde(default)]
@@ -238,6 +1029,7 @@ pub enum Request {
         enabled: Option<bool>,
     },
     /// Enable/disable a device or set its plugin parameters.
+    #[serde(rename_all = "camelCase")]
     SetDevice {
         /// Device key.
         key: String,
@@ -245,6 +1037,29 @@ pub enum Request {
         enabled: Option<bool>,
         /// `ControllableParameters` values (applied live, stored).
         parameters: Option<Map<String, Value>>,
+        /// This device's exit mode (`restore`, `keep`, `off`; `default` or an
+        /// empty string: the setting's).
+        #[serde(default)]
+        shutdown_mode: Option<String>,
+        /// Pulse the device red while its battery is low.
+        #[serde(default)]
+        blink_low_battery: Option<bool>,
+    },
+    /// "Save to devices": store lighting in the devices' own memory (flash or
+    /// EEPROM), so it shows at boot without Lightloom. A preview says what would be
+    /// stored and writes nothing; a save needs `confirm` (the user said yes) and
+    /// is refused for a device saved less than a minute ago.
+    #[serde(rename_all = "camelCase")]
+    SaveToDevices {
+        /// Only say what would be stored.
+        #[serde(default)]
+        preview: bool,
+        /// The user confirmed the save.
+        #[serde(default)]
+        confirm: bool,
+        /// Device key -> what to store. A preview of every device when empty.
+        #[serde(default)]
+        devices: std::collections::BTreeMap<String, DeviceSaveChoice>,
     },
     /// Assign component instances to a channel (the device session restarts).
     SetChannel {
@@ -255,6 +1070,54 @@ pub enum Request {
         /// Component instances in chain order (SignalRGB's JSON shape;
         /// `{"ProductName": ...}` from the library gets a new `ComponentId`).
         components: Vec<Value>,
+    },
+    /// Choose a device's LCD face, its frame rate and/or the face's control values (kept
+    /// per device; a running face renderer restarts on a new face or rate, new values
+    /// reach it live).
+    SetLcd {
+        /// Device key.
+        key: String,
+        /// Face id (`""`: back to the default face).
+        face: Option<String>,
+        /// Frames per second, 1-60.
+        framerate: Option<u32>,
+        /// Control values of the face the device shows (after `face`), by property.
+        #[serde(default)]
+        values: Option<Map<String, Value>>,
+    },
+    /// The LED painter's view of a device's endpoints ([`LedMapView`]).
+    LedMap {
+        /// Device key.
+        key: String,
+    },
+    /// Change an endpoint's custom LEDs (colours, mode, zone colours).
+    SetLeds {
+        /// Device key.
+        key: String,
+        /// Endpoint uid (the device key, a subdevice's or a component's uid).
+        uid: String,
+        /// The change.
+        edit: LedEdit,
+    },
+    /// Create or replace a zone of an endpoint (a named set of LED slots).
+    SaveLedZone {
+        /// Device key.
+        key: String,
+        /// Endpoint uid.
+        uid: String,
+        /// Zone name.
+        name: String,
+        /// Its slots.
+        leds: Vec<u32>,
+    },
+    /// Delete a zone of an endpoint.
+    DeleteLedZone {
+        /// Device key.
+        key: String,
+        /// Endpoint uid.
+        uid: String,
+        /// Zone name.
+        name: String,
     },
     /// Move an endpoint in the current layout.
     SetPlacement {
@@ -307,10 +1170,67 @@ pub enum Request {
         /// Drive SMBus devices (scans the buses when turned on).
         #[serde(default)]
         smbus: Option<bool>,
+        /// What devices show when Lightloom closes (`restore`, `keep`, `off`).
+        #[serde(default)]
+        shutdown_mode: Option<String>,
+        /// Low-battery threshold, percent (`1..=95`, above the critical one).
+        #[serde(default)]
+        battery_low: Option<u8>,
+        /// Critical battery threshold, percent (below the low one).
+        #[serde(default)]
+        battery_critical: Option<u8>,
+        /// Battery alerts as system notifications.
+        #[serde(default)]
+        battery_notifications: Option<bool>,
+        /// Port of the native API and the dashboard (saved; the API side has
+        /// already bound it and moves the listener).
+        #[serde(default)]
+        port: Option<u16>,
+        /// Serve the OpenRGB SDK protocol (127.0.0.1:6742).
+        #[serde(default)]
+        openrgb_sdk: Option<bool>,
+        /// Network lights (starts or stops the discovery services).
+        #[serde(default)]
+        network: Option<bool>,
+        /// Black canvas while the PC is locked or the display is off.
+        #[serde(default)]
+        lights_off_when_idle: Option<bool>,
+    },
+    /// Choose the audio output device and the display the inputs capture.
+    SetInputs {
+        /// Output device name (`""`: the system default); `None` leaves it.
+        #[serde(default)]
+        audio_device: Option<String>,
+        /// Display name (`""`: the primary display); `None` leaves it.
+        #[serde(default)]
+        display: Option<String>,
+    },
+    /// *Add by IP*: ask a network plugin to look at `ip`.
+    NetworkAdd {
+        /// Plugin `Name()`.
+        plugin: String,
+        /// The address.
+        ip: String,
+    },
+    /// *Pair* (`startLink()`) or *Forget* (`forgetController`) a network controller.
+    NetworkAction {
+        /// Plugin `Name()`.
+        plugin: String,
+        /// Controller id.
+        id: String,
+        /// `pair` or `forget`.
+        action: String,
     },
     /// Import the local SignalRGB setup (read in place): its canvas placements
-    /// as a layout, and the component arrays of its channels.
+    /// as a layout (with the layout and per-device brightness and enable), the
+    /// component arrays of its channels, effect control values and presets, the
+    /// selected effect, the global brightness and per-device enable.
     ImportSignalRgb {
+        /// Layout name (default `SignalRGB`).
+        name: Option<String>,
+    },
+    /// What [`Request::ImportSignalRgb`] would import, without changing anything.
+    PreviewSignalRgb {
         /// Layout name (default `SignalRGB`).
         name: Option<String>,
     },
@@ -328,6 +1248,170 @@ pub enum Request {
         /// The document.
         state: Value,
     },
+    /// PawnIO / RAM lighting status, read again now (read-only).
+    PawnIoStatus,
+    /// Start the elevated helper for RAM lighting (Windows shows one UAC prompt).
+    PawnIoSetup {
+        /// Install or remove.
+        action: PawnIoAction,
+    },
+    /// Create (`id` absent) or replace a playlist; answers with it.
+    SavePlaylist {
+        /// Playlist id; `None` makes one from the name.
+        #[serde(default)]
+        id: Option<String>,
+        /// The playlist (its `id` and `updatedAt` are ignored).
+        playlist: Playlist,
+    },
+    /// Delete a playlist (it stops when it plays).
+    DeletePlaylist {
+        /// Playlist id.
+        id: String,
+    },
+    /// Play a playlist from its first entry, or from the entry showing `start`.
+    PlayPlaylist {
+        /// Playlist id.
+        id: String,
+        /// Effect id of the entry to start with.
+        #[serde(default)]
+        start: Option<String>,
+    },
+    /// Stop the playlist (the effect stays).
+    StopPlaylist,
+    /// The auto-next timer.
+    SetEffectTimer {
+        /// Advance through the library by itself.
+        #[serde(default)]
+        enabled: Option<bool>,
+        /// Seconds per effect.
+        #[serde(default)]
+        interval: Option<u32>,
+    },
+    /// Add a developer's effect page (`developer:<uid>`) and show it.
+    LoadEffect {
+        /// Name of the effect (letters, digits, space, `-`, `_`, `.`).
+        uid: String,
+        /// The page.
+        html: String,
+    },
+    /// Where an effect's picture is (read-only): `{path, contentType}`.
+    EffectImage {
+        /// Effect id.
+        id: String,
+    },
+    /// Run a `lightloom://` action URL (docs/integrations/actions.md).
+    Action {
+        /// The URL (or a bare action path).
+        url: String,
+    },
+    /// Register (`true`) or remove (`false`) the per-user `lightloom://` URL scheme.
+    SetUrlScheme {
+        /// Registered.
+        enabled: bool,
+    },
+    /// The macro runtime: settings and scripts (read-only).
+    Macros,
+    /// Macro settings; `None` leaves one as it is.
+    #[serde(rename_all = "camelCase")]
+    SetMacros {
+        /// Macros run.
+        #[serde(default)]
+        enabled: Option<bool>,
+        /// The low-level keyboard hook may be installed.
+        #[serde(default)]
+        keyboard_hook: Option<bool>,
+        /// The low-level mouse hook may be installed.
+        #[serde(default)]
+        mouse_hook: Option<bool>,
+        /// Macros may start programs (`system.openApplication`).
+        #[serde(default)]
+        allow_launch: Option<bool>,
+    },
+    /// One macro script's settings.
+    SetMacro {
+        /// Script id (`user:input:Key Pressed`).
+        id: String,
+        /// An Input runs.
+        #[serde(default)]
+        enabled: Option<bool>,
+        /// Option values by property.
+        #[serde(default)]
+        options: Option<Map<String, Value>>,
+        /// An Input's chain of Actions (script ids).
+        #[serde(default)]
+        actions: Option<Vec<String>>,
+    },
+    /// Run a macro Action now.
+    RunMacro {
+        /// Script id.
+        id: String,
+    },
+    /// Answer a macro's `system.prompt` (`text` absent: cancelled).
+    AnswerPrompt {
+        /// Prompt id.
+        id: u64,
+        /// What the user typed.
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// Put a device in one of its hardware modes (`mode`), or back on the
+    /// effect (`None`). Live only: kept by Lightloom, never stored in the device.
+    SetHardwareMode {
+        /// Device key.
+        key: String,
+        /// The mode; `None`: follow the effect.
+        #[serde(default)]
+        mode: Option<DeviceHardwareMode>,
+    },
+    /// Save the whole lighting setup as a profile (created or replaced).
+    SaveProfile {
+        /// Profile name.
+        name: String,
+    },
+    /// A profile document (read-only; what an export file holds).
+    GetProfile {
+        /// Profile name.
+        name: String,
+    },
+    /// Apply a profile: effect and values, brightness, layout, device settings.
+    ApplyProfile {
+        /// Profile name.
+        name: String,
+    },
+    /// Delete a profile.
+    DeleteProfile {
+        /// Profile name.
+        name: String,
+    },
+    /// Rename a profile.
+    RenameProfile {
+        /// Current name.
+        name: String,
+        /// New name.
+        to: String,
+    },
+    /// Copy a profile under a new name.
+    DuplicateProfile {
+        /// Profile to copy.
+        name: String,
+        /// The copy's name.
+        to: String,
+    },
+    /// Add a profile from an exported document; answers with the name it got
+    /// (`name`, else the document's, made unique).
+    ImportProfile {
+        /// The document.
+        profile: Value,
+        /// Name to give it.
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// The profile applied when Lightloom starts (`None` or `""`: none).
+    SetDefaultProfile {
+        /// Profile name.
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// Enumerate devices again now.
     Rescan,
     /// Stop the daemon (every plugin restores its device first).
@@ -343,10 +1427,17 @@ impl Request {
             Request::SavePreset { .. } => "savePreset",
             Request::ApplyPreset { .. } => "applyPreset",
             Request::DeletePreset { .. } => "deletePreset",
+            Request::ShuffleEffect => "shuffleEffect",
             Request::StepEffect { .. } => "stepEffect",
             Request::SetLighting { .. } => "setLighting",
             Request::SetDevice { .. } => "setDevice",
+            Request::SaveToDevices { .. } => "saveToDevices",
             Request::SetChannel { .. } => "setChannel",
+            Request::SetLcd { .. } => "setLcd",
+            Request::LedMap { .. } => "ledMap",
+            Request::SetLeds { .. } => "setLeds",
+            Request::SaveLedZone { .. } => "saveLedZone",
+            Request::DeleteLedZone { .. } => "deleteLedZone",
             Request::SetPlacement { .. } => "setPlacement",
             Request::ApplyLayout { .. } => "applyLayout",
             Request::SaveLayoutAs { .. } => "saveLayoutAs",
@@ -355,11 +1446,40 @@ impl Request {
             Request::CanvasEvent { .. } => "canvasEvent",
             Request::CanvasTap { .. } => "canvasTap",
             Request::SetSettings { .. } => "setSettings",
+            Request::SetInputs { .. } => "setInputs",
+            Request::NetworkAdd { .. } => "networkAdd",
+            Request::NetworkAction { .. } => "networkAction",
             Request::ImportSignalRgb { .. } => "importSignalRgb",
+            Request::PreviewSignalRgb { .. } => "previewSignalRgb",
             Request::GetLayout { .. } => "getLayout",
             Request::ListComponents => "listComponents",
             Request::Export => "export",
             Request::Import { .. } => "import",
+            Request::PawnIoStatus => "pawnIoStatus",
+            Request::PawnIoSetup { .. } => "pawnIoSetup",
+            Request::SavePlaylist { .. } => "savePlaylist",
+            Request::DeletePlaylist { .. } => "deletePlaylist",
+            Request::PlayPlaylist { .. } => "playPlaylist",
+            Request::StopPlaylist => "stopPlaylist",
+            Request::SetEffectTimer { .. } => "setEffectTimer",
+            Request::LoadEffect { .. } => "loadEffect",
+            Request::EffectImage { .. } => "effectImage",
+            Request::Action { .. } => "action",
+            Request::SetUrlScheme { .. } => "setUrlScheme",
+            Request::Macros => "macros",
+            Request::SetMacros { .. } => "setMacros",
+            Request::SetMacro { .. } => "setMacro",
+            Request::RunMacro { .. } => "runMacro",
+            Request::AnswerPrompt { .. } => "answerPrompt",
+            Request::SetHardwareMode { .. } => "setHardwareMode",
+            Request::SaveProfile { .. } => "saveProfile",
+            Request::GetProfile { .. } => "getProfile",
+            Request::ApplyProfile { .. } => "applyProfile",
+            Request::DeleteProfile { .. } => "deleteProfile",
+            Request::RenameProfile { .. } => "renameProfile",
+            Request::DuplicateProfile { .. } => "duplicateProfile",
+            Request::ImportProfile { .. } => "importProfile",
+            Request::SetDefaultProfile { .. } => "setDefaultProfile",
             Request::Rescan => "rescan",
             Request::Shutdown => "shutdown",
         }
@@ -370,7 +1490,13 @@ impl Request {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
-    /// `state` (the snapshot changed), `stats` (counters only) or `log`.
+    /// `state` (the snapshot changed), `stats` (counters only), `log`,
+    /// `battery` (a low or critical battery alert: `{key, name, level, severity}`)
+    /// or `action` (an action URL for the dashboard: `{action: "view", page, tab, uid}`,
+    /// `{action: "raiseWindow"}` or `{action: "toast", title, message}`; a macro's
+    /// `system.prompt`: `{action: "prompt", id, script, title, message, placeholder,
+    /// confirmText, cancelText}`, answered with `POST /v1/macros/prompts/{id}`),
+    /// or `macros` (the macro runtime changed: the view of `GET /v1/macros`).
     pub kind: String,
     /// Event payload (`log`: the line).
     #[serde(default, skip_serializing_if = "Value::is_null")]
@@ -467,6 +1593,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn profile_device_settings_keep_keys_this_build_does_not_know() {
+        let text = r##"{"enabled":false,"parameters":{"mode":"Forced"},"laterSetting":{"0":"#ff0000"},"hardwareMode":{"id":"rainbow","colors":[],"speed":10}}"##;
+        let d: ProfileDevice = serde_json::from_str(text).unwrap();
+        assert_eq!(d.enabled, Some(false));
+        assert_eq!(d.hardware_mode.as_ref().unwrap().speed, Some(10));
+        assert_eq!(d.extra["laterSetting"]["0"], "#ff0000");
+        let back = serde_json::to_value(&d).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(text).unwrap());
+    }
+
+    #[test]
     fn requests_are_tagged_by_op() {
         let r: Request = serde_json::from_str(r#"{"op":"applyEffect","id":"lightloom:plasma"}"#).unwrap();
         assert_eq!(
@@ -482,6 +1619,13 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Request::StepEffect { previous: true }).unwrap(),
             serde_json::json!({"op": "stepEffect", "previous": true})
+        );
+        assert_eq!(
+            serde_json::to_value(Request::PawnIoSetup {
+                action: PawnIoAction::Remove
+            })
+            .unwrap(),
+            serde_json::json!({"op": "pawnIoSetup", "action": "remove"})
         );
     }
 }

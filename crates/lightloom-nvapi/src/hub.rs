@@ -23,11 +23,12 @@
 
 use crate::bus::NvapiBus;
 use crate::info::I2cPlan;
+use crate::sensors::GpuSensors;
 use crate::NvapiError;
 use lightloom_hal::smbus::{PciIds, SmbusBusDescriptor, SmbusBusKind, SMBUS_BLOCK_MAX};
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 /// How long a request may wait in the worker's queue before it is dropped.
@@ -86,6 +87,11 @@ pub trait I2cTransport {
     /// (`plan.data.len()` bytes).
     fn transfer(&mut self, gpu: &GpuInfo, addr: u8, plan: &I2cPlan, out: &mut [u8])
         -> Result<(), NvapiError>;
+    /// The read-only sensors of card `gpu` ([`crate::sensors`]).
+    fn sensors(&mut self, gpu: &GpuInfo) -> Result<GpuSensors, NvapiError> {
+        let _ = gpu;
+        Err(NvapiError::Unsupported("sensors"))
+    }
 }
 
 /// What a request asks of the worker.
@@ -100,6 +106,20 @@ pub(crate) enum Job {
         /// The transfer.
         plan: I2cPlan,
     },
+    /// Read the card's sensors (temperature, load, fan, clocks).
+    Sensors {
+        /// The card.
+        gpu: GpuInfo,
+    },
+}
+
+/// What the worker answers.
+#[derive(Debug)]
+pub(crate) enum Reply {
+    /// The bytes a transfer read (empty for writes).
+    Bytes(Vec<u8>),
+    /// A card's sensors.
+    Sensors(GpuSensors),
 }
 
 /// A request to the worker thread.
@@ -107,7 +127,7 @@ pub(crate) struct Request {
     pub job: Job,
     /// The caller stops waiting then: a request still queued is dropped.
     pub deadline: Instant,
-    pub reply: Sender<Result<Vec<u8>, NvapiError>>,
+    pub reply: Sender<Result<Reply, NvapiError>>,
 }
 
 /// Owner of the NvAPI worker thread.
@@ -165,9 +185,33 @@ impl NvapiHub {
         Ok(Self { gpus, tx })
     }
 
+    /// The process-wide hub: the running one when somebody still holds it
+    /// (the SMBus buses, the sensors), else a new one. One NvAPI worker
+    /// thread per process, whoever needs it.
+    pub fn shared() -> Result<Arc<Self>, NvapiError> {
+        static SHARED: Mutex<Weak<NvapiHub>> = Mutex::new(Weak::new());
+        let mut slot = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hub) = slot.upgrade() {
+            return Ok(hub);
+        }
+        let hub = Arc::new(Self::start()?);
+        *slot = Arc::downgrade(&hub);
+        Ok(hub)
+    }
+
     /// The GPUs found.
     pub fn gpus(&self) -> &[GpuInfo] {
         &self.gpus
+    }
+
+    /// The worker's queue.
+    pub(crate) fn sender(&self) -> &Sender<Request> {
+        &self.tx
+    }
+
+    /// The GPUs' read-only sensors on this hub's worker.
+    pub fn sensors(self: &Arc<Self>) -> crate::sensors::NvapiSensors {
+        crate::sensors::NvapiSensors::new(Arc::clone(self))
     }
 
     /// One SMBus bus per GPU (port 1 of each).
@@ -202,8 +246,11 @@ fn serve<T: I2cTransport>(transport: &mut T, rx: &Receiver<Request>) {
         let result = match req.job {
             Job::Transfer { gpu, addr, plan } => {
                 let mut out = vec![0u8; if plan.write { 0 } else { plan.data.len() }];
-                transport.transfer(&gpu, addr, &plan, &mut out).map(|()| out)
+                transport
+                    .transfer(&gpu, addr, &plan, &mut out)
+                    .map(|()| Reply::Bytes(out))
             }
+            Job::Sensors { gpu } => transport.sensors(&gpu).map(Reply::Sensors),
         };
         let _ = req.reply.send(result);
     }
@@ -230,6 +277,7 @@ pub struct FakeTransfer {
 pub struct FakeNvI2c {
     gpus: Vec<GpuInfo>,
     devices: BTreeMap<(usize, u8), BTreeMap<u8, u8>>,
+    sensors: BTreeMap<usize, GpuSensors>,
     fail: Option<i32>,
     log: Arc<Mutex<Vec<FakeTransfer>>>,
 }
@@ -250,7 +298,13 @@ impl FakeNvI2c {
         self
     }
 
-    /// Every transfer fails with NvAPI status `status`.
+    /// GPU `gpu` reports `sensors` (the others report none).
+    pub fn with_sensors(mut self, gpu: usize, sensors: GpuSensors) -> Self {
+        self.sensors.insert(gpu, sensors);
+        self
+    }
+
+    /// Every transfer and sensor read fails with NvAPI status `status`.
     pub fn fail_with(mut self, status: i32) -> Self {
         self.fail = Some(status);
         self
@@ -299,6 +353,14 @@ impl I2cTransport for FakeNvI2c {
             }
         }
         Ok(())
+    }
+
+    fn sensors(&mut self, card: &GpuInfo) -> Result<GpuSensors, NvapiError> {
+        let gpu = locate(&self.gpus, card)?;
+        if let Some(status) = self.fail {
+            return Err(NvapiError::Status(status));
+        }
+        Ok(self.sensors.get(&gpu).cloned().unwrap_or_default())
     }
 }
 

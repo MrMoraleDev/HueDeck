@@ -89,6 +89,16 @@ Imported as default (`import serial from "@SignalRGB/serial"`, 7 files: Turzx_LC
 - `serial.read(maxBytes?, timeoutMs?=1000) → int[]|null` (`Turzx_Screen_21_Controller.js:138` `Serial.read(23) ?? []`); `serial.readAll()` (docs).
 - `serial.availablePorts() → {portName, vendorId:int, productId:int, ...}[]` (`Hyte_CNVS_Mousepad.js:47-55`).
 - `serial.getDeviceInfo(portName?) → object` (VID/PID/port; `Hyte:108`, `Turzx_Screen_21:117`, `Nollie8:59`); `getPortName()`, `getBaudRate()` (docs).
+- **Lightloom implementation** (`crates/lightloom-plugin-host/src/serial.rs`, `js/host.js` `serialModule`; HAL `lightloom_hal::serial`, Windows `lightloom-hal-windows/src/serial.rs`, Linux `lightloom-hal-linux/src/tty.rs`):
+  - Matching: the OS list of serial ports (SetupAPI on Windows, `/sys/class/tty` on Linux; never opened to enumerate) is grouped by USB device (`vid`, `pid`, USB serial number, else the port name); a group whose VID:PID a `Type() == "serial"` plugin owns (last scanned wins, as for HID) becomes a device with key `vid:pid:<serial>`. A HID device with the same VID:PID is not offered to that plugin.
+  - `Validate(endpoint)` is called once per port of the device with `{interface: <USB interface of the port, 0 when unknown>, usage: 0, usage_page: 0, collection: 0}`; the first accepted port is the one `connect()` binds without `portName`. No port accepted: the session faults.
+  - Shared resources: only the device's own ports can be opened. `connect({portName})` naming any other port returns `false` (logged, counted as `refused`); `availablePorts()` lists the device's own ports only. Lightloom never writes to a port it was not asked to by the plugin that owns it.
+  - `connect` defaults: `baudRate` 115200, `dataBits` 8, `stopBits` `"One"`, `parity` `"None"`, no flow control, DTR asserted. `stopBits: "OneAndHalf"` and `parity: "Mark" | "Space"` are not supported by the backends: `connect` returns `false` with a log line. Calling `connect` again closes the open port first.
+  - `write(bytes | Uint8Array | ArrayBuffer | string)` returns the bytes written (up to 1 MiB per call), `0` on failure. `read(maxBytes?, timeoutMs = 1000)` returns an array (empty on timeout, never `null`): with `maxBytes` it waits until that many bytes arrived or the time is up; without, it returns what is waiting or the first bytes that arrive. The wait is capped at 5000 ms and ends early on a stop request. `readAll()` is `read()` without waiting.
+  - `getDeviceInfo(portName?)` and `availablePorts()` entries: `{portName, vendorId, productId, deviceId, serialNumber, manufacturer, product, interface}`; `deviceId` is the USB serial number, else the port name. `getDeviceInfo()` describes the open port, else the default one; `undefined` for a port of another device. `getPortName()` is `""` and `getBaudRate()` `0` while nothing is open.
+  - A port that goes away (unplug) fails the operation, is closed, and `isConnected()` turns `false`, so the usual reconnect in `Render()` works after a replug.
+  - Dry run (`WriteMode::DryRun`): the port is opened and reads reach the device, every write is recorded (session report `serial.io_log`) and reported as sent, never sent.
+  - `Render()` runs at most every 33 ms for serial devices. Serial ports are not watched for hotplug yet: they are found when the device list is enumerated (start, or a HID hotplug event).
 - Other module APIs seen in serial/LCD plugins: `LCD.initialize({width,height,circularPreview?})`, `LCD.getFrame({format:"RGB"|"RGB565"|"JPEG"|"NZXT::Q565"|"NZXT::RGB565"})`, `DeviceDiscovery.foundVirtualDevice({type,name,supported:false,vendorId})` (unsupported-model report), `permissions.setCallback(fn)`/`permissions.permissions()` → `{ "Lian-Li": {fans:bool, lighting:bool, macros:bool} }`.
 
 ## 4. The `hybrid` model (11 files)
@@ -117,6 +127,61 @@ Values (call sites): `"battery"` 46, `"keyboard"` 18, `"mouse"` 10, `"udp"` 5, `
 - `keyboard.sendHid(vkCode:int, {released:bool})` — inject OS key (Windows VK) (`BUND\Corsair\Modern_Corsair\Corsair_Bragi_Device.js:421`); `keyboard.sendKey(keyName:string, {released})` (`Corsair_Vanguard_96_Input_Protocol.js:153`, with `type:"keycode"` properties); `keyboard.sendEvent({key:string, keyCode:int, released:bool}, "Key Press")` — macro-system event only (`BUND\Hyte\Hyte_Keeb_TKL_Keyboard.js:117`).
 - `mouse.sendHid(MOUSEEVENTF flag, {XButton?, WheelDelta?})` (docs; 0 corpus uses); `mouse.sendEvent({button:"LeftClick"...}, "Button Press")` (`BUND\Razer\Razer_Modern_Mouse.js:360`).
 - `udp.send(ip, port, bytes[, BIG_ENDIAN])`, `udp.createSocket()`; `dtls.createConnection(ip, 2100, username, psk)`, `dtls.send(bytes)`, `dtls.CloseConnection()`, callbacks `onConnectionEstablished/Closed/Error(fn)` (PhilipsHue); `base64.Encode(bytes)→string`, `base64.Decode(string)→bytes` (Twinkly/Govee).
+
+### 7.1 The `battery` feature in Lightloom
+
+`device.addFeature("battery")` (idempotent) installs the `battery` global; in a device session
+it also marks the device as having a battery (level unknown until set).
+
+| member | Lightloom behaviour |
+|---|---|
+| `setBatteryLevel(level)` | `Number(level)`, rounded, clamped to 0..100; a non-finite value is ignored. |
+| `setBatteryState(state)` | `Math.trunc(Number(state))`; 0..5 kept, anything else stored as 0. |
+| `batteryLevel` | last level, 0 before the first `setBatteryLevel`. |
+| `batteryState` | last state number. |
+| `stateString` | `Unknown`, `Draining`, `Charging`, `Full (charging)`, `Full`, `Wireless charging`. |
+| `lowBatteryWarningLevel` | the user's low-battery threshold (Settings, default 15); updates live. |
+| `unknown` `draining` `charging` `fullCharging` `full` `wirelessCharging` | 0, 1, 2, 3, 4, 5. `disabled` is 0 (no corpus use, number unknown). |
+
+States 2, 3, 4 and 5 count as "on power". Each setter call stamps the report with the wall
+clock. Natives: `batteryEnable`, `batterySetLevel`, `batterySetState`, `batteryGet`
+(`crates/lightloom-plugin-host/src/device.rs`); the session publishes the report
+(`LiveSnapshot::battery`, `SessionReport::battery`); the dry-run report lists `battery`
+(`{level, state}`) for plugins that added the feature.
+
+Plugins should poll their device rarely (every 30-60 s) and call the setters when a value
+changes; polling inside `Render()` must stay within the frame budget (short reads, one query per
+frame).
+
+**What the daemon does with it** (`crates/lightloom-daemon/src/battery.rs`, device-agnostic):
+
+- `DeviceView.battery` = `{level, state, charging, status, updatedMs}`; `state` is `unknown`,
+  `discharging`, `charging`, `fullCharging`, `full` or `wirelessCharging`; `status` is `ok`,
+  `low` or `critical`. The last report is kept after the device goes away.
+- A device not on power at or below the low threshold (`settings.batteryLow`, default 15 %) is
+  low, at or below `settings.batteryCritical` (default 5 %) critical. While that lasts the
+  snapshot carries a warning (the dashboard banner) and the badge turns amber or red.
+- Alerts: once per discharge cycle at low and once at critical (a critical alert also uses up
+  the low one). An alert re-arms when the device is on power or back at its threshold + 5
+  points. An alert is a log line, a WebSocket event `{kind: "battery", data: {key, name, level,
+  severity}}` and, when `settings.batteryNotifications` is on (default), a system notification.
+- `PATCH /v1/settings {batteryLow, batteryCritical, batteryNotifications}`: `1 <= batteryLow <=
+  95`, `batteryCritical < batteryLow`, else 400. `notificationsAvailable` tells the dashboard
+  whether this OS has a notifier.
+- `PATCH /v1/devices/{key} {blinkLowBattery: true}` (default off): while that device is low or
+  critical the engine overrides every LED of the device, its subdevices and its channel
+  components with red pulsing over 1.6 s (15-100 %), regardless of forced colours and
+  brightness sliders (`Control::Alert`, `DeviceContext::set_alert`).
+
+**System notifications.** `lightloom_hal::Notifier` is the platform trait. Windows: toasts
+(`lightloom-hal-windows/src/toast.rs`, `ToastNotificationManager::CreateToastNotifierWithId`)
+under the AppUserModelID `Lightloom.Lightloom`. Lightloom has no package identity and, as a portable
+app, no Start-menu shortcut, so the least invasive registration is one per-user key written
+just before the first toast (no administrator rights):
+`HKCU\Software\Classes\AppUserModelId\Lightloom.Lightloom`, value `DisplayName = Lightloom`. Delete
+the key to undo it. Each toast is shown from its own short-lived thread. Other OSes get
+`NoNotifier` for now (Linux: libnotify / `org.freedesktop.Notifications` later, behind the
+same trait).
 
 
 ## 8. Lightloom extensions for generic HID drivers
@@ -289,3 +354,48 @@ assumptions above (interface -1 for MI-less paths, 0-based collection index).
 - **Linux (M7)**: hidraw tuples must follow the same rules: collection 0 for a single-TLC
   interface, otherwise the 1-based TLC index in report-descriptor order (`lightloom-hid-desc`);
   interface 0 for non-composite USB, -1 for Bluetooth.
+
+## Raw USB in Lightloom (`rawusb`, `hybrid`, `setProtocol`)
+
+Implemented on `feature/rawusb` (WP-USB). The SignalRGB contract of §2 and §4, with the open
+questions of the critic pass settled as follows.
+
+- **Transport.** Windows: WinUSB through `nusb` (`lightloom_hal_windows::WinUsbBackend`). Lightloom
+  ships no INF and never installs, generates or swaps a driver (`docs/research/drivers.md` §2.4).
+  Only interfaces whose driver is `WinUSB` are claimed; an interface bound to anything else (HID,
+  audio, mass storage, a vendor driver) is never touched. A device with no WinUSB interface is
+  listed as **needs-driver** in the device list, with the reason (`driverProblem`) and a link to
+  [`docs/hardware/winusb.md`](../hardware/winusb.md) (`helpUrl`); its `rawusb` plugin does not run.
+- **Devices.** USB devices are enumerated next to the HID collections and joined to them by USB
+  parent (the HID group's parent instance id is the USB device's instance id). A USB device with
+  no HID collection becomes a device of its own when a `rawusb` plugin owns its VID:PID, keyed
+  `vid:pid:<instance-id serial>` like HID groups. Hotplug also watches the USB device interface
+  class, so such devices arrive and leave like HID ones.
+- **Sessions.** `Type() == "rawusb"`: no `Validate`, no HID collection; the USB device opens
+  before `Initialize` (failure faults the session: "needs WinUSB driver: …"). `"hybrid"`: the
+  validated HID collection opens as for HID plugins, then the USB device; without it HID I/O
+  goes on and transfers fail (a session note says why). `setProtocol("hybrid")` opens the USB
+  side of any session whose device has one, `setProtocol("hid")` closes it (a `rawusb` plugin
+  ignores both).
+- **`device.bulk_transfer(endpoint, data, length[, timeout])`.** Bit 7 of `endpoint` decides.
+  IN (`>= 0x80`): `length` is the buffer size; returns the bytes received (`getLastReadSize()` of
+  them), `[]` on timeout or failure. OUT: sends `data` zero-padded or cut to `length`; returns the
+  bytes sent, `-1` on failure. Interrupt endpoints work the same way. The interface owning the
+  endpoint is claimed on first use.
+- **`device.control_transfer(bmRequestType, bRequest, wValue, wIndex, data, length, timeout)`.**
+  IN (`bmRequestType & 0x80`): returns the data stage, `[]` on timeout or failure. OUT: returns
+  the bytes sent or `-1`. The request goes through the addressed interface (recipient interface:
+  `wIndex` low byte; endpoint: the endpoint's interface) or, for device requests, the first
+  WinUSB interface. Standard OUT requests (`SET_ADDRESS`, `SET_CONFIGURATION`, `SET_FEATURE`, …)
+  are refused: they change the device's USB state, not its lighting.
+- **Timeouts.** Default 1000 ms when the argument is missing or negative, capped at 5000 ms (as
+  HID reads) so a stop request still leaves time for `Shutdown()`. Nothing throws: failures are
+  counted (`usb_write_errors`, `usb_read_errors`; IN timeouts in `usb_timeouts`, not errors) and
+  logged once per kind.
+- **Dry run.** OUT transfers are recorded in the session's I/O log (`BulkOut`: `[endpoint, data…]`,
+  `ControlOut`: the 8-byte setup packet then the data) and reported as sent; IN transfers still
+  reach the device.
+- **Tests.** `lightloom_hal::mock::MockUsb` scripts bulk IN data per endpoint and control IN
+  answers, times out IN transfers without data, refuses foreign interfaces and records every
+  transfer (`UsbClaim`, `BulkOut`, `BulkIn`, `ControlOut`, `ControlIn`). Session tests:
+  `crates/lightloom-plugin-host/tests/session_rawusb.rs` with `testdata/device/{rawusb,hybrid}.js`.

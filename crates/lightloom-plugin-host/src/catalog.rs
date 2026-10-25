@@ -3,7 +3,9 @@
 //!
 //! [`Catalog::scan`] loads every candidate `*.js` file under the given
 //! directories in an isolated runtime with the recording stub host, reads its
-//! metadata exports and indexes HID plugins by `(vid, pid)`. Directories are
+//! metadata exports and indexes HID and serial plugins by `(vid, pid)` (a
+//! serial plugin owns the USB serial device with that VID:PID, never a HID
+//! device: [`Catalog::lookup_serial`], [`Catalog::lookup_device`]). Directories are
 //! scanned in the order given and files in sorted order, so SignalRGB's *last
 //! scanned wins* rule ([`PluginIndex`]) lets a later directory override an
 //! earlier one. No plugin lifecycle function runs here.
@@ -41,7 +43,7 @@ use std::time::{Duration, UNIX_EPOCH};
 const SKIP_DIRS: &[&str] = &["tests", "test", "fixtures", "_testkit", "node_modules", ".git"];
 
 /// Bumped whenever what the cache stores (or how metadata is read) changes.
-const INDEX_VERSION: u32 = 5;
+const INDEX_VERSION: u32 = 7;
 
 /// One discovered plugin.
 #[derive(Clone, Debug)]
@@ -246,7 +248,7 @@ impl Catalog {
         for ((root, file, _), loaded) in files.iter().zip(results) {
             match loaded.map(accept) {
                 Some(Ok(meta)) => {
-                    if meta.plugin_type != PluginType::Smbus {
+                    if !matches!(meta.plugin_type, PluginType::Smbus | PluginType::Network) {
                         catalog.index.insert(&meta);
                     }
                     catalog.entries.push(CatalogEntry {
@@ -298,6 +300,21 @@ impl Catalog {
         self.stats
     }
 
+    /// The network plugins, in scan order; of two with the same `Name()` the
+    /// later scanned one is kept (its service and settings are keyed by name).
+    pub fn network_plugins(&self) -> Vec<&CatalogEntry> {
+        let all: Vec<&CatalogEntry> = self
+            .entries
+            .iter()
+            .filter(|e| e.meta.plugin_type == PluginType::Network)
+            .collect();
+        all.iter()
+            .enumerate()
+            .filter(|(i, e)| !all[i + 1..].iter().any(|l| l.meta.name == e.meta.name))
+            .map(|(_, e)| *e)
+            .collect()
+    }
+
     /// The SMBus plugins, in scan order.
     pub fn smbus_plugins(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries
@@ -332,16 +349,35 @@ impl Catalog {
     /// scanned plugin whose `HidUsages()` names the usage page and usage of
     /// one of the device's HID collections (a generic driver, e.g. HID
     /// LampArray).
+    /// A serial plugin owning `(vid, pid)` is not a HID driver: the device is
+    /// left to [`Catalog::lookup_serial`].
     pub fn lookup_device(&self, vid: u16, pid: u16, endpoints: &[HidEndpointInfo]) -> Option<&CatalogEntry> {
-        self.lookup(vid, pid).or_else(|| {
-            self.entries.iter().rev().find(|e| {
-                e.meta.hid_usages.iter().any(|[page, usage]| {
-                    endpoints
-                        .iter()
-                        .any(|ep| ep.usage_page == *page && ep.usage == *usage)
-                })
+        if let Some(owner) = self.lookup(vid, pid) {
+            return (owner.meta.plugin_type != PluginType::Serial).then_some(owner);
+        }
+        self.entries.iter().rev().find(|e| {
+            e.meta.hid_usages.iter().any(|[page, usage]| {
+                endpoints
+                    .iter()
+                    .any(|ep| ep.usage_page == *page && ep.usage == *usage)
             })
         })
+    }
+}
+
+impl Catalog {
+    /// The serial plugin owning the USB serial device `(vid, pid)` under the
+    /// last-scanned-wins rule (`None` when the owner is not a serial plugin).
+    pub fn lookup_serial(&self, vid: u16, pid: u16) -> Option<&CatalogEntry> {
+        self.lookup(vid, pid)
+            .filter(|e| e.meta.plugin_type == PluginType::Serial)
+    }
+
+    /// Whether some serial plugin claims a VID:PID (no serial enumeration is needed otherwise).
+    pub fn has_serial_plugins(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.meta.plugin_type == PluginType::Serial)
     }
 }
 
@@ -372,8 +408,9 @@ fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
         Loaded::Meta(meta) => *meta,
         Loaded::Failed(why) => return Err(why),
     };
-    // Hybrid plugins also need libusb bulk/control transfers, which device
-    // sessions do not provide yet: refusing them beats faking that I/O.
+    // rawusb and hybrid plugins get WinUSB bulk/control transfers (a device
+    // without WinUSB is reported as needing it); serial plugins have no
+    // device session yet.
     match meta.plugin_type {
         PluginType::Smbus => {
             if meta.smbus_addresses.is_empty() {
@@ -395,13 +432,20 @@ fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
             }
             Ok(meta)
         }
+        PluginType::Network => {
+            if !meta.lifecycle.discovery_service || !meta.lifecycle.is_device() {
+                return Err(
+                    "network plugin without DiscoveryService, Initialize() and Render() exports".into(),
+                );
+            }
+            Ok(meta)
+        }
         _ if (meta.product_ids.is_empty() || meta.vendor_id == 0) && meta.hid_usages.is_empty() => {
             Err("no VendorId/ProductId exports (helper module?)".into())
         }
-        PluginType::Hid => Ok(meta),
-        other => Err(format!(
-            "plugin type {other:?} is not supported by device sessions yet"
-        )),
+        PluginType::Hid | PluginType::RawUsb | PluginType::Hybrid => Ok(meta),
+        // Bound to the COM / tty ports of the matched USB device (crate::serial).
+        PluginType::Serial => Ok(meta),
     }
 }
 

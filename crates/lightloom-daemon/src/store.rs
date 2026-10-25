@@ -9,6 +9,7 @@
 //! byte (everything is ordered by key).
 
 use anyhow::{bail, Context};
+use lightloom_api::model::{Playlist, Profile};
 use lightloom_engine::{Layout, Placement};
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
@@ -19,7 +20,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Schema, oldest first. Never edit a released migration; append a new one.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE kv (
     key   TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
@@ -71,7 +73,45 @@ CREATE TABLE presets (
     params   TEXT NOT NULL,
     PRIMARY KEY (effect, name)
 );
-"#];
+"#,
+    r#"
+CREATE TABLE plugin_settings (
+    plugin TEXT NOT NULL,
+    id     TEXT NOT NULL,
+    key    TEXT NOT NULL,
+    value  TEXT NOT NULL,
+    PRIMARY KEY (plugin, id, key)
+);
+"#,
+    r#"
+CREATE TABLE playlists (
+    id         TEXT PRIMARY KEY NOT NULL,
+    name       TEXT NOT NULL,
+    shuffle    INTEGER NOT NULL DEFAULT 0,
+    entries    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"#,
+    // Per-LED custom colours, mode and zones of each endpoint (store/leds.rs).
+    r#"
+CREATE TABLE custom_leds (
+    uid    TEXT PRIMARY KEY NOT NULL,
+    device TEXT NOT NULL,
+    state  TEXT NOT NULL
+);
+"#,
+    r#"
+CREATE TABLE profiles (
+    name       TEXT PRIMARY KEY NOT NULL,
+    data       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"#,
+];
+
+mod leds;
+pub use leds::CustomLedsRow;
 
 /// `format` of an export document.
 pub const EXPORT_FORMAT: &str = "lightloom-state";
@@ -132,6 +172,19 @@ pub struct StateExport {
     pub channels: BTreeMap<String, BTreeMap<String, Value>>,
     /// Effect state by effect id.
     pub effects: BTreeMap<String, EffectState>,
+    /// Effect playlists, by id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub playlists: Vec<Playlist>,
+    /// Network plugin settings (`service.saveSetting`): plugin -> id -> key -> value.
+    /// They may hold pairing keys (Hue user names, Nanoleaf tokens).
+    #[serde(default, rename = "pluginSettings")]
+    pub plugin_settings: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
+    /// Profiles, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<Profile>,
+    /// Per-LED custom colours, mode and zones, by endpoint uid.
+    #[serde(default, rename = "customLeds", skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_leds: BTreeMap<String, CustomLedsRow>,
 }
 
 /// The database.
@@ -464,12 +517,196 @@ impl Store {
         Ok(())
     }
 
+    /// The SignalRGB import's effect mapping: each effect's control values are
+    /// merged into the stored ones and its presets created or replaced, all in
+    /// one transaction (nothing is written when one fails). Returns how many
+    /// control values and presets were written.
+    pub fn merge_effects(
+        &mut self,
+        effects: &BTreeMap<String, EffectState>,
+    ) -> anyhow::Result<(usize, usize)> {
+        let tx = self.conn.transaction()?;
+        let (mut values, mut presets) = (0, 0);
+        for (effect, state) in effects {
+            for (name, value) in &state.params {
+                tx.execute(
+                    "INSERT INTO effect_params (effect, name, value) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(effect, name) DO UPDATE SET value = excluded.value",
+                    params![effect, name, to_json(value)?],
+                )?;
+                values += 1;
+            }
+            for (name, preset) in &state.presets {
+                tx.execute(
+                    "INSERT INTO presets (effect, name, params) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(effect, name) DO UPDATE SET params = excluded.params",
+                    params![effect, name, to_json(preset)?],
+                )?;
+                presets += 1;
+            }
+        }
+        tx.commit()?;
+        Ok((values, presets))
+    }
+
     /// Delete a preset; `false` when there was none.
     pub fn delete_preset(&self, effect: &str, name: &str) -> anyhow::Result<bool> {
         Ok(self.conn.execute(
             "DELETE FROM presets WHERE effect = ?1 AND name = ?2",
             [effect, name],
         )? > 0)
+    }
+
+    // ----------------------------------------------------------------- playlists
+
+    /// Every playlist, by id.
+    pub fn playlists(&self) -> anyhow::Result<Vec<Playlist>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, shuffle, entries, updated_at FROM playlists ORDER BY id")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, name, shuffle, entries, updated_at)| {
+                Ok(Playlist {
+                    entries: serde_json::from_str(&entries)
+                        .with_context(|| format!("entries of playlist {id}"))?,
+                    id,
+                    name,
+                    shuffle: shuffle != 0,
+                    updated_at,
+                })
+            })
+            .collect()
+    }
+
+    /// The playlist `id`.
+    pub fn playlist(&self, id: &str) -> anyhow::Result<Option<Playlist>> {
+        Ok(self.playlists()?.into_iter().find(|p| p.id == id))
+    }
+
+    /// Create or replace a playlist (`updated_at` is set now); answers with it.
+    pub fn save_playlist(&self, playlist: &Playlist) -> anyhow::Result<Playlist> {
+        let mut p = playlist.clone();
+        p.updated_at = now();
+        Self::insert_playlist(&self.conn, &p)?;
+        Ok(p)
+    }
+
+    fn insert_playlist(conn: &Connection, p: &Playlist) -> anyhow::Result<()> {
+        if p.id.is_empty() {
+            bail!("a playlist needs an id");
+        }
+        conn.execute(
+            "INSERT INTO playlists (id, name, shuffle, entries, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, shuffle = excluded.shuffle,
+                 entries = excluded.entries, updated_at = excluded.updated_at",
+            params![p.id, p.name, p.shuffle as i64, to_json(&p.entries)?, p.updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a playlist; `false` when there was none.
+    pub fn delete_playlist(&self, id: &str) -> anyhow::Result<bool> {
+        Ok(self.conn.execute("DELETE FROM playlists WHERE id = ?1", [id])? > 0)
+    }
+
+    // ------------------------------------------------------------------ profiles
+
+    /// Every profile, by name.
+    pub fn profiles(&self) -> anyhow::Result<Vec<Profile>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, data, created_at, updated_at FROM profiles ORDER BY name")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(name, data, created_at, updated_at)| {
+                let mut p: Profile =
+                    serde_json::from_str(&data).with_context(|| format!("profile {name}"))?;
+                p.name = name;
+                p.created_at = created_at;
+                p.updated_at = updated_at;
+                Ok(p)
+            })
+            .collect()
+    }
+
+    /// The profile `name`.
+    pub fn profile(&self, name: &str) -> anyhow::Result<Option<Profile>> {
+        Ok(self.profiles()?.into_iter().find(|p| p.name == name))
+    }
+
+    /// Create or replace a profile: `updated_at` is now, `created_at` the existing
+    /// profile's (or the given one, or now). Answers with it as stored.
+    pub fn save_profile(&self, profile: &Profile) -> anyhow::Result<Profile> {
+        if profile.name.trim().is_empty() {
+            bail!("a profile needs a name");
+        }
+        let mut p = profile.clone();
+        let t = now();
+        let existing: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT created_at FROM profiles WHERE name = ?1",
+                [&p.name],
+                |r| r.get(0),
+            )
+            .optional()?;
+        p.created_at = existing
+            .or_else(|| (!p.created_at.is_empty()).then(|| p.created_at.clone()))
+            .unwrap_or_else(|| t.clone());
+        p.updated_at = t;
+        Self::insert_profile(&self.conn, &p)?;
+        Ok(p)
+    }
+
+    fn insert_profile(conn: &Connection, p: &Profile) -> anyhow::Result<()> {
+        conn.execute(
+            "INSERT INTO profiles (name, data, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(name) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+            params![p.name, to_json(p)?, p.created_at, p.updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Rename a profile; `false` when there was none. The new name must be free.
+    pub fn rename_profile(&mut self, from: &str, to: &str) -> anyhow::Result<bool> {
+        let Some(mut p) = self.profile(from)? else {
+            return Ok(false);
+        };
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM profiles WHERE name = ?1", [from])?;
+        p.name = to.to_string();
+        p.updated_at = now();
+        Self::insert_profile(&tx, &p)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Delete a profile; `false` when there was none.
+    pub fn delete_profile(&self, name: &str) -> anyhow::Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM profiles WHERE name = ?1", [name])?
+            > 0)
     }
 
     // ------------------------------------------------------------ export/import
@@ -528,7 +765,54 @@ impl Store {
             layouts,
             channels,
             effects,
+            playlists: self.playlists()?,
+            plugin_settings: {
+                let mut all: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>> = BTreeMap::new();
+                for (plugin, id, key, value) in self.plugin_settings()? {
+                    all.entry(plugin)
+                        .or_default()
+                        .entry(id)
+                        .or_default()
+                        .insert(key, value);
+                }
+                all
+            },
+            profiles: self.profiles()?,
+            custom_leds: self.custom_leds()?,
         })
+    }
+
+    /// Every network plugin setting as `(plugin, id, key, value)`.
+    pub fn plugin_settings(&self) -> anyhow::Result<Vec<(String, String, String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT plugin, id, key, value FROM plugin_settings ORDER BY plugin, id, key")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Store (`Some`) or delete (`None`) one network plugin setting.
+    pub fn set_plugin_setting(
+        &self,
+        plugin: &str,
+        id: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> anyhow::Result<()> {
+        match value {
+            Some(v) => self.conn.execute(
+                "INSERT INTO plugin_settings (plugin, id, key, value) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(plugin, id, key) DO UPDATE SET value = excluded.value",
+                params![plugin, id, key, v],
+            )?,
+            None => self.conn.execute(
+                "DELETE FROM plugin_settings WHERE plugin = ?1 AND id = ?2 AND key = ?3",
+                params![plugin, id, key],
+            )?,
+        };
+        Ok(())
     }
 
     /// Replace everything with `state` in one transaction.
@@ -551,9 +835,23 @@ impl Store {
             "channel_components",
             "effect_params",
             "presets",
+            "playlists",
             "kv",
+            "plugin_settings",
+            "profiles",
+            "custom_leds",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        for (plugin, ids) in &state.plugin_settings {
+            for (id, keys) in ids {
+                for (key, value) in keys {
+                    tx.execute(
+                        "INSERT INTO plugin_settings (plugin, id, key, value) VALUES (?1, ?2, ?3, ?4)",
+                        params![plugin, id, key, value],
+                    )?;
+                }
+            }
         }
         for (key, value) in &state.settings {
             tx.execute(
@@ -627,6 +925,18 @@ impl Store {
                 )?;
             }
         }
+        for p in &state.playlists {
+            Self::insert_playlist(&tx, p)?;
+        }
+        for p in &state.profiles {
+            if p.name.trim().is_empty() {
+                bail!("a profile needs a name");
+            }
+            Self::insert_profile(&tx, p)?;
+        }
+        for (uid, row) in &state.custom_leds {
+            Self::insert_custom_leds(&tx, uid, &row.device, &row.state)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -664,6 +974,15 @@ mod tests {
             )
             .unwrap();
         store.set_device_enabled("1532:007c:00", false).unwrap();
+        let mut leds = lightloom_engine::CustomLeds {
+            enabled: true,
+            colors: vec![lightloom_engine::Rgb::new(255, 0, 0); 3],
+            ..Default::default()
+        };
+        leds.save_zone("Logo", &[2]).unwrap();
+        store
+            .set_custom_leds("1532:007c:00", "1532:007c:00", &leds)
+            .unwrap();
         let mut layout = Layout {
             name: "Desk".into(),
             brightness: 70,
@@ -692,7 +1011,11 @@ mod tests {
             .set_effect_params("lightloom:plasma", json!({"speed": 60}).as_object().unwrap())
             .unwrap();
         store
-            .save_preset("lightloom:plasma", "Calm", json!({"speed": 5}).as_object().unwrap())
+            .save_preset(
+                "lightloom:plasma",
+                "Calm",
+                json!({"speed": 5}).as_object().unwrap(),
+            )
             .unwrap();
         store
             .save_preset(
@@ -701,6 +1024,89 @@ mod tests {
                 json!({"speed": 9}).as_object().unwrap(),
             )
             .unwrap();
+        store
+            .save_playlist(
+                &serde_json::from_value(json!({
+                    "id": "evening",
+                    "name": "Evening",
+                    "shuffle": true,
+                    "entries": [
+                        {"effect": "lightloom:plasma", "preset": "Calm", "duration": 60},
+                        {"effect": "signalrgb:Rainbow", "values": {"speed": 2}}
+                    ]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        store.save_profile(&profile("Night")).unwrap();
+    }
+
+    fn profile(name: &str) -> Profile {
+        serde_json::from_value(json!({
+            "format": "lightloom-profile",
+            "version": 1,
+            "name": name,
+            "lighting": {"effect": "lightloom:plasma", "values": {"speed": 3}, "brightness": 40},
+            "layout": {"name": "Desk", "brightness": 70, "endpoints": {}},
+            "devices": {"1462:7c91:A0": {"enabled": true, "laterSetting": {"0": "#ff0000"}}}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn profiles_are_saved_renamed_and_deleted() {
+        let mut s = Store::in_memory().unwrap();
+        let first = s.save_profile(&profile("Night")).unwrap();
+        assert!(!first.created_at.is_empty());
+        let again = s.save_profile(&profile("Night")).unwrap();
+        assert_eq!(
+            again.created_at, first.created_at,
+            "a replace keeps its creation time"
+        );
+        s.save_profile(&profile("Day")).unwrap();
+        let names: Vec<String> = s.profiles().unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["Day", "Night"]);
+        let night = s.profile("Night").unwrap().unwrap();
+        assert_eq!(night.lighting.brightness, 40);
+        assert_eq!(
+            night.devices["1462:7c91:A0"].extra["laterSetting"]["0"], "#ff0000",
+            "unknown device keys are kept"
+        );
+        assert!(s.rename_profile("Night", "Evening").unwrap());
+        assert!(!s.rename_profile("Night", "X").unwrap());
+        assert_eq!(s.profile("Evening").unwrap().unwrap().name, "Evening");
+        assert!(s.delete_profile("Evening").unwrap());
+        assert!(!s.delete_profile("Evening").unwrap());
+        assert!(s.save_profile(&profile(" ")).is_err());
+    }
+
+    #[test]
+    fn plugin_settings_round_trip_and_travel_with_exports() {
+        let s = Store::in_memory().unwrap();
+        s.set_plugin_setting("Philips Hue", "001788fffe", "username", Some("abc"))
+            .unwrap();
+        s.set_plugin_setting("Philips Hue", "001788fffe", "username", Some("def"))
+            .unwrap();
+        s.set_plugin_setting("WLED", "forced", "list", Some("[]"))
+            .unwrap();
+        s.set_plugin_setting("WLED", "forced", "list", None).unwrap();
+        assert_eq!(
+            s.plugin_settings().unwrap(),
+            vec![(
+                "Philips Hue".into(),
+                "001788fffe".into(),
+                "username".into(),
+                "def".into()
+            )]
+        );
+        let export = s.export().unwrap();
+        assert_eq!(
+            export.plugin_settings["Philips Hue"]["001788fffe"]["username"],
+            "def"
+        );
+        let mut t = Store::in_memory().unwrap();
+        t.import(&export).unwrap();
+        assert_eq!(t.plugin_settings().unwrap(), s.plugin_settings().unwrap());
     }
 
     #[test]
@@ -728,6 +1134,22 @@ mod tests {
         assert_eq!(s.presets("lightloom:plasma").unwrap()["Calm"]["speed"], 5);
         assert!(s.delete_preset("lightloom:plasma", "Calm").unwrap());
         assert!(!s.delete_preset("lightloom:plasma", "Calm").unwrap());
+        let evening = s.playlist("evening").unwrap().unwrap();
+        assert_eq!(
+            (evening.name.as_str(), evening.shuffle, evening.entries.len()),
+            ("Evening", true, 2)
+        );
+        assert_eq!(evening.entries[0].preset.as_deref(), Some("Calm"));
+        assert_eq!(
+            (evening.entries[0].duration, evening.entries[1].duration),
+            (Some(60), None)
+        );
+        assert_eq!(evening.entries[1].values["speed"], 2);
+        assert!(!evening.updated_at.is_empty());
+        assert!(s.save_playlist(&Playlist::default()).is_err());
+        assert!(s.delete_playlist("evening").unwrap());
+        assert!(!s.delete_playlist("evening").unwrap());
+        assert!(s.playlists().unwrap().is_empty());
         assert!(s.delete_layout("Desk").unwrap());
         // Placements go with their layout.
         let left: i64 = s
@@ -735,6 +1157,35 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM placements", [], |r| r.get(0))
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn merged_effects_keep_other_values_and_replace_presets() {
+        let mut s = Store::in_memory().unwrap();
+        let mut keep = Map::new();
+        keep.insert("speed".into(), json!(5));
+        keep.insert("mine".into(), json!("kept"));
+        s.set_effect_params("signalrgb:Rainbow", &keep).unwrap();
+        s.save_preset("signalrgb:Rainbow", "A", &keep).unwrap();
+
+        let mut params = Map::new();
+        params.insert("speed".into(), json!(2));
+        params.insert("color".into(), json!("#ff0000"));
+        let mut preset = Map::new();
+        preset.insert("speed".into(), json!(9));
+        let state = EffectState {
+            params,
+            presets: BTreeMap::from([("A".to_string(), preset.clone())]),
+        };
+        let written = s
+            .merge_effects(&BTreeMap::from([("signalrgb:Rainbow".to_string(), state)]))
+            .unwrap();
+        assert_eq!(written, (2, 1));
+        let values = s.effect_params("signalrgb:Rainbow").unwrap();
+        assert_eq!(values["speed"], 2);
+        assert_eq!(values["color"], "#ff0000");
+        assert_eq!(values["mine"], "kept");
+        assert_eq!(s.presets("signalrgb:Rainbow").unwrap()["A"], preset);
     }
 
     #[test]

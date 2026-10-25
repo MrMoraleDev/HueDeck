@@ -244,11 +244,47 @@ restore image, which leaves per-LED mode.
 A 725-byte SET_FEATURE takes about 12-13 ms on this board, against 3.6 ms for the
 185-byte report of zone mode; at 30 fps that is well inside the frame time.
 
+## Save to devices and exit modes (Lightloom extensions, 2026-10-23, untested on the board)
+
+"Save to devices" ([docs/host-api/save-shutdown.md](../host-api/save-shutdown.md)) stores a static
+(or breathing) configuration in the controller's flash with the save byte `0xB8 = 1`. The packet
+is built on the restore image: the records of this board's zones (JRGB1 `0x01`, JRGB2 `0xAE`,
+JRAINBOW1 `0x1F`, JRAINBOW2 `0x2A`, the onboard master `0x4A` and the nine onboard slots
+`0x54..0xA4`) become `[effect, R, G, B, options, R, G, B, flags, 0]` with effect `0x01` (static) or
+`0x02` (breathing), options `0x28` (brightness 10, speed 0) or `0x29` (speed medium), flags `0x80`
+(custom colour; the master `0x81`, onboard sync), one colour per zone (the average of its LEDs on
+the frame shown), and the strips' LED counts at `+10` of the JRAINBOW records; every other byte as
+read. The values are those of OpenRGB's `MSIMotherboard185Controller::SetMode()` /
+`SetZoneColor()` for `MSI_MODE_STATIC` / `MSI_MODE_BREATHING` (MSIMotherboardCommon.h flag
+layout); the composition is Lightloom's.
+
+The send sequence is OpenRGB's `MSIMotherboard185Controller::Update(true)` for non-direct modes:
+GET 0x52, SET what was read with the save byte set, then SET the new configuration with the save
+byte set ("Windows Mystic Light sends two consecutive reports", OpenRGB's comment). The first
+report therefore also writes the per-LED configuration Lightloom had set to flash, immediately
+replaced by the second; if the second failed the board would boot in per-LED mode with no stream
+(dark) until saved again. After the save the plugin reads 0x52 again (the new restore image) and
+re-enters per-LED mode (reset report, configuration with save byte 0).
+
+Exit modes: `Shutdown(false, "keep")` sends a black stream and the same static configuration with
+the last colours, `"off"` with black, both with the save byte 0 (volatile).
+
+## Hardware mode (Lightloom extension, 2026-10-25, untested on the board)
+
+`HardwareModes()` offers one mode, "Static (per zone)": five colours (onboard LEDs, JRGB1, JRGB2,
+JRAINBOW1, JRAINBOW2) and a brightness. `SetHardwareMode` sends the black 0x53 stream and the static
+0x52 configuration of the "keep" exit mode with those colours and the options byte `level << 2`
+(`MSI_BRIGHTNESS_LEVEL_10..100` = 1-10, from `round(brightness% / 10)`, at least 1), save byte 0.
+`SetHardwareMode(null)` sends the reset and per-LED configuration again (as `Initialize()` does). The
+board's animated modes are not offered until they are checked on the bench. Test:
+`plugins/msi-mystic-light-7c91/tests/packet.test.mjs` (never the save byte).
+
 ## Safety rules (carry into the host and the CLI)
 
 - Nothing is sent before a successful GET of 0x52 (the restore image). The restore packet is
   that image; the per-LED configuration is the packet recorded on the wire (S6).
-- Byte `0xB8` is always `0` — Lightloom never persists to the controller's flash.
+- Byte `0xB8` is `0` in every packet except the two of "Save to devices" (above), which the user
+  asks for and confirms; nothing else persists to the controller's flash.
 - Byte `0x3E` is written as the read value - 4 (see "Bench results": the controller reads it back
   as the written value + 4).
 - Nothing is written on `Shutdown(false)` when the session never wrote.

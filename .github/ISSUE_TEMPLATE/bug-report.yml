@@ -1,0 +1,40 @@
+name: Bug report
+description: Something in Lightloom itself is broken (dashboard, daemon, effects, installer).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: For a problem with one specific device, use the **Device report** form instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the dashboard
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: Lightloom version
+      description: Shown in Settings, or run `lightloom --version`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant part of the dashboard's Logs page, or `%LOCALAPPDATA%\Lightloom\logs` on Windows, `journalctl --user -u lightloomd` on Linux.
+      render: text

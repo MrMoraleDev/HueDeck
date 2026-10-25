@@ -1,43 +1,75 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # tools/gen-udev
 
-Generates `70-lightloom.rules` for Linux from the device plugins Lightloom knows about.
-Planned for M7 (Linux backend); this directory holds the contract so the CLI
-(`lightloom udev generate|install`) and the standalone tool agree.
+Generates `70-lightloom.rules` for Linux from the plugin manifests. The implementation is
+the `lightloom udev generate` subcommand (`crates/lightloom-cli/src/udev.rs`); there is no
+separate binary, so packaging scripts (AppImage, Flatpak post-install, distro packages)
+call the CLI.
+
+```
+lightloom udev generate [--plugins <dir>...] [--out <file>] [--check]
+```
+
+- `--plugins`: a plugin directory (holding `manifest.json`) or a directory of plugin
+  directories; repeatable. Default: `LIGHTLOOM_PLUGINS`, else `./plugins`.
+- `--out`: write the file instead of printing it.
+- `--check`: write nothing; exit 1 when `--out` differs (drift test).
+
+The packaged file is `packaging/udev/70-lightloom.rules` (install steps in
+`packaging/udev/README.md`).
 
 ## Input
 
-- Every plugin loaded by the plugin index (first-party `plugins/`, imported SignalRGB
-  plugins, community sources): `VendorId` + `ProductId` (int, int[] or decimal-string
-  keys), `Type` (`Hid`, `rawusb`, `hybrid`, `serial`, `SMBUS`, `network`), `Name`.
-- The template `packaging/udev/70-lightloom.rules.template` (per-device block between the
-  `---- per-device block` markers, plus the fixed I2C tail).
+Every `manifest.json` (manifest v2, `schemas/plugin-manifest-v2.schema.json`):
+`devices[]` with `vid` + `pids` (integers or hex strings, `"0x1462"` or `"1462"`) and
+`transport` (`hid` by default, `rawusb`, `hybrid`, `serial`), `smbus` claims and
+`hidUsage` claims.
 
 ## Output
 
-One rules file, deterministic order (sorted by VID, then PID), one comment line per
-plugin followed by the two `TAG+="uaccess"` lines (`usb` subsystem for libusb/rawusb and
-`hidraw` for HID), with VID/PID rendered as 4-digit lowercase hex. Plugins of type
-`SMBUS` contribute nothing per device; the single `KERNEL=="i2c-[0-9]*", GROUP="i2c"`
-rule is always emitted. `serial` plugins add no rule (dialout group membership is the
-documented requirement). `network` plugins are skipped.
+Deterministic: plugins sorted by id, each with a `# <id>: <name>` comment, then its
+VID:PID rules sorted by VID, PID; a VID:PID already emitted for an earlier plugin is not
+repeated. Ids are 4-digit lower-case hex, as sysfs prints them.
 
-Example output fragment:
+| transport | rule |
+|---|---|
+| `hid` | `ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="vvvv", ATTRS{idProduct}=="pppp", TAG+="uaccess"` |
+| `rawusb` | `ACTION!="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="vvvv", ATTR{idProduct}=="pppp", TAG+="uaccess"` |
+| `hybrid` | both of the above |
+| `serial` | `ACTION!="remove", SUBSYSTEM=="tty", ATTRS{...}, TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"` |
+
+Why this shape (docs/research/m7-linux-backend.md, section 0 finding 5 and section 1.6):
+
+- Every rule names its subsystem. The old template's bare `SUBSYSTEMS=="usb"` match also
+  tagged the device's `input` and `tty` nodes, which would hand the seat user raw
+  keystrokes of a keyboard.
+- `ACTION!="remove"`: since systemd 258 ACLs are re-applied on `change` events.
+- The file name sorts below `73-seat-late.rules`, which applies the `uaccess` tag.
+- Residual risk: the hidraw node of a keyboard's boot interface still carries keystrokes
+  (OpenRGB has the same). A rule cannot combine `idVendor` (USB device) with
+  `bInterfaceNumber` (USB interface): udev matches all `ATTRS` keys on one ancestor.
+
+`hidUsage` claims (HID LampArray on any device) have no VID:PID and get a comment only;
+`network` claims are skipped. SMBus claims add nothing per device; four rules always close
+the file, one per adapter family Lightloom uses, matched by the kernel's adapter name
+(the same names `lightloom_hal_linux::i2c::classify` accepts):
 
 ```
-# Razer (OpenRGB port) (razer)
-SUBSYSTEMS=="usb", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="007c", TAG+="uaccess"
-KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="007c", TAG+="uaccess"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="SMBus PIIX4 adapter port [01] at *|SMBus PIIX4 adapter at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="SMBus I801 adapter at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="NVIDIA i2c adapter 1 at *", GROUP="i2c", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", ATTR{name}=="AMDGPU DM i2c OEM bus|AMDGPU i2c bit bus OEM 0x97", GROUP="i2c", MODE="0660"
 ```
 
-## Planned interface
+The `i2c` group comes from `packaging/sysusers.d/lightloom.conf` (Debian's i2c-tools
+creates the same group). DDC, DP AUX, touchpad and EC adapters, the PIIX4 ports 2-4, the
+i801 IDF function and the other NVIDIA ports stay root-only. The chipset adapters still
+reach the SPD EEPROMs; Lightloom refuses every write there in `lightloom_hal_linux::i2c`
+and in the plugin host. udev ignores trailing whitespace in attribute values, so the
+NVIDIA driver's trailing newline in its adapter names does not matter.
 
-```
-gen-udev [--plugins <dir>...] [--template <file>] [--out <file>] [--check]
-```
+## Tests
 
-- `--check` exits non-zero when the existing `--out` file differs (CI drift test).
-- Shared implementation with `lightloom udev generate` (crate `lightloom-cli`); this tool is
-  the headless entry point used by packaging scripts (AppImage, Flatpak post-install).
-- Tests: golden file against the first-party plugin set, uniqueness of VID:PID lines,
-  no uppercase hex, template markers present.
+`crates/lightloom-cli/src/udev.rs`: manifest id forms, rule scoping and ordering, `--check`,
+and a golden test of the first-party plugin set against
+`packaging/udev/70-lightloom.rules` (unique lines, lower-case hex, every rule scoped).

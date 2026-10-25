@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Lightloom Flatpak manifest (flatpak-builder).
+#
+# Build, from the repository root. cargo-sources.json and node-sources.json (the offline
+# crate and npm sources) are generated, git-ignored files: regenerate them whenever
+# Cargo.lock or ui/package-lock.json changes. flatpak-builder gives the build no network, so
+# everything comes from those lists and the working tree. CI: .github/workflows/flatpak.yml.
+# Caveats: packaging/flatpak/README.md.
+#
+#   packaging/flatpak/generate-sources.sh
+#   flatpak-builder --user --install --force-clean build-flatpak \
+#     packaging/flatpak/org.lightloom.Lightloom.yml
+#   flatpak run org.lightloom.Lightloom
+#
+# Device access: `--device=all` exposes /dev (hidraw, usb, tty, i2c-*) inside the sandbox,
+# but the kernel still applies the host's permissions. The udev rules, the i2c group and
+# the i2c-dev module must be installed on the host (`flatpak run org.lightloom.Lightloom
+# --setup-help`); a Flatpak cannot install them.
+
+app-id: org.lightloom.Lightloom
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  # The dashboard's Vite needs Node >= 20.19; CI builds it with Node 24.
+  - org.freedesktop.Sdk.Extension.node24
+command: lightloom-launch
+
+finish-args:
+  # The dashboard and API listen on 127.0.0.1; without the host network namespace the
+  # browser outside the sandbox cannot reach them. Also network-device plugins (HTTP,
+  # mDNS) and udev's netlink hotplug broadcasts (netlink is per network namespace).
+  - --share=network
+  # hidraw, usbfs, serial and /dev/i2c-* nodes. There is no narrower device permission
+  # that covers hidraw and i2c.
+  - --device=all
+  # engine.audio (PulseAudio protocol, served by PipeWire on current desktops).
+  - --socket=pulseaudio
+  # The CEF effect renderer renders off-screen and needs no display socket; screen
+  # capture (engine.zone) goes through the ScreenCast portal, which needs no permission.
+  # Data and config stay in ~/.var/app/org.lightloom.Lightloom (XDG dirs inside the sandbox).
+  # Printed commands (`--setup-help`, `--systemd-unit`) must name the Flatpak, not /app.
+  - --env=LIGHTLOOM_SELF=flatpak run org.lightloom.Lightloom
+  # Desktop integration (docs/linux-porting.md): logind sleep/lock and its delay inhibitor,
+  # desktop notifications, and the tray icon (registered under its unique bus name; the
+  # one-tray-per-session name is under the app id, which needs no permission).
+  - --system-talk-name=org.freedesktop.login1
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+
+modules:
+  - name: lightloom
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node24/bin
+      env:
+        # cargo-sources.json vendors every crate into cargo/vendor and writes cargo/config
+        # (source replacement), read from CARGO_HOME.
+        CARGO_HOME: /run/build/lightloom/cargo
+        CARGO_NET_OFFLINE: "true"
+        # node-sources.json fills this npm cache.
+        npm_config_cache: /run/build/lightloom/flatpak-node/npm-cache
+        npm_config_offline: "true"
+        XDG_CACHE_HOME: /run/build/lightloom/flatpak-node/cache
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      # Not the CEF effect renderer yet: cef-dll-sys would download the CEF distribution at
+      # build time (no network here), so it needs CEF as a pinned archive source plus the
+      # archive.json cef-dll-sys checks, and zypak for Chromium inside the sandbox
+      # (packaging/flatpak/README.md). Without it the daemon plays the native effects.
+      - cargo --offline build --release --locked -p lightloom-daemon -p lightloom-cli
+      - cd ui && npm ci --offline --ignore-scripts --no-audit --no-fund && npm run build
+      - tools/package/stage-linux.sh --release target/release --ui ui/dist --out /app/lib/lightloom
+      - install -Dm0755 packaging/appimage/AppRun /app/bin/lightloom-launch
+      - ln -s ../lib/lightloom/lightloomd /app/bin/lightloomd
+      - ln -s ../lib/lightloom/lightloom /app/bin/lightloom
+      - >-
+        sed -e 's/^Exec=.*/Exec=lightloom-launch/' -e 's/^Icon=.*/Icon=org.lightloom.Lightloom/'
+        -e '/^X-AppImage-/d' packaging/appimage/lightloom.desktop
+        > org.lightloom.Lightloom.desktop
+      - install -Dm0644 org.lightloom.Lightloom.desktop /app/share/applications/org.lightloom.Lightloom.desktop
+      - install -Dm0644 packaging/appimage/lightloom.svg /app/share/icons/hicolor/scalable/apps/org.lightloom.Lightloom.svg
+      - install -Dm0644 packaging/flatpak/org.lightloom.Lightloom.metainfo.xml /app/share/metainfo/org.lightloom.Lightloom.metainfo.xml
+    sources:
+      # Local builds use the working tree. Flathub needs a pinned source instead:
+      #   - type: git
+      #     url: https://github.com/MrMoraleDev/Lightloom.git
+      #     tag: v0.1.0
+      #     commit: <full sha>
+      - type: dir
+        path: ../..
+        # Build outputs, and flatpak-builder's own directories when it runs from the
+        # repository root (flatpak.yml: flatpak_app, repo, .flatpak-builder).
+        skip:
+          - .git
+          - target
+          - dist
+          - ui/node_modules
+          - ui/dist
+          - build-flatpak
+          - flatpak_app
+          - repo
+          - .flatpak-builder
+      - cargo-sources.json
+      - node-sources.json

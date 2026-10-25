@@ -13,15 +13,27 @@
 //! I/O failures never throw into plugin code (hid-usb.md): writes return `-1`,
 //! reads return a zero-filled buffer with `getLastReadSize() == 0`. Failures
 //! are counted in [`IoStats`] and logged once per operation kind.
+//!
+//! `rawusb` and `hybrid` plugins (and HID plugins after
+//! `device.setProtocol("hybrid")`) also reach the device's raw USB side
+//! ([`DeviceContext::set_usb`]): bulk and control transfers through the
+//! interfaces WinUSB owns. OUT transfers return the bytes sent or `-1`, IN
+//! transfers the bytes received, empty on timeout or failure.
 
+use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::children::{ChildSetup, Children};
+use crate::plugin_ui::PluginUi;
 use crate::runtime::Deadline;
 use crate::stats::{LatencyHistogram, LatencySummary};
 use lightloom_engine::{
-    apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, Frame, OffsetTable, Placement,
-    SamplerConfig,
+    apply_brightness, compute_offsets, effective_brightness, DeviceGeometry, DirectLeds, Frame, OffsetTable,
+    Placement, Rgb, SamplerConfig,
 };
 use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportSpec};
+use lightloom_hal::usb::{
+    UsbBackend, UsbDeviceInfo, UsbHandle, DEFAULT_TIMEOUT_MS, ENDPOINT_IN, MAX_TIMEOUT_MS,
+};
+use lightloom_hal::{HalError, HalResult};
 use rquickjs::{Ctx, Function, Object};
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -49,6 +61,10 @@ const LOG_ONCE_LIMIT: usize = 256;
 const MAX_LOG_CHARS: usize = 4096;
 /// Longest id or name a plugin may pass (characters): subdevices, channels, components.
 pub const MAX_ID_CHARS: usize = 256;
+/// One pulse of the alert override (see [`DeviceContext::set_alert`]).
+pub const ALERT_PERIOD: Duration = Duration::from_millis(1600);
+/// Dimmest point of the alert pulse (fraction of the alert colour).
+const ALERT_FLOOR: f32 = 0.15;
 
 /// `s` cut to at most `max` characters (strings copied out of the engine escape its heap cap).
 pub(crate) fn capped(mut s: String, max: usize) -> String {
@@ -92,6 +108,61 @@ pub enum IoKind {
     GetInput,
     /// Interrupt IN read (`device.read`).
     Read,
+    /// Raw USB bulk OUT (`bytes` = `[endpoint, data…]`).
+    BulkOut,
+    /// Raw USB bulk IN (`bytes` = `[endpoint, data received…]`).
+    BulkIn,
+    /// Raw USB control OUT (`bytes` = the 8-byte setup packet, then the data).
+    ControlOut,
+    /// Raw USB control IN (`bytes` = the setup packet, then the data received).
+    ControlIn,
+}
+
+/// Which transport `device.*` I/O uses: the plugin's `Type()` at start,
+/// `device.setProtocol(...)` later.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Protocol {
+    /// HID reports only.
+    #[default]
+    Hid,
+    /// Raw USB transfers only (no HID endpoint).
+    RawUsb,
+    /// HID reports and raw USB transfers.
+    Hybrid,
+}
+
+/// A control transfer's setup fields (`wLength` comes from the data).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlSetup {
+    /// `bmRequestType`.
+    pub request_type: u8,
+    /// `bRequest`.
+    pub request: u8,
+    /// `wValue`.
+    pub value: u16,
+    /// `wIndex`.
+    pub index: u16,
+}
+
+impl ControlSetup {
+    /// The setup packet (little-endian, `wLength` = `length`) followed by `data`.
+    pub fn packet(&self, length: usize, data: &[u8]) -> Vec<u8> {
+        let length = u16::try_from(length).unwrap_or(u16::MAX);
+        let mut out = vec![self.request_type, self.request];
+        out.extend_from_slice(&self.value.to_le_bytes());
+        out.extend_from_slice(&self.index.to_le_bytes());
+        out.extend_from_slice(&length.to_le_bytes());
+        out.extend_from_slice(data);
+        out
+    }
+}
+
+/// The raw USB side of a device.
+struct UsbSide {
+    backend: Arc<dyn UsbBackend>,
+    info: UsbDeviceInfo,
+    handle: Option<Box<dyn UsbHandle>>,
 }
 
 /// One recorded I/O operation (payload includes the report id byte).
@@ -126,6 +197,16 @@ pub struct IoStats {
     pub read_errors: u64,
     /// Input reads that timed out without data.
     pub read_timeouts: u64,
+    /// Successful raw USB OUT transfers (bulk and control).
+    pub usb_writes: u64,
+    /// Failed raw USB OUT transfers (timeouts included).
+    pub usb_write_errors: u64,
+    /// Successful raw USB IN transfers.
+    pub usb_reads: u64,
+    /// Failed raw USB IN transfers.
+    pub usb_read_errors: u64,
+    /// Raw USB IN transfers that timed out without data.
+    pub usb_timeouts: u64,
     /// Calls that needed an open endpoint while none was open.
     pub no_endpoint: u64,
     /// Failed operations (also counted above) whose device is gone: unplugged,
@@ -138,9 +219,11 @@ pub struct IoStats {
 }
 
 impl IoStats {
-    /// Failed HID operations of any kind.
+    /// Failed HID and raw USB operations of any kind.
     pub fn errors(&self) -> u64 {
         self.write_errors
+            + self.usb_write_errors
+            + self.usb_read_errors
             + self.feature_send_errors
             + self.feature_get_errors
             + self.read_errors
@@ -182,11 +265,16 @@ pub struct DeviceContext {
     frame: Arc<Frame>,
     size: [u32; 2],
     led_positions: Vec<[u32; 2]>,
+    /// `LedNames()` or the names of `device.setControllableLeds` (the LED painter's tooltips).
+    led_names: Vec<String>,
     placement: Placement,
     sampler: SamplerConfig,
     grid: OffsetTable,
     /// `LightingMode::Forced` colour of the placement.
     forced: Option<lightloom_engine::Rgb>,
+    /// Direct colours per grid cell (row-major), from [`DirectLeds`]; win
+    /// over the canvas and the forced colour.
+    direct: Option<Vec<lightloom_engine::Rgb>>,
     brightness: Brightness,
     factor: f32,
     stats: IoStats,
@@ -202,6 +290,8 @@ pub struct DeviceContext {
     log_tail: VecDeque<String>,
     log_lines: u64,
     log_sink: Option<LogSink>,
+    /// Where `keyboard` / `mouse` feature events go (the macro runtime).
+    input_sink: Option<Arc<dyn Fn(crate::input::PluginInput) + Send + Sync>>,
     warned: BTreeSet<&'static str>,
     logged: BTreeSet<String>,
     fatal: Option<String>,
@@ -211,6 +301,20 @@ pub struct DeviceContext {
     deadline: Option<Deadline>,
     /// `getDeviceInfo()` strings of a device without HID endpoints (SMBus).
     info_override: Option<Vec<String>>,
+    /// The `battery` feature: `None` until the plugin adds it.
+    battery: Option<BatteryStatus>,
+    /// `battery.lowBatteryWarningLevel` (percent, the user's setting).
+    battery_warning_level: u8,
+    /// Alert override colour: every LED of the device and its children pulses it.
+    alert: Option<Rgb>,
+    /// The alert colour at the current frame's pulse phase.
+    alert_now: Option<[u8; 3]>,
+    /// The raw USB side (rawusb / hybrid devices).
+    usb: Option<UsbSide>,
+    /// Transport of `device.*` I/O.
+    protocol: Protocol,
+    /// Parameters and messages for the dashboard (`device.addProperty`, `device.addMessage`, ...).
+    ui: PluginUi,
 }
 
 impl std::fmt::Debug for DeviceContext {
@@ -241,6 +345,25 @@ fn clamp_len(len: i32) -> usize {
 
 fn to_bytes(values: &[i32]) -> Vec<u8> {
     values.iter().take(MAX_REPORT_LEN).map(|&v| v as u8).collect()
+}
+
+/// A plugin's transfer timeout: [`DEFAULT_TIMEOUT_MS`] when negative, at most [`MAX_TIMEOUT_MS`].
+fn usb_timeout(ms: i32) -> u32 {
+    u32::try_from(ms).map_or(DEFAULT_TIMEOUT_MS, |t| t.min(MAX_TIMEOUT_MS))
+}
+
+/// `[bmRequestType, bRequest, wValue, wIndex, timeout]` from the JS host.
+fn control_args(args: &[i32]) -> (ControlSetup, u32) {
+    let at = |i: usize| args.get(i).copied().unwrap_or(0);
+    (
+        ControlSetup {
+            request_type: at(0) as u8,
+            request: at(1) as u8,
+            value: at(2) as u16,
+            index: at(3) as u16,
+        },
+        usb_timeout(args.get(4).copied().unwrap_or(-1)),
+    )
 }
 
 fn pause_duration(ms: f64) -> Duration {
@@ -284,10 +407,12 @@ impl DeviceContext {
             frame,
             size: [1, 1],
             led_positions: vec![[0, 0]],
+            led_names: Vec::new(),
             placement,
             sampler,
             grid,
             forced: None,
+            direct: None,
             brightness: Brightness::default(),
             factor: 1.0,
             stats: IoStats::default(),
@@ -301,6 +426,7 @@ impl DeviceContext {
             log_tail: VecDeque::new(),
             log_lines: 0,
             log_sink: None,
+            input_sink: None,
             warned: BTreeSet::new(),
             logged: BTreeSet::new(),
             fatal: None,
@@ -308,6 +434,13 @@ impl DeviceContext {
             system_info: String::new(),
             deadline: None,
             info_override: None,
+            battery: None,
+            battery_warning_level: DEFAULT_WARNING_LEVEL,
+            alert: None,
+            alert_now: None,
+            usb: None,
+            protocol: Protocol::Hid,
+            ui: PluginUi::default(),
         };
         ctx.update_factor();
         ctx
@@ -321,6 +454,26 @@ impl DeviceContext {
     /// Forward plugin log lines to `sink` as well.
     pub fn set_log_sink(&mut self, sink: Option<LogSink>) {
         self.log_sink = sink;
+    }
+
+    /// Hand `keyboard` / `mouse` feature events to `sink`.
+    pub fn set_input_sink(&mut self, sink: Option<Arc<dyn Fn(crate::input::PluginInput) + Send + Sync>>) {
+        self.input_sink = sink;
+    }
+
+    /// A `keyboard` / `mouse` feature call (`kind`: `key`, `button`, `keyHid`,
+    /// `buttonHid`; see [`crate::input::parse`]). Dropped without a sink or when malformed.
+    pub fn input_event(&mut self, kind: &str, json: &str) {
+        let Some(sink) = &self.input_sink else {
+            return;
+        };
+        match crate::input::parse(kind, json) {
+            Some(event) => sink(event),
+            None => self.warn_once(
+                "input",
+                "keyboard/mouse feature call with malformed arguments (dropped)",
+            ),
+        }
     }
 
     /// Display name used in logs (`Name()` export or `device.setName`).
@@ -365,10 +518,11 @@ impl DeviceContext {
         self.validated = indices;
     }
 
-    /// Close the open collection.
+    /// Close the open collection and the raw USB handle.
     pub fn close(&mut self) {
         self.handle = None;
         self.active = None;
+        self.close_usb();
     }
 
     /// Feature reports the open collection's report descriptor declares
@@ -382,6 +536,11 @@ impl DeviceContext {
     /// Whether writes reach the hardware.
     pub fn write_mode(&self) -> WriteMode {
         self.mode
+    }
+
+    /// Let writes reach the hardware or record them only (a save preview runs dry).
+    pub fn set_write_mode(&mut self, mode: WriteMode) {
+        self.mode = mode;
     }
 
     /// I/O counters so far.
@@ -439,6 +598,98 @@ impl DeviceContext {
             self.pending_frame = Some(captured);
         }
         self.frame = frame;
+        self.update_alert();
+    }
+
+    // ------------------------------------------------------------------ parameters and messages
+
+    /// The plugin's parameters and messages as of now.
+    pub fn plugin_ui(&self) -> &PluginUi {
+        &self.ui
+    }
+
+    /// Start from the plugin's `ControllableParameters()` / `DeviceMessages()`.
+    pub fn set_plugin_ui(&mut self, ui: PluginUi) {
+        self.ui = ui;
+    }
+
+    /// Log a refused `addProperty` / `addMessage` once per distinct message.
+    fn log_refusal(&mut self, result: Result<(), String>) {
+        if let Err(e) = result {
+            self.log_once(e);
+        }
+    }
+
+    // ------------------------------------------------------------------ battery and alert
+
+    /// What the plugin reported through the `battery` feature (`None`: it never added it).
+    pub fn battery(&self) -> Option<BatteryStatus> {
+        self.battery
+    }
+
+    /// `device.addFeature("battery")`: the device has a battery (level unknown yet).
+    pub fn enable_battery(&mut self) {
+        self.battery.get_or_insert_with(BatteryStatus::default);
+    }
+
+    /// `battery.setBatteryLevel(level)`.
+    pub fn set_battery_level(&mut self, level: f64) {
+        self.battery
+            .get_or_insert_with(BatteryStatus::default)
+            .set_level(level);
+    }
+
+    /// `battery.setBatteryState(state)`.
+    pub fn set_battery_state(&mut self, raw: i32) {
+        self.battery
+            .get_or_insert_with(BatteryStatus::default)
+            .set_state(raw);
+    }
+
+    /// `battery.lowBatteryWarningLevel`, percent.
+    pub fn battery_warning_level(&self) -> u8 {
+        self.battery_warning_level
+    }
+
+    /// Set `battery.lowBatteryWarningLevel` (clamped to `0..=100`).
+    pub fn set_battery_warning_level(&mut self, level: u8) {
+        self.battery_warning_level = level.min(100);
+    }
+
+    /// Override every LED of the device and its children (forced colours and
+    /// brightness sliders included) with `color`, pulsing over [`ALERT_PERIOD`];
+    /// `None` ends the override. The caller decides when (a low battery).
+    pub fn set_alert(&mut self, color: Option<Rgb>) {
+        self.alert = color;
+        self.update_alert();
+    }
+
+    /// The alert override is on.
+    pub fn alert(&self) -> Option<Rgb> {
+        self.alert
+    }
+
+    /// The alert colour at the pulse phase of now (once per frame, so every LED
+    /// of a frame agrees).
+    fn update_alert(&mut self) {
+        self.alert_now = self.alert.map(|c| {
+            let period = ALERT_PERIOD.as_secs_f32();
+            let phase = (self.created.elapsed().as_secs_f32() % period) / period;
+            let wave = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
+            let k = ALERT_FLOOR + (1.0 - ALERT_FLOOR) * wave;
+            let scale = |v: u8| (f32::from(v) * k).round() as u8;
+            [scale(c.r), scale(c.g), scale(c.b)]
+        });
+    }
+
+    /// Replace every colour of a flat RGB stream with the alert colour.
+    fn alert_stream(&self, mut rgb: Vec<u8>) -> Vec<u8> {
+        if let Some(c) = self.alert_now {
+            for px in rgb.as_chunks_mut::<3>().0 {
+                px.copy_from_slice(&c);
+            }
+        }
+        rgb
     }
 
     /// Sampler parameters (canvas size, pivot, sample point, `DefaultScale()`).
@@ -484,6 +735,8 @@ impl DeviceContext {
             size: self.size(),
             leds: self.led_positions().len(),
             placement: self.placement.clone(),
+            led_positions: self.led_positions.clone(),
+            led_names: self.led_names.clone(),
         }];
         out.extend(self.children.views());
         out
@@ -509,6 +762,15 @@ impl DeviceContext {
             self.led_positions = leds;
             self.log(&format!("device.setSize ignored: {e}"));
         }
+    }
+
+    /// LED names in `LedPositions()` order (`LedNames()`, `device.setControllableLeds`).
+    pub fn set_led_names(&mut self, names: Vec<String>) {
+        self.led_names = names
+            .into_iter()
+            .take(lightloom_engine::direct::MAX_DIRECT_LEDS)
+            .map(|n| capped(n, crate::children::MAX_LED_NAME_CHARS))
+            .collect();
     }
 
     fn set_leds(&mut self, flat: &[i32]) {
@@ -542,11 +804,18 @@ impl DeviceContext {
         if x >= self.size[0] || y >= self.size[1] {
             return [0, 0, 0];
         }
+        if let Some(c) = self.alert_now {
+            return c;
+        }
+        let index = (y * self.size[0] + x) as usize;
+        if let Some(cells) = &self.direct {
+            let c = apply_brightness(cells.get(index).copied().unwrap_or_default(), self.factor);
+            return [c.r, c.g, c.b];
+        }
         if let Some(c) = self.forced {
             let c = apply_brightness(c, self.factor);
             return [c.r, c.g, c.b];
         }
-        let index = (y * self.size[0] + x) as usize;
         let ok = self.frame.width() == self.sampler.canvas_width
             && self.frame.height() == self.sampler.canvas_height;
         match self.grid.offsets().get(index) {
@@ -556,6 +825,40 @@ impl DeviceContext {
             }
             _ => [0, 0, 0],
         }
+    }
+
+    /// The colour of every LED of the device (`LedPositions()` order; every
+    /// cell of the grid, row by row, when it lists none), as `device.color(x, y)`
+    /// returns it for the current frame.
+    pub fn led_colors(&self) -> Vec<[u8; 3]> {
+        if self.led_positions.is_empty() {
+            let [w, h] = self.size;
+            return (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .map(|(x, y)| self.color(x as i32, y as i32))
+                .collect();
+        }
+        self.led_positions
+            .iter()
+            .map(|&[x, y]| self.color(x as i32, y as i32))
+            .collect()
+    }
+
+    /// Take this frame's direct colours from `direct` for the device (uid
+    /// `key`, colours in `LedPositions()` order) and its children. Endpoints
+    /// without an entry sample the canvas again.
+    pub fn apply_direct(&mut self, direct: &DirectLeds, key: &str) {
+        self.direct = direct.get(key).map(|colors| {
+            let [w, h] = self.size;
+            let mut cells = vec![lightloom_engine::Rgb::BLACK; (w * h) as usize];
+            for (p, c) in self.led_positions.iter().zip(colors.iter()) {
+                if p[0] < w && p[1] < h {
+                    cells[(p[1] * w + p[0]) as usize] = *c;
+                }
+            }
+            cells
+        });
+        self.children.apply_direct(direct);
     }
 
     // ------------------------------------------------------------------ subdevices and channels
@@ -605,7 +908,7 @@ impl DeviceContext {
     /// subdevice or a cell outside its grid.
     pub fn subdevice_color(&mut self, id: &str, x: i32, y: i32) -> [u8; 3] {
         match self.children.subdevice_color(&self.frame, id, x, y) {
-            Ok(c) => c,
+            Ok(c) => self.alert_now.unwrap_or(c),
             Err(e) => {
                 // One line per subdevice: out-of-bounds messages differ by coordinates.
                 self.log_once_keyed(format!("subdeviceColor:{id}"), &e);
@@ -632,11 +935,11 @@ impl DeviceContext {
 
     /// `channel(name).getColors()` as flat RGB.
     pub fn channel_colors(&self, name: &str) -> Vec<u8> {
-        self.children.channel_colors(&self.frame, name)
+        self.alert_stream(self.children.channel_colors(&self.frame, name))
     }
 
     fn component_colors(&self, name: &str, id: &str) -> Vec<u8> {
-        self.children.component_colors(&self.frame, name, id)
+        self.alert_stream(self.children.component_colors(&self.frame, name, id))
     }
 
     fn component_data(&self, name: &str, id: &str) -> String {
@@ -1088,6 +1391,299 @@ impl DeviceContext {
         report_fields_json(tlc).to_string()
     }
 
+    // ------------------------------------------------------------------ raw USB I/O
+
+    /// The raw USB side of the device (its WinUSB-reachable interfaces); the
+    /// handle opens with [`DeviceContext::open_usb`].
+    pub fn set_usb(&mut self, backend: Arc<dyn UsbBackend>, info: UsbDeviceInfo) {
+        self.usb = Some(UsbSide {
+            backend,
+            info,
+            handle: None,
+        });
+    }
+
+    /// The raw USB device, if the device has one.
+    pub fn usb_info(&self) -> Option<&UsbDeviceInfo> {
+        self.usb.as_ref().map(|u| &u.info)
+    }
+
+    /// The transport `device.*` I/O uses now.
+    pub fn protocol(&self) -> Protocol {
+        self.protocol
+    }
+
+    /// The transport the plugin's `Type()` asks for (before `Initialize`).
+    pub fn set_protocol_kind(&mut self, protocol: Protocol) {
+        self.protocol = protocol;
+    }
+
+    /// Whether the raw USB handle is open.
+    pub fn usb_open(&self) -> bool {
+        self.usb.as_ref().is_some_and(|u| u.handle.is_some())
+    }
+
+    /// Open the raw USB device (claims nothing: transfers claim the WinUSB
+    /// interface they need). [`HalError::NeedsDriver`] when Windows bound no
+    /// user-mode driver to it.
+    pub fn open_usb(&mut self) -> HalResult<()> {
+        let usb = self
+            .usb
+            .as_mut()
+            .ok_or_else(|| HalError::NotFound("this device has no raw USB side".into()))?;
+        if usb.handle.is_some() {
+            return Ok(());
+        }
+        if let Some(problem) = usb.info.driver_problem() {
+            return Err(HalError::NeedsDriver(problem));
+        }
+        let handle = usb.backend.open(&usb.info.path)?;
+        // Keep what the backend learned at open time (endpoint lists).
+        usb.info = handle.info().clone();
+        usb.handle = Some(handle);
+        Ok(())
+    }
+
+    /// Close the raw USB handle (its interfaces are released).
+    pub fn close_usb(&mut self) {
+        if let Some(u) = self.usb.as_mut() {
+            u.handle = None;
+        }
+    }
+
+    /// `device.setProtocol(name)`: `"hid"` closes the raw USB handle of a
+    /// hybrid session, `"hybrid"` opens it (SignalRGB semantics: NZXT Kraken
+    /// LCD streaming). `false` when the switch did not happen.
+    pub fn set_protocol(&mut self, name: &str) -> bool {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "hid" => match self.protocol {
+                Protocol::RawUsb => {
+                    self.log_once("setProtocol(\"hid\") ignored: a rawusb plugin has no HID endpoint".into());
+                    false
+                }
+                _ => {
+                    self.close_usb();
+                    self.protocol = Protocol::Hid;
+                    true
+                }
+            },
+            "hybrid" => {
+                if self.protocol == Protocol::RawUsb {
+                    self.log_once(
+                        "setProtocol(\"hybrid\") ignored: a rawusb plugin has no HID endpoint".into(),
+                    );
+                    return false;
+                }
+                if self.usb.is_none() {
+                    self.log_once(
+                        "setProtocol(\"hybrid\"): this device has no raw USB side; bulk/control transfers fail"
+                            .into(),
+                    );
+                    return false;
+                }
+                self.protocol = Protocol::Hybrid;
+                match self.open_usb() {
+                    Ok(()) => true,
+                    Err(e) => {
+                        self.fail_usb("setProtocol", &e);
+                        false
+                    }
+                }
+            }
+            other => {
+                self.log_once(format!(
+                    "setProtocol(\"{other}\"): unknown protocol (hid or hybrid)"
+                ));
+                false
+            }
+        }
+    }
+
+    fn fail_usb(&mut self, key: &'static str, err: &HalError) {
+        if matches!(err, HalError::Disconnected) {
+            self.stats.disconnects += 1;
+            self.stats.disconnected = true;
+        }
+        self.stats.last_error = Some(format!("{key}: {err}"));
+        let text = match err {
+            HalError::NeedsDriver(problem) => format!("USB {key}: {problem}"),
+            _ => format!("USB {key} failed: {err} (further failures are counted, not logged)"),
+        };
+        self.warn_once(key, &text);
+    }
+
+    /// The open raw USB handle, or the reason there is none (counted and logged once).
+    fn usb_handle(&mut self, key: &'static str) -> Option<&mut Box<dyn UsbHandle>> {
+        if self.protocol == Protocol::Hid {
+            self.stats.no_endpoint += 1;
+            self.stats.last_error = Some(format!("{key}: no raw USB session"));
+            self.warn_once(
+                "no-usb",
+                &format!("device.{key} needs Type() \"rawusb\"/\"hybrid\" or device.setProtocol(\"hybrid\")"),
+            );
+            return None;
+        }
+        if !self.usb_open() {
+            self.stats.no_endpoint += 1;
+            let why = self
+                .usb_info()
+                .and_then(UsbDeviceInfo::driver_problem)
+                .unwrap_or_else(|| "the raw USB device is not open".into());
+            self.stats.last_error = Some(format!("{key}: {why}"));
+            self.warn_once("no-usb", &format!("device.{key}: {why}"));
+            return None;
+        }
+        self.usb.as_mut().and_then(|u| u.handle.as_mut())
+    }
+
+    /// `device.bulk_transfer(endpoint < 0x80, data, len[, timeout])`: bytes sent, or `-1`.
+    pub fn bulk_out(&mut self, endpoint: u8, data: &[u8], timeout_ms: u32) -> i32 {
+        let mut bytes = vec![endpoint & !ENDPOINT_IN];
+        bytes.extend_from_slice(data);
+        if self.mode == WriteMode::DryRun {
+            self.record(IoKind::BulkOut, &bytes, true);
+            self.stats.usb_writes += 1;
+            self.mark_write(None);
+            return data.len() as i32;
+        }
+        let Some(handle) = self.usb_handle("bulk_transfer") else {
+            return -1;
+        };
+        let started = Instant::now();
+        let mut buf = data.to_vec();
+        match handle.bulk_transfer(endpoint & !ENDPOINT_IN, &mut buf, timeout_ms) {
+            Ok(n) => {
+                self.stats.usb_writes += 1;
+                self.stats.disconnected = false;
+                self.mark_write(Some(started));
+                n as i32
+            }
+            Err(e) => {
+                self.stats.usb_write_errors += 1;
+                self.fail_usb("bulk_transfer", &e);
+                -1
+            }
+        }
+    }
+
+    /// `device.bulk_transfer(endpoint >= 0x80, buffer, len[, timeout])`: the
+    /// bytes received (`getLastReadSize()` of them); empty on timeout or failure.
+    pub fn bulk_in(&mut self, endpoint: u8, len: usize, timeout_ms: u32) -> Vec<u8> {
+        self.last_read_size = 0;
+        if len == 0 {
+            return Vec::new();
+        }
+        let Some(handle) = self.usb_handle("bulk_transfer") else {
+            return Vec::new();
+        };
+        let mut buf = vec![0u8; len];
+        let result = handle.bulk_transfer(endpoint | ENDPOINT_IN, &mut buf, timeout_ms);
+        self.usb_read_result("bulk_transfer", result, buf, |n, buf| {
+            let mut bytes = vec![endpoint | ENDPOINT_IN];
+            bytes.extend_from_slice(&buf[..n]);
+            (IoKind::BulkIn, bytes)
+        })
+    }
+
+    /// `device.control_transfer(bmRequestType without 0x80, …)`: bytes sent, or `-1`.
+    /// Standard requests (`SET_ADDRESS`, `SET_CONFIGURATION`, `SET_FEATURE`, …)
+    /// change the device's USB state, not its lighting: refused.
+    pub fn control_out(&mut self, setup: ControlSetup, data: &[u8], timeout_ms: u32) -> i32 {
+        let bytes = setup.packet(data.len(), data);
+        if setup.request_type & 0x60 == 0 {
+            self.stats.usb_write_errors += 1;
+            self.stats.last_error = Some("control_transfer: standard OUT request refused".into());
+            self.log_once(format!(
+                "control_transfer(0x{:02x}, 0x{:02x}, …): standard OUT requests change the device's USB state; refused",
+                setup.request_type, setup.request
+            ));
+            return -1;
+        }
+        if self.mode == WriteMode::DryRun {
+            self.record(IoKind::ControlOut, &bytes, true);
+            self.stats.usb_writes += 1;
+            self.mark_write(None);
+            return data.len() as i32;
+        }
+        let Some(handle) = self.usb_handle("control_transfer") else {
+            return -1;
+        };
+        let started = Instant::now();
+        let mut buf = data.to_vec();
+        match handle.control_transfer(
+            setup.request_type,
+            setup.request,
+            setup.value,
+            setup.index,
+            &mut buf,
+            timeout_ms,
+        ) {
+            Ok(n) => {
+                self.stats.usb_writes += 1;
+                self.stats.disconnected = false;
+                self.mark_write(Some(started));
+                n as i32
+            }
+            Err(e) => {
+                self.stats.usb_write_errors += 1;
+                self.fail_usb("control_transfer", &e);
+                -1
+            }
+        }
+    }
+
+    /// `device.control_transfer(bmRequestType with 0x80, …, len, timeout)`:
+    /// the bytes of the data stage; empty on timeout or failure.
+    pub fn control_in(&mut self, setup: ControlSetup, len: usize, timeout_ms: u32) -> Vec<u8> {
+        self.last_read_size = 0;
+        let Some(handle) = self.usb_handle("control_transfer") else {
+            return Vec::new();
+        };
+        let mut buf = vec![0u8; len];
+        let result = handle.control_transfer(
+            setup.request_type | ENDPOINT_IN,
+            setup.request,
+            setup.value,
+            setup.index,
+            &mut buf,
+            timeout_ms,
+        );
+        self.usb_read_result("control_transfer", result, buf, |n, buf| {
+            (IoKind::ControlIn, setup.packet(len, &buf[..n]))
+        })
+    }
+
+    fn usb_read_result(
+        &mut self,
+        key: &'static str,
+        result: HalResult<usize>,
+        mut buf: Vec<u8>,
+        record: impl FnOnce(usize, &[u8]) -> (IoKind, Vec<u8>),
+    ) -> Vec<u8> {
+        match result {
+            Ok(n) => {
+                let n = n.min(buf.len());
+                self.stats.usb_reads += 1;
+                self.stats.disconnected = false;
+                self.last_read_size = n;
+                let (kind, bytes) = record(n, &buf);
+                self.record(kind, &bytes, false);
+                buf.truncate(n);
+                buf
+            }
+            Err(HalError::Timeout(_)) => {
+                self.stats.usb_timeouts += 1;
+                self.stats.disconnected = false;
+                Vec::new()
+            }
+            Err(e) => {
+                self.stats.usb_read_errors += 1;
+                self.fail_usb(key, &e);
+                Vec::new()
+            }
+        }
+    }
+
     /// What `device.getDeviceInfo()` reports for a device without HID
     /// endpoints: `[manufacturer, product, serial]`.
     pub fn set_device_info(&mut self, info: [String; 3]) {
@@ -1101,6 +1697,10 @@ impl DeviceContext {
         }
         let info = self.active_endpoint().or_else(|| self.endpoints.first());
         info.map(|e| vec![e.manufacturer.clone(), e.product.clone(), e.serial.clone()])
+            .or_else(|| {
+                self.usb_info()
+                    .map(|u| vec![u.manufacturer.clone(), u.product.clone(), u.serial.clone()])
+            })
             .unwrap_or_else(|| vec![String::new(), String::new(), String::new()])
     }
 }
@@ -1223,10 +1823,66 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
     native!("brightness", |d| d.device_brightness() as i32);
     native!("setSize", |d, w: i32, h: i32| d.set_size(w, h));
     native!("setLeds", |d, flat: Vec<i32>| d.set_leds(&flat));
+    native!("setLedNames", |d, names: Vec<String>| d.set_led_names(names));
     native!("setName", |d, name: String| d
         .set_name(capped(name, MAX_ID_CHARS)));
     native!("log", |d, text: String| d.log(&text));
     native!("systemInfo", |d| d.system_info.clone());
+    // Raw USB (hid-usb.md §2: bulk_transfer, control_transfer, setProtocol).
+    native!(blocking "usbBulkOut" else { d.cut_off_write(); -1 }, |d, ep: i32, data: Vec<i32>, timeout: i32| d
+        .bulk_out(ep as u8, &to_bytes(&data), usb_timeout(timeout)));
+    native!(blocking "usbBulkIn" else d.cut_off_read(0), |d, ep: i32, len: i32, timeout: i32| d
+        .bulk_in(ep as u8, clamp_len(len), usb_timeout(timeout)));
+    native!(blocking "usbControlOut" else { d.cut_off_write(); -1 }, |d, setup: Vec<i32>, data: Vec<i32>| {
+        let (setup, timeout) = control_args(&setup);
+        d.control_out(setup, &to_bytes(&data), timeout)
+    });
+    native!(blocking "usbControlIn" else d.cut_off_read(0), |d, setup: Vec<i32>, len: i32| {
+        let (setup, timeout) = control_args(&setup);
+        d.control_in(setup, clamp_len(len).min(usize::from(u16::MAX)), timeout)
+    });
+    native!(blocking "setProtocol" else { d.cut_off_write(); false }, |d, name: String| d.set_protocol(&name));
+    native!("protocol", |d| match d.protocol() {
+        Protocol::Hid => "hid",
+        Protocol::RawUsb => "rawusb",
+        Protocol::Hybrid => "hybrid",
+    }
+    .to_string());
+    // The `keyboard` / `mouse` features (crate::input).
+    native!("inputEvent", |d, kind: String, json: String| d
+        .input_event(&kind, &json));
+    // The `battery` feature (docs/host-api/hid-usb.md §addFeature).
+    native!("batteryEnable", |d| d.enable_battery());
+    native!("batterySetLevel", |d, level: f64| d.set_battery_level(level));
+    native!("batterySetState", |d, state: i32| d.set_battery_state(state));
+    // [level (-1: never set), state, lowBatteryWarningLevel]
+    native!("batteryGet", |d| {
+        let b = d.battery.unwrap_or_default();
+        vec![
+            b.level.map_or(-1, i32::from),
+            b.state.raw(),
+            i32::from(d.battery_warning_level),
+        ]
+    });
+    // Run-time parameters and messages (plugin_ui.rs).
+    native!("propAdd", |d, json: String| {
+        let r = d.ui.add_property(&json);
+        d.log_refusal(r)
+    });
+    native!("propRemove", |d, name: String| d.ui.remove_property(&name));
+    native!("msgAdd", |d, id: String, message: String, tooltip: String| {
+        let r = d.ui.add_message(id, message, tooltip);
+        d.log_refusal(r)
+    });
+    native!("msgNotify", |d,
+                          id: String,
+                          title: String,
+                          text: String,
+                          priority: i32| {
+        let r = d.ui.notify(id, title, text, priority);
+        d.log_refusal(r)
+    });
+    native!("msgRemove", |d, id: String| d.ui.remove_message(&id));
     // Subdevices (components-channels.md §2).
     native!("subCreate", |d, id: String| d
         .create_subdevice(&capped(id, MAX_ID_CHARS)));
@@ -1456,6 +2112,107 @@ mod tests {
         assert_eq!(ctx.color(2, 0), [0, 0, 0], "outside the grid");
         ctx.set_placement(Placement::default());
         assert_eq!(ctx.color(0, 0), [1, 2, 3]);
+    }
+
+    #[test]
+    fn direct_colours_win_over_canvas_and_forced_colour() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        // Two LEDs, listed right to left.
+        ctx.set_geometry([3, 1], vec![[2, 0], [0, 0]]).unwrap();
+        ctx.set_frame(Arc::new(Frame::solid(320, 200, Rgb::new(1, 2, 3))));
+        ctx.set_placement(Placement {
+            lighting_mode: lightloom_engine::LightingMode::Forced,
+            forced_color: "#ff8000".into(),
+            ..Placement::default()
+        });
+        let direct = DirectLeds::new();
+        let owner = direct.new_owner();
+        direct.write(
+            owner,
+            "dev",
+            2,
+            0,
+            &[Rgb::new(10, 20, 30), Rgb::new(40, 50, 60)],
+            Duration::from_secs(60),
+        );
+        ctx.apply_direct(&direct, "other");
+        assert_eq!(ctx.color(2, 0), [255, 128, 0], "another endpoint's colours");
+        ctx.apply_direct(&direct, "dev");
+        assert_eq!(ctx.color(2, 0), [10, 20, 30], "LED 0 sits at cell (2, 0)");
+        assert_eq!(ctx.color(0, 0), [40, 50, 60]);
+        assert_eq!(ctx.color(1, 0), [0, 0, 0], "no LED there");
+        direct.release(owner);
+        ctx.apply_direct(&direct, "dev");
+        assert_eq!(ctx.color(2, 0), [255, 128, 0], "back to the forced colour");
+    }
+
+    #[test]
+    fn custom_led_colours_answer_device_color_with_brightness() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        ctx.set_geometry([2, 1], vec![[1, 0], [0, 0]]).unwrap();
+        ctx.set_led_names(vec!["Esc".into(), "F1".into()]);
+        ctx.set_frame(Arc::new(Frame::solid(320, 200, Rgb::new(1, 2, 3))));
+        ctx.set_placement(Placement {
+            brightness: 50,
+            ..Placement::default()
+        });
+        let direct = DirectLeds::new();
+        direct.set_static("kbd", &[Rgb::new(200, 100, 0), Rgb::new(0, 0, 255)]);
+        ctx.apply_direct(&direct, "kbd");
+        assert_eq!(
+            ctx.color(1, 0),
+            [100, 50, 0],
+            "LED 0 at cell (1, 0), device brightness 50"
+        );
+        assert_eq!(ctx.color(0, 0), [0, 0, 128]);
+        let views = ctx.endpoint_views("kbd");
+        assert_eq!(views[0].led_positions, vec![[1, 0], [0, 0]]);
+        assert_eq!(views[0].led_names, vec!["Esc".to_string(), "F1".to_string()]);
+        direct.clear_static("kbd");
+        ctx.apply_direct(&direct, "kbd");
+        assert_eq!(ctx.color(1, 0), [1, 1, 2], "the canvas again");
+    }
+
+    #[test]
+    fn the_alert_overrides_forced_colours_and_brightness_and_ends() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        ctx.set_geometry([2, 1], vec![[0, 0], [1, 0]]).unwrap();
+        ctx.set_frame(Arc::new(Frame::solid(320, 200, Rgb::new(1, 2, 3))));
+        ctx.set_placement(Placement {
+            lighting_mode: lightloom_engine::LightingMode::Forced,
+            forced_color: "#00ff00".into(),
+            brightness: 0,
+            ..Placement::default()
+        });
+        ctx.set_alert(Some(Rgb::new(255, 0, 0)));
+        let [r, g, b] = ctx.color(1, 0);
+        assert!(r > 0 && g == 0 && b == 0, "{r} {g} {b}");
+        assert_eq!(ctx.color(2, 0), [0, 0, 0], "outside the grid");
+        assert_eq!(ctx.alert_stream(vec![9; 6]), vec![r, 0, 0, r, 0, 0]);
+        ctx.set_alert(None);
+        assert_eq!(ctx.color(1, 0), [0, 0, 0], "forced green at brightness 0");
+        assert_eq!(ctx.alert_stream(vec![9; 3]), vec![9; 3]);
+    }
+
+    #[test]
+    fn battery_setters_create_the_report() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        assert_eq!(ctx.battery(), None);
+        ctx.enable_battery();
+        assert_eq!(ctx.battery().unwrap().level, None);
+        ctx.set_battery_state(2);
+        ctx.set_battery_level(55.0);
+        let b = ctx.battery().unwrap();
+        assert_eq!(
+            (b.level, b.state),
+            (Some(55), crate::battery::BatteryState::Charging)
+        );
+        ctx.set_battery_warning_level(140);
+        assert_eq!(ctx.battery_warning_level(), 100);
     }
 
     #[test]

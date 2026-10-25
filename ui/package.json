@@ -2,13 +2,14 @@
   "name": "@lightloom/ui",
   "private": true,
   "version": "0.1.0",
-  "description": "Lightloom dashboard, served by lightloomd on 127.0.0.1:16138. SPDX-License-Identifier: GPL-3.0-or-later",
+  "description": "Lightloom dashboard, served by lightloomd on 127.0.0.1:53000 (by default). SPDX-License-Identifier: GPL-3.0-or-later",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "test": "node --conditions=browser --test src/lib/reconcile.test.ts src/lib/report.test.ts src/lib/store-reactivity.test.ts src/lib/painter.test.ts src/lib/macro-options.test.ts src/lib/preview-loop.test.ts"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",

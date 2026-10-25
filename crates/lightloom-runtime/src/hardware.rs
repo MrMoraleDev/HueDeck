@@ -1,11 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The HID backend of a hardware run and the present devices some plugin claims.
+//!
+//! Raw USB devices (WinUSB on Windows, usbfs on Linux) are enumerated next to the HID
+//! collections and joined to them by USB parent: the HID group whose USB
+//! parent instance id is the USB device's own gets it as its raw USB side
+//! (`hybrid` plugins, `device.setProtocol("hybrid")`). A USB device no HID
+//! group claims is a device of its own when a `rawusb` plugin owns its
+//! VID:PID, keyed like SignalRGB keys it (`vid:pid:<instance serial>`).
+//!
+//! Serial devices (`Type() == "serial"` plugins) come from the OS list of
+//! serial ports ([`serial_targets`]): a port whose USB parent's VID:PID a
+//! serial plugin owns becomes a device with all the ports of that USB device.
+//! Ports are listed, never opened or written to, until a session connects.
 
-use lightloom_hal::HidBackend;
+use lightloom_hal::usb::{UsbBackend, UsbDeviceInfo};
+use lightloom_hal::{DeviceKey, HidBackend, SerialBackend};
+use lightloom_hal_windows::path::signalrgb_serial_from_instance;
+use lightloom_hal_windows::DeviceGroup;
 use lightloom_plugin_host::catalog::Catalog;
 use lightloom_plugin_host::manager::Present;
-#[cfg(windows)]
-use lightloom_plugin_host::session::SessionDevice;
+use lightloom_plugin_host::serial::{group_ports, SerialTarget};
+use lightloom_plugin_host::session::{SessionDevice, UsbTarget};
+use lightloom_plugin_host::PluginType;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// `LIGHTLOOM_HID_BACKEND=hidapi` selects the hidapi backend instead of the native one.
@@ -23,6 +40,171 @@ pub fn matches_filter(key: &str, filters: &[String]) -> bool {
         })
 }
 
+/// `(vid, pid)` pairs and `(usage_page, usage)` pairs the catalog's plugins claim.
+pub fn claims(catalog: &Catalog) -> (BTreeSet<(u16, u16)>, BTreeSet<(u16, u16)>) {
+    let wanted = catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
+    let usages = catalog
+        .entries()
+        .iter()
+        .flat_map(|e| e.meta.hid_usages.iter().map(|[page, usage]| (*page, *usage)))
+        .collect();
+    (wanted, usages)
+}
+
+/// The groups some plugin drives, after `filters`, each with its plugin.
+pub fn present(groups: Vec<DeviceGroup>, catalog: &Catalog, filters: &[String]) -> Vec<Present> {
+    present_with_usb(groups, Vec::new(), None, catalog, filters)
+}
+
+/// The SignalRGB-shaped key of a USB device without HID collections: the
+/// serial is its instance id's last segment (as for HID groups), else its
+/// USB serial string.
+pub fn usb_device_key(info: &UsbDeviceInfo) -> DeviceKey {
+    let serial = signalrgb_serial_from_instance(&info.instance_id).unwrap_or_else(|| info.serial.clone());
+    DeviceKey::new(info.vid, info.pid, serial)
+}
+
+/// [`present`] with the raw USB devices `usb` (opened through `backend`)
+/// joined to their HID groups by USB parent, and USB-only devices that a
+/// `rawusb` plugin owns added (see the module docs).
+pub fn present_with_usb(
+    groups: Vec<DeviceGroup>,
+    usb: Vec<UsbDeviceInfo>,
+    backend: Option<Arc<dyn UsbBackend>>,
+    catalog: &Catalog,
+    filters: &[String],
+) -> Vec<Present> {
+    let mut usb: Vec<Option<UsbDeviceInfo>> = usb.into_iter().map(Some).collect();
+    let mut target_of = |parent: Option<&str>| -> Option<UsbTarget> {
+        let (parent, backend) = (parent?, backend.as_ref()?);
+        let slot = usb.iter_mut().find(|u| {
+            u.as_ref()
+                .is_some_and(|u| !u.instance_id.is_empty() && u.instance_id.eq_ignore_ascii_case(parent))
+        })?;
+        Some(UsbTarget {
+            backend: Arc::clone(backend),
+            info: slot.take()?,
+        })
+    };
+    let mut targets = Vec::new();
+    for g in groups {
+        let key = g.key.to_string();
+        // Joined before filtering: a filtered-out group keeps its USB device.
+        let target = target_of(g.usb_parent.as_deref());
+        if !matches_filter(&key, filters) {
+            continue;
+        }
+        let endpoints: Vec<_> = g.endpoints.into_iter().map(|e| e.info).collect();
+        if let Some(plugin) = catalog.lookup_device(g.key.vid, g.key.pid, &endpoints) {
+            targets.push(Present {
+                device: SessionDevice::hid(key, g.key.vid, g.key.pid, endpoints).with_usb(target),
+                plugin: plugin.clone(),
+            });
+        }
+    }
+    let Some(backend) = backend else {
+        return targets;
+    };
+    for info in usb.into_iter().flatten() {
+        let key = usb_device_key(&info).to_string();
+        if !matches_filter(&key, filters) {
+            continue;
+        }
+        let Some(plugin) = catalog
+            .lookup(info.vid, info.pid)
+            .filter(|p| p.meta.plugin_type == PluginType::RawUsb)
+        else {
+            continue;
+        };
+        // Linux: a backend that may take non-HID interfaces from their kernel driver.
+        let (backend, info) = backend
+            .for_rawusb(&info)
+            .unwrap_or_else(|| (Arc::clone(&backend), info));
+        targets.push(Present {
+            device: SessionDevice::usb(key, UsbTarget { backend, info }),
+            plugin: plugin.clone(),
+        });
+    }
+    targets
+}
+
+/// The serial devices some serial plugin owns among `backend`'s ports,
+/// after `filters`, each with its plugin.
+pub fn serial_targets(
+    backend: Arc<dyn SerialBackend>,
+    catalog: &Catalog,
+    filters: &[String],
+) -> lightloom_hal::HalResult<Vec<Present>> {
+    if !catalog.has_serial_plugins() {
+        return Ok(Vec::new());
+    }
+    let mut targets = Vec::new();
+    for ((vid, pid, _), ports) in group_ports(backend.available_ports()?) {
+        let Some(plugin) = catalog.lookup_serial(vid, pid) else {
+            continue;
+        };
+        let device = SessionDevice::serial(
+            vid,
+            pid,
+            SerialTarget {
+                backend: Arc::clone(&backend),
+                ports,
+            },
+        );
+        if matches_filter(&device.key, filters) {
+            targets.push(Present {
+                device,
+                plugin: plugin.clone(),
+            });
+        }
+    }
+    Ok(targets)
+}
+
+/// The serial backend of this OS (stateless; nothing is opened).
+#[cfg(windows)]
+pub fn serial_backend() -> Option<Arc<dyn SerialBackend>> {
+    Some(Arc::new(lightloom_hal_windows::WindowsSerialBackend::new()))
+}
+
+/// The serial backend of this OS (sysfs; nothing is opened).
+#[cfg(target_os = "linux")]
+pub fn serial_backend() -> Option<Arc<dyn SerialBackend>> {
+    Some(Arc::new(lightloom_hal_linux::LinuxSerialBackend::new()))
+}
+
+/// No serial backend on this platform.
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn serial_backend() -> Option<Arc<dyn SerialBackend>> {
+    None
+}
+
+/// The raw USB backend of this OS (WinUSB on Windows, usbfs through nusb on
+/// Linux); `None` where there is none.
+pub fn usb_backend() -> Option<Arc<dyn UsbBackend>> {
+    #[cfg(windows)]
+    return Some(Arc::new(lightloom_hal_windows::WinUsbBackend::new()));
+    #[cfg(target_os = "linux")]
+    return Some(Arc::new(lightloom_hal_linux::LinuxUsbBackend::new()));
+    #[cfg(not(any(windows, target_os = "linux")))]
+    None
+}
+
+/// The USB devices whose VID:PID is in `wanted` (read-only enumeration; a
+/// failure is logged and counts as none).
+pub fn usb_devices(backend: &dyn UsbBackend, wanted: &BTreeSet<(u16, u16)>) -> Vec<UsbDeviceInfo> {
+    match backend.enumerate() {
+        Ok(list) => list
+            .into_iter()
+            .filter(|d| wanted.contains(&(d.vid, d.pid)))
+            .collect(),
+        Err(e) => {
+            tracing::warn!("enumerating USB devices failed: {e}");
+            Vec::new()
+        }
+    }
+}
+
 /// The HID backend of a hardware run, kept to enumerate again after hotplug events.
 #[cfg(windows)]
 pub enum Hardware {
@@ -32,9 +214,17 @@ pub enum Hardware {
     Hidapi(Arc<lightloom_hal_windows::WindowsHidBackend>),
 }
 
-#[cfg(windows)]
+/// The HID backend of a hardware run (hidraw), kept to enumerate again after hotplug events.
+#[cfg(target_os = "linux")]
+pub enum Hardware {
+    /// `/dev/hidraw*` backend.
+    Hidraw(Arc<lightloom_hal_linux::LinuxHidBackend>),
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 impl Hardware {
-    /// The backend [`use_hidapi`] selects.
+    /// The backend of this OS ([`use_hidapi`] selects between the two on Windows).
+    #[cfg(windows)]
     pub fn open() -> anyhow::Result<Self> {
         use anyhow::Context;
         Ok(if use_hidapi() {
@@ -46,11 +236,23 @@ impl Hardware {
         })
     }
 
+    /// The hidraw backend (nothing is opened until a session starts).
+    #[cfg(target_os = "linux")]
+    pub fn open() -> anyhow::Result<Self> {
+        Ok(Self::Hidraw(
+            Arc::new(lightloom_hal_linux::LinuxHidBackend::new()),
+        ))
+    }
+
     /// The backend as the plugin host sees it.
     pub fn backend(&self) -> Arc<dyn HidBackend> {
         match self {
+            #[cfg(windows)]
             Self::Native(b) => b.clone(),
+            #[cfg(windows)]
             Self::Hidapi(b) => b.clone(),
+            #[cfg(target_os = "linux")]
+            Self::Hidraw(b) => b.clone(),
         }
     }
 
@@ -59,54 +261,51 @@ impl Hardware {
     /// before filtering.
     pub fn targets(&self, catalog: &Catalog, filters: &[String]) -> anyhow::Result<(Vec<Present>, usize)> {
         use anyhow::Context;
-        let wanted: std::collections::BTreeSet<(u16, u16)> =
-            catalog.entries().iter().flat_map(|e| e.meta.keys()).collect();
-        let usages: std::collections::BTreeSet<(u16, u16)> = catalog
-            .entries()
-            .iter()
-            .flat_map(|e| e.meta.hid_usages.iter().map(|[page, usage]| (*page, *usage)))
-            .collect();
+        let (wanted, usages) = claims(catalog);
         let groups = match self {
+            #[cfg(windows)]
             Self::Native(b) => b.enumerate_grouped_matching(&wanted, &usages),
+            #[cfg(windows)]
             Self::Hidapi(b) => b.enumerate_grouped_matching(&wanted, &usages),
+            #[cfg(target_os = "linux")]
+            Self::Hidraw(b) => b.enumerate_grouped_matching(&wanted, &usages),
         }
         .context("enumerating HID devices")?;
-        let total = groups.len();
-        let mut targets = Vec::new();
-        for g in groups {
-            let key = g.key.to_string();
-            if !matches_filter(&key, filters) {
-                continue;
-            }
-            let endpoints: Vec<_> = g.endpoints.into_iter().map(|e| e.info).collect();
-            if let Some(plugin) = catalog.lookup_device(g.key.vid, g.key.pid, &endpoints) {
-                targets.push(Present {
-                    device: SessionDevice {
-                        smbus: None,
-                        key,
-                        vid: g.key.vid,
-                        pid: g.key.pid,
-                        endpoints,
-                    },
-                    plugin: plugin.clone(),
-                });
+        let mut total = groups.len();
+        let usb = usb_backend();
+        let devices = usb
+            .as_deref()
+            .map(|b| usb_devices(b, &wanted))
+            .unwrap_or_default();
+        let mut targets = present_with_usb(groups, devices, usb, catalog, filters);
+        if let Some(serial) = serial_backend() {
+            // A failed port listing must not cost the HID and USB devices.
+            match serial_targets(serial, catalog, &[]) {
+                Ok(found) => {
+                    total += found.len();
+                    targets.extend(
+                        found
+                            .into_iter()
+                            .filter(|p| matches_filter(&p.device.key, filters)),
+                    );
+                }
+                Err(e) => tracing::warn!(error = %e, "listing serial ports failed"),
             }
         }
         Ok((targets, total))
     }
 }
 
-/// No hardware backend on this platform yet.
-#[cfg(not(windows))]
+/// No hardware backend on this platform.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub enum Hardware {}
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl Hardware {
-    /// Always an error: the Linux backend arrives with milestone M7.
+    /// Always an error: Lightloom drives hardware on Windows and Linux only.
     pub fn open() -> anyhow::Result<Self> {
         anyhow::bail!(
-            "driving hardware is only implemented on Windows so far (Linux backend: milestone M7); \
-             try `lightloom bench --mock VID:PID`"
+            "driving hardware is implemented on Windows and Linux only; try `lightloom bench --mock VID:PID`"
         )
     }
 
@@ -121,25 +320,125 @@ impl Hardware {
     }
 }
 
-/// Every connected HID device (read-only enumeration): key, VID, PID.
+/// Every connected HID device grouped by physical device (read-only
+/// enumeration; `LIGHTLOOM_HID_BACKEND=hidapi` selects hidapi on Windows).
 #[cfg(windows)]
+pub fn connected_groups() -> anyhow::Result<Vec<DeviceGroup>> {
+    if use_hidapi() {
+        return Ok(lightloom_hal_windows::WindowsHidBackend::new()?.enumerate_grouped()?);
+    }
+    Ok(lightloom_hal_windows::NativeHidBackend::new().enumerate_grouped()?)
+}
+
+/// Every connected HID device grouped by physical device (sysfs only, nothing opened).
+#[cfg(target_os = "linux")]
+pub fn connected_groups() -> anyhow::Result<Vec<DeviceGroup>> {
+    Ok(lightloom_hal_linux::LinuxHidBackend::new().enumerate_grouped()?)
+}
+
+/// Every connected HID device: not implemented on this OS.
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn connected_groups() -> anyhow::Result<Vec<DeviceGroup>> {
+    anyhow::bail!("HID enumeration is implemented on Windows and Linux only")
+}
+
+/// Every connected HID device (read-only enumeration): key, VID, PID.
 pub fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
+    #[cfg(windows)]
     let groups = lightloom_hal_windows::NativeHidBackend::new().enumerate_grouped()?;
+    #[cfg(not(windows))]
+    let groups = connected_groups()?;
     Ok(groups
         .into_iter()
         .map(|g| (g.key.to_string(), g.key.vid, g.key.pid))
         .collect())
 }
 
-/// Every connected HID device: not implemented on this OS yet.
-#[cfg(not(windows))]
-pub fn connected_devices() -> anyhow::Result<Vec<(String, u16, u16)>> {
-    anyhow::bail!("HID enumeration is only implemented on Windows so far")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightloom_hal::mock::{MockHid, MockUsb};
+    use lightloom_hal::ReportLengths;
+    use lightloom_hal_windows::{GroupingSource, ProbedEndpoint};
+
+    fn catalog() -> Catalog {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lightloom-plugin-host/testdata/device");
+        Catalog::scan(&[dir], std::time::Duration::from_secs(10))
+    }
+
+    #[test]
+    fn usb_devices_join_their_hid_group_by_usb_parent_or_stand_alone() {
+        let hybrid = MockUsb::device_info(0x1234, 0x9999, "H1", vec![MockUsb::winusb_interface(1, &[0x02])]);
+        let rawusb = MockUsb::device_info(
+            0x1234,
+            0x7701,
+            "6&1a2b&0&3",
+            vec![MockUsb::winusb_interface(0, &[0x01])],
+        );
+        let stranger = MockUsb::device_info(0x1234, 0x5555, "X", vec![MockUsb::winusb_interface(0, &[0x01])]);
+        let ep = MockHid::endpoint_info(0x1234, 0x9999, "", 0, 0xFF00, 1, 0, ReportLengths::default());
+        let group = DeviceGroup {
+            key: DeviceKey::new(0x1234, 0x9999, "H1"),
+            source: GroupingSource::UsbParent,
+            usb_parent: Some(hybrid.instance_id.to_ascii_lowercase()),
+            manufacturer: String::new(),
+            product: String::new(),
+            endpoints: vec![ProbedEndpoint::from_info(ep)],
+        };
+        let backend: Arc<dyn UsbBackend> = Arc::new(MockUsb::new());
+        let present = present_with_usb(
+            vec![group],
+            vec![stranger, rawusb.clone(), hybrid.clone()],
+            Some(backend),
+            &catalog(),
+            &[],
+        );
+        let keys: Vec<&str> = present.iter().map(|p| p.device.key.as_str()).collect();
+        assert_eq!(keys, vec!["1234:9999:H1", "1234:7701:6-1a2b-0-3"]);
+        assert_eq!(present[0].device.endpoints.len(), 1);
+        assert_eq!(present[0].device.usb.as_ref().unwrap().info, hybrid);
+        assert!(present[1].device.endpoints.is_empty());
+        assert_eq!(present[1].device.usb.as_ref().unwrap().info, rawusb);
+        assert_eq!(present[1].plugin.meta.plugin_type, PluginType::RawUsb);
+        // Without a USB backend only the HID side is there.
+        assert!(present_with_usb(Vec::new(), vec![rawusb], None, &catalog(), &[]).is_empty());
+    }
+
+    #[test]
+    fn serial_ports_of_claimed_usb_devices_become_devices() {
+        use lightloom_hal::mock::MockSerial;
+        let dir = std::env::temp_dir().join(format!("lightloom-serial-targets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("strip.js"),
+            "export function Name() { return 'Strip'; }\n\
+             export function Type() { return 'serial'; }\n\
+             export function VendorId() { return 0x16D5; }\n\
+             export function ProductId() { return 0x2A08; }\n\
+             export function Initialize() {}\n\
+             export function Render() {}\n",
+        )
+        .unwrap();
+        let catalog = Catalog::scan(std::slice::from_ref(&dir), std::time::Duration::from_secs(10));
+        let mock = MockSerial::new()
+            .add_port(MockSerial::usb_port("COM3", 0x16D5, 0x2A08, "N8", Some(0)))
+            .add_port(MockSerial::usb_port("COM4", 0x16D5, 0x2A08, "N8", Some(2)))
+            .add_port(MockSerial::usb_port("COM5", 0x0403, 0x6001, "FTDI", Some(0)));
+        let backend: Arc<dyn SerialBackend> = Arc::new(mock);
+        let found = serial_targets(Arc::clone(&backend), &catalog, &[]).unwrap();
+        assert_eq!(found.len(), 1, "the unclaimed FTDI port is no device");
+        let d = &found[0].device;
+        assert_eq!(d.key, "16d5:2a08:N8");
+        assert_eq!(d.serial.as_ref().unwrap().ports.len(), 2);
+        assert!(serial_targets(backend, &catalog, &["1532".into()])
+            .unwrap()
+            .is_empty());
+        // The serial plugin does not drive a HID device with its VID:PID.
+        assert!(catalog.lookup_device(0x16D5, 0x2A08, &[]).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn filters_are_case_insensitive_key_prefixes() {

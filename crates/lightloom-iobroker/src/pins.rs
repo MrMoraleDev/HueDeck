@@ -33,6 +33,18 @@ pub const SMBUS_PIIX4: Pin = Pin {
     sha256: "91f9b4b1c39e3d399ce48477a89d8f6bd3e58a2241064a4daec3a1513dff56e5",
 };
 
+/// The Intel PCH SMBus module (i801 family, MMIO BAR of 00:1F.4/1F.3/1F.1/80:1F.4).
+pub const SMBUS_I801: Pin = Pin {
+    name: "SmbusI801",
+    file: "SmbusI801.bin",
+    size: 55540,
+    sha256: "a0f7d066e7efda28c0e754c1f52dbd8dc280d388ba8575b514a80cb67490530c",
+};
+
+/// The chipset SMBus modules, in the order the broker tries them: each
+/// refuses (`STATUS_NOT_SUPPORTED`) a chipset it does not drive.
+pub const CHIPSET_MODULES: &[Pin] = &[SMBUS_PIIX4, SMBUS_I801];
+
 /// The harmless probe module (`ioctl_not`), used to detect an unrestricted driver.
 pub const ECHO: Pin = Pin {
     name: "Echo",
@@ -42,7 +54,50 @@ pub const ECHO: Pin = Pin {
 };
 
 /// Every module the broker may load.
-pub const MODULES: &[Pin] = &[SMBUS_PIIX4, ECHO];
+pub const MODULES: &[Pin] = &[SMBUS_PIIX4, SMBUS_I801, ECHO];
+
+/// A file `lightloom-setup --pawnio-install` downloads, pinned like the modules
+/// and checked for its Authenticode signer as well.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DownloadPin {
+    /// What it is.
+    pub name: &'static str,
+    /// Its release.
+    pub version: &'static str,
+    /// The one URL it comes from (HTTPS, the official release).
+    pub url: &'static str,
+    /// Size in bytes.
+    pub size: usize,
+    /// Lower-case hex SHA-256 of the whole file.
+    pub sha256: &'static str,
+    /// Simple display name (CN) of the Authenticode signer certificate.
+    pub signer: &'static str,
+}
+
+/// The official PawnIO installer, release 2.2.0 (namazso/PawnIO.Setup). Run
+/// with `-install -silent`; never redistributed by Lightloom, only downloaded
+/// when the user asks for RAM lighting.
+pub const PAWNIO_SETUP: DownloadPin = DownloadPin {
+    name: "PawnIO_setup.exe",
+    version: "2.2.0",
+    url: "https://github.com/namazso/PawnIO.Setup/releases/download/2.2.0/PawnIO_setup.exe",
+    size: 3_410_960,
+    sha256: "1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032",
+    signer: "namazso.eu",
+};
+
+/// Check downloaded `bytes` against `pin` (size, then SHA-256).
+pub fn verify_download(pin: &DownloadPin, bytes: &[u8]) -> Result<(), PinError> {
+    verify_against(
+        &Pin {
+            name: pin.name,
+            file: pin.name,
+            size: pin.size,
+            sha256: pin.sha256,
+        },
+        bytes,
+    )
+}
 
 /// Why a blob is refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,6 +194,52 @@ mod tests {
     }
 
     #[test]
+    fn downloads_are_checked_like_modules() {
+        let file: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
+        let pin = DownloadPin {
+            name: "Fixture.exe",
+            version: "1.0.0",
+            url: "https://example.invalid/Fixture.exe",
+            size: file.len(),
+            sha256: Box::leak(sha256_hex(&file).into_boxed_str()),
+            signer: "example",
+        };
+        assert_eq!(verify_download(&pin, &file), Ok(()));
+        let mut evil = file.clone();
+        evil[999] ^= 0x80;
+        assert!(matches!(
+            verify_download(&pin, &evil),
+            Err(PinError::Hash {
+                name: "Fixture.exe",
+                ..
+            })
+        ));
+        assert!(matches!(
+            verify_download(&pin, &file[..999]),
+            Err(PinError::Size { found: 999, .. })
+        ));
+        assert!(
+            verify_download(&pin, b"").is_err(),
+            "an empty or truncated download"
+        );
+    }
+
+    #[test]
+    fn pawnio_setup_pin_is_well_formed() {
+        let p = PAWNIO_SETUP;
+        assert_eq!(p.sha256.len(), 64);
+        assert!(p
+            .sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(p
+            .url
+            .starts_with("https://github.com/namazso/PawnIO.Setup/releases/download/"));
+        assert!(p.url.contains(p.version) && p.url.ends_with(p.name));
+        assert_eq!(p.signer, "namazso.eu");
+    }
+
+    #[test]
     fn pinned_modules_are_well_formed() {
         for p in MODULES {
             assert_eq!(p.sha256.len(), 64, "{}", p.name);
@@ -149,6 +250,9 @@ mod tests {
             assert_eq!(p.file, format!("{}.bin", p.name));
         }
         assert_eq!(pin("SmbusPIIX4"), Some(&SMBUS_PIIX4));
+        assert_eq!(pin("SmbusI801"), Some(&SMBUS_I801));
+        assert!(CHIPSET_MODULES.iter().all(|c| MODULES.contains(c)));
+        assert!(pin("SmbusIntelSkylakeIMC").is_none(), "not pinned yet");
         assert!(matches!(verify("SmbusNCT6793", &[]), Err(PinError::Unknown(_))));
         assert_eq!(
             sha256_hex(b"abc"),

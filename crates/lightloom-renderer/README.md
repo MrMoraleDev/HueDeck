@@ -45,7 +45,7 @@ lines.
 
 ```text
 lightloom-renderer --serve --effect <path.html> --out <ring.shm> [--fps 30] [--prop name=value]...
-                 [--software-compositing]
+                 [--software-compositing] [--control stdin|unix:PATH]
 ```
 
 `--serve` drops the frame limit and the deadline: the renderer paints into the ring until it is
@@ -54,7 +54,11 @@ report is printed when it exits. `--prop` sets a control's starting value; the v
 as JSON, else taken as a string, and coerced to the control's type (`ControlMeta::coerce`: a
 number control takes `5` or `"5"`, a boolean `true`, `"true"` or `1`, a colour `#rrggbb`).
 
-Stdin carries one JSON object per line (`src/control.rs`):
+The control channel carries one JSON object per line (`src/control.rs`). It is stdin by default
+(and what lightloomd uses on Windows); `--control unix:PATH` makes the renderer connect to a unix
+domain socket instead (what lightloomd uses on Linux, see "Linux" below). Lines are read with a
+bound of 512 KB each (`ipc::read_bounded_line`), so a peer that never sends a newline cannot
+make the renderer allocate without limit.
 
 | command | effect on the page |
 |---|---|
@@ -168,6 +172,61 @@ What a packaged renderer needs next to the exe (sizes from 154.0.34):
 `build.rs` embeds `lightloom-renderer.exe.manifest`. The manifest declares Windows 7 through 11
 as supported OSes (supportedOS GUIDs) and loads Common Controls v6, the same shape as CEF's
 own sample manifests. The embedding was verified: the Win10 GUID string is present in the exe.
+
+## Linux (WP-L5)
+
+The renderer and the daemon-side client (`lightloom_render::CefRenderer`) share all code with
+Windows; the per-platform parts are in `src/ipc.rs`, `cli.rs` and `build.rs`. Status: the whole
+crate graph, including the `cef` host, is compile-checked for `x86_64-unknown-linux-gnu`
+(`cargo clippy --target x86_64-unknown-linux-gnu -p lightloom-renderer --features cef,cef/dox`:
+`cef/dox` skips cef-dll-sys's download, the bindings are pre-generated per target). Building,
+linking and running against `libcef.so` happens only in CI (`renderer-cef-linux`).
+
+- **Building.** `cargo build -p lightloom-renderer --features cef`. On Linux cef-dll-sys builds no
+  C++ wrapper (no CMake, Ninja or C++ compiler): it resolves the CEF distribution like on
+  Windows (`CEF_PATH/154.0.34/cef_linux_x86_64`, the linux64 *minimal* archive, 326.5 MB bz2),
+  links `libcef.so` and copies the runtime files next to the binary: `libcef.so`, `icudtl.dat`,
+  `v8_context_snapshot.bin`, `chrome-sandbox`, `libvk_swiftshader.so`, `libvulkan.so.1`,
+  `vk_swiftshader_icd.json`, the `.pak` files and `locales/`. `build.rs` adds an `$ORIGIN`
+  rpath, so the binary (and every Chromium subprocess, which is the same binary) finds
+  `libcef.so` without `LD_LIBRARY_PATH`. CI checks it with `readelf -d` and `ldd`.
+- **No display.** Windowless (OSR) browsers paint into `OnPaint` buffers and need no window.
+  On Linux the default switches add `--ozone-platform=headless` (software output, no X11 or
+  Wayland connection). CEF's maintainer called Ozone headless unsupported (2020), but CEF OSR has
+  been run with it since M133 (CEF issue #3902). Escape hatches: `--chromium-flag=ozone-platform=x11`
+  (with Xvfb or a desktop session), or `LIGHTLOOM_OZONE_PLATFORM=x11|wayland` in the environment
+  for a renderer lightloomd starts. CI tries headless first and retries once under `xvfb-run`
+  with X11, with a warning, so the log shows which one worked.
+- **Shared memory.** The ring stays a mapped file with the `lightloom_protocol::shm` layout, but on
+  Linux it lives on a tmpfs: `$XDG_RUNTIME_DIR` (per user, 0700), else `/dev/shm`, else the work
+  dir. A file in `/dev/shm` is exactly what `shm_open` creates (glibc maps `shm_open("/x")` to
+  `/dev/shm/x`), while both processes can still open it by path. `memfd_create` was not used:
+  an anonymous memfd would have to be passed across `exec` (`pre_exec` + `dup2`, `unsafe` in a
+  `forbid(unsafe_code)` crate) or opened through `/proc/<pid>/fd` (subject to Yama). Each run
+  gets a private directory (`ipc::PrivateDir`: 0700, unique name, never adopted if it exists)
+  holding `frames.shm` (0600) and the control socket, removed when the run ends.
+- **Control channel.** lightloomd binds `control.sock` in that directory, starts the renderer with
+  `--control unix:PATH` and stdin at `/dev/null`, and accepts the connection while it waits for
+  the ring. The renderer connects right after creating the ring, before CEF initialises; lines
+  sent earlier wait in the socket buffer, and lines the daemon sends before the accept are
+  buffered on its side (up to 4 MB) and flushed on accept. Writes time out after 2 s. The
+  framing is the same JSON lines as stdin, and end of stream still means "the daemon is gone".
+  Why not stdin: the accepted connection proves the renderer got through its start-up, launch
+  wrappers that do not forward stdin (AppImage runtimes, `flatpak-spawn`, zypak) do not matter,
+  and stdin stays free. If the socket cannot be bound (a `sun_path` over 107 bytes), the client
+  falls back to stdin.
+- **Sandbox.** Off (`no_sandbox = 1`), as on Windows. The setuid `chrome-sandbox` helper needs
+  `root:root 4755` next to the binary, and Ubuntu 24.04+ restricts unprivileged user namespaces
+  to binaries with an AppArmor profile granting `userns` (an AppImage's random mount path cannot
+  be matched). The Linux packages (WP-L7: `tools/package/stage-linux.sh`, tarball and AppImage)
+  therefore ship without `chrome-sandbox` and run unsandboxed; effects are local files loaded
+  with DNS blocked.
+- **System libraries.** Chromium's runtime list (NSS, GBM, ALSA, CUPS, ATK/AT-SPI, Pango/Cairo,
+  xkbcommon and the X11/XCB client libraries, even with Ozone headless, because `libcef.so`
+  links them). The CI job installs the Ubuntu 24.04 names (`t64` variants).
+- **Not verified yet** (needs CI or a Linux machine): that headless paints at the requested
+  rate; WebGL lightscripts (Ozone headless is software only; they would need
+  `--use-angle=swiftshader-webgl --enable-unsafe-swiftshader`); a sandboxed layout; Wayland.
 
 ## Process and message-loop model
 
@@ -287,9 +346,10 @@ generations. The protocol is unchanged; nothing was added to lightloom-protocol.
   polled the ring file while the renderer wrote it. It saw seq 1..300 in order with 0 gaps, 0
   torn reads, 0 generation/label mismatches, 300 non-black and 300 distinct frames, and final
   generations `(200, 200, 200)`.
-- **Production.** Use a named section (`CreateFileMapping(INVALID_HANDLE_VALUE, name)` or
-  `memfd` on Linux) instead of a file. `memmap2` cannot create named sections, which is why
-  this spike uses a file.
+- **Production.** Windows could use a named section (`CreateFileMapping(INVALID_HANDLE_VALUE,
+  name)`) instead of a file; `memmap2` cannot create named sections, which is why it is a file.
+  On Linux the file lives on a tmpfs, which makes it the same object `shm_open` returns (see
+  "Linux").
 
 ## Tests (no CEF, no GPU, no hardware)
 
@@ -419,11 +479,20 @@ software 34.67 / 34.67) is within these ranges.
   resolve features differently, so each gets its own cef-dll-sys hash and, without `CEF_PATH`,
   its own ~722 MB download + extraction under `target/<profile>/build/`. During the spike this
   piled up a dozen copies. Set `CEF_PATH` once, persistently: as a user environment variable,
-  or in an uncommitted `.cargo/config.toml` (`[env] CEF_PATH = "..."`, which cargo also hands
-  to build scripts). Keep the cargo target dir outside folders synced by cloud clients.
+  or in an uncommitted `.cargo/config.toml` in a directory *above* the checkout
+  (`[env] CEF_PATH = "..."`, which cargo also hands to build scripts; the repo's own
+  `.cargo/config.toml` is committed). Keep the cargo target dir outside folders synced by cloud
+  clients.
+- **Static CRT.** The repo's `.cargo/config.toml` builds Windows MSVC targets with
+  `+crt-static`. cef-dll-sys builds libcef_dll_wrapper with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`
+  (`/MT`) regardless, so the two match; `libcef.dll` is a separate DLL with its own static CRT.
 - **CI** (`.github/workflows/ci.yml`): the `rust` jobs build the workspace without `cef`. The
-  Windows-only `renderer-cef` job runs `cargo clippy|build -p lightloom-renderer --features cef`
-  with CMake + Ninja from `tools/cef-env.sh` and `CEF_PATH` cached by CEF version.
+  Windows `renderer-cef` job runs `cargo clippy|build -p lightloom-renderer --features cef`
+  with CMake + Ninja from `tools/cef-env.sh` and `CEF_PATH` cached by CEF version, then the
+  client test against the real renderer (`lightloom-render/tests/cef_real.rs`, `--ignored`,
+  `LIGHTLOOM_RENDERER_EXE`). `renderer-cef-linux` (Ubuntu 24.04) does the same with the linux64
+  distribution, checks the rpath, makes a 60-frame smoke run of `testdata/spike.html` and runs
+  the client test, each headless first and under Xvfb as a fallback.
 - **cargo-deny** runs with `all-features = true` so the CEF graph is checked too. Two
   **build-only** dependencies of `download-cef` need crate-scoped exceptions in `deny.toml`:
   `libbz2-rs-sys` (`bzip2-1.0.6`) and `webpki-roots` (`CDLA-Permissive-2.0`).

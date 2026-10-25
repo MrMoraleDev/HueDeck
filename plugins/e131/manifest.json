@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.e131",
+  "name": "E1.31 (sACN)",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "Generic E1.31 / sACN (ANSI E1.31-2018) unicast output on UDP 5568 to pixel controllers added by IP, 170 RGB LEDs per universe, Stream_Terminated on shutdown. Written from the public E1.31 standard. Untested: nobody on the project owns an E1.31 receiver. Protocol notes: docs/hardware/e131.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "lightingcontroller",
+  "devices": [
+    { "network": { "udpPorts": [5568] } }
+  ],
+  "shutdownModes": ["restore"],
+  "permissions": ["network-udp", "settings"],
+  "keywords": ["e1.31", "e131", "sacn", "streaming acn", "dmx", "pixel controller", "wled", "falcon", "espixelstick"]
+}

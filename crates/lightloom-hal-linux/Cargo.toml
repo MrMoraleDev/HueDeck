@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "lightloom-hal-linux"
-description = "Lightloom HAL backends for Linux: hidraw + report-descriptor TLC split, i2c-dev, udev, hwmon (stub until M7)"
+description = "Lightloom HAL backends for Linux: hidraw with the report-descriptor TLC split (Windows-identical endpoint tuples), udev netlink hotplug; /dev/i2c-* SMBus, hwmon sensors; serial ports from sysfs; raw USB over usbfs (nusb); logind sleep/lock and desktop notifications over D-Bus (zbus)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,4 +13,21 @@ homepage.workspace = true
 
 [dependencies]
 lightloom-hal = { path = "../lightloom-hal" }
-# TODO(M7): hidapi (linux-native), lightloom-hid-desc, nusb, serialport, i2cdev, libc.
+lightloom-hid-desc = { path = "../lightloom-hid-desc" }
+# The I/O broker's write allowlist, mirrored on Linux chipset buses.
+lightloom-protocol = { path = "../lightloom-protocol" }
+# Pure parts only (path parsing, device grouping, `DeviceGroup`): the same
+# identity and tuple rules as Windows. Its OS modules are `cfg(windows)`.
+lightloom-hal-windows = { path = "../lightloom-hal-windows" }
+tracing = { workspace = true }
+
+# Raw hidraw ioctls, poll and the netlink uevent socket (no libudev, no C build).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+nusb = { workspace = true }
+zbus = { workspace = true }
+serde = { workspace = true }
+
+# Fake D-Bus peers over socket pairs in the tests.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { workspace = true, features = ["p2p"] }

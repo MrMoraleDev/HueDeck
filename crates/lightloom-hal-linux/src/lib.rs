@@ -1,33 +1,70 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Linux HAL backends (M7).
 //!
-//! Planned: hidapi `linux-native` (hidraw) with `lightloom-hid-desc` splitting
-//! each interface into top-level collections so `Validate` sees the same
-//! `{interface, usage, usage_page, collection}` tuples as on Windows; `nusb`
-//! for raw USB; `serialport`; udev hotplug; `/dev/i2c-*` SMBus (no broker);
-//! hwmon sensors and pwm fan control.
+//! * [`sysfs`]: hidraw nodes from `/sys/class/hidraw` (identity, USB parent,
+//!   report descriptor) without opening them;
+//! * [`tlc`]: the report-descriptor split into top-level collections and the
+//!   grouping into physical devices, giving the same
+//!   `{interface, usage, usage_page, collection}` tuples as Windows;
+//! * [`uevent`]: netlink uevent parsing (udev and kernel shapes);
+//! * [`i2c`]: `/dev/i2c-*` adapter discovery by sysfs name and the
+//!   [`SmbusBus`](lightloom_hal::SmbusBus) of each (Windows policy; the
+//!   device and opener are Linux only);
+//! * [`hwmon`]: read-only temperatures and fan speeds;
+//! * [`tty`]: serial ports and the USB device behind each from sysfs (nothing
+//!   opened); `LinuxSerialBackend` (Linux only) opens them over `serialport`;
+//! * [`procfs`]: system-wide CPU time and memory (`/proc/stat`, `/proc/meminfo`);
+//! * `hidraw` (Linux only): [`LinuxHidBackend`], report I/O on `/dev/hidrawN`;
+//! * `hotplug` (Linux only): [`HidrawHotplug`], the udev netlink monitor
+//!   (hidraw nodes and raw USB devices);
+//! * [`usb`]: USB devices and interfaces from sysfs; `LinuxUsbBackend`
+//!   (Linux only), raw USB over usbfs through `nusb`;
+//! * `logind` (Linux only): [`LogindPower`], sleep/resume and lock/unlock
+//!   from systemd-logind over D-Bus;
+//! * `notifications` (Linux only): [`FreedesktopNotifier`],
+//!   `org.freedesktop.Notifications` over D-Bus;
+//! * `dbus` (Linux only): blocking calls on zbus, shared with the tray.
+//!
+//! The pure modules compile on every OS so their tests (and the tuple-parity
+//! fixtures shared with the Windows path logic) run in Windows CI too.
+//! `unsafe` is confined to the Linux-only `sys` module (ioctls, poll, socket).
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
-#[cfg(unix)]
-mod imp {
-    use lightloom_hal::hid::{HidBackend, HidEndpointInfo, HidHandle};
-    use lightloom_hal::{HalError, HalResult};
+pub mod hwmon;
+pub mod i2c;
+pub mod procfs;
+pub mod sysfs;
+pub mod tlc;
+pub mod tty;
+pub mod uevent;
+pub mod usb;
 
-    /// Placeholder hidraw backend; every call reports `Unsupported` until M7.
-    #[derive(Debug, Default, Clone, Copy)]
-    pub struct LinuxHidBackend;
+#[cfg(test)]
+mod fixtures;
 
-    impl HidBackend for LinuxHidBackend {
-        fn enumerate(&self) -> HalResult<Vec<HidEndpointInfo>> {
-            Err(HalError::Unsupported("hidraw backend lands in M7"))
-        }
+#[cfg(target_os = "linux")]
+pub mod dbus;
+#[cfg(target_os = "linux")]
+pub mod hidraw;
+#[cfg(target_os = "linux")]
+pub mod hotplug;
+#[cfg(target_os = "linux")]
+pub mod logind;
+#[cfg(target_os = "linux")]
+pub mod notifications;
+#[cfg(target_os = "linux")]
+mod sys;
 
-        fn open(&self, _path: &str) -> HalResult<Box<dyn HidHandle>> {
-            Err(HalError::Unsupported("hidraw backend lands in M7"))
-        }
-    }
-}
-
-#[cfg(unix)]
-pub use imp::LinuxHidBackend;
+#[cfg(target_os = "linux")]
+pub use hidraw::LinuxHidBackend;
+#[cfg(target_os = "linux")]
+pub use hotplug::HidrawHotplug;
+#[cfg(target_os = "linux")]
+pub use logind::LogindPower;
+#[cfg(target_os = "linux")]
+pub use notifications::FreedesktopNotifier;
+#[cfg(target_os = "linux")]
+pub use tty::LinuxSerialBackend;
+#[cfg(target_os = "linux")]
+pub use usb::LinuxUsbBackend;

@@ -4,7 +4,8 @@
 //! A LocalSystem Windows service, registered once by `lightloom-setup --smbus`
 //! only when the user opts in. It talks to the PawnIO driver with raw IOCTLs
 //! ([`pawnio`]), runs the signed `SmbusPIIX4` module (hash-pinned, [`pins`])
-//! on one handle per PIIX4 port ([`piix4`]), and serves the closed operation
+//! on one handle per PIIX4 port ([`piix4`]) on AMD boards, or `SmbusI801`
+//! on the Intel PCH SMBus ([`i801`]; the two share [`chipset`]), and serves the closed operation
 //! set of `lightloom_protocol::broker` over a local named pipe ([`pipe`]) to the
 //! unprivileged `lightloom` / `lightloomd`. GPU I2C (NvAPI) does not go through
 //! here: it runs in the user process.
@@ -28,7 +29,9 @@
 #![deny(unsafe_op_in_unsafe_fn, clippy::undocumented_unsafe_blocks)]
 
 pub mod boot;
+pub mod chipset;
 pub mod detect;
+pub mod i801;
 pub mod mutex;
 pub mod pawnio;
 pub mod piix4;
@@ -37,8 +40,12 @@ pub mod pipe;
 pub mod policy;
 pub mod server;
 
-#[cfg(test)]
-pub(crate) mod fake;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fake;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzz;
 
 /// Windows service name registered by `lightloom-setup --smbus`.
 pub const SERVICE_NAME: &str = "LightloomIoBroker";

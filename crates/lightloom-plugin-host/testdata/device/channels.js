@@ -53,6 +53,8 @@ export function Initialize() {
     bios: systeminfo.GetBiosInfo().releaseDate,
     ram: systeminfo.GetRamInfo().map((m) => m.partNumber),
   }));
+  // Names for the LED painter (the host keeps them with the positions).
+  device.setControllableLeds(["Body"], [[0, 0]]);
 }
 
 export function Render() {

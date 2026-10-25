@@ -140,6 +140,20 @@ Per-GPU bus created from NvAPI enumeration (`NvAPI Version: NVidia Complete Vers
 
 `AMDGpuHandle::Initialize` → ADLX; bus `AMD ADLX Bus - <name>`; supports WriteQuick, WriteBlock(reg,len,data), ReadBlockBytes(reg,len). Fails without AMD driver (`General failure`).
 
+**Lightloom** (`crates/lightloom-adl`): legacy ADL instead of ADLX (the ADL SDK headers are MIT; the
+structures are declared by hand). `atiadlxx.dll` is loaded from System32 only; without it there
+are simply no AMD GPU buses (no note, no error). One bus per AMD GPU (one ADL adapter per PCI
+bus, vendor 0x1002, PCI ids from the PNP string), kind `AmdGpu` (`IsAMDGpuBus()`), name
+`AMD ADLX Bus - <adapter name>` (SignalRGB's prefix, so plugins that strip it work), key
+`1002:dddd:ssss:SSSS@pciNN`. Every transfer is one `ADL2_Display_WriteAndReadI2C` on line 1 at
+100 kHz, as OpenRGB's `i2c_smbus_amdadl.cpp`: reads put the register in `iOffset`; writes send
+the register as the first data byte; Block Write is `[reg, count, data…]`; `WriteQuick` is a
+zero-length write [U]; register-less reads use offset 0 [U]; `ReadByteWithoutRegister` is
+unsupported. Plugins see `-1` for any failure (ADL statuses stay in the logs). One worker
+thread `lightloom-adl` per process, a 500 ms deadline per request, the card looked up by PCI bus
+and ids at every transfer; a lost context or stale adapter index (-2, -5, -10) gets a new
+context, a re-enumeration and one retry. No cross-process mutex.
+
 ## 11. RAM address remapping
 
 ENE/Aura (`ENE_RAM.js:733-851`): all ENE DIMMs power up at 0x77 (Aura) ; first software to touch them must move each DIMM to a unique address. Loop up to 8 slots: `WriteQuick(0x77)` (<0 ⇒ nothing left) → pick first *free* address (WriteQuick<0) from the potential list → `WriteRegister(0x77, 0x80F8, slotIdx)` (SetChannelIdx) + `WriteRegister(0x77, 0x80F9, freeAddr<<1)` (SetStickAddress, 8-bit address) with 1 ms pauses; XTREEM variant uses 0xE0F8/0xE0F9. ENE register access = `WriteWord(addr, 0x00, bswap16(reg))` then `WriteByte(addr, 0x01, val)` / `ReadByte(addr, 0x81)` / `WriteBlock(addr, 0x03, n, data)`.
@@ -275,7 +289,10 @@ Lightloom implements the surface above in `crates/lightloom-plugin-host` (`js/ho
 - **`SmbusDeniedRegisters()` (Lightloom extension, optional).** Registers the host never
   lets the plugin write, at any address and in every phase (for a register-less write, its
   first byte): save-to-flash and similar commands. The MSI GPU plugin lists 0x3F
-  (`MSI_GPU_REG_SAVE`). The manifest repeats them as `smbus.deniedRegisters`.
+  (`MSI_GPU_REG_SAVE`). The manifest repeats them as `smbus.deniedRegisters`. The one
+  exception is the plugin's `SaveToDevice({action: "save"})` that the user asked for and
+  confirmed ("Save to devices"): for the duration of that call only, writes to these
+  registers go through (and are logged); see [save-shutdown.md](save-shutdown.md).
 - **DIMM deny ranges.** Writes and Quick commands to 0x50-0x57 (SPD EEPROM) are refused on
   every bus. On buses that may reach the DIMMs (chipset: System, AMD, Intel; and Nuvoton)
   also 0x30-0x37 (SPD write protect / page select), 0x48-0x4F (DDR5 PMIC) and 0x50-0x5F
@@ -327,8 +344,9 @@ Lightloom implements the surface above in `crates/lightloom-plugin-host` (`js/ho
   buses are used only while the broker answers and reports itself healthy (protocol 3,
   official PawnIO 2.2.0 or later, `SmbusPIIX4` loaded); otherwise the run says what is
   missing and drives the other devices. Installing PawnIO and registering the broker are
-  the user's steps (an option of the Lightloom installer and an install / remove button in
-  Settings are planned).
+  the user's choice: the installer's RAM lighting option or Settings → PawnIO / RAM
+  lighting in the dashboard, both through `lightloom-setup` behind one UAC prompt
+  (packaging/README.md).
 - **Batched writes (`SmbusBatchWrites()`, Lightloom extension, optional).** A plugin whose
   `SmbusBatchWrites()` returns `true` (manifest `smbus.batchWrites`) gets its writes inside
   a `TransactionLock` queued after every policy check (a refused write still answers its

@@ -18,13 +18,26 @@
 //!   compat host module (`js/host.js`: recording stubs, or device natives).
 //! * [`device`]: the native backing of `device.*` for a real device (HID I/O
 //!   through lightloom-hal, canvas sampling, I/O statistics, dry-run writes).
+//! * [`battery`]: what a plugin reports through the `battery` feature global.
+//! * [`input`]: key and button events of the `keyboard` / `mouse` feature
+//!   globals, handed to the macro runtime.
+//! * [`plugin_ui`]: a device plugin's parameters and messages as they change
+//!   at run time (`device.addProperty`, `device.addMessage`, `device.notify`).
 //! * [`children`]: subdevices and channels (with their component instances),
 //!   each placed and sampled on the canvas on its own.
 //! * [`session`]: one device session = one plugin thread running
 //!   Validate → Initialize → Render per frame → Shutdown.
+//! * [`serial`]: `@SignalRGB/serial` for `Type() == "serial"` sessions, bound
+//!   to the matched USB device's own ports (dry-run writes, read timeouts).
+//! * [`lcd`]: `@SignalRGB/lcd` in device sessions: `LCD.initialize` attaches to the
+//!   device's face renderer, `getFrame` and friends encode its frames.
+//! * [`lamparray`]: the built-in session of a LampArray of the OS backend
+//!   (Windows Dynamic Lighting), sampled like a plugin device.
 //! * [`manager`]: one session per present device, following hotplug
 //!   (stop on removal, restart behind a stale handle, start on arrival).
 //! * [`catalog`]: plugin discovery over plugin directories (VID:PID index).
+//! * [`save`]: storing lighting in a device (`SaveToDevice`) and the
+//!   shutdown modes (`Shutdown(SystemSuspending, mode)`), Lightloom extensions.
 //! * [`stats`]: fixed-memory latency histograms for long-running sessions.
 //! * [`exports`]: namespace JSON → [`PluginMeta`].
 //! * [`dryrun`]: the `lightloom compat dry-run` corpus harness.
@@ -36,6 +49,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod battery;
 pub mod bus;
 pub mod catalog;
 pub mod children;
@@ -43,11 +57,21 @@ pub mod device;
 pub mod discover;
 pub mod dryrun;
 pub mod exports;
+pub mod hwmode;
+pub mod input;
+pub mod lamparray;
+pub mod lcd;
 pub mod loader;
 pub mod manager;
+pub mod manifest;
 pub mod meta;
+pub mod net;
+pub mod plugin_ui;
 pub mod resolve;
 pub mod runtime;
+pub mod save;
+pub mod serial;
+pub mod service;
 pub mod session;
 pub mod smbus;
 pub mod spd;

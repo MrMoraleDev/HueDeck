@@ -4,13 +4,45 @@
   import { daemon } from "../lib/store.svelte";
   import type { DeviceView, LibraryComponent, Snapshot } from "../lib/types";
   import ControlInput from "./ControlInput.svelte";
+  import SaveDialog from "./SaveDialog.svelte";
+  import BatteryBadge from "./BatteryBadge.svelte";
+  import DeviceReport, { skipWorksPreview } from "./DeviceReport.svelte";
+  import LcdFacePicker from "./LcdFacePicker.svelte";
+  import HardwareModePicker from "./HardwareModePicker.svelte";
+  import LedPainter from "./LedPainter.svelte";
+  import { groupParameters, groupTitle } from "../lib/params";
+  import { token } from "../lib/api";
+  import { buildReport, type ReportResult } from "../lib/report";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let library = $state<LibraryComponent[]>([]);
   let libraryError = $state<string | null>(null);
   let open = $state<string | null>(null);
+  /** The device whose LED painter is open. */
+  let painting = $state<string | null>(null);
   let pick = $state<Record<string, string>>({});
   let strip = $state<Record<string, number>>({});
+  let saving = $state(false);
+  /** The device report being previewed. */
+  let reporting = $state<{ device: DeviceView; result: ReportResult } | null>(null);
+
+  function report(d: DeviceView, result: ReportResult) {
+    if (result === "works" && skipWorksPreview()) {
+      // The user turned the preview off for "Works": one click opens the form.
+      const r = buildReport(
+        { device: $state.snapshot(d) as DeviceView, version: snapshot.version, os: snapshot.os ?? "", logs: daemon.logs, token: token() },
+        "works",
+      );
+      window.open(r.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    reporting = { device: d, result };
+  }
+  const MODE_NAMES: Record<string, string> = {
+    restore: "Its own lighting",
+    keep: "Keep the last colours",
+    off: "Lights off",
+  };
 
   async function loadLibrary() {
     try {
@@ -37,19 +69,52 @@
   }
 </script>
 
+<div class="row toolbar">
+  <button onclick={() => (saving = true)} disabled={!snapshot.devices.some((d) => d.connected)}>Save to devices…</button>
+  <span class="muted">Stores the current lighting in each device's own memory, so it shows at boot without Lightloom.</span>
+</div>
+{#if saving}
+  <SaveDialog {snapshot} onclose={() => (saving = false)} />
+{/if}
+{#if reporting}
+  <DeviceReport
+    device={reporting.device}
+    result={reporting.result}
+    version={snapshot.version}
+    os={snapshot.os ?? ""}
+    logs={daemon.logs}
+    onclose={() => (reporting = null)}
+  />
+{/if}
+
 <div class="list">
   {#each snapshot.devices as d (d.key)}
-    <section class="panel device">
+    <section class="panel device" id={`device-${d.key}`}>
       <div class="row head">
         {#if d.image}<img src={d.image} alt="" />{/if}
         <div class="title">
           <strong>{d.name}</strong>
-          <span class="muted key">{d.bus ? `SMBus · ${d.bus}` : d.key}</span>
+          <span class="muted key">{d.bus ? (d.bus.startsWith("network") ? d.bus : `SMBus · ${d.bus}`) : d.key}</span>
         </div>
         <span class={`badge ${stateBadge(d)}`}>{d.state}</span>
+        <span
+          class="badge"
+          class:good={d.tested}
+          title={d.tested
+            ? "Someone has run this plugin on this very device: it is in the plugin's tested list."
+            : "Nobody has reported this device with this plugin yet. If it works (or not), the buttons below open a prefilled report."}
+          >{d.tested ? "Tested" : "Untested"}</span
+        >
+        {#if d.thirdParty}<span class="badge" title="Driven by a plugin read from your SignalRGB installation"
+            >third-party plugin</span
+          >{/if}
+        {#if d.battery}<BatteryBadge battery={d.battery} />{/if}
+        {#if d.endpoints.some((e) => e.customLeds)}<span class="badge" title="Some of its LEDs show your own colours, not the effect"
+            >Custom LEDs</span
+          >{/if}
         {#if d.connected}
           <span class="muted stats"
-            >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? "bus" : "HID"} errors</span
+            >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? (d.bus.startsWith("network") ? "network" : "bus") : "HID"} errors</span
           >
         {/if}
         <label class="row"
@@ -59,6 +124,13 @@
             onchange={(e) => daemon.run(() => api.setDevice(d.key, { enabled: (e.target as HTMLInputElement).checked }))}
           /> Drive this device</label
         >
+        {#if d.connected && d.endpoints.some((e) => e.leds > 0)}
+          <button
+            title="Colour single LEDs (keys) yourself, instead of the effect"
+            onclick={() => (painting = painting === d.key ? null : d.key)}
+            >{painting === d.key ? "Close LEDs" : "Customise LEDs"}</button
+          >
+        {/if}
         {#if d.connected}
           <button
             onclick={() => {
@@ -68,24 +140,90 @@
           >
         {/if}
       </div>
-      <p class="muted plugin">Plugin: {d.plugin} <span class="path">({d.pluginPath})</span></p>
+      <div class="row plugin">
+        <p class="muted">
+          Plugin: {d.plugin}{d.pluginVersion ? ` ${d.pluginVersion}` : ""} <span class="path">({d.pluginPath})</span>
+        </p>
+        <span class="report">
+          <button
+            class="small"
+            title="Open a prefilled GitHub issue saying this device works (you see it first; Lightloom sends nothing)"
+            onclick={() => report(d, "works")}>Works</button
+          >
+          <button
+            class="small"
+            title="Open a prefilled GitHub issue about a problem with this device (you see it first; Lightloom sends nothing)"
+            onclick={() => report(d, "problem")}>Report a problem</button
+          >
+        </span>
+      </div>
+      {#if d.driverProblem}
+        <p class="driver-problem">
+          <span class="badge bad">needs WinUSB driver</span>
+          {d.driverProblem}
+          {#if d.helpUrl}<a href={d.helpUrl} target="_blank" rel="noreferrer">Why, and what to check</a>{/if}
+        </p>
+      {/if}
+      {#each d.messages ?? [] as m (m.id)}
+        <p class={`message ${(m.priority ?? 0) >= 2 ? "bad" : m.priority === 1 ? "warn" : ""}`} title={m.tooltip ?? ""}>
+          {#if m.title}<strong>{m.title}:</strong>{/if}
+          {m.message}
+        </p>
+      {/each}
+      {#if painting === d.key && d.connected}<LedPainter device={d} />{/if}
+      {#if d.lcd}<LcdFacePicker device={d} faces={snapshot.lcdFaces ?? []} />{/if}
+      {#if d.connected && d.hardwareModes?.length}<HardwareModePicker device={d} />{/if}
+      {#if d.battery}
+        <label class="check blink"
+          ><input
+            type="checkbox"
+            checked={d.blinkLowBattery}
+            onchange={(e) =>
+              daemon.run(() => api.setDevice(d.key, { blinkLowBattery: (e.target as HTMLInputElement).checked }))}
+          /> Pulse red while the battery is low (below {snapshot.settings.batteryLow} %)</label
+        >
+      {/if}
 
       {#if open === d.key}
         {#if d.parameters.length}
           <h3>Plugin settings</h3>
-          {#each d.parameters as p (p.property)}
-            <ControlInput
-              kind={p.type}
-              label={p.label || p.property}
-              value={p.value}
-              min={p.min}
-              max={p.max}
-              step={p.step}
-              values={p.values}
-              tooltip={p.tooltip ?? p.description}
-              onchange={(v) => daemon.run(() => api.setDevice(d.key, { parameters: { [p.property]: v } }))}
-            />
+          {#each groupParameters(d.parameters) as g (g.name)}
+            {#if g.name}<h4>{groupTitle(g.name)}</h4>{/if}
+            {#each g.items as p (p.property)}
+              <ControlInput
+                kind={p.type}
+                label={p.label || p.property}
+                value={p.value}
+                min={p.min}
+                max={p.max}
+                step={p.step}
+                values={p.values}
+                tooltip={p.tooltip ?? p.description}
+                live={p.live !== false}
+                filter={p.filter}
+                onchange={(v) => daemon.run(() => api.setDevice(d.key, { parameters: { [p.property]: v } }))}
+              />
+            {/each}
           {/each}
+        {/if}
+
+        <h3>When Lightloom closes</h3>
+        <label class="row"
+          ><select
+            value={d.shutdownMode ?? "default"}
+            onchange={(e) =>
+              daemon.run(() =>
+                api.setDevice(d.key, { shutdownMode: (e.target as HTMLSelectElement).value as "default" }),
+              )}
+          >
+            <option value="default">As in Settings ({MODE_NAMES[snapshot.settings.shutdownMode]})</option>
+            {#each d.shutdownModes as m (m)}
+              <option value={m}>{MODE_NAMES[m] ?? m}</option>
+            {/each}
+          </select></label
+        >
+        {#if d.shutdownModes.length < 3}
+          <p class="muted">This device's plugin can only give the lights back to the device's own lighting.</p>
         {/if}
 
         {#if d.channels.length}
@@ -148,6 +286,9 @@
 </div>
 
 <style>
+  .toolbar {
+    margin-bottom: 12px;
+  }
   .list {
     display: flex;
     flex-direction: column;
@@ -168,13 +309,57 @@
   }
   .stats {
     flex: 1;
+    /* Counters change every second: fixed-width digits keep the row from shifting. */
+    font-variant-numeric: tabular-nums;
   }
   .plugin {
     margin: 6px 0 0;
     font-size: 12px;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+  }
+  .plugin p {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .report {
+    display: inline-flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .small {
+    padding: 2px 8px;
+    font-size: 12px;
+  }
+  .driver-problem {
+    margin: 6px 0 0;
+    font-size: 12px;
+    overflow-wrap: anywhere;
   }
   .path {
     opacity: 0.6;
+  }
+  .message {
+    margin: 6px 0 0;
+    padding: 4px 8px;
+    border-left: 3px solid var(--accent);
+    font-size: 13px;
+  }
+  .message.warn {
+    border-color: var(--warn);
+  }
+  .message.bad {
+    border-color: var(--bad);
+  }
+  h4 {
+    margin: 8px 0 2px;
+    font-size: 13px;
+  }
+  .blink {
+    font-size: 12px;
+    margin: 6px 0 0;
   }
   .channel {
     border-top: 1px solid var(--line);

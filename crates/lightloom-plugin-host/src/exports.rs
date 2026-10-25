@@ -9,8 +9,8 @@
 //! dry-run can count every problem at once.
 
 use crate::meta::{
-    coerce_number, smbus_kind, ControllableParameter, DeviceMessage, DeviceType, LifecycleExports, ParamType,
-    ParamValue, PluginMeta, PluginType, ProductIdExport,
+    coerce_number, coerce_param_value, smbus_kind, ControllableParameter, DeviceMessage, DeviceType,
+    LifecycleExports, ParamType, ParamValue, PluginMeta, PluginType, ProductIdExport,
 };
 use serde_json::Value as J;
 use std::collections::BTreeMap;
@@ -63,6 +63,14 @@ fn truthy(v: &J) -> bool {
     }
 }
 
+/// A boolean attribute that may be quoted (`"live": "false"`).
+fn flag(v: &J) -> bool {
+    match v {
+        J::String(s) => !matches!(s.trim().to_ascii_lowercase().as_str(), "" | "false" | "0"),
+        other => truthy(other),
+    }
+}
+
 fn pair_u32(v: &J) -> Option<[u32; 2]> {
     let a = v.as_array()?;
     let x = as_f64(a.first()?)?;
@@ -79,7 +87,9 @@ fn param_value(v: &J) -> Option<ParamValue> {
     }
 }
 
-fn parameter(v: &J, warnings: &mut Vec<String>) -> Option<ControllableParameter> {
+/// One `ControllableParameters()` row or `device.addProperty(obj)` object;
+/// `None` without a `property`, and (with a warning) with an unknown `type`.
+pub(crate) fn parameter(v: &J, warnings: &mut Vec<String>) -> Option<ControllableParameter> {
     let o = v.as_object()?;
     let property = o.get("property").and_then(as_string)?;
     let raw_type = o.get("type").and_then(as_string).unwrap_or_default();
@@ -106,8 +116,12 @@ fn parameter(v: &J, warnings: &mut Vec<String>) -> Option<ControllableParameter>
         min: f("min"),
         max: f("max"),
         step: f("step"),
-        default: o.get("default").and_then(param_value),
-        live: o.get("live").map(truthy).unwrap_or(true),
+        default: o
+            .get("default")
+            .map(|d| coerce_param_value(param_type, d))
+            .as_ref()
+            .and_then(param_value),
+        live: o.get("live").map(flag).unwrap_or(true),
         order: f("order").map(|v| v as i64),
         filter: s("filter"),
         property,
@@ -262,6 +276,15 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
         }
     }
     meta.smbus_batch_writes = get("SmbusBatchWrites").is_some_and(|v| v.as_bool() == Some(true));
+    if let Some(v) = get("SaveCapabilities") {
+        meta.save_caps = crate::save::SaveCaps::from_json(v, &mut warnings);
+    }
+    if let Some(v) = get("ShutdownModes") {
+        meta.shutdown_modes = crate::save::shutdown_modes_from_json(v, &mut warnings);
+    }
+    if let Some(v) = get("HardwareModes") {
+        meta.hardware_modes = crate::hwmode::modes_from_json(v, &mut warnings);
+    }
     if let Some(a) = get("SmbusBuses").and_then(J::as_array) {
         for v in a {
             let name = as_string(v).unwrap_or_default();
@@ -291,7 +314,19 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
             .and_then(J::as_array)
             .map(|a| a.iter().filter_map(as_string).collect())
             .unwrap_or_default(),
+        save_to_device: flag("SaveToDevice"),
+        set_hardware_mode: flag("SetHardwareMode"),
     };
+    if meta.save_caps.is_some() && !meta.lifecycle.save_to_device {
+        warnings.push("SaveCapabilities() without a SaveToDevice(request) export: nothing is saved".into());
+        meta.save_caps = None;
+    }
+    if !meta.hardware_modes.is_empty() && !meta.lifecycle.set_hardware_mode {
+        warnings.push(
+            "HardwareModes() without a SetHardwareMode(request) export: no hardware mode is offered".into(),
+        );
+        meta.hardware_modes.clear();
+    }
 
     let errors = ns
         .get("errors")

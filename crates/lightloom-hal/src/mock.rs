@@ -6,13 +6,23 @@
 //!   handle returns pre-scripted reads/feature reports and records every
 //!   operation into a shared [`TransactionRecorder`].
 //! * [`MockSmbus`] is a register-map SMBus bus that records transactions too.
+//! * [`MockUsb`] is a scripted raw USB backend (bulk IN data per endpoint,
+//!   control IN answers, timeouts, unplug) that records every transfer.
+//! * [`MockNotifier`] keeps the system notifications it was asked to show.
+//! * [`MockRegistry`] is an in-memory per-user registry.
+//! * [`MockLampArray`] is a fake LampArray provider (plug, unplug,
+//!   availability, recorded colour updates).
+//! * [`MockSerial`] has serial ports with an input queue and canned replies
+//!   (exclusive opens, read timeouts, unplug).
 //!
 //! Golden tests compare `recorder.snapshot()` (or just `recorder.writes()`)
 //! against checked-in fixtures.
 
 use crate::error::{HalError, HalResult};
 use crate::hid::{HidBackend, HidEndpointInfo, HidHandle, ReportLengths};
+use crate::serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};
 use crate::smbus::{validate_address, PciIds, SmbusBus, SmbusBusDescriptor, SmbusBusKind};
+use crate::usb::{UsbBackend, UsbDeviceInfo, UsbHandle, UsbInterfaceInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -44,6 +54,16 @@ pub enum TransactionKind {
     SmbusRead,
     /// SMBus bus lock taken (`bytes` = lease in ms, LE) or released (`bytes` empty).
     SmbusLock,
+    /// Raw USB interface claimed (`bytes` = `[interface]`).
+    UsbClaim,
+    /// Bulk OUT transfer (`bytes` = `[endpoint, data…]`).
+    BulkOut,
+    /// Bulk IN transfer (`bytes` = `[endpoint, data the mock returned…]`).
+    BulkIn,
+    /// Control OUT transfer (`bytes` = the 8-byte setup packet, then the data).
+    ControlOut,
+    /// Control IN transfer (`bytes` = the setup packet, then the data returned).
+    ControlIn,
 }
 
 /// One recorded operation.
@@ -797,9 +817,918 @@ impl SmbusBus for MockSmbus {
     }
 }
 
+/// Mutable state behind one scripted raw USB device.
+#[derive(Debug, Default)]
+pub struct MockUsbDeviceState {
+    /// Static description handed to `enumerate()`.
+    pub info: UsbDeviceInfo,
+    /// Data returned by successive bulk IN transfers, per endpoint address.
+    pub bulk_in: BTreeMap<u8, VecDeque<Vec<u8>>>,
+    /// Data returned by successive control IN transfers.
+    pub control_in: VecDeque<Vec<u8>>,
+    /// Every OUT transfer fails with [`HalError::Backend`].
+    pub fail_out: bool,
+    /// Every OUT transfer times out (a device that stopped reading).
+    pub out_timeout: bool,
+    /// An IN transfer without scripted data waits out its timeout (up to
+    /// 5 s) before it fails with [`HalError::Timeout`]; otherwise it fails at once.
+    pub block_reads: bool,
+    /// Number of times the device was opened.
+    pub open_count: usize,
+    /// Unplugged: absent from `enumerate()`, `open` fails, I/O fails with
+    /// [`HalError::Disconnected`].
+    pub unplugged: bool,
+    /// Bumped by every unplug: handles opened before stay stale.
+    pub generation: u64,
+}
+
+type SharedUsbDevice = Arc<Mutex<MockUsbDeviceState>>;
+
+/// Scripted raw USB backend. Handles route transfers like the Windows
+/// backend does ([`UsbDeviceInfo::claimable_for_endpoint`],
+/// [`UsbDeviceInfo::claimable_for_control`]): an interface another driver
+/// owns is never claimed. Every operation is recorded: `Open`/`Close`,
+/// `UsbClaim` (`[interface]`), `BulkOut`/`BulkIn` (`[endpoint, data…]`) and
+/// `ControlOut`/`ControlIn` (the 8-byte setup packet, then the data).
+#[derive(Debug, Default)]
+pub struct MockUsb {
+    devices: Vec<SharedUsbDevice>,
+    recorder: TransactionRecorder,
+}
+
+fn lock_usb(d: &SharedUsbDevice) -> MutexGuard<'_, MockUsbDeviceState> {
+    d.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl MockUsb {
+    /// Empty backend with a fresh recorder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Empty backend that logs into an existing recorder (shared with a [`MockHid`]).
+    pub fn with_recorder(recorder: TransactionRecorder) -> Self {
+        Self {
+            devices: Vec::new(),
+            recorder,
+        }
+    }
+
+    /// An interface WinUSB owns, with its endpoints.
+    pub fn winusb_interface(number: u8, endpoints: &[u8]) -> UsbInterfaceInfo {
+        UsbInterfaceInfo {
+            number,
+            class: 0xFF,
+            subclass: 0,
+            protocol: 0,
+            driver: "WinUSB".into(),
+            accessible: true,
+            endpoints: endpoints.to_vec(),
+        }
+    }
+
+    /// An interface another driver owns (`HidUsb`, `usbaudio`, `USBSTOR`, ...).
+    pub fn foreign_interface(number: u8, class: u8, driver: &str, endpoints: &[u8]) -> UsbInterfaceInfo {
+        UsbInterfaceInfo {
+            number,
+            class,
+            subclass: 0,
+            protocol: 0,
+            driver: driver.into(),
+            accessible: false,
+            endpoints: endpoints.to_vec(),
+        }
+    }
+
+    /// A device description with a synthetic `mockusb://` path and instance
+    /// id `USB\VID_xxxx&PID_xxxx\<serial>` (what a HID group's USB parent is
+    /// matched against). `driver_bound` follows the interfaces.
+    pub fn device_info(vid: u16, pid: u16, serial: &str, interfaces: Vec<UsbInterfaceInfo>) -> UsbDeviceInfo {
+        UsbDeviceInfo {
+            vid,
+            pid,
+            serial: serial.to_string(),
+            manufacturer: "Lightloom Mock".into(),
+            product: format!("Mock USB {vid:04x}:{pid:04x}"),
+            path: format!("mockusb://{vid:04x}:{pid:04x}/{serial}"),
+            bus_number: 1,
+            address: 1,
+            driver_bound: interfaces.iter().any(|i| i.accessible),
+            instance_id: format!("USB\\VID_{vid:04X}&PID_{pid:04X}\\{serial}"),
+            interfaces,
+        }
+    }
+
+    /// Add a device (builder style).
+    pub fn add_device(mut self, info: UsbDeviceInfo) -> Self {
+        self.push_device(info);
+        self
+    }
+
+    /// Add a device in place.
+    pub fn push_device(&mut self, info: UsbDeviceInfo) {
+        self.devices.push(Arc::new(Mutex::new(MockUsbDeviceState {
+            info,
+            ..Default::default()
+        })));
+    }
+
+    /// The shared recorder.
+    pub fn recorder(&self) -> TransactionRecorder {
+        self.recorder.clone()
+    }
+
+    /// Shared state of the device at `path`, for scripting from tests.
+    pub fn device(&self, path: &str) -> Option<SharedUsbDevice> {
+        self.devices
+            .iter()
+            .find(|d| lock_usb(d).info.path == path)
+            .cloned()
+    }
+
+    fn with_device<T>(&self, path: &str, f: impl FnOnce(&mut MockUsbDeviceState) -> T) -> HalResult<T> {
+        let d = self
+            .device(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let mut s = lock_usb(&d);
+        Ok(f(&mut s))
+    }
+
+    /// Queue data for the next bulk IN transfer on `endpoint` of `path`.
+    pub fn script_bulk_in(&self, path: &str, endpoint: u8, data: impl Into<Vec<u8>>) -> HalResult<()> {
+        let data = data.into();
+        self.with_device(path, |s| s.bulk_in.entry(endpoint).or_default().push_back(data))
+    }
+
+    /// Queue data for the next control IN transfer on `path`.
+    pub fn script_control_in(&self, path: &str, data: impl Into<Vec<u8>>) -> HalResult<()> {
+        let data = data.into();
+        self.with_device(path, |s| s.control_in.push_back(data))
+    }
+
+    /// Unplug the device at `path` (see [`MockUsbDeviceState::unplugged`]).
+    pub fn unplug(&self, path: &str) -> HalResult<()> {
+        self.with_device(path, |s| {
+            s.unplugged = true;
+            s.generation += 1;
+        })
+    }
+
+    /// Plug the device at `path` back in (handles opened before stay stale).
+    pub fn replug(&self, path: &str) -> HalResult<()> {
+        self.with_device(path, |s| s.unplugged = false)
+    }
+}
+
+impl UsbBackend for MockUsb {
+    fn enumerate(&self) -> HalResult<Vec<UsbDeviceInfo>> {
+        Ok(self
+            .devices
+            .iter()
+            .filter_map(|d| {
+                let s = lock_usb(d);
+                (!s.unplugged).then(|| s.info.clone())
+            })
+            .collect())
+    }
+
+    fn open(&self, path: &str) -> HalResult<Box<dyn UsbHandle>> {
+        let state = self
+            .device(path)
+            .ok_or_else(|| HalError::NotFound(path.to_string()))?;
+        let (info, generation) = {
+            let mut s = lock_usb(&state);
+            if s.unplugged {
+                return Err(HalError::NotFound(path.to_string()));
+            }
+            s.open_count += 1;
+            (s.info.clone(), s.generation)
+        };
+        self.recorder.record(TransactionKind::Open, path, Vec::new());
+        Ok(Box::new(MockUsbHandle {
+            state,
+            recorder: self.recorder.clone(),
+            info,
+            generation,
+            claimed: BTreeSet::new(),
+        }))
+    }
+}
+
+/// Handle returned by [`MockUsb::open`].
+#[derive(Debug)]
+pub struct MockUsbHandle {
+    state: SharedUsbDevice,
+    recorder: TransactionRecorder,
+    info: UsbDeviceInfo,
+    generation: u64,
+    claimed: BTreeSet<u8>,
+}
+
+impl MockUsbHandle {
+    fn connected(&self) -> HalResult<MutexGuard<'_, MockUsbDeviceState>> {
+        let s = lock_usb(&self.state);
+        if s.unplugged || s.generation != self.generation {
+            return Err(HalError::Disconnected);
+        }
+        Ok(s)
+    }
+
+    fn claim(&mut self, interface: u8) -> HalResult<()> {
+        self.info.claimable_interface(interface)?;
+        drop(self.connected()?);
+        if self.claimed.insert(interface) {
+            self.recorder
+                .record(TransactionKind::UsbClaim, &*self.info.path, vec![interface]);
+        }
+        Ok(())
+    }
+
+    /// What an OUT transfer runs into: a scripted timeout or failure.
+    fn out_allowed(&self, timeout_ms: u32) -> HalResult<()> {
+        let s = self.connected()?;
+        if s.out_timeout {
+            return Err(HalError::Timeout(timeout_ms));
+        }
+        if s.fail_out {
+            return Err(HalError::Backend("mock: OUT transfer failure scripted".into()));
+        }
+        Ok(())
+    }
+}
+
+/// An IN transfer found nothing to return: [`HalError::Timeout`], after
+/// waiting the timeout out (at most 5 s) when `block`.
+fn starve(block: bool, timeout_ms: u32) -> HalError {
+    if block {
+        std::thread::sleep(Duration::from_millis(u64::from(timeout_ms.min(5000))));
+    }
+    HalError::Timeout(timeout_ms)
+}
+
+/// The setup packet of a control transfer, little-endian, then `data`.
+fn setup_packet(bm: u8, request: u8, value: u16, index: u16, length: usize, data: &[u8]) -> Vec<u8> {
+    let length = u16::try_from(length).unwrap_or(u16::MAX);
+    let mut out = vec![bm, request];
+    out.extend_from_slice(&value.to_le_bytes());
+    out.extend_from_slice(&index.to_le_bytes());
+    out.extend_from_slice(&length.to_le_bytes());
+    out.extend_from_slice(data);
+    out
+}
+
+impl UsbHandle for MockUsbHandle {
+    fn info(&self) -> &UsbDeviceInfo {
+        &self.info
+    }
+
+    fn claim_interface(&mut self, interface: u8) -> HalResult<()> {
+        self.claim(interface)
+    }
+
+    fn bulk_transfer(&mut self, endpoint: u8, data: &mut [u8], timeout_ms: u32) -> HalResult<usize> {
+        let iface = self.info.claimable_for_endpoint(endpoint)?.number;
+        self.claim(iface)?;
+        if endpoint & crate::usb::ENDPOINT_IN == 0 {
+            self.out_allowed(timeout_ms)?;
+            let mut bytes = vec![endpoint];
+            bytes.extend_from_slice(data);
+            self.recorder
+                .record(TransactionKind::BulkOut, &*self.info.path, bytes);
+            return Ok(data.len());
+        }
+        let (next, block) = {
+            let mut s = self.connected()?;
+            let next = s.bulk_in.get_mut(&endpoint).and_then(VecDeque::pop_front);
+            (next, s.block_reads)
+        };
+        let Some(next) = next else {
+            return Err(starve(block, timeout_ms));
+        };
+        let n = next.len().min(data.len());
+        data[..n].copy_from_slice(&next[..n]);
+        let mut bytes = vec![endpoint];
+        bytes.extend_from_slice(&data[..n]);
+        self.recorder
+            .record(TransactionKind::BulkIn, &*self.info.path, bytes);
+        Ok(n)
+    }
+
+    fn control_transfer(
+        &mut self,
+        bm_request_type: u8,
+        b_request: u8,
+        w_value: u16,
+        w_index: u16,
+        data: &mut [u8],
+        timeout_ms: u32,
+    ) -> HalResult<usize> {
+        let iface = self.info.claimable_for_control(bm_request_type, w_index)?.number;
+        self.claim(iface)?;
+        if bm_request_type & crate::usb::ENDPOINT_IN == 0 {
+            self.out_allowed(timeout_ms)?;
+            let bytes = setup_packet(bm_request_type, b_request, w_value, w_index, data.len(), data);
+            self.recorder
+                .record(TransactionKind::ControlOut, &*self.info.path, bytes);
+            return Ok(data.len());
+        }
+        let (next, block) = {
+            let mut s = self.connected()?;
+            (s.control_in.pop_front(), s.block_reads)
+        };
+        let Some(next) = next else {
+            return Err(starve(block, timeout_ms));
+        };
+        let n = next.len().min(data.len());
+        data[..n].copy_from_slice(&next[..n]);
+        let bytes = setup_packet(
+            bm_request_type,
+            b_request,
+            w_value,
+            w_index,
+            data.len(),
+            &data[..n],
+        );
+        self.recorder
+            .record(TransactionKind::ControlIn, &*self.info.path, bytes);
+        Ok(n)
+    }
+}
+
+impl Drop for MockUsbHandle {
+    fn drop(&mut self) {
+        self.recorder
+            .record(TransactionKind::Close, &*self.info.path, Vec::new());
+    }
+}
+
+/// A [`crate::notify::Notifier`] that keeps what it is asked to show.
+#[derive(Debug, Default)]
+pub struct MockNotifier {
+    shown: Mutex<Vec<crate::notify::Notification>>,
+}
+
+impl MockNotifier {
+    /// The notifications shown so far.
+    pub fn shown(&self) -> Vec<crate::notify::Notification> {
+        self.shown.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl crate::notify::Notifier for MockNotifier {
+    fn notify(&self, notification: &crate::notify::Notification) -> HalResult<()> {
+        self.shown
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(notification.clone());
+        Ok(())
+    }
+}
+
+/// An in-memory [`crate::user_registry::UserRegistry`]: `(key, value name) -> text`,
+/// keys compared case-insensitively as the Windows registry does.
+#[derive(Debug, Default)]
+pub struct MockRegistry {
+    values: Mutex<BTreeMap<(String, String), String>>,
+    /// Fail every write (an unwritable registry).
+    pub fail_writes: std::sync::atomic::AtomicBool,
+}
+
+impl MockRegistry {
+    fn norm(key: &str) -> String {
+        key.trim_matches('\\').to_ascii_lowercase()
+    }
+
+    /// Every value, as `(key, name, value)` with keys lower-cased.
+    pub fn dump(&self) -> Vec<(String, String, String)> {
+        self.values
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|((k, n), v)| (k.clone(), n.clone(), v.clone()))
+            .collect()
+    }
+}
+
+impl crate::user_registry::UserRegistry for MockRegistry {
+    fn read_string(&self, key: &str, name: &str) -> HalResult<Option<String>> {
+        let values = self.values.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(values.get(&(Self::norm(key), name.to_ascii_lowercase())).cloned())
+    }
+
+    fn write_string(&self, key: &str, name: &str, value: &str) -> HalResult<()> {
+        if self.fail_writes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(HalError::PermissionDenied(format!("HKCU\\{key}")));
+        }
+        self.values
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((Self::norm(key), name.to_ascii_lowercase()), value.to_string());
+        Ok(())
+    }
+
+    fn delete_tree(&self, key: &str) -> HalResult<()> {
+        let root = Self::norm(key);
+        let prefix = format!("{root}\\");
+        self.values
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(k, _), _| *k != root && !k.starts_with(&prefix));
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct LampState {
+    devices: Vec<crate::lamparray::LampArrayInfo>,
+    available: BTreeMap<String, bool>,
+    writes: BTreeMap<String, Vec<Vec<[u8; 4]>>>,
+    releases: BTreeMap<String, u32>,
+    containers: BTreeMap<String, String>,
+    generation: u64,
+    identity: bool,
+}
+
+/// A fake LampArray provider ([`crate::lamparray::LampArrayBackend`]): devices
+/// come and go, availability flips (another app took control) and every
+/// colour update is recorded per device id.
+#[derive(Clone, Debug)]
+pub struct MockLampArray {
+    state: Arc<Mutex<LampState>>,
+}
+
+impl Default for MockLampArray {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(LampState {
+                devices: Vec::new(),
+                available: BTreeMap::new(),
+                writes: BTreeMap::new(),
+                releases: BTreeMap::new(),
+                containers: BTreeMap::new(),
+                generation: 0,
+                identity: true,
+            })),
+        }
+    }
+}
+
+impl MockLampArray {
+    /// No devices, with package identity.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock(&self) -> MutexGuard<'_, LampState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A LampArray of `lamps` RGB lamps in a row, 10 mm apart, on a
+    /// `lamps * 10 mm` x 10 mm bounding box.
+    pub fn row(id: &str, vid: u16, pid: u16, lamps: u32) -> crate::lamparray::LampArrayInfo {
+        crate::lamparray::LampArrayInfo {
+            id: id.into(),
+            name: format!("Mock LampArray {id}"),
+            vid,
+            pid,
+            container_id: None,
+            kind: crate::lamparray::LampArrayKind::Peripheral,
+            bounding_box_um: [lamps.max(1) * 10_000, 10_000, 1_000],
+            min_update_interval_us: 0,
+            lamps: (0..lamps)
+                .map(|i| crate::lamparray::LampInfo {
+                    index: i,
+                    position_um: [(i * 10_000 + 5_000) as i32, 5_000, 0],
+                    is_rgb: true,
+                })
+                .collect(),
+        }
+    }
+
+    /// Plug a device in (replacing one with the same id).
+    pub fn add(&self, info: crate::lamparray::LampArrayInfo) {
+        let mut s = self.lock();
+        s.devices.retain(|d| d.id != info.id);
+        s.devices.push(info);
+        s.generation += 1;
+    }
+
+    /// Unplug a device.
+    pub fn remove(&self, id: &str) {
+        let mut s = self.lock();
+        s.devices.retain(|d| d.id != id);
+        s.generation += 1;
+    }
+
+    /// `IsAvailable` of a device (default `true`).
+    pub fn set_available(&self, id: &str, available: bool) {
+        self.lock().available.insert(id.into(), available);
+    }
+
+    /// Whether the process has package identity (default `true`).
+    pub fn set_identity(&self, identity: bool) {
+        self.lock().identity = identity;
+    }
+
+    /// The container id [`crate::lamparray::LampArrayBackend::container_of`]
+    /// returns for a HID interface path.
+    pub fn set_container(&self, interface_path: &str, container: &str) {
+        self.lock()
+            .containers
+            .insert(interface_path.to_ascii_lowercase(), container.into());
+    }
+
+    /// Every colour update sent to device `id`, oldest first.
+    pub fn writes(&self, id: &str) -> Vec<Vec<[u8; 4]>> {
+        self.lock().writes.get(id).cloned().unwrap_or_default()
+    }
+
+    /// How often device `id` was released.
+    pub fn releases(&self, id: &str) -> u32 {
+        self.lock().releases.get(id).copied().unwrap_or(0)
+    }
+}
+
+struct MockLampHandle {
+    state: Arc<Mutex<LampState>>,
+    info: crate::lamparray::LampArrayInfo,
+}
+
+impl MockLampHandle {
+    fn lock(&self) -> MutexGuard<'_, LampState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl crate::lamparray::LampArrayHandle for MockLampHandle {
+    fn info(&self) -> &crate::lamparray::LampArrayInfo {
+        &self.info
+    }
+
+    fn available(&self) -> bool {
+        self.lock().available.get(&self.info.id).copied().unwrap_or(true)
+    }
+
+    fn set_colors(&mut self, rgba: &[[u8; 4]]) -> HalResult<()> {
+        if rgba.len() != self.info.lamps.len() {
+            return Err(HalError::InvalidArgument(format!(
+                "{} colours for {} lamps",
+                rgba.len(),
+                self.info.lamps.len()
+            )));
+        }
+        let id = self.info.id.clone();
+        let mut s = self.lock();
+        if !s.devices.iter().any(|d| d.id == id) {
+            return Err(HalError::Disconnected);
+        }
+        s.writes.entry(id).or_default().push(rgba.to_vec());
+        Ok(())
+    }
+
+    fn release(&mut self) -> HalResult<()> {
+        let id = self.info.id.clone();
+        *self.lock().releases.entry(id).or_default() += 1;
+        Ok(())
+    }
+}
+
+impl crate::lamparray::LampArrayBackend for MockLampArray {
+    fn enumerate(&self) -> HalResult<Vec<crate::lamparray::LampArrayInfo>> {
+        Ok(self.lock().devices.clone())
+    }
+
+    fn open(&self, id: &str) -> HalResult<Box<dyn crate::lamparray::LampArrayHandle>> {
+        let info = self
+            .lock()
+            .devices
+            .iter()
+            .find(|d| d.id == id)
+            .cloned()
+            .ok_or_else(|| HalError::NotFound(id.into()))?;
+        Ok(Box::new(MockLampHandle {
+            state: Arc::clone(&self.state),
+            info,
+        }))
+    }
+
+    fn generation(&self) -> u64 {
+        self.lock().generation
+    }
+
+    fn has_identity(&self) -> bool {
+        self.lock().identity
+    }
+
+    fn container_of(&self, interface_path: &str) -> Option<String> {
+        self.lock()
+            .containers
+            .get(&interface_path.to_ascii_lowercase())
+            .cloned()
+    }
+}
+
+// ---------------------------------------------------------------- serial
+
+/// Mutable state behind one scripted serial port.
+#[derive(Debug, Default)]
+pub struct MockSerialPortState {
+    /// Static description handed to `available_ports()`.
+    pub info: SerialPortInfo,
+    /// Bytes waiting in the input queue.
+    pub input: VecDeque<u8>,
+    /// Replies: a write starting with the first bytes queues the second as input.
+    pub replies: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Every write fails with [`HalError::Backend`].
+    pub fail_writes: bool,
+    /// Unplugged: absent from `available_ports()`, `open` fails, I/O fails
+    /// with [`HalError::Disconnected`].
+    pub unplugged: bool,
+    /// Times the port was opened.
+    pub open_count: usize,
+    /// A handle is open (COM ports are exclusive: a second `open` is `Busy`).
+    pub is_open: bool,
+    /// Configuration of the last `open`.
+    pub last_config: Option<SerialConfig>,
+}
+
+type SharedPort = Arc<Mutex<MockSerialPortState>>;
+
+fn lock_port(p: &SharedPort) -> MutexGuard<'_, MockSerialPortState> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Scripted serial backend: ports with an input queue and canned replies.
+/// Opens, writes, reads (with data) and closes go to the recorder, `target` =
+/// the port name.
+#[derive(Debug, Default)]
+pub struct MockSerial {
+    ports: Vec<SharedPort>,
+    recorder: TransactionRecorder,
+}
+
+impl MockSerial {
+    /// Empty backend with a fresh recorder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A USB serial port description.
+    pub fn usb_port(
+        port_name: &str,
+        vid: u16,
+        pid: u16,
+        serial: &str,
+        interface: Option<u8>,
+    ) -> SerialPortInfo {
+        SerialPortInfo {
+            port_name: port_name.to_string(),
+            vid: Some(vid),
+            pid: Some(pid),
+            serial: Some(serial.to_string()),
+            interface,
+            manufacturer: Some("Lightloom Mock".into()),
+            product: Some(format!("Mock serial {vid:04x}:{pid:04x}")),
+        }
+    }
+
+    /// Add a port (builder style).
+    pub fn add_port(mut self, info: SerialPortInfo) -> Self {
+        self.ports.push(Arc::new(Mutex::new(MockSerialPortState {
+            info,
+            ..Default::default()
+        })));
+        self
+    }
+
+    /// The shared recorder.
+    pub fn recorder(&self) -> TransactionRecorder {
+        self.recorder.clone()
+    }
+
+    /// Shared state of `port_name`, for scripting from tests.
+    pub fn port(&self, port_name: &str) -> Option<SharedPort> {
+        self.ports
+            .iter()
+            .find(|p| lock_port(p).info.port_name == port_name)
+            .cloned()
+    }
+
+    fn with_port<T>(&self, port_name: &str, f: impl FnOnce(&mut MockSerialPortState) -> T) -> HalResult<T> {
+        let p = self
+            .port(port_name)
+            .ok_or_else(|| HalError::NotFound(port_name.to_string()))?;
+        let mut s = lock_port(&p);
+        Ok(f(&mut s))
+    }
+
+    /// Queue bytes in the input of `port_name`.
+    pub fn push_input(&self, port_name: &str, bytes: &[u8]) -> HalResult<()> {
+        self.with_port(port_name, |s| s.input.extend(bytes.iter().copied()))
+    }
+
+    /// Answer every write starting with `request` with `reply`.
+    pub fn reply(&self, port_name: &str, request: &[u8], reply: &[u8]) -> HalResult<()> {
+        self.with_port(port_name, |s| s.replies.push((request.to_vec(), reply.to_vec())))
+    }
+
+    /// Unplug (`true`) or plug back (`false`) `port_name`.
+    pub fn set_unplugged(&self, port_name: &str, unplugged: bool) -> HalResult<()> {
+        self.with_port(port_name, |s| s.unplugged = unplugged)
+    }
+}
+
+impl SerialBackend for MockSerial {
+    fn available_ports(&self) -> HalResult<Vec<SerialPortInfo>> {
+        Ok(self
+            .ports
+            .iter()
+            .filter_map(|p| {
+                let s = lock_port(p);
+                (!s.unplugged).then(|| s.info.clone())
+            })
+            .collect())
+    }
+
+    fn open(&self, port_name: &str, config: &SerialConfig) -> HalResult<Box<dyn SerialHandle>> {
+        config.validate()?;
+        let state = self
+            .port(port_name)
+            .ok_or_else(|| HalError::NotFound(port_name.to_string()))?;
+        {
+            let mut s = lock_port(&state);
+            if s.unplugged {
+                return Err(HalError::NotFound(port_name.to_string()));
+            }
+            if s.is_open {
+                return Err(HalError::Busy(port_name.to_string()));
+            }
+            s.is_open = true;
+            s.open_count += 1;
+            s.last_config = Some(config.clone());
+        }
+        self.recorder.record(TransactionKind::Open, port_name, Vec::new());
+        Ok(Box::new(MockSerialHandle {
+            state,
+            recorder: self.recorder.clone(),
+            port_name: port_name.to_string(),
+            config: config.clone(),
+        }))
+    }
+}
+
+/// An open [`MockSerial`] port.
+#[derive(Debug)]
+pub struct MockSerialHandle {
+    state: SharedPort,
+    recorder: TransactionRecorder,
+    port_name: String,
+    config: SerialConfig,
+}
+
+impl SerialHandle for MockSerialHandle {
+    fn port_name(&self) -> &str {
+        &self.port_name
+    }
+
+    fn config(&self) -> &SerialConfig {
+        &self.config
+    }
+
+    fn write(&mut self, data: &[u8]) -> HalResult<usize> {
+        let mut s = lock_port(&self.state);
+        if s.unplugged {
+            return Err(HalError::Disconnected);
+        }
+        if s.fail_writes {
+            return Err(HalError::Backend("scripted write failure".into()));
+        }
+        let reply = s
+            .replies
+            .iter()
+            .find(|(req, _)| data.starts_with(req))
+            .map(|(_, r)| r.clone());
+        if let Some(r) = reply {
+            s.input.extend(r);
+        }
+        drop(s);
+        self.recorder
+            .record(TransactionKind::Write, &self.port_name, data);
+        Ok(data.len())
+    }
+
+    fn read(&mut self, buf: &mut [u8], timeout_ms: u32) -> HalResult<usize> {
+        let started = Instant::now();
+        let limit = Duration::from_millis(u64::from(timeout_ms.min(5000)));
+        loop {
+            {
+                let mut s = lock_port(&self.state);
+                if s.unplugged {
+                    return Err(HalError::Disconnected);
+                }
+                if !s.input.is_empty() || buf.is_empty() {
+                    let n = buf.len().min(s.input.len());
+                    for (dst, src) in buf.iter_mut().zip(s.input.drain(..n)) {
+                        *dst = src;
+                    }
+                    drop(s);
+                    if n > 0 {
+                        self.recorder
+                            .record(TransactionKind::Read, &self.port_name, &buf[..n]);
+                    }
+                    return Ok(n);
+                }
+            }
+            if started.elapsed() >= limit {
+                return Ok(0);
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn bytes_to_read(&mut self) -> HalResult<usize> {
+        let s = lock_port(&self.state);
+        if s.unplugged {
+            return Err(HalError::Disconnected);
+        }
+        Ok(s.input.len())
+    }
+}
+
+impl Drop for MockSerialHandle {
+    fn drop(&mut self) {
+        lock_port(&self.state).is_open = false;
+        self.recorder
+            .record(TransactionKind::Close, &self.port_name, Vec::new());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mock_serial_replies_times_out_and_is_exclusive() {
+        let m = MockSerial::new().add_port(MockSerial::usb_port("COM7", 0x1A86, 0x7523, "A1", Some(0)));
+        m.reply("COM7", &[0x01, 0x02], &[0xAA, 0xBB, 0xCC]).unwrap();
+        let cfg = SerialConfig {
+            baud_rate: 115_200,
+            ..SerialConfig::default()
+        };
+        let mut h = m.open("COM7", &cfg).unwrap();
+        assert!(matches!(m.open("COM7", &cfg), Err(HalError::Busy(_))));
+        assert_eq!(h.write(&[0x01, 0x02, 0x03]).unwrap(), 3);
+        assert_eq!(h.bytes_to_read().unwrap(), 3);
+        let mut buf = [0u8; 2];
+        assert_eq!(h.read(&mut buf, 100).unwrap(), 2);
+        assert_eq!(buf, [0xAA, 0xBB]);
+        assert_eq!(h.read(&mut buf, 100).unwrap(), 1);
+        let t = Instant::now();
+        assert_eq!(h.read(&mut buf, 30).unwrap(), 0, "timeout without data");
+        assert!(t.elapsed() >= Duration::from_millis(30));
+        m.set_unplugged("COM7", true).unwrap();
+        assert!(matches!(h.write(&[1]), Err(HalError::Disconnected)));
+        assert!(m.available_ports().unwrap().is_empty());
+        drop(h);
+        let kinds: Vec<_> = m.recorder().snapshot().iter().map(|t| t.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                TransactionKind::Open,
+                TransactionKind::Write,
+                TransactionKind::Read,
+                TransactionKind::Read,
+                TransactionKind::Close
+            ]
+        );
+        m.set_unplugged("COM7", false).unwrap();
+        assert!(m.open("COM7", &cfg).is_ok(), "closed handles release the port");
+        let bad = SerialConfig {
+            data_bits: 4,
+            ..SerialConfig::default()
+        };
+        assert!(m.open("COM7", &bad).is_err());
+    }
+
+    #[test]
+    fn mock_lamparray_records_and_follows_plugs() {
+        use crate::lamparray::LampArrayBackend;
+        let m = MockLampArray::new();
+        assert_eq!(m.generation(), 0);
+        m.add(MockLampArray::row("a", 1, 2, 3));
+        assert_eq!(m.generation(), 1);
+        let mut h = m.open("a").unwrap();
+        assert!(h.available());
+        h.set_colors(&[[1, 2, 3, 255]; 3]).unwrap();
+        assert!(h.set_colors(&[[0; 4]; 2]).is_err());
+        m.set_available("a", false);
+        assert!(!h.available());
+        m.remove("a");
+        assert!(matches!(h.set_colors(&[[0; 4]; 3]), Err(HalError::Disconnected)));
+        h.release().unwrap();
+        assert_eq!((m.writes("a").len(), m.releases("a")), (1, 1));
+        assert!(m.open("a").is_err());
+    }
 
     #[test]
     fn ddr4_spd_pages_switch_on_the_wire() {
@@ -1007,6 +1936,128 @@ mod tests {
         assert_eq!(
             rec.payloads(TransactionKind::SmbusWrite),
             vec![vec![0x39, 0x01, 7]]
+        );
+    }
+
+    fn usb() -> (MockUsb, String) {
+        let info = MockUsb::device_info(
+            0x0CF2,
+            0xA103,
+            "S1",
+            vec![
+                MockUsb::foreign_interface(0, 3, "HidUsb", &[0x81]),
+                MockUsb::winusb_interface(1, &[0x02, 0x82]),
+            ],
+        );
+        let path = info.path.clone();
+        (MockUsb::new().add_device(info), path)
+    }
+
+    #[test]
+    fn usb_bulk_and_control_transfers_are_recorded() {
+        let (mock, path) = usb();
+        let rec = mock.recorder();
+        mock.script_bulk_in(&path, 0x82, vec![9, 8, 7]).unwrap();
+        mock.script_control_in(&path, vec![0x12, 0x34]).unwrap();
+        let mut h = mock.open(&path).unwrap();
+        assert_eq!(h.bulk_transfer(0x02, &mut [1, 2, 3], 100).unwrap(), 3);
+        let mut buf = [0u8; 64];
+        assert_eq!(h.bulk_transfer(0x82, &mut buf, 100).unwrap(), 3);
+        assert_eq!(buf[..3], [9, 8, 7]);
+        assert_eq!(
+            h.control_transfer(0x40, 0x80, 0, 0x0010, &mut [0xAA], 1000)
+                .unwrap(),
+            1
+        );
+        let mut buf = [0u8; 4];
+        assert_eq!(
+            h.control_transfer(0xC0, 0x81, 0, 0xD800, &mut buf, 1000).unwrap(),
+            2
+        );
+        drop(h);
+        let kinds: Vec<TransactionKind> = rec.snapshot().iter().map(|t| t.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TransactionKind::Open,
+                TransactionKind::UsbClaim,
+                TransactionKind::BulkOut,
+                TransactionKind::BulkIn,
+                TransactionKind::ControlOut,
+                TransactionKind::ControlIn,
+                TransactionKind::Close,
+            ]
+        );
+        assert_eq!(rec.payloads(TransactionKind::UsbClaim), vec![vec![1]]);
+        assert_eq!(rec.payloads(TransactionKind::BulkOut), vec![vec![0x02, 1, 2, 3]]);
+        assert_eq!(rec.payloads(TransactionKind::BulkIn), vec![vec![0x82, 9, 8, 7]]);
+        assert_eq!(
+            rec.payloads(TransactionKind::ControlOut),
+            vec![vec![0x40, 0x80, 0, 0, 0x10, 0, 1, 0, 0xAA]]
+        );
+        assert_eq!(
+            rec.payloads(TransactionKind::ControlIn),
+            vec![vec![0xC0, 0x81, 0, 0, 0x00, 0xD8, 4, 0, 0x12, 0x34]]
+        );
+    }
+
+    #[test]
+    fn usb_in_without_data_times_out_and_foreign_interfaces_stay_unclaimed() {
+        let (mock, path) = usb();
+        let mut h = mock.open(&path).unwrap();
+        let mut buf = [0u8; 8];
+        assert!(matches!(
+            h.bulk_transfer(0x82, &mut buf, 250),
+            Err(HalError::Timeout(250))
+        ));
+        assert!(matches!(
+            h.control_transfer(0xC0, 1, 0, 0, &mut buf, 30),
+            Err(HalError::Timeout(30))
+        ));
+        // The HID interface's endpoint and a class request to it: refused, never claimed.
+        assert!(matches!(
+            h.bulk_transfer(0x81, &mut buf, 10),
+            Err(HalError::NeedsDriver(_))
+        ));
+        assert!(matches!(
+            h.control_transfer(0x21, 9, 0x0200, 0, &mut buf, 10),
+            Err(HalError::NeedsDriver(_))
+        ));
+        assert!(matches!(h.claim_interface(0), Err(HalError::NeedsDriver(_))));
+        assert_eq!(mock.recorder().payloads(TransactionKind::UsbClaim), vec![vec![1]]);
+        lock_usb(&mock.device(&path).unwrap()).out_timeout = true;
+        assert!(matches!(
+            h.bulk_transfer(0x02, &mut [1], 40),
+            Err(HalError::Timeout(40))
+        ));
+    }
+
+    #[test]
+    fn unplugged_usb_devices_vanish_and_their_handles_go_stale() {
+        let (mock, path) = usb();
+        let mut old = mock.open(&path).unwrap();
+        mock.unplug(&path).unwrap();
+        assert!(mock.enumerate().unwrap().is_empty());
+        assert!(matches!(mock.open(&path), Err(HalError::NotFound(_))));
+        assert!(matches!(
+            old.bulk_transfer(0x02, &mut [1], 10),
+            Err(HalError::Disconnected)
+        ));
+        mock.replug(&path).unwrap();
+        assert!(matches!(
+            old.bulk_transfer(0x02, &mut [1], 10),
+            Err(HalError::Disconnected)
+        ));
+        assert_eq!(
+            mock.open(&path)
+                .unwrap()
+                .bulk_transfer(0x02, &mut [1], 10)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            mock.enumerate().unwrap()[0].instance_id,
+            "USB\\VID_0CF2&PID_A103\\S1"
         );
     }
 }

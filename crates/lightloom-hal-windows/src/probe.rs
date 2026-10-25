@@ -34,8 +34,9 @@ use windows::Win32::Devices::HumanInterfaceDevice::{
     HIDP_STATUS_SUCCESS, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Devices::Properties::{
-    DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_Manufacturer, DEVPROPTYPE,
-    DEVPROP_TYPE_STRING, DEVPROP_TYPE_STRING_LIST,
+    DEVPKEY_Device_CompatibleIds, DEVPKEY_Device_ContainerId, DEVPKEY_Device_InstanceId,
+    DEVPKEY_Device_Manufacturer, DEVPROPTYPE, DEVPROP_TYPE_GUID, DEVPROP_TYPE_STRING,
+    DEVPROP_TYPE_STRING_LIST,
 };
 use windows::Win32::Foundation::DEVPROPKEY;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
@@ -46,11 +47,11 @@ use windows::Win32::Storage::FileSystem::{
 /// Maximum parent hops (HID collection → USB interface → USB device is 2).
 const MAX_HOPS: usize = 8;
 
-fn wide(s: &str) -> Vec<u16> {
+pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn device_id(devinst: u32) -> Result<String, String> {
+pub(crate) fn device_id(devinst: u32) -> Result<String, String> {
     let mut buf = vec![0u16; MAX_DEVICE_ID_LEN as usize + 1];
     // SAFETY: `buf` is a valid, writable UTF-16 buffer; cfgmgr32 writes at most `buf.len()` units.
     let cr = unsafe { CM_Get_Device_IDW(devinst, &mut buf, 0) };
@@ -91,6 +92,40 @@ fn interface_instance_id(path: &str) -> Option<String> {
         }
     }
     interface_path_to_instance_id(path)
+}
+
+/// The container id of the physical device behind a device-interface path
+/// (`DEVPKEY_Device_ContainerId` of its devnode, normalised by
+/// [`lightloom_hal::lamparray::normalize_container`]): every interface and
+/// collection of one physical device shares it, across product ids and
+/// transports. `None` when cfgmgr32 does not know it.
+pub fn container_id(path: &str) -> Option<String> {
+    let id = interface_instance_id(path)?;
+    let wid = wide(&id);
+    let mut inst = 0u32;
+    // SAFETY: `wid` is NUL-terminated and outlives the call; `inst` is a valid out pointer.
+    let cr = unsafe { CM_Locate_DevNodeW(&mut inst, PCWSTR(wid.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) };
+    if cr != CR_SUCCESS {
+        return None;
+    }
+    let mut guid = windows::core::GUID::zeroed();
+    let mut kind = DEVPROPTYPE(0);
+    let mut size = std::mem::size_of::<windows::core::GUID>() as u32;
+    // SAFETY: the buffer pointer and its size in bytes describe `guid`; out pointers are valid.
+    let cr = unsafe {
+        CM_Get_DevNode_PropertyW(
+            inst,
+            &DEVPKEY_Device_ContainerId,
+            &mut kind,
+            Some((&mut guid as *mut windows::core::GUID).cast()),
+            &mut size,
+            0,
+        )
+    };
+    if cr != CR_SUCCESS || kind != DEVPROP_TYPE_GUID {
+        return None;
+    }
+    lightloom_hal::lamparray::normalize_container(&format!("{guid:?}"))
 }
 
 /// USB parent device instance id of a HID collection path.
@@ -248,7 +283,7 @@ fn parent_devnode(path: &str) -> Option<u32> {
 }
 
 /// A string or string-list property of a devnode, as UTF-16 strings.
-fn devnode_strings(inst: u32, key: &DEVPROPKEY) -> Vec<String> {
+pub(crate) fn devnode_strings(inst: u32, key: &DEVPROPKEY) -> Vec<String> {
     let mut buf = vec![0u16; 512];
     for _ in 0..2 {
         let mut kind = DEVPROPTYPE(0);

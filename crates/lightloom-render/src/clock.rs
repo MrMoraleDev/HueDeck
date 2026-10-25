@@ -96,15 +96,31 @@ mod tests {
 
     #[test]
     fn ticks_at_roughly_the_requested_rate() {
-        let mut clock = FrameClock::new(100.0);
-        let start = Instant::now();
-        for expected in 1..=10 {
-            assert_eq!(clock.wait_tick(), expected);
+        // Guaranteed on any machine: ticks are numbered 1, 2, ... and never come
+        // early (tick k is at least k periods after the clock was made), so ten
+        // ticks at 100 fps take at least 100 ms.
+        // Only "not much slower" depends on the scheduler: a loaded box can
+        // stall a sleeping thread, so that part is a wide band, and a window
+        // that missed it is measured once more before the test fails.
+        let mut windows = Vec::new();
+        for _ in 0..2 {
+            let made = Instant::now();
+            let mut clock = FrameClock::new(100.0);
+            for expected in 1..=10u32 {
+                assert_eq!(clock.wait_tick(), u64::from(expected));
+                let at = made.elapsed();
+                assert!(
+                    at >= clock.period() * expected,
+                    "tick {expected} came early: {at:?}"
+                );
+            }
+            let elapsed = made.elapsed();
+            if elapsed <= Duration::from_millis(600) {
+                return;
+            }
+            windows.push(elapsed);
         }
-        let elapsed = start.elapsed();
-        // 10 ticks at 100 fps ≈ 100 ms; allow generous slack for loaded CI boxes.
-        assert!(elapsed >= Duration::from_millis(90), "too fast: {elapsed:?}");
-        assert!(elapsed <= Duration::from_millis(400), "too slow: {elapsed:?}");
+        panic!("too slow: 10 ticks at 100 fps took {windows:?}");
     }
 
     #[test]

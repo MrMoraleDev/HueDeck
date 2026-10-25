@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Control commands for a serving renderer (`--serve`): one JSON object per line on stdin,
-//! turned into JavaScript for the effect page. End of input means the daemon is gone.
+//! Control commands for a serving renderer (`--serve`): one JSON object per line on the control
+//! channel (stdin, or a unix socket on Linux: [`crate::ipc::ControlAddr`]), turned into
+//! JavaScript for the effect page. End of input means the daemon is gone.
 //!
 //! ```text
 //! {"cmd":"set","values":{"speed":5,"color":"#ff0000"}}   assign, then on<name>Changed()
@@ -80,6 +81,28 @@ pub fn parse_line(line: &str) -> Result<Option<Command>, String> {
     Ok(Some(cmd))
 }
 
+/// Next command from a control channel (stdin or a unix socket, see [`crate::ipc`]): blank
+/// lines are skipped, end of input or a read error is [`Command::Quit`] (the daemon is gone), and
+/// a line that does not parse (or is longer than [`MAX_LINE`]) is `Err` with the reason; the
+/// caller logs it and reads on.
+pub fn read_command<R: std::io::BufRead + ?Sized>(r: &mut R, buf: &mut Vec<u8>) -> Result<Command, String> {
+    use crate::ipc::{read_bounded_line, BoundedLine};
+    loop {
+        match read_bounded_line(r, buf, MAX_LINE) {
+            Ok(BoundedLine::Eof) | Err(_) => return Ok(Command::Quit),
+            Ok(BoundedLine::TooLong(n)) => {
+                return Err(format!("control line of {n} bytes is longer than {MAX_LINE}"))
+            }
+            Ok(BoundedLine::Line) => {
+                let line = std::str::from_utf8(buf).map_err(|e| format!("bad control line: {e}"))?;
+                if let Some(cmd) = parse_line(line)? {
+                    return Ok(cmd);
+                }
+            }
+        }
+    }
+}
+
 /// JS assigning `values` to the effect's controls, then calling their change hooks.
 /// Unknown controls, names that cannot be page globals and values of the wrong type
 /// are skipped and returned.
@@ -120,6 +143,10 @@ const ENGINE_MERGE_JS: &str = r#"(function (d) {
       if (k === "__proto__") return;
       var v = src[k], cur = dst[k];
       if (cur && ArrayBuffer.isView(cur) && Array.isArray(v)) { cur.set(v.slice(0, cur.length)); }
+      else if (cur && ArrayBuffer.isView(cur) && typeof v === "string" && v.lastIndexOf("base64:", 0) === 0) {
+        var b = atob(v.slice(7)), n = Math.min(b.length, cur.length);
+        for (var i = 0; i < n; i++) cur[i] = b.charCodeAt(i);
+      }
       else if (cur && typeof cur === "object" && !ArrayBuffer.isView(cur) && v && typeof v === "object" && !Array.isArray(v)) { merge(cur, v); }
       else { dst[k] = v; }
     });
@@ -129,7 +156,8 @@ const ENGINE_MERGE_JS: &str = r#"(function (d) {
 
 /// JS merging `data` into `window.engine`: objects merge recursively, arrays
 /// fill the existing typed arrays in place (effects keep references to them),
-/// other values replace. Keys outside [`ENGINE_KEYS`] are dropped and returned.
+/// a `"base64:…"` string fills a typed array with its decoded bytes (the
+/// 64,000-byte `zone.imagedata`), other values replace. Keys outside [`ENGINE_KEYS`] are dropped and returned.
 pub fn engine_script(data: &Map<String, Value>) -> (String, Vec<String>) {
     let mut kept = Map::new();
     let mut skipped = Vec::new();
@@ -200,6 +228,29 @@ mod tests {
     }
 
     #[test]
+    fn commands_are_read_from_a_stream() {
+        let input = format!(
+            "\n{{\"cmd\":\"fps\",\"value\":15}}\nnot json\n{{\"cmd\":\"x\":\"{}\"}}\n{{\"cmd\":\"tap\",\"x\":1,\"y\":2}}",
+            "a".repeat(MAX_LINE)
+        );
+        let mut r = std::io::Cursor::new(input.into_bytes());
+        let mut buf = Vec::new();
+        assert_eq!(read_command(&mut r, &mut buf), Ok(Command::Fps { value: 15 }));
+        assert!(read_command(&mut r, &mut buf)
+            .unwrap_err()
+            .contains("bad control line"));
+        assert!(read_command(&mut r, &mut buf)
+            .unwrap_err()
+            .contains("longer than"));
+        assert_eq!(
+            read_command(&mut r, &mut buf),
+            Ok(Command::Tap { x: 1.0, y: 2.0 })
+        );
+        // end of input: the daemon is gone
+        assert_eq!(read_command(&mut r, &mut buf), Ok(Command::Quit));
+    }
+
+    #[test]
     fn set_assigns_known_controls_then_calls_their_hooks() {
         let mut values = Map::new();
         values.insert("speed".into(), serde_json::json!(4));
@@ -228,6 +279,7 @@ mod tests {
         assert_eq!(skipped, vec!["getSensorValue"]);
         assert!(js.contains("\"level\":-20") && js.contains("cur.set("), "{js}");
         assert!(!js.contains("getSensorValue"));
+        assert!(js.contains(r#"v.lastIndexOf("base64:", 0) === 0"#));
         assert!(matches!(
             parse_line(r#"{"cmd":"engine","data":{"zone":{"hue":[1]}}}"#).unwrap(),
             Some(Command::Engine { .. })

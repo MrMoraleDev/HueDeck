@@ -220,12 +220,12 @@ mod win {
         handle.set_service_status(status(ServiceState::Running, 0))?;
         // PawnIO calls and the SMBus mutex live on this one worker thread.
         let worker_stop = Arc::clone(&stop);
-        let worker = std::thread::Builder::new().name("lightloom-iobroker".into()).spawn(
-            move || -> Result<(), String> {
+        let worker = std::thread::Builder::new()
+            .name("lightloom-iobroker".into())
+            .spawn(move || -> Result<(), String> {
                 let mut server = boot::bootstrap(&opts)?;
                 pipe::serve(&mut server, sid.as_deref(), &worker_stop).map_err(|e| e.to_string())
-            },
-        );
+            });
         let exit = match worker.map(|w| w.join()) {
             Ok(Ok(Ok(()))) => 0,
             Ok(Ok(Err(e))) => {

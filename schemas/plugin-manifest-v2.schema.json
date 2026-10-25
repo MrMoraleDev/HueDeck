@@ -67,6 +67,33 @@
       "items": { "type": "string", "minLength": 1 },
       "description": "Executable names that will fight over the device; reported to the user (never killed)."
     },
+    "save": {
+      "type": "object",
+      "description": "Lightloom extension (docs/host-api/save-shutdown.md): what the plugin's SaveToDevice(request) export can store in the device's own memory (flash/EEPROM) when the user asks for it with \"Save to devices\". Must equal the SaveCapabilities() export. Omit when the device cannot store lighting.",
+      "required": ["static", "effects"],
+      "properties": {
+        "static": { "type": "boolean", "description": "The colours of the current frame (one colour per zone or LED, as the device stores them)." },
+        "effects": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["spectrum", "breathing", "wave", "rainbow"] },
+          "description": "Built-in hardware effects the device can store instead."
+        }
+      },
+      "additionalProperties": false
+    },
+    "shutdownModes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": ["restore", "keep", "off"] },
+      "description": "Lightloom extension: the exit modes the plugin's Shutdown(SystemSuspending, mode) carries out itself (restore: the device's own lighting; keep: the last colours, volatile; off). Must equal the ShutdownModes() export. Other modes fall back to the shutdownColor parameter."
+    },
+    "hardwareModes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+      "description": "Lightloom extension (docs/host-api/hardware-modes.md): the ids of the built-in effects the plugin's SetHardwareMode(request) can put the device in, in the order of the HardwareModes() export, which they must equal. Omit when the plugin offers none."
+    },
     "icon": { "type": "string", "description": "Relative path or URL of a PNG/JPG/SVG image." },
     "keywords": { "type": "array", "items": { "type": "string" } }
   },
@@ -169,8 +196,18 @@
             "tested": {
               "type": "array",
               "uniqueItems": true,
-              "items": { "$ref": "#/$defs/pciTuple" },
-              "description": "Cards, from pci, that someone has run the plugin on (GPU plugins); empty until then. RAM plugins list no pci and keep this empty until a run is recorded in their docs/hardware note."
+              "items": {
+                "oneOf": [
+                  { "$ref": "#/$defs/pciTuple" },
+                  {
+                    "type": "object",
+                    "required": ["bus"],
+                    "properties": { "bus": { "type": "string", "enum": ["amd", "intel", "nuvoton"] } },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "description": "What someone has run the plugin on: cards, from pci (GPU plugins), or a chipset bus family, {\"bus\": \"amd\"} (RAM plugins, which list no pci; the run is recorded in their docs/hardware note). Empty until then."
             },
             "deniedRegisters": {
               "type": "array",

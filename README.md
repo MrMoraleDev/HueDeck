@@ -22,7 +22,7 @@ and gives you a modern dashboard in your browser.
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 
 [Why Lightloom](#why-lightloom) · [Features](#features) · [Devices](#supported-devices) ·
-[Quick start](#quick-start) · [Add your device](#add-your-device) · [Roadmap](#roadmap)
+[Install](#install) · [Build from source](#build-from-source) · [Add your device](#add-your-device) · [Roadmap](#roadmap)
 
 </div>
 
@@ -31,8 +31,8 @@ and gives you a modern dashboard in your browser.
 </p>
 
 > **Pre-alpha.** Lightloom already drives real hardware with its own plugins, renders
-> effects and has a working dashboard, but there is no installer yet: today you build
-> it from source. Watch the repository to catch the first release.
+> effects and has a working dashboard. There is no release yet: until the first one,
+> [build it from source](#build-from-source). Watch the repository to catch the first release.
 
 ## Why Lightloom
 
@@ -40,7 +40,9 @@ and gives you a modern dashboard in your browser.
   RGB program in the background, no cloud service.
 - **Private by design.** No account, no sign-in, no telemetry, no ads, no "Pro"
   subscription. Lightloom never phones home: its daemon listens only on `127.0.0.1`,
-  and every change needs a token that only your user account can read.
+  and every change needs a token that only your user account can read. The one network
+  access it makes on its own is the optional PawnIO download for RAM lighting
+  ([privacy](docs/privacy.md)).
 - **A dashboard you will enjoy using.** Pick an effect and tune it live, save presets,
   watch a live preview of the canvas and drag your devices into place on a visual
   layout. It runs in any browser, served by Lightloom itself.
@@ -89,9 +91,9 @@ and gives you a modern dashboard in your browser.
 
 ### Dashboard, API and command line
 
-- **Dashboard** at `http://127.0.0.1:16138`: effects with live controls and preview,
-  layout editor, devices and channels, settings, export and import of your whole
-  setup in one file.
+- **Dashboard** at `http://127.0.0.1:53000` (the port can be changed in Settings;
+  loopback only): effects with live controls and preview, layout editor, devices
+  and channels, settings, export and import of your whole setup in one file.
 - **Local API**: everything the dashboard does, over REST and WebSocket (`/v1/...`),
   with live state events and a live canvas stream. Script your lights.
 - **`lightloom` CLI**: list devices, set a colour, run an effect, record and replay
@@ -135,22 +137,65 @@ Coming next: network lights (**WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeeligh
 then many more families adapted from OpenRGB. Missing your device?
 [Add it](#add-your-device) or open an issue with its USB id.
 
-## Quick start
+## Install
 
-There is no release yet. From source (stable Rust toolchain, Windows for now):
+These steps apply from the first release on.
+
+### Windows: winget (recommended)
+
+winget comes with Windows 11 and with up-to-date Windows 10 (it is part of "App Installer"
+from the Microsoft Store). In a terminal:
+
+```text
+winget install Lightloom.Lightloom
+```
+
+`winget upgrade Lightloom.Lightloom` updates it later; the dashboard's Settings → "Check for
+updates" works too.
+
+### Windows: installer
+
+Download `Lightloom-<version>-x64.msi` from the
+[releases page](https://github.com/MrMoraleDev/Lightloom/releases) and run it. It installs for
+your user only, without administrator rights. `SHA256SUMS` on the same page lets you check the
+download.
+
+### "Windows protected your PC"
+
+Lightloom's releases are not code-signed yet, so Windows SmartScreen may stop the installer
+the first time a new version is downloaded. That warning means "unknown publisher", not "a
+virus was found". To go on:
+
+1. Click **More info**.
+2. Click **Run anyway**.
+
+If you'd rather check first: the source is all here, every release is built by the public
+[release workflow](.github/workflows/release.yml), and `SHA256SUMS` lists the hash of each file.
+
+### Linux
+
+From the releases page: the AppImage (one file, no install) or the `.tar.xz` tarball. Device
+access needs udev rules once; [docs/linux-porting.md](docs/linux-porting.md) has the steps.
+Linux support is new and has not been tried on real hardware yet.
+
+## Build from source
+
+Stable Rust toolchain, Windows for now:
 
 ```text
 cargo build --release                          # lightloomd and lightloom
 cargo build --release -p lightloom-renderer --features cef   # effects (CMake + Ninja on PATH)
 cd ui && npm ci && npm run build               # the dashboard (ui/dist)
-target/release/lightloomd --open                 # devices, effects, API; opens http://127.0.0.1:16138
+target/release/lightloomd --open                 # devices, effects, API; opens http://127.0.0.1:53000
 ```
 
 `lightloomd` finds the renderer, the dashboard, its plugins and starter effects next
 to its executable (in a source checkout: the tree's `plugins/`, `effects/` and
 `ui/dist`). Settings live in `%LOCALAPPDATA%\Lightloom` (database, API token) and
 `%APPDATA%\Lightloom\config.toml` (ports, frame rate, extra plugin directories,
-devices to leave alone); `--home DIR` keeps everything in one directory,
+devices to leave alone); the dashboard's Settings → Port wins over `[api] port`
+there, and `lightloomd --port N` over both for one run. `lightloom url` prints where
+the running daemon serves. `--home DIR` keeps everything in one directory,
 `--dry-run` never writes to devices. Close other RGB software that owns the same
 devices: Lightloom leaves them alone while it runs and tells you so.
 

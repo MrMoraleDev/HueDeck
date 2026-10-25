@@ -5,10 +5,10 @@
 
 Please do **not** open a public issue for security problems.
 
-- Email: `security@lightloom.invalid` (placeholder; will be replaced by a real
-  address and a PGP key before the first public release)
-- Alternatively use GitHub's private vulnerability reporting on the repository once
-  it is enabled.
+Report it privately through GitHub: **[Report a vulnerability](https://github.com/MrMoraleDev/Lightloom/security/advisories/new)**
+(the repository's Security tab → "Report a vulnerability"). Only the maintainers see the
+report, and the fix and its advisory are prepared in a private fork before anything is
+published.
 
 Include the Lightloom version or commit, OS, the component (daemon, renderer, broker,
 CLI, dashboard, a first-party plugin), reproduction steps and the impact you
@@ -18,8 +18,9 @@ unless you prefer otherwise.
 
 ## Supported versions
 
-Pre-alpha: only the `main` branch is supported. Once releases exist, the latest
-minor release receives security fixes.
+Lightloom is pre-1.0: only the latest release (and `main`) receives security fixes.
+Dependabot alerts and security updates are on for the repository; Rust dependencies are
+also checked against the RustSec database by `cargo deny` in CI.
 
 ## Stance: no kernel driver, least privilege
 

@@ -6,6 +6,7 @@
   import type { SignalRgbImport, Snapshot } from "../lib/types";
   import InputDevices from "./InputDevices.svelte";
   import Logs from "./Logs.svelte";
+  import UpdateCheck from "./UpdateCheck.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let message = $state<string | null>(null);
@@ -408,6 +409,7 @@
   </section>
 
   <InputDevices {snapshot} />
+  <UpdateCheck />
 
   <section class="panel">
     <h2>Daemon</h2>

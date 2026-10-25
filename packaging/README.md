@@ -89,6 +89,14 @@ checked by default.
   (`lightloomw.exe --stop`: `POST /v1/shutdown`, so plugins restore their devices). With the
   option checked, Finish runs the helper again, which updates the broker (stop, replace,
   register) and keeps PawnIO when it is current.
+- **In-app updates** (Settings → Updates, `crates/lightloom-daemon/src/update.rs`) rely on
+  exactly this: the daemon downloads `Lightloom-<x.y.z>-x64.msi`, checks it against the
+  release's `SHA256SUMS` (written by the `release` job of `release.yml` from the `*.sha256`
+  files, the MSI's included) and starts `msiexec /i` detached from itself. The package's
+  `StopLightloom` action then stops the daemon and the tray before `InstallValidate`, so no file
+  is in use, and Finish starts the new version. Cancelling the wizard leaves the running version
+  alone. Keep the MSI name, the per-user scope and `StopLightloom` as they are, or update the
+  updater with them.
 - **Uninstall** stops the daemon, then, when the `LightloomIoBroker` service exists, runs
   `lightloom-setup.exe --smbus --uninstall --elevate` (one UAC prompt) to remove the service and
   its files under `%ProgramFiles%\Lightloom`. **PawnIO stays installed**, because other programs

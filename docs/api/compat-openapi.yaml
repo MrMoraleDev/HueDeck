@@ -164,7 +164,7 @@ paths:
                           name: { type: string }
                           description: { type: string }
                           publisher: { type: string }
-                          image: { type: string, description: Link to `effects/{id}/image`. }
+                          image: { type: string, description: "Link to `effects/{id}/image`." }
                           developer_effect: { type: boolean }
                           favorite: { const: false }
                           uses_audio: { type: boolean }

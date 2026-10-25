@@ -893,6 +893,78 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SensorsView" }
+  /v1/update:
+    get:
+      tags: [daemon]
+      operationId: getUpdate
+      summary: The update check (Settings → Updates), as it is; no network
+      responses:
+        "200":
+          description: The state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateView" }
+    patch:
+      tags: [daemon]
+      operationId: setUpdateOptions
+      summary: Turn the weekly check or the beta channel on or off (both off by default)
+      description: Kept in `update.json` in the data directory. Changing the channel forgets the release found.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checkWeekly: { type: boolean }
+                beta: { type: boolean }
+      responses:
+        "200":
+          description: The new state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/update/check:
+    post:
+      tags: [daemon]
+      operationId: checkUpdate
+      summary: Ask GitHub for the latest release now
+      description: >-
+        One anonymous `GET https://api.github.com/repos/MrMoraleDev/Lightloom/releases/latest`
+        (`.../releases?per_page=20` with the beta channel on) with `User-Agent: Lightloom/<version>`
+        and nothing else that identifies the user (docs/privacy.md); 20 s timeout. Answers when it ends;
+        a failure is in `error`, not an HTTP error.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: The result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/update/install:
+    post:
+      tags: [daemon]
+      operationId: installUpdate
+      summary: Download, verify and open the installer of the release found
+      description: >-
+        Windows, per-user MSI install only (`installable`). Downloads the release's `SHA256SUMS` and its
+        `Lightloom-<x.y.z>-x64.msi` to `%TEMP%\lightloom-update`, checks size and SHA-256 (a release
+        without checksums is refused) and runs `msiexec /i` on it; the installer stops the daemon before it
+        replaces files. Answers at once with `job.running`; read `GET /v1/update` for the progress. 409 when
+        nothing was found, the release has no installer for this system, a download runs, or the copy is
+        not installable here.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/inputs:
     get:
       tags: [settings]
@@ -1622,6 +1694,57 @@ components:
         urlSchemeNotice: { type: [string, "null"], description: Why the registration is not what the setting says. }
         audioDevice: { type: [string, "null"], description: "The output device `engine.audio` captures (`null`: the system default); see `/v1/inputs`." }
         display: { type: [string, "null"], description: "The display screen capture uses (`null`: the primary one); see `/v1/inputs`." }
+    UpdateView:
+      type: object
+      description: Settings → Updates.
+      properties:
+        currentVersion: { type: string }
+        checkWeekly: { type: boolean, description: Check once a week by itself (off by default). }
+        beta: { type: boolean, description: Offer pre-releases too (off by default). }
+        checking: { type: boolean }
+        lastCheck: { type: [integer, "null"], description: When the last check ended (Unix seconds). }
+        error: { type: [string, "null"], description: Why the last check failed. }
+        available:
+          oneOf:
+            - $ref: "#/components/schemas/UpdateRelease"
+            - type: "null"
+          description: A newer release; null when up to date or never checked.
+        installable: { type: boolean, description: "`install` downloads and opens the installer here; otherwise the release page is the way." }
+        installNote: { type: [string, "null"], description: Why not installable. }
+        job:
+          oneOf:
+            - $ref: "#/components/schemas/UpdateJob"
+            - type: "null"
+    UpdateRelease:
+      type: object
+      properties:
+        version: { type: string, examples: ["1.2.0", "1.3.0-beta.1"] }
+        tag: { type: string }
+        name: { type: string }
+        notes: { type: string, description: Release notes as plain text (no HTML), at most 20000 characters. }
+        url: { type: string, description: "The release page, always under https://github.com/MrMoraleDev/Lightloom/releases/." }
+        publishedAt: { type: [string, "null"] }
+        prerelease: { type: boolean }
+        asset:
+          oneOf:
+            - $ref: "#/components/schemas/UpdateAsset"
+            - type: "null"
+          description: The download for this system (per-user MSI on Windows, AppImage or tarball on Linux).
+    UpdateAsset:
+      type: object
+      properties:
+        name: { type: string }
+        size: { type: integer }
+        url: { type: string }
+    UpdateJob:
+      type: object
+      properties:
+        version: { type: string }
+        running: { type: boolean }
+        ok: { type: [boolean, "null"] }
+        downloaded: { type: integer }
+        total: { type: integer }
+        message: { type: string }
     InputsView:
       type: object
       properties:

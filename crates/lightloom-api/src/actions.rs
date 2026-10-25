@@ -51,7 +51,7 @@ pub enum Action {
     View {
         /// The page as written (`devices`, `settings/Video`, `showdevice`, ...).
         page: String,
-        /// The dashboard tab it maps to (`effects`, `layout`, `devices`, `macros`, `settings`).
+        /// The dashboard tab it maps to (`effects`, `layout`, `devices`, `profiles`, `macros`, `settings`).
         tab: &'static str,
         /// A device to show (`showdevice?uid=`, `devices?uid=`).
         uid: Option<String>,
@@ -178,6 +178,7 @@ fn view_tab(page: &str) -> Option<Option<&'static str>> {
     Some(match page.to_ascii_lowercase().as_str() {
         "dashboard" | "customize" | "effects" | "library" => Some("effects"),
         "layouts" | "layout" => Some("layout"),
+        "profiles" => Some("profiles"),
         "devices" | "showdevice" | "network" => Some("devices"),
         "settings" | "addons" | "debuginfo" | "logs" => Some("settings"),
         "macros" => Some("macros"),

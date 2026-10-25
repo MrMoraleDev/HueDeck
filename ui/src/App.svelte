@@ -10,16 +10,18 @@
   import Sensors from "./components/Sensors.svelte";
   import Settings from "./components/Settings.svelte";
   import Macros from "./components/Macros.svelte";
+  import Profiles from "./components/Profiles.svelte";
   import MacroPrompt from "./components/MacroPrompt.svelte";
   import { prompts } from "./lib/macros.svelte";
   import BatteryBadge from "./components/BatteryBadge.svelte";
   import logotype from "./assets/lightloom-logotype.svg";
 
-  type Tab = "effects" | "layout" | "devices" | "macros" | "settings";
+  type Tab = "effects" | "layout" | "devices" | "profiles" | "macros" | "settings";
   const tabs: { id: Tab; label: string }[] = [
     { id: "effects", label: "Effects" },
     { id: "layout", label: "Layout" },
     { id: "devices", label: "Devices" },
+    { id: "profiles", label: "Profiles" },
     { id: "macros", label: "Macros" },
     { id: "settings", label: "Settings" },
   ];
@@ -79,6 +81,28 @@
       </span>
     </div>
     <div class="row">
+      <label class="row" title="Apply a saved profile (the whole lighting setup)">
+        <span class="muted">Profile</span>
+        <select
+          class="profile"
+          value={s.lighting.profile ?? ""}
+          onchange={(e) => {
+            const name = e.currentTarget.value;
+            if (name) void daemon.run(() => api.applyProfile(name));
+            else {
+              // "Manage profiles…" is a link, not a choice: show the current profile again.
+              e.currentTarget.value = s!.lighting.profile ?? "";
+              select("profiles");
+            }
+          }}
+        >
+          {#if !s.lighting.profile}<option value="">—</option>{/if}
+          {#each s.profiles ?? [] as p (p.name)}
+            <option value={p.name}>{p.name}</option>
+          {/each}
+          {#if s.lighting.profile}<option value="">Manage profiles…</option>{/if}
+        </select>
+      </label>
       <label class="row" title="Global brightness">
         <span class="muted">Brightness</span>
         <input
@@ -155,6 +179,8 @@
       <Network snapshot={s} />
       <Devices snapshot={s} />
       <Sensors />
+    {:else if tab === "profiles"}
+      <Profiles snapshot={s} />
     {:else if tab === "macros"}
       <Macros />
     {:else}
@@ -182,6 +208,9 @@
   }
   .now {
     flex: 1;
+  }
+  .profile {
+    max-width: 180px;
   }
   .num {
     width: 2.5em;

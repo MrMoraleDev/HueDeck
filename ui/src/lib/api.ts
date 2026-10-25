@@ -3,6 +3,7 @@
 // state carry the token lightloomd embeds in the page it serves.
 
 import type {
+  DeviceHardwareMode,
   EffectTimer,
   InputsView,
   LogQuery,
@@ -98,6 +99,26 @@ export const api = {
   /** Choose a device's LCD face (`""`: the default) and/or frame rate (1-60). */
   setLcd: (key: string, patch: { face?: string; framerate?: number }) =>
     request<{ key: string; face: string | null; framerate: number }>("PUT", `/v1/devices/${enc(key)}/lcd`, patch),
+  /** Put a device in one of its hardware modes; null: back to the effect. */
+  setHardwareMode: (key: string, mode: DeviceHardwareMode | null) =>
+    request<{ device: string; hardwareMode: DeviceHardwareMode | null; applied: boolean }>(
+      "PUT",
+      `/v1/devices/${enc(key)}/mode`,
+      mode ?? { id: null },
+    ),
+  /** Save the whole lighting setup as a profile (created or replaced). */
+  saveProfile: (name: string) => request<{ profile: string }>("PUT", `/v1/profiles/${enc(name)}`),
+  applyProfile: (name: string) => request<{ profile: string; notes: string[] }>("POST", `/v1/profiles/${enc(name)}/apply`),
+  deleteProfile: (name: string) => request("DELETE", `/v1/profiles/${enc(name)}`),
+  renameProfile: (name: string, to: string) =>
+    request<{ profile: string }>("POST", `/v1/profiles/${enc(name)}/rename`, { name: to }),
+  duplicateProfile: (name: string, to: string) =>
+    request<{ profile: string }>("POST", `/v1/profiles/${enc(name)}/duplicate`, { name: to }),
+  /** The profile document (what an export file holds). */
+  getProfile: (name: string) => request<unknown>("GET", `/v1/profiles/${enc(name)}`),
+  importProfile: (profile: unknown, name?: string) => request<{ profile: string }>("POST", "/v1/profiles", { profile, name }),
+  /** The profile applied at start (null: none). */
+  setDefaultProfile: (name: string | null) => request("PATCH", "/v1/profiles", { default: name }),
   setPlacement: (uid: string, placement: Placement) => request("PUT", `/v1/placements/${enc(uid)}`, placement),
   applyLayout: (name: string) => request("POST", `/v1/layouts/${enc(name)}/apply`),
   saveLayoutAs: (name: string) => request("PUT", `/v1/layouts/${enc(name)}`),

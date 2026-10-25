@@ -109,6 +109,42 @@ export interface DeviceView {
   interfaces?: string[];
   /** The device's LCD, while its plugin drives one. */
   lcd?: LcdView | null;
+  /** The device's built-in effects it can run live (its plugin's HardwareModes()). */
+  hardwareModes?: HardwareModeView[];
+  /** The hardware mode chosen for it (null: it follows the effect). */
+  hardwareMode?: DeviceHardwareMode | null;
+}
+
+/** A device's built-in effect (docs/host-api/hardware-modes.md). */
+export interface HardwareModeView {
+  id: string;
+  name: string;
+  /** Colours it takes. */
+  colors: number;
+  colorNames?: string[];
+  speed: boolean;
+  brightness: boolean;
+}
+
+/** A hardware mode chosen for a device (live; never stored in the device). */
+export interface DeviceHardwareMode {
+  id: string;
+  /** #rrggbb, one per colour of the mode. */
+  colors: string[];
+  /** 0-100. */
+  speed?: number | null;
+  /** 0-100. */
+  brightness?: number | null;
+}
+
+/** A saved profile in the list. */
+export interface ProfileView {
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  effect?: string | null;
+  layout: string;
+  devices: number;
 }
 
 /** A device's LCD (docs/host-api/lcd-lightloom.md). */
@@ -253,6 +289,8 @@ export interface Lighting {
   timer: EffectTimer;
   /** When the next effect comes by itself (Unix ms). */
   nextSwitchMs?: number | null;
+  /** The profile applied or saved last. */
+  profile?: string | null;
 }
 
 export interface Settings {
@@ -287,6 +325,8 @@ export interface Settings {
   display?: string | null;
   /** Why the registration is not what the setting says. */
   urlSchemeNotice?: string | null;
+  /** The profile applied when Lightloom starts (null: the setup as it was left). */
+  defaultProfile?: string | null;
 }
 
 /** An `action` event: an action URL for the dashboard. */
@@ -312,6 +352,8 @@ export interface Snapshot {
   os?: string;
   /** LCD faces devices with a screen can show. */
   lcdFaces?: LcdFace[];
+  /** Saved profiles, by name. */
+  profiles?: ProfileView[];
 }
 
 export interface PawnIoJob {

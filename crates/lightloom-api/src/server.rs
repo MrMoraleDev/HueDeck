@@ -53,6 +53,24 @@ pub trait Backend: Send + Sync + 'static {
     fn sensors(&self) -> crate::model::SensorsView {
         crate::model::SensorsView::default()
     }
+    /// Every log line the daemon has (`GET /v1/logs`, filtered by the router):
+    /// `from` is `file` or `memory`, `None` the files when there are any. It
+    /// may read files, so the router calls it off the async runtime. Default:
+    /// an empty in-memory log.
+    fn logs(&self, from: Option<&str>) -> crate::logs::LogBatch {
+        let _ = from;
+        crate::logs::LogBatch {
+            from: "memory".into(),
+            available: vec!["memory".into()],
+            ..crate::logs::LogBatch::default()
+        }
+    }
+    /// The audio output devices and displays capture can open, and the
+    /// choice (`GET /v1/inputs`). Enumerating may block briefly, so the
+    /// router calls it off the async runtime. Default: no capture.
+    fn inputs(&self) -> crate::model::InputsView {
+        crate::model::InputsView::default()
+    }
     /// The update check (`/v1/update`); `None`: not supported (503).
     fn updates(&self) -> Option<Arc<dyn Updates>> {
         None
@@ -253,6 +271,8 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/pawnio/remove", post(pawnio_remove))
         .route("/v1/rescan", post(rescan))
         .route("/v1/sensors", get(sensors))
+        .route("/v1/inputs", get(inputs).patch(patch_inputs))
+        .route("/v1/logs", get(logs))
         .route("/v1/update", get(update).patch(patch_update))
         .route("/v1/update/check", post(check_update))
         .route("/v1/update/install", post(install_update))
@@ -715,6 +735,61 @@ async fn sensors(State(ctx): State<ApiContext>) -> Response {
     let backend = Arc::clone(&ctx.backend);
     match tokio::task::spawn_blocking(move || backend.sensors()).await {
         Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
+}
+
+async fn inputs(State(ctx): State<ApiContext>) -> Response {
+    let backend = Arc::clone(&ctx.backend);
+    match tokio::task::spawn_blocking(move || backend.inputs()).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
+}
+
+/// `null` stays apart from a missing field: `Some(None)` is "the default".
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InputsPatch {
+    #[serde(default, deserialize_with = "present")]
+    audio_device: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    display: Option<Option<String>>,
+}
+
+/// `PATCH /v1/inputs`: `{"audioDevice": name | null, "display": name | null}`;
+/// `null` (or `""`) goes back to the system default output / the primary display.
+async fn patch_inputs(State(ctx): State<ApiContext>, Json(p): Json<InputsPatch>) -> Response {
+    let name = |v: Option<Option<String>>| v.map(|n| n.unwrap_or_default().trim().to_string());
+    let (audio_device, display) = (name(p.audio_device), name(p.display));
+    for n in [&audio_device, &display].into_iter().flatten() {
+        if n.len() > 256 {
+            return error_response(&ApiError::bad_request("device names are at most 256 bytes"));
+        }
+    }
+    reply(
+        ctx.call(Request::SetInputs {
+            audio_device,
+            display,
+        })
+        .await,
+    )
+}
+
+/// `GET /v1/logs?from&level&q&source&limit`: the log history, filtered, the
+/// API token redacted.
+async fn logs(State(ctx): State<ApiContext>, Query(q): Query<crate::logs::LogQuery>) -> Response {
+    if let Err(m) = q.validate() {
+        return error_response(&ApiError::bad_request(m));
+    }
+    let backend = Arc::clone(&ctx.backend);
+    let from = q.from.clone().filter(|f| !f.is_empty());
+    match tokio::task::spawn_blocking(move || backend.logs(from.as_deref())).await {
+        Ok(batch) => Json(q.apply(batch, &[&ctx.token])).into_response(),
         Err(e) => error_response(&ApiError::internal(e.to_string())),
     }
 }

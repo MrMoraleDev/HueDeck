@@ -21,7 +21,7 @@ fps = 30                # capture rate, 10-60
 ```
 
 - **Display.** The name is the DXGI device name, `\\.\DISPLAY1`, `\\.\DISPLAY2`, … (`DISPLAY2` and `display2` also work). The debug log (`RUST_LOG=lightloom_daemon=debug`) lists the displays at capture start, and the info line `screen: capturing \\.\DISPLAY1 (2560x1440, primary) on <adapter>` names the one in use. A name that matches nothing is logged with the list of names, and Lightloom retries every 2 s.
-- **No dashboard picker yet.** `lightloom_inputs::screen::displays()` lists the displays, for a future dashboard select.
+- **Dashboard picker.** Settings → Inputs lists the displays (`GET /v1/inputs`, from `lightloom_inputs::screen::displays()`). A display chosen there is saved in the settings database, wins over `display` in `config.toml`, and moves the running capture at once; *Primary display* goes back to `config.toml`'s choice.
 - **Rate.** At most `fps` reductions per second. While the desktop does not change, Windows delivers no new image, so nothing is computed. The last snapshot is still pushed once a second, so a restarted renderer gets it.
 
 ## Capture (Windows)

@@ -4,6 +4,8 @@
   import { api } from "../lib/api";
   import { daemon } from "../lib/store.svelte";
   import type { SignalRgbImport, Snapshot } from "../lib/types";
+  import InputDevices from "./InputDevices.svelte";
+  import Logs from "./Logs.svelte";
   import UpdateCheck from "./UpdateCheck.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
@@ -406,6 +408,7 @@
     </p>
   </section>
 
+  <InputDevices {snapshot} />
   <UpdateCheck />
 
   <section class="panel">
@@ -422,10 +425,7 @@
   <p class="message">{message}</p>
 {/if}
 
-<section class="panel logs">
-  <h2>Log</h2>
-  <pre>{daemon.logs.join("\n") || "Nothing logged since this page opened."}</pre>
-</section>
+<Logs />
 
 <style>
   .cols {
@@ -460,19 +460,9 @@
   input[type="number"] {
     width: 9em;
   }
-  .logs {
-    margin-top: 16px;
-  }
   .preview {
     margin: 8px 0 0;
     padding-left: 1.2em;
     font-size: 13px;
-  }
-  pre {
-    max-height: 320px;
-    overflow: auto;
-    font-size: 12px;
-    white-space: pre-wrap;
-    margin: 0;
   }
 </style>

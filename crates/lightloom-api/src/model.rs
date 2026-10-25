@@ -193,6 +193,39 @@ pub struct SensorsView {
     pub sources: Vec<SensorSourceView>,
 }
 
+/// `GET /v1/inputs`: what audio and screen capture can open, and the choice.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputsView {
+    /// This OS has the capture backends (Windows: WASAPI loopback, DXGI duplication).
+    pub supported: bool,
+    /// Output devices loopback capture can open, by name. Microphones and
+    /// other capture endpoints are never opened, so they are not listed.
+    pub audio_devices: Vec<String>,
+    /// The chosen output device; `None`: the system default.
+    pub audio_device: Option<String>,
+    /// Displays screen capture can open.
+    pub displays: Vec<DisplayView>,
+    /// The chosen display; `None`: the primary display.
+    pub display: Option<String>,
+}
+
+/// One display for screen capture.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayView {
+    /// Device name (`\\.\DISPLAY1`), what `display` names.
+    pub name: String,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// The primary display.
+    pub primary: bool,
+    /// Graphics adapter.
+    pub adapter: String,
+}
+
 /// One sensor: what `engine.getSensorValue(name)` returns, plus its name.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -649,6 +682,14 @@ pub struct Settings {
     /// Black canvas while the PC is locked or the display is off (off by default).
     #[serde(default)]
     pub lights_off_when_idle: bool,
+    /// The output device `engine.audio` captures (chosen in the dashboard, else
+    /// `[audio] device` in config.toml); `None`: the system default.
+    #[serde(default)]
+    pub audio_device: Option<String>,
+    /// The display `engine.zone` and the meters capture (chosen in the dashboard,
+    /// else `[screen] display`); `None`: the primary display.
+    #[serde(default)]
+    pub display: Option<String>,
 }
 
 /// A state change asked of the daemon.
@@ -830,6 +871,15 @@ pub enum Request {
         #[serde(default)]
         lights_off_when_idle: Option<bool>,
     },
+    /// Choose the audio output device and the display the inputs capture.
+    SetInputs {
+        /// Output device name (`""`: the system default); `None` leaves it.
+        #[serde(default)]
+        audio_device: Option<String>,
+        /// Display name (`""`: the primary display); `None` leaves it.
+        #[serde(default)]
+        display: Option<String>,
+    },
     /// *Add by IP*: ask a network plugin to look at `ip`.
     NetworkAdd {
         /// Plugin `Name()`.
@@ -963,6 +1013,7 @@ impl Request {
             Request::CanvasEvent { .. } => "canvasEvent",
             Request::CanvasTap { .. } => "canvasTap",
             Request::SetSettings { .. } => "setSettings",
+            Request::SetInputs { .. } => "setInputs",
             Request::NetworkAdd { .. } => "networkAdd",
             Request::NetworkAction { .. } => "networkAction",
             Request::ImportSignalRgb { .. } => "importSignalRgb",

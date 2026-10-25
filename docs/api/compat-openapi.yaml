@@ -1,0 +1,522 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The SignalRGB-compatible API of lightloomd (crates/lightloom-api src/server.rs `compat_router`
+# and `canvas_event_router`). Every route of `lightloom_api::COMPAT_ROUTES`, of the router and
+# `COMPAT_CANVAS_EVENT_ROUTE` appears here: crates/lightloom-api/tests/compat_openapi.rs checks
+# it. The prose guide is docs/integrations/signalrgb-api.md; Lightloom's own API is
+# docs/api/openapi.yaml.
+openapi: 3.1.0
+info:
+  title: Lightloom SignalRGB-compatible API
+  version: "1.0"
+  license:
+    name: GPL-3.0-or-later
+    identifier: GPL-3.0-or-later
+  description: |
+    The shapes of SignalRGB's local API, so tools and game integrations written for it work with
+    Lightloom unchanged.
+
+    * **Loopback only**, on fixed ports: REST on 16038, canvas events on 16034. While another
+      application (SignalRGB) listens on a port, Lightloom waits for it and tries again every 30 s.
+      The same `Host` / `Origin` checks as the native API apply (`403`).
+    * **Token.** Reads need none. `POST` and `PATCH` need `Authorization: Bearer <token>` (the
+      `api-token` file in Lightloom's data directory), unless `config.toml` sets
+      `[api] compat_open_mutations = true`; `lighting/loadEffect` needs the token even then.
+      The canvas-event listener needs it only with `[api] canvas_events_need_token = true`.
+    * **Envelope.** Every REST answer is a `CompatEnvelope`; the one exception is a successful
+      `effects/{id}/image`, which is the picture itself. Errors carry the HTTP status of the
+      error and `errors` instead of `data`. Unknown paths get a 404 envelope.
+    * JSON field names are snake_case, as SignalRGB's.
+servers:
+  - url: http://127.0.0.1:16038
+    description: REST
+tags:
+  - name: app
+  - name: lighting
+  - name: effects
+  - name: playlists
+  - name: scenes
+  - name: canvas
+paths:
+  /api/v1/app:
+    get:
+      tags: [app]
+      operationId: compatApp
+      summary: Who answers
+      responses:
+        "200":
+          description: "`data`: the application."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/CompatEnvelope"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          name: { const: Lightloom }
+                          version: { type: string }
+                          api_version: { const: "1.0" }
+                          compatible_with: { type: string }
+                          platform: { type: string, examples: [windows, linux] }
+                          state: { type: string }
+                          links: { $ref: "#/components/schemas/Links" }
+  /api/v1/new:
+    get:
+      tags: [app]
+      operationId: compatNew
+      summary: SignalRGB's news feed (always empty)
+      responses:
+        "200":
+          description: "`data`: `{items: [], type: new}`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompatEnvelope" }
+  /api/v1/partners/{id}:
+    get:
+      tags: [app]
+      operationId: compatPartner
+      summary: Partner permissions (Lightloom grants none)
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+      responses:
+        "200":
+          description: "`data`: `{id, permissions: {}, type: partner}`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompatEnvelope" }
+  /api/v1/lighting:
+    get:
+      tags: [lighting]
+      operationId: compatLighting
+      summary: What shows now
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+  /api/v1/lighting/global_brightness:
+    patch:
+      tags: [lighting]
+      operationId: compatSetBrightness
+      summary: Set the global brightness
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [global_brightness]
+              properties:
+                global_brightness: { type: integer, minimum: 0, maximum: 100 }
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/enabled:
+    patch:
+      tags: [lighting]
+      operationId: compatSetEnabled
+      summary: Pause or resume the canvas (paused, every device shows black)
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/effects:
+    get:
+      tags: [effects]
+      operationId: compatEffects
+      summary: The effect library
+      responses:
+        "200":
+          description: "`data.items`: `{id, name, links: {apply, self}}`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompatEnvelope" }
+  /api/v1/lighting/effects/{id}:
+    get:
+      tags: [effects]
+      operationId: compatEffect
+      summary: One effect
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+      responses:
+        "200":
+          description: The effect.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/CompatEnvelope"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: string }
+                          name: { type: string }
+                          description: { type: string }
+                          publisher: { type: string }
+                          image: { type: string, description: "Link to `effects/{id}/image`." }
+                          developer_effect: { type: boolean }
+                          favorite: { const: false }
+                          uses_audio: { type: boolean }
+                          uses_input: { type: boolean }
+                          uses_video: { type: boolean }
+                          uses_meters: { type: boolean }
+                          uses_webgl: { type: boolean }
+                          parameters:
+                            type: object
+                            description: "By property: `{label, type, value}`."
+                            additionalProperties:
+                              type: object
+                              properties:
+                                label: { type: string }
+                                type: { type: string }
+                                value: {}
+                          presets: { type: array, items: { type: string } }
+                          links: { $ref: "#/components/schemas/Links" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/effects/{id}/image:
+    get:
+      tags: [effects]
+      operationId: compatEffectImage
+      summary: The effect's picture
+      description: |
+        `<name>.png`, `.jpg`, `.jpeg` or `.webp` next to the page (catalog-cache effects: `image.*`
+        or `thumbnail.*`). No envelope on success.
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+      responses:
+        "200":
+          description: The picture.
+          content:
+            image/png: { schema: { type: string, contentEncoding: binary } }
+            image/jpeg: { schema: { type: string, contentEncoding: binary } }
+            image/webp: { schema: { type: string, contentEncoding: binary } }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/effects/{id}/apply:
+    post:
+      tags: [effects]
+      operationId: compatApply
+      summary: Show the effect (a playing playlist stops)
+      security: [{ bearer: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/effects/{id}/presets:
+    get:
+      tags: [effects]
+      operationId: compatPresets
+      summary: The effect's preset names
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+      responses:
+        "200":
+          description: "`data.items`: the preset names."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompatEnvelope" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [effects]
+      operationId: compatApplyPreset
+      summary: Load a preset and show the effect
+      security: [{ bearer: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [preset]
+              properties:
+                preset: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/next:
+    get:
+      tags: [lighting]
+      operationId: compatNextGet
+      summary: Next effect (of the library, or of the playing playlist)
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "409": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [lighting]
+      operationId: compatNext
+      summary: Next effect (of the library, or of the playing playlist)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/previous:
+    get:
+      tags: [lighting]
+      operationId: compatPreviousGet
+      summary: Previous effect
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "409": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [lighting]
+      operationId: compatPrevious
+      summary: Previous effect
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/shuffle:
+    get:
+      tags: [lighting]
+      operationId: compatShuffleGet
+      summary: A random effect (no game integrations or developer effects; a playlist stops)
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+    post:
+      tags: [lighting]
+      operationId: compatShuffle
+      summary: A random effect (no game integrations or developer effects; a playlist stops)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/loadEffect:
+    post:
+      tags: [effects]
+      operationId: compatLoadEffect
+      summary: Save a page as the effect `developer:<uid>` and show it
+      description: |
+        The file goes to `developer-effects/` in the data directory and stays after a restart.
+        Always needs the token, even with `compat_open_mutations`.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uid, html]
+              properties:
+                uid: { type: string, maxLength: 64, pattern: "^[A-Za-z0-9 ._-]+$" }
+                html: { type: string, description: The page, at most 4 MiB. }
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/playlists:
+    get:
+      tags: [playlists]
+      operationId: compatPlaylists
+      summary: The playlists
+      responses:
+        "200":
+          description: "`data.items`: `CompatPlaylist`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompatEnvelope" }
+  /api/v1/lighting/playlists/{id}:
+    get:
+      tags: [playlists]
+      operationId: compatPlaylist
+      summary: One playlist, with `playing` and `effects`
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+      responses:
+        "200":
+          description: The playlist.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/CompatEnvelope"
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: "#/components/schemas/CompatPlaylist"
+                          - type: object
+                            properties:
+                              playing: { type: boolean }
+                              effects:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id: { type: string }
+                                    name: { type: string }
+                                    preset: { type: [string, "null"] }
+                                    duration: { type: [integer, "null"] }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/lighting/playlists/{id}/play:
+    post:
+      tags: [playlists]
+      operationId: compatPlayPlaylist
+      summary: Play a playlist
+      security: [{ bearer: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                starting_effect_id: { type: string, description: Start at the entry that shows this effect. }
+      responses:
+        "200": { $ref: "#/components/responses/Lighting" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/scenes/current_layout:
+    get:
+      tags: [scenes]
+      operationId: compatCurrentLayout
+      summary: The layout in use
+      responses:
+        "200":
+          description: "`data`: `{current_layout: {id, type: layout}}`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompatEnvelope" }
+    patch:
+      tags: [scenes]
+      operationId: compatSetLayout
+      summary: Switch to a layout
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [layout]
+              properties:
+                layout: { type: string }
+      responses:
+        "200":
+          description: "`data`: `{current_layout: {id, type: layout}}`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompatEnvelope" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/scenes/layouts:
+    get:
+      tags: [scenes]
+      operationId: compatLayouts
+      summary: The layouts
+      responses:
+        "200":
+          description: "`data.items`: `{id, type: layout}`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompatEnvelope" }
+  /canvas/event:
+    post:
+      tags: [canvas]
+      operationId: compatCanvasEvent
+      summary: Send an event to the running effect (`onCanvasApiEvent`)
+      description: |
+        On port 16034, not 16038. The token is needed only with
+        `[api] canvas_events_need_token = true`. Not enveloped.
+      servers:
+        - url: http://127.0.0.1:16034
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: sender, in: query, required: true, schema: { type: string }, description: The sending application. }
+        - { name: event, in: query, required: true, schema: { type: string }, description: The event string. }
+      responses:
+        "200":
+          description: Handed to the effect.
+        "400":
+          description: "`sender` or `event` missing."
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: The contents of the `api-token` file in Lightloom's data directory.
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: Effect, partner or playlist id (URL-encoded).
+  responses:
+    Lighting:
+      description: "`data`: `CompatLighting`, the state after the call."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/CompatEnvelope"
+              - properties:
+                  data: { $ref: "#/components/schemas/CompatLighting" }
+    Error:
+      description: "`status: error` with `errors`, sent with the matching HTTP status."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/CompatEnvelope" }
+  schemas:
+    CompatEnvelope:
+      type: object
+      required: [api_version, id, method, params, status]
+      properties:
+        api_version: { const: "1.0" }
+        id: { type: integer, description: A request counter. }
+        method: { type: string, examples: ["GET /api/v1/lighting"] }
+        params: { type: object, description: "The path parameters and body fields the call used." }
+        status: { enum: [ok, error] }
+        data: { description: The answer, on success. }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              title: { type: string }
+              detail: { type: string }
+    CompatLighting:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        global_brightness: { type: integer, minimum: 0, maximum: 100 }
+        name: { type: string, description: The effect's name. }
+        id: { type: string, description: The effect's id. }
+        playlist:
+          type: [object, "null"]
+          properties:
+            id: { type: string }
+            name: { type: string }
+        links: { $ref: "#/components/schemas/Links" }
+    CompatPlaylist:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        effects_count: { type: integer }
+        last_update_time: { type: string }
+        image_url: { type: "null" }
+        shuffle: { type: boolean }
+        type: { const: playlist }
+        links: { $ref: "#/components/schemas/Links" }
+    Links:
+      type: object
+      additionalProperties: { type: string }

@@ -15,6 +15,7 @@
 
 pub mod actions;
 pub mod listener;
+pub mod logs;
 pub mod model;
 pub mod openrgb;
 pub mod server;
@@ -171,6 +172,9 @@ pub const NATIVE_ROUTES: &[Route] = &[
     r("POST", "/pawnio/remove", true),
     r("POST", "/rescan", true),
     r("GET", "/sensors", false),
+    r("GET", "/inputs", false),
+    r("PATCH", "/inputs", true),
+    r("GET", "/logs", false),
     r("GET", "/update", false),
     r("PATCH", "/update", true),
     r("POST", "/update/check", true),

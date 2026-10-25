@@ -6,7 +6,7 @@ Tools and game integrations written for SignalRGB's local API work with Lightloo
 
 Both are loopback only. While SignalRGB itself holds the ports, Lightloom waits and does not fight it for them.
 
-The route table is `lightloom_api::COMPAT_ROUTES` (`crates/lightloom-api/src/lib.rs`), and the router is `compat_router` in `crates/lightloom-api/src/server.rs`. The test `every_compat_route_answers_in_the_envelope` checks every route against the envelope below. For Lightloom's own, richer API, see [`docs/api/openapi.yaml`](../api/openapi.yaml).
+The route table is `lightloom_api::COMPAT_ROUTES` (`crates/lightloom-api/src/lib.rs`), and the router is `compat_router` in `crates/lightloom-api/src/server.rs`. The test `every_compat_route_answers_in_the_envelope` checks every route against the envelope below. The OpenAPI description of these routes is [`docs/api/compat-openapi.yaml`](../api/compat-openapi.yaml), checked against the routers by `crates/lightloom-api/tests/compat_openapi.rs`. For Lightloom's own, richer API, see [`docs/api/openapi.yaml`](../api/openapi.yaml).
 
 ## Envelope
 

@@ -17,6 +17,7 @@ pub mod config;
 pub mod engine;
 pub mod instance;
 pub mod lifecycle;
+pub mod logs;
 pub mod paths;
 pub mod pawnio;
 pub mod port;

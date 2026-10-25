@@ -256,6 +256,10 @@ export interface Settings {
   urlScheme?: boolean;
   /** This OS and install can register the URL scheme. */
   urlSchemeAvailable?: boolean;
+  /** The output device engine.audio captures (null: the system default). */
+  audioDevice?: string | null;
+  /** The display screen capture uses (null: the primary one). */
+  display?: string | null;
   /** Why the registration is not what the setting says. */
   urlSchemeNotice?: string | null;
 }
@@ -316,6 +320,43 @@ export interface NetworkController {
 }
 
 /** `GET /v1/sensors` (read-only hardware sensors). */
+/** GET /v1/inputs: what audio and screen capture can open, and the choice. */
+export interface InputsView {
+  supported: boolean;
+  audioDevices: string[];
+  audioDevice: string | null;
+  displays: { name: string; width: number; height: number; primary: boolean; adapter: string }[];
+  display: string | null;
+}
+
+/** One line of GET /v1/logs. */
+export interface LogEntry {
+  time?: string;
+  level?: "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE";
+  target?: string;
+  source?: string;
+  message: string;
+  file?: string;
+}
+
+/** GET /v1/logs. */
+export interface LogsView {
+  from: "file" | "memory";
+  available: ("file" | "memory")[];
+  files: string[];
+  entries: LogEntry[];
+  truncated: boolean;
+  sources: string[];
+}
+
+export interface LogQuery {
+  from?: "file" | "memory";
+  level?: string;
+  q?: string;
+  source?: string;
+  limit?: number;
+}
+
 export interface SensorsView {
   enabled: boolean;
   polling: boolean;

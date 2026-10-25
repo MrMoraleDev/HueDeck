@@ -84,12 +84,12 @@ impl LhmJson {
         let mut s = TcpStream::connect_timeout(&self.addr, TIMEOUT).map_err(io)?;
         s.set_read_timeout(Some(TIMEOUT)).map_err(io)?;
         s.set_write_timeout(Some(TIMEOUT)).map_err(io)?;
-        write!(
-            s,
+        let request = format!(
             "GET {} HTTP/1.0\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
             self.path, self.host
-        )
-        .map_err(io)?;
+        );
+        // One write: some servers read the request line from the first segment.
+        s.write_all(request.as_bytes()).map_err(io)?;
         let mut reply = Vec::new();
         s.take(MAX_REPLY).read_to_end(&mut reply).map_err(io)?;
         http_body(&reply).map_err(|e| HalError::Backend(format!("LibreHardwareMonitor: {e}")))
@@ -302,9 +302,16 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let server = std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
-            let mut req = [0u8; 512];
-            let n = s.read(&mut req).unwrap();
-            assert!(String::from_utf8_lossy(&req[..n]).starts_with("GET /data.json HTTP/1.0"));
+            let mut req = Vec::new();
+            let mut buf = [0u8; 512];
+            while !req.ends_with(b"\r\n\r\n") {
+                let n = s.read(&mut buf).unwrap();
+                assert!(n > 0, "the request ends with an empty line");
+                req.extend_from_slice(&buf[..n]);
+            }
+            assert!(
+                String::from_utf8_lossy(&req).starts_with("GET /data.json HTTP/1.0\r\nHost: 127.0.0.1\r\n")
+            );
             write!(
                 s,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{SAMPLE}"

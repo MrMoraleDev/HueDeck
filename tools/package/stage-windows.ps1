@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 <#
 .SYNOPSIS
-  Stage Lightloom's portable Windows build in one directory: the daemon, the CLI, the effect
-  renderer with its CEF runtime, the dashboard, the first-party plugins and starter effects,
-  and the license texts. lightloomd finds everything next to its executable.
+  Stage Lightloom's Windows build in one directory: the daemon and its windowless launcher, the
+  CLI, the effect renderer with its CEF runtime, the RAM lighting helper and I/O broker with the
+  pinned PawnIO modules, the dashboard, the first-party plugins and starter effects, and the
+  license texts. lightloomd finds everything next to its executable. The portable zip and the MSI
+  (packaging/wix/build.ps1) are both made from this directory.
 
 .PARAMETER Release
-  Cargo's release directory holding lightloomd.exe, lightloom.exe, lightloom-renderer.exe (built
-  with --features cef) and the CEF runtime files the cef build copied next to them.
+  Cargo's release directory holding lightloomd.exe, lightloomw.exe, lightloom.exe,
+  lightloom-setup.exe, lightloom-iobroker.exe, lightloom-renderer.exe (built with --features cef)
+  and the CEF runtime files the cef build copied next to them.
 
 .PARAMETER Ui
   The dashboard build (ui/dist: index.html and assets/).
@@ -20,6 +23,10 @@
 .PARAMETER Out
   Where to stage (emptied first).
 
+.PARAMETER NoPawnIoModules
+  Do not fetch PawnIO.Modules into pawnio-modules/ (offline staging; RAM lighting setup then
+  needs `lightloom-setup --pawnio-modules <dir>`).
+
 .EXAMPLE
   tools/package/stage-windows.ps1 -Release target/release -Ui ui/dist -Out dist/Lightloom
 #>
@@ -27,7 +34,8 @@ param(
   [Parameter(Mandatory = $true)] [string] $Release,
   [Parameter(Mandatory = $true)] [string] $Ui,
   [string] $Cef = "",
-  [string] $Out = "dist/Lightloom"
+  [string] $Out = "dist/Lightloom",
+  [switch] $NoPawnIoModules
 )
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
@@ -41,8 +49,14 @@ if (Test-Path $Out) { Remove-Item -Recurse -Force $Out }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 # Programs.
-foreach ($exe in "lightloomd.exe", "lightloom.exe", "lightloom-renderer.exe") {
+foreach ($exe in "lightloomd.exe", "lightloomw.exe", "lightloom.exe", "lightloom-renderer.exe",
+  "lightloom-setup.exe", "lightloom-iobroker.exe") {
   Copy-Required (Join-Path $Release $exe) $Out
+}
+
+# The PawnIO modules the I/O broker loads (LGPL-2.1, with COPYING and sources), hash-pinned.
+if (-not $NoPawnIoModules) {
+  & (Join-Path $PSScriptRoot "fetch-pawnio-modules.ps1") -Out (Join-Path $Out "pawnio-modules")
 }
 
 # The CEF runtime lightloom-renderer loads from its own directory.
@@ -82,7 +96,7 @@ if (Test-Path (Join-Path $repo "components")) {
 }
 
 # Licenses and notices.
-foreach ($f in "LICENSE", "LICENSE-EXCEPTION.md", "README.md") {
+foreach ($f in "LICENSE", "LICENSE-EXCEPTION.md", "README.md", "docs/privacy.md") {
   Copy-Required (Join-Path $repo $f) $Out
 }
 if (-not $Cef) {

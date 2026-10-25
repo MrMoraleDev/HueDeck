@@ -1,0 +1,101 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Lightloom launcher: the AppImage entry point (linuxdeploy --custom-apprun), also installed
+# by the Flatpak as /app/bin/lightloom-launch.
+#
+# The staged Linux build (tools/package/stage-linux.sh) lives in usr/lib/lightloom/ of the
+# AppDir (or /app/lib/lightloom in the Flatpak): lightloomd finds plugins/, effects/ and ui/
+# next to itself.
+#
+#   Lightloom.AppImage                 open the dashboard; start the daemon first when none runs
+#   Lightloom.AppImage --daemon [ARGS] run lightloomd in the foreground (systemd, terminals)
+#   Lightloom.AppImage --cli ARGS      run the `lightloom` CLI (e.g. `--cli devices`)
+#   Lightloom.AppImage --udev-rules    print 70-lightloom.rules (AppImages cannot install it)
+#   Lightloom.AppImage --setup-help    print the one-time Linux setup commands
+#   Lightloom.AppImage --systemd-unit  print a systemd --user unit that runs this launcher
+#   Lightloom.AppImage OTHER ARGS      passed to lightloomd (e.g. --no-hardware --port 53001)
+
+set -eu
+
+HERE="$(dirname "$(readlink -f "$0")")"
+LIB="$HERE/usr/lib/lightloom"
+[ -d "$LIB" ] || LIB="$(dirname "$HERE")/lib/lightloom"
+
+# How the user runs this launcher again, as shell words for the printed commands.
+# The AppImage runtime sets $APPIMAGE to the .AppImage file; the Flatpak sets
+# LIGHTLOOM_SELF (`flatpak run org.lightloom.Lightloom`); else this script (unpacked AppDir).
+if [ -n "${LIGHTLOOM_SELF:-}" ]; then
+  SELF="$LIGHTLOOM_SELF"
+else
+  SELF="'${APPIMAGE:-$(readlink -f "$0")}'"
+fi
+
+data_dir() {
+  if [ -n "${LIGHTLOOM_HOME:-}" ]; then
+    echo "$LIGHTLOOM_HOME/data"
+  else
+    echo "${XDG_DATA_HOME:-$HOME/.local/share}/lightloom"
+  fi
+}
+
+# True when a lightloomd already holds this user's single-instance lock (lightloomd takes
+# an flock(2) on <data>/lightloomd.lock, crates/lightloom-daemon/src/instance.rs).
+daemon_running() {
+  lock="$(data_dir)/lightloomd.lock"
+  [ -e "$lock" ] || return 1
+  if command -v flock >/dev/null 2>&1; then
+    ! flock -n "$lock" true 2>/dev/null
+  else
+    [ -e "$(data_dir)/api-port" ]
+  fi
+}
+
+case "${1:-}" in
+  --daemon)
+    shift
+    exec "$LIB/lightloomd" "$@"
+    ;;
+  --cli)
+    shift
+    exec "$LIB/lightloom" "$@"
+    ;;
+  --udev-rules)
+    exec cat "$LIB/packaging/udev/70-lightloom.rules"
+    ;;
+  --setup-help)
+    cat <<EOF
+Lightloom needs a one-time setup that it cannot do by itself (it never runs as root).
+Run these once, then log out and back in:
+
+  $SELF --udev-rules | sudo tee /etc/udev/rules.d/70-lightloom.rules >/dev/null
+  echo i2c-dev | sudo tee /etc/modules-load.d/lightloom.conf >/dev/null
+  sudo modprobe i2c-dev
+  sudo groupadd -f i2c && sudo usermod -aG i2c "\$USER"   # RAM / GPU (SMBus) only
+  sudo udevadm control --reload-rules && sudo udevadm trigger
+
+Start with the session (optional):
+
+  mkdir -p ~/.config/systemd/user
+  $SELF --systemd-unit > ~/.config/systemd/user/lightloomd.service
+  systemctl --user daemon-reload && systemctl --user enable --now lightloomd
+
+Details: INSTALL-LINUX.md in the release archive (docs/linux-porting.md).
+EOF
+    ;;
+  --systemd-unit)
+    # The packaged unit with ExecStart pointing at this launcher. An AppImage needs FUSE 2
+    # (libfuse2) to mount itself; without it add Environment=APPIMAGE_EXTRACT_AND_RUN=1.
+    sed -e "s|^ExecStart=.*|ExecStart=$SELF --daemon|" \
+      "$LIB/packaging/systemd/lightloomd.service"
+    ;;
+  "")
+    if daemon_running; then
+      exec xdg-open "$("$LIB/lightloom" url)"
+    fi
+    exec "$LIB/lightloomd" --open
+    ;;
+  *)
+    exec "$LIB/lightloomd" "$@"
+    ;;
+esac

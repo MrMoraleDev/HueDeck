@@ -1,0 +1,12 @@
+{
+  "ProductName": "Lightloom Generic ARGB Strip 6",
+  "DisplayName": "ARGB Strip 6 - 6 LED",
+  "Brand": "Generic",
+  "Type": "Strip",
+  "LedCount": 6,
+  "Width": 6,
+  "Height": 1,
+  "LedMapping": [0,1,2,3,4,5],
+  "LedCoordinates": [[0,0],[1,0],[2,0],[3,0],[4,0],[5,0]],
+  "LedNames": ["Led 1","Led 2","Led 3","Led 4","Led 5","Led 6"]
+}

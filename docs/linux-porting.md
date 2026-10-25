@@ -9,8 +9,8 @@ backends, and the desktop integration (sleep and lock through logind, notificati
 icon), compile and are unit-tested, but none has run on real Linux hardware or a Linux desktop
 yet. The CEF effect
 renderer and its daemon-side client are ported (WP-L5: built and run headless by CI's
-`renderer-cef-linux` job) and ship in the tarball and the AppImage with the CEF runtime next to
-them; the release workflow runs the staged renderer once headless, but it has not run on a
+`renderer-cef-linux` job) and ship in the tarball, the AppImage, the `.deb` and the `.rpm` with
+the CEF runtime next to them; the release workflow runs the staged renderer once headless, but it has not run on a
 Linux desktop yet. The Flatpak does not include the renderer yet and plays the native effects
 only.
 Audio (`engine.audio`, the monitor of an output sink) and screen capture (`engine.zone`,
@@ -23,14 +23,48 @@ and X11 capture were checked in WSLg, the portal path has not run on a Wayland d
 
 | Build | For | Device setup | Updates |
 |---|---|---|---|
+| `.deb` `lightloom_<version>_amd64.deb` | Ubuntu 24.04, Debian 13 and later | done by the package | install the new `.deb` |
+| `.rpm` `lightloom-<version>-1.x86_64.rpm` | Fedora 40 and later (Fedora package names) | done by the package | install the new `.rpm` |
 | Tarball `lightloom-<version>-linux-x86_64.tar.xz` | any x86_64 distribution with glibc 2.39 or newer (Ubuntu 24.04, Debian 13, Fedora 40 and later) | manual, once (below) | replace the directory |
 | AppImage `Lightloom-<version>-x86_64.AppImage` | the same, one file, no install | manual, once (`--setup-help`) | replace the file |
-| Flatpak `io.github.MrMoraleDev.Lightloom` | sandboxed install | manual, once, on the host | `flatpak update` |
+| Flatpak `io.github.MrMoraleDev.Lightloom` | sandboxed install (Flathub once accepted; no HTML effects yet) | manual, once, on the host | `flatpak update` |
 | From source | developers | manual, once | `git pull` |
 
 Every build runs as your user. No build installs a kernel driver, and none needs root at
 run time. Root is needed only once, to install the udev rules that grant your user access
-to the devices.
+to the devices (the `.deb` and `.rpm` do that when they are installed).
+
+### Debian, Ubuntu (.deb) and Fedora (.rpm)
+
+```sh
+sudo apt install ./lightloom_<version>_amd64.deb          # Debian, Ubuntu
+sudo dnf install ./lightloom-<version>-1.x86_64.rpm       # Fedora
+```
+
+The package installs the program into `/usr/lib/lightloom/` (daemon, CLI, CEF effect
+renderer and its Chromium runtime, dashboard, plugins, effects) with `lightloomd` and
+`lightloom` in `/usr/bin`, and pulls in the Chromium runtime libraries and libpipewire as
+dependencies. It also installs, and applies at once:
+
+- the udev rules (`/usr/lib/udev/rules.d/70-lightloom.rules`), reloaded and re-triggered for
+  hidraw, USB, serial and i2c devices already plugged in;
+- the `i2c` group (`/usr/lib/sysusers.d/lightloom.conf`, created with `systemd-sysusers`) and
+  `i2c-dev` at boot (`/usr/lib/modules-load.d/lightloom.conf`; loaded right away too);
+- the systemd user unit `/usr/lib/systemd/user/lightloomd.service` and a *Lightloom* menu
+  entry.
+
+It never starts anything. Each user who wants lighting from login on runs, once:
+
+```sh
+systemctl --user enable --now lightloomd
+lightloom url                             # where the dashboard is
+```
+
+or opens *Lightloom* from the applications menu, which opens the dashboard of the running
+daemon or starts one. For RAM, motherboard and graphics-card lighting (SMBus) also join the
+group and log in again: `sudo usermod -aG i2c "$USER"`. The `.rpm` uses Fedora's package
+names; on other RPM distributions (openSUSE) the dependencies may not resolve, use the
+tarball or the AppImage there. Packages are not signed yet: check them against `SHA256SUMS`.
 
 ### Tarball
 
@@ -92,6 +126,11 @@ without it, set `APPIMAGE_EXTRACT_AND_RUN=1`. The AppImage contains the CEF effe
 and takes Chromium's system libraries from the host, as the tarball does.
 
 ### Flatpak
+
+Once Lightloom is accepted on Flathub (submitted as `io.github.MrMoraleDev.Lightloom`,
+`packaging/flathub/README.md`), `flatpak install flathub io.github.MrMoraleDev.Lightloom`; until
+then build it locally (`packaging/flatpak/README.md`). The Flatpak has no CEF effect renderer
+yet: the effects written as web pages do not play, the native ones do.
 
 ```sh
 flatpak run io.github.MrMoraleDev.Lightloom --setup-help        # run the printed commands on the host
@@ -248,6 +287,12 @@ program or exclude the device in one of them. Lightloom never kills other proces
 
 ### Uninstall
 
+`.deb` / `.rpm`: `systemctl --user disable --now lightloomd`, then `sudo apt remove lightloom`
+or `sudo dnf remove lightloom`. Settings stay in `~/.local/share/lightloom` and
+`~/.config/lightloom`; the `i2c` group stays (other tools use it).
+
+Tarball:
+
 ```sh
 systemctl --user disable --now lightloomd; rm ~/.config/systemd/user/lightloomd.service
 rm -r ~/.local/lib/lightloom ~/.local/bin/lightloomd ~/.local/bin/lightloom
@@ -340,7 +385,15 @@ Rules for Linux code:
 - Open: `Type=notify` with `WatchdogSec=` (needs `sd_notify` in the daemon). The logind
   sleep inhibitor is taken by the daemon itself (`lightloom_hal_linux::logind`).
 
-### AppImage and Flatpak
+### Packages (.deb, .rpm), AppImage and Flatpak
+
+- `packaging/nfpm/`: `build-packages.sh` lays out a package root from the staged tree and
+  runs nFPM (`nfpm.yaml`) for both formats; `postinstall.sh` / `postremove.sh` are the
+  maintainer scripts (sysusers, i2c-dev, udev reload; no service enabling), `copyright` the
+  DEP-5 file. The desktop entry runs `/usr/lib/lightloom/lightloom-launch` (the AppImage's
+  `AppRun`, which finds the daemon next to itself). Dependencies: Chromium's runtime
+  libraries plus libpipewire, Ubuntu 24.04 / Debian 13 (`t64`) names for the `.deb`, Fedora
+  names for the `.rpm`, glibc 2.39 or newer.
 
 - `packaging/appimage/`: linuxdeploy with a custom `AppRun`; the staged tree lives in
   `usr/lib/lightloom` and linuxdeploy bundles the daemon's and CLI's libraries with
@@ -351,13 +404,15 @@ Rules for Linux code:
 - `packaging/flatpak/`: Freedesktop 25.08 runtime with the rust-stable and node24 SDK
   extensions, offline cargo and npm sources generated by
   `packaging/flatpak/generate-sources.sh` (flatpak-builder-tools, pinned). Built weekly by
-  `.github/workflows/flatpak.yml`. Details and caveats: `packaging/flatpak/README.md`.
+  `.github/workflows/flatpak.yml`, which also runs Flathub's linter. Details and caveats:
+  `packaging/flatpak/README.md`; Flathub submission (app id `io.github.MrMoraleDev.Lightloom`,
+  `packaging/flathub/prepare.sh`): `packaging/flathub/README.md`.
 - Both reuse one launcher (`packaging/appimage/AppRun`) and one desktop entry.
 - Chromium sandbox: off in every Linux build, as on Windows (`cef_host.rs`). Turning it on
   would need the SUID helper (impossible in an AppImage or a tarball run as the user) or
   unprivileged user namespaces (restricted by AppArmor on Ubuntu 24.04 and later); the
-  Flatpak needs zypak. A `.deb`/`.rpm` with `chrome-sandbox` root 4755 and an AppArmor
-  profile is the fully sandboxed option.
+  Flatpak needs zypak. The `.deb`/`.rpm` could ship `chrome-sandbox` root 4755 with an
+  AppArmor profile, the fully sandboxed option; they do not yet (same renderer, sandbox off).
 - Screen capture (WP-L6) links `libpipewire-0.3`. linuxdeploy will bundle the build host's
   copy (Ubuntu 24.04: 1.0.5) into the AppImage; libpipewire loads its SPA plugins from the
   host, so a bundled copy older than the host's PipeWire may be the wrong pairing. Excluding
@@ -390,11 +445,18 @@ branch) and on manual dispatch, without publishing, so a tag never runs untested
   --require-renderer`; the systemd unit and dashboard check; a 60-frame headless smoke run
   of the staged renderer (Xvfb fallback, as in CI); `lightloom-<version>-linux-x86_64.tar.xz`
   (sorted, owner 0, mtimes from the commit, single-threaded `xz -6`);
-  `Lightloom-<version>-x86_64.AppImage`; CycloneDX SBOMs.
+  `Lightloom-<version>-x86_64.AppImage`; `lightloom_<version>_amd64.deb` and
+  `lightloom-<version>-1.x86_64.rpm` (`packaging/nfpm/build-packages.sh`: nFPM 2.47.0,
+  downloaded and checked against its SHA-256), checked with `dpkg-deb --info/--contents`,
+  `lintian` and `rpm -qip`/`rpmlint` (errors fail the job, a few tags on the prebuilt CEF
+  runtime are suppressed), then the `.deb` is installed on the runner (`lightloomd --version`
+  through `/usr/bin`, the unit, the group, the desktop entry and metainfo) and removed;
+  CycloneDX SBOMs.
 - `linux-reproducible`: builds the daemon and CLI twice from the same checkout into two
   target directories, with `--remap-path-prefix` for the workspace, `CARGO_HOME` and the
   target directory, and fails when the SHA-256 of either binary differs.
-- `assemble`: checks that the zip, the MSI, the tarball, the AppImage and both sets of SBOMs
+- `assemble`: checks that the zip, the MSI, the tarball, the AppImage, the `.deb`, the `.rpm`
+  and both sets of SBOMs
   are there under their expected names, writes one `SHA256SUMS` over every file (the updater
   verifies its download against it) and uploads them as the `lightloom-release` artifact.
   It waits for `linux-reproducible`, so a build that is not reproducible is not released.

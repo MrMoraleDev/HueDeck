@@ -4,7 +4,7 @@
 | File | Purpose |
 |---|---|
 | `io.github.MrMoraleDev.Lightloom.yml` | flatpak-builder manifest (Freedesktop 25.08 runtime, rust-stable and node24 SDK extensions) |
-| `io.github.MrMoraleDev.Lightloom.metainfo.xml` | AppStream metadata, brand colours from `docs/brand/README.md` |
+| `io.github.MrMoraleDev.Lightloom.metainfo.xml` | AppStream metadata (Flathub app id, screenshot, OARS rating, releases), brand colours from `docs/brand/README.md`; also installed by the .deb and .rpm |
 | `generate-sources.sh` | writes `cargo-sources.json` and `node-sources.json` (git-ignored) from the lock files, with a pinned flatpak-builder-tools in a throwaway virtualenv |
 
 The desktop entry and icon are the AppImage ones (`../appimage/lightloom.desktop`,
@@ -31,8 +31,9 @@ or `ui/package-lock.json` changes.
 CI: `.github/workflows/flatpak.yml` (weekly and on manual dispatch) generates the lists on an
 Ubuntu runner, builds the manifest with `flatpak/flatpak-github-actions/flatpak-builder` in
 the `ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08` container, checks the
-installed tree and leaves `lightloom.flatpak` on the run (artifact `lightloom-flatpak`). It is
-not attached to releases yet.
+installed tree, runs Flathub's linter (`flatpak-builder-lint` appstream, manifest, builddir,
+repo) and leaves `lightloom.flatpak` on the run (artifact `lightloom-flatpak`). It is not
+attached to releases.
 
 ## Caveats
 
@@ -57,7 +58,9 @@ not attached to releases yet.
   `archive.json` it checks) and pointed to by `CEF_PATH`. Running Chromium inside the
   sandbox then needs zypak (`ZYPAK_CEF_LIBRARY_PATH`), as in `org.electronjs.Electron2.BaseApp`.
   Until then the Flatpak plays the native effects only.
-- **Flathub** needs a pinned `git` source (commented in the manifest) instead of `dir`,
-  and the generated source lists committed in the Flathub repository.
+- **Flathub**: `packaging/flathub/prepare.sh --tag vX.Y.Z` writes the Flathub manifest (this
+  one, with the `dir` source between the `flathub-source` markers replaced by a `git` source
+  pinned to the tag and its commit) and the source lists for that commit. Submission steps:
+  `packaging/flathub/README.md`.
 - Data and config live in `~/.var/app/io.github.MrMoraleDev.Lightloom/{data,config}/lightloom`, not in
   `~/.local/share/lightloom`: a Flatpak and a tarball install do not share settings.

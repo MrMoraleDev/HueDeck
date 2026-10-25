@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# rpmlint filters for lightloom-<version>-1.x86_64.rpm (release-build.yml: `rpmlint -r`).
+# Only for the prebuilt CEF runtime in /usr/lib/lightloom, which ships as it comes, and for
+# what is not done yet (signing). Everything Lightloom builds itself must stay clean.
+
+# Chromium's sandbox code (unused: the sandbox is off) calls setuid/chroot.
+addFilter(r"missing-call-to-setgroups-before-setuid /usr/lib/lightloom/lib")
+addFilter(r"missing-call-to-chdir-with-chroot /usr/lib/lightloom/lib")
+# The CEF minimal distribution's libraries as they come.
+addFilter(r"unstripped-binary-or-object /usr/lib/lightloom/lib")
+addFilter(r"shared-library-without-dependency-information /usr/lib/lightloom/lib")
+# lightloom-renderer finds libcef.so through its $ORIGIN RUNPATH.
+addFilter(r"binary-or-shlib-defines-rpath /usr/lib/lightloom/lightloom-renderer")
+# Packages are not signed yet (SIGNING in release-build.yml).
+addFilter(r"no-signature")

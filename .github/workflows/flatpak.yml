@@ -64,10 +64,10 @@ jobs:
       # then builds offline; the .flatpak-builder cache is keyed on the inputs.
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          manifest-path: packaging/flatpak/org.lightloom.Lightloom.yml
+          manifest-path: packaging/flatpak/io.github.MrMoraleDev.Lightloom.yml
           bundle: lightloom.flatpak
           artifact-name: lightloom-flatpak
-          cache-key: flatpak-builder-${{ hashFiles('Cargo.lock', 'ui/package-lock.json', 'packaging/flatpak/org.lightloom.Lightloom.yml') }}
+          cache-key: flatpak-builder-${{ hashFiles('Cargo.lock', 'ui/package-lock.json', 'packaging/flatpak/io.github.MrMoraleDev.Lightloom.yml') }}
 
       - name: Check the installed tree
         run: |
@@ -75,8 +75,8 @@ jobs:
           app=flatpak_app/files
           for f in bin/lightloom-launch bin/lightloomd bin/lightloom lib/lightloom/lightloomd \
             lib/lightloom/ui/index.html lib/lightloom/packaging/udev/70-lightloom.rules \
-            share/applications/org.lightloom.Lightloom.desktop \
-            share/metainfo/org.lightloom.Lightloom.metainfo.xml; do
+            share/applications/io.github.MrMoraleDev.Lightloom.desktop \
+            share/metainfo/io.github.MrMoraleDev.Lightloom.metainfo.xml; do
             test -e "$app/$f" || { echo "::error::missing /app/$f"; exit 1; }
           done
           find "$app/lib/lightloom/plugins" -mindepth 1 -maxdepth 1 -type d | wc -l

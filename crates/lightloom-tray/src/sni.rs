@@ -26,7 +26,7 @@ pub const MENU_PATH: &str = "/MenuBar";
 pub const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 /// One tray per session: whoever owns this name (under the Flatpak app id,
 /// which a Flatpak may own without a permission).
-pub const TRAY_NAME: &str = "org.lightloom.Lightloom.Tray";
+pub const TRAY_NAME: &str = "io.github.MrMoraleDev.Lightloom.Tray";
 /// How often the daemon's state is polled.
 pub const POLL: std::time::Duration = std::time::Duration::from_secs(3);
 

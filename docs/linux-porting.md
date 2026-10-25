@@ -25,7 +25,7 @@ and X11 capture were checked in WSLg, the portal path has not run on a Wayland d
 |---|---|---|---|
 | Tarball `lightloom-<version>-linux-x86_64.tar.xz` | any x86_64 distribution with glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later) | manual, once (below) | replace the directory |
 | AppImage `Lightloom-<version>-x86_64.AppImage` | the same, one file, no install | manual, once (`--setup-help`) | replace the file |
-| Flatpak `org.lightloom.Lightloom` | sandboxed install | manual, once, on the host | `flatpak update` |
+| Flatpak `io.github.MrMoraleDev.Lightloom` | sandboxed install | manual, once, on the host | `flatpak update` |
 | From source | developers | manual, once | `git pull` |
 
 Every build runs as your user. No build installs a kernel driver, and none needs root at
@@ -94,13 +94,13 @@ and takes Chromium's system libraries from the host, as the tarball does.
 ### Flatpak
 
 ```sh
-flatpak run org.lightloom.Lightloom --setup-help        # run the printed commands on the host
-flatpak run org.lightloom.Lightloom
+flatpak run io.github.MrMoraleDev.Lightloom --setup-help        # run the printed commands on the host
+flatpak run io.github.MrMoraleDev.Lightloom
 ```
 
 The Flatpak has `--device=all`, but the kernel still checks the host's permissions on each
 device node, so the udev rules, the `i2c` group and `i2c-dev` must be set up on the host
-exactly as below. Its settings live in `~/.var/app/org.lightloom.Lightloom/`, separate from a
+exactly as below. Its settings live in `~/.var/app/io.github.MrMoraleDev.Lightloom/`, separate from a
 tarball install. More caveats: `packaging/flatpak/README.md`.
 
 ### One-time device setup

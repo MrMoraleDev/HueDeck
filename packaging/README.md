@@ -20,7 +20,7 @@ for Windows (see the SIGNING block in the release workflow).
 | `sysusers.d/` | Linux `i2c` group   | `lightloom.conf` (present)                                                      | M7 |
 | `modules-load.d/` | Linux `i2c-dev` module | `lightloom.conf` (present)                                              | M7 |
 | `appimage/` | AppImage              | `AppRun`, `lightloom.desktop`, `lightloom.svg`, `build-appimage.sh` (linuxdeploy), `README.md` (present) | M7 |
-| `flatpak/`  | Flatpak               | `org.lightloom.Lightloom.yml`, `org.lightloom.Lightloom.metainfo.xml`, `generate-sources.sh`, `README.md` (present); `cargo-sources.json`, `node-sources.json` (generated, git-ignored) | M7 |
+| `flatpak/`  | Flatpak               | `io.github.MrMoraleDev.Lightloom.yml`, `io.github.MrMoraleDev.Lightloom.metainfo.xml`, `generate-sources.sh`, `README.md` (present); `cargo-sources.json`, `node-sources.json` (generated, git-ignored) | M7 |
 
 ## Windows (MSI, winget)
 

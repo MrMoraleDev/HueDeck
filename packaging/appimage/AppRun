@@ -24,7 +24,7 @@ LIB="$HERE/usr/lib/lightloom"
 
 # How the user runs this launcher again, as shell words for the printed commands.
 # The AppImage runtime sets $APPIMAGE to the .AppImage file; the Flatpak sets
-# LIGHTLOOM_SELF (`flatpak run org.lightloom.Lightloom`); else this script (unpacked AppDir).
+# LIGHTLOOM_SELF (`flatpak run io.github.MrMoraleDev.Lightloom`); else this script (unpacked AppDir).
 if [ -n "${LIGHTLOOM_SELF:-}" ]; then
   SELF="$LIGHTLOOM_SELF"
 else

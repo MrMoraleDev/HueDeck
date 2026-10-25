@@ -3,8 +3,8 @@
 
 | File | Purpose |
 |---|---|
-| `org.lightloom.Lightloom.yml` | flatpak-builder manifest (Freedesktop 25.08 runtime, rust-stable and node24 SDK extensions) |
-| `org.lightloom.Lightloom.metainfo.xml` | AppStream metadata, brand colours from `docs/brand/README.md` |
+| `io.github.MrMoraleDev.Lightloom.yml` | flatpak-builder manifest (Freedesktop 25.08 runtime, rust-stable and node24 SDK extensions) |
+| `io.github.MrMoraleDev.Lightloom.metainfo.xml` | AppStream metadata, brand colours from `docs/brand/README.md` |
 | `generate-sources.sh` | writes `cargo-sources.json` and `node-sources.json` (git-ignored) from the lock files, with a pinned flatpak-builder-tools in a throwaway virtualenv |
 
 The desktop entry and icon are the AppImage ones (`../appimage/lightloom.desktop`,
@@ -17,9 +17,9 @@ The desktop entry and icon are the AppImage ones (`../appimage/lightloom.desktop
 packaging/flatpak/generate-sources.sh
 flatpak install --user flathub org.freedesktop.Sdk//25.08 \
   org.freedesktop.Sdk.Extension.rust-stable//25.08 org.freedesktop.Sdk.Extension.node24//25.08
-flatpak-builder --user --install --force-clean build-flatpak packaging/flatpak/org.lightloom.Lightloom.yml
-flatpak run org.lightloom.Lightloom --setup-help
-flatpak run org.lightloom.Lightloom
+flatpak-builder --user --install --force-clean build-flatpak packaging/flatpak/io.github.MrMoraleDev.Lightloom.yml
+flatpak run io.github.MrMoraleDev.Lightloom --setup-help
+flatpak run io.github.MrMoraleDev.Lightloom
 ```
 
 flatpak-builder runs the build commands without network access: every crate comes from
@@ -59,5 +59,5 @@ not attached to releases yet.
   Until then the Flatpak plays the native effects only.
 - **Flathub** needs a pinned `git` source (commented in the manifest) instead of `dir`,
   and the generated source lists committed in the Flathub repository.
-- Data and config live in `~/.var/app/org.lightloom.Lightloom/{data,config}/lightloom`, not in
+- Data and config live in `~/.var/app/io.github.MrMoraleDev.Lightloom/{data,config}/lightloom`, not in
   `~/.local/share/lightloom`: a Flatpak and a tarball install do not share settings.

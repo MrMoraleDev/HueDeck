@@ -10,10 +10,13 @@
 //!   that delivers nothing (WASAPI loopback sends no packets while nothing
 //!   plays) is read as silence after two ticks.
 //! * On Windows, [`loopback`] opens the default (or a named) **output**
-//!   device through cpal's WASAPI loopback. Microphones and other capture
-//!   endpoints are never opened.
+//!   device through cpal's WASAPI loopback. On Linux (feature `pulseaudio`)
+//!   it records the monitor of an output sink over the PulseAudio protocol
+//!   (`pulse.rs`). Microphones and other capture endpoints are never opened.
 
 pub mod analyzer;
+#[cfg(all(target_os = "linux", feature = "pulseaudio"))]
+mod pulse;
 #[cfg(windows)]
 mod wasapi;
 
@@ -68,13 +71,18 @@ const REOPEN_AFTER_ERROR: Duration = Duration::from_millis(300);
 /// Wait between failed opens.
 const RETRY_OPEN: Duration = Duration::from_secs(2);
 
-/// Names of the output devices loopback can capture (Windows; empty elsewhere).
+/// Names of the output devices loopback can capture (Windows; Linux with
+/// the `pulseaudio` feature; empty elsewhere).
 pub fn output_devices() -> Vec<String> {
     #[cfg(windows)]
     {
         wasapi::output_devices()
     }
-    #[cfg(not(windows))]
+    #[cfg(all(target_os = "linux", feature = "pulseaudio"))]
+    {
+        pulse::output_devices()
+    }
+    #[cfg(not(any(windows, all(target_os = "linux", feature = "pulseaudio"))))]
     {
         Vec::new()
     }
@@ -89,7 +97,13 @@ pub fn loopback(device: Option<String>) -> OpenSource {
             wasapi::LoopbackSource::open(device.as_deref()).map(|s| Box::new(s) as Box<dyn SampleSource>)
         })
     }
-    #[cfg(not(windows))]
+    #[cfg(all(target_os = "linux", feature = "pulseaudio"))]
+    {
+        Box::new(move || {
+            pulse::MonitorSource::open(device.as_deref()).map(|s| Box::new(s) as Box<dyn SampleSource>)
+        })
+    }
+    #[cfg(not(any(windows, all(target_os = "linux", feature = "pulseaudio"))))]
     {
         let _ = device;
         Box::new(|| Err("audio capture is not available on this platform yet".into()))

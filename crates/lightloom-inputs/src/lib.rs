@@ -2,12 +2,15 @@
 //! Input sources for lightscripts: audio spectrum (`engine.audio`), screen
 //! zones (`engine.zone`), vision meters (`engine.vision`) and sensors.
 //!
-//! Audio: [`audio`] (WASAPI loopback + FFT, docs/audio.md). Screen:
-//! [`screen`] (DXGI Desktop Duplication, zones and meters, docs/screen.md).
+//! Audio: [`audio`] (WASAPI loopback, or a PulseAudio sink monitor on
+//! Linux, + FFT, docs/audio.md). Screen: [`screen`] (DXGI Desktop
+//! Duplication, or the ScreenCast portal / X11 on Linux, zones and meters,
+//! docs/screen.md).
 //! Sensors (`engine.sensors`) are polled by the daemon from
 //! `lightloom_runtime::sensors` (docs/sensors.md).
 
-// Only the DXGI duplication (`screen/dxgi.rs`) opts back in.
+// Only the DXGI duplication (`screen/dxgi.rs`) and the X11 shared-memory
+// mapping (`screen/linux/x11.rs`) opt back in.
 #![deny(unsafe_code)]
 
 pub mod audio;

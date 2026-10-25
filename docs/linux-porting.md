@@ -13,7 +13,9 @@ renderer and its daemon-side client are ported (WP-L5: built and run headless by
 them; the release workflow runs the staged renderer once headless, but it has not run on a
 Linux desktop yet. The Flatpak does not include the renderer yet and plays the native effects
 only.
-PipeWire audio and screen capture are not ported yet.
+Audio (`engine.audio`, the monitor of an output sink) and screen capture (`engine.zone`,
+`engine.vision`: the ScreenCast portal on Wayland, MIT-SHM on X11) are ported (WP-L6): audio
+and X11 capture were checked in WSLg, the portal path has not run on a Wayland desktop yet.
 
 ## Part 1: installing
 
@@ -208,6 +210,36 @@ no kernel module to install; `lightloom-setup` and `lightloom-iobroker` are Wind
 - AMD boards: since kernel 6.13, boards with an ASF controller may get an `AMD ASF adapter`
   instead of the PIIX4 aux port. It cannot read, so Lightloom does not use it.
 
+### Audio and screen capture
+
+Effects that react to music (`engine.audio`) or to the screen (`engine.zone`, screen meters)
+work on Linux too:
+
+- **Audio** records the *monitor* of an output device: what the PC plays, never a
+  microphone. It talks to PipeWire (through `pipewire-pulse`, installed by default on
+  current desktops) or PulseAudio, with nothing to set up. Pick the device in Settings →
+  Inputs, or set `[audio] device` to the name `pactl list sinks` shows under
+  `Description:`.
+- **Screen on Wayland** goes through the desktop's screen-sharing portal: the first time an
+  effect reads the screen, your desktop asks which monitor to share. Lightloom keeps the
+  answer (a restore token in its data directory), so the question does not come back; most
+  desktops show a "screen is being shared" indicator while it runs. Needs
+  `xdg-desktop-portal` with a backend for your desktop (`xdg-desktop-portal-gnome`, `-kde`,
+  `-wlr`, `-hyprland`), which desktops install by default. To be asked again, delete
+  `~/.local/share/lightloom/screencast-token`.
+- **Screen on X11** needs no permission. `[screen] display` takes the output name `xrandr`
+  shows (`DP-1`, `HDMI-1`).
+- Run as a systemd user service, the daemon needs the session environment
+  (`WAYLAND_DISPLAY` or `DISPLAY`), which GNOME and KDE import into the user manager; on
+  other setups run `systemctl --user import-environment WAYLAND_DISPLAY DISPLAY` from the
+  session. Without either variable Lightloom tries the portal.
+
+- `lightloomd` links `libpipewire-0.3` for the Wayland path (`libpipewire-0.3-0` on Debian
+  and Ubuntu, `pipewire-libs` on Fedora), which every desktop with PipeWire has; the
+  AppImage bundles it.
+
+Details: `docs/audio.md` "Capture (Linux)", `docs/screen.md` "Capture (Linux)".
+
 ### Coexistence
 
 OpenRGB, liquidctl, openrazer and similar tools can drive the same devices. hidraw has no
@@ -228,7 +260,7 @@ sudo rm /etc/udev/rules.d/70-lightloom.rules /etc/modules-load.d/lightloom.conf 
 ### Build
 
 ```sh
-sudo apt-get install libudev-dev libusb-1.0-0-dev pkg-config   # Debian/Ubuntu
+sudo apt-get install libudev-dev libusb-1.0-0-dev pkg-config libpipewire-0.3-dev libclang-dev   # Debian/Ubuntu
 cargo build --release -p lightloom-daemon -p lightloom-cli
 cargo build --release -p lightloom-renderer --features cef     # optional; downloads CEF
 (cd ui && npm ci --ignore-scripts && npm run build)
@@ -243,6 +275,11 @@ when any of it is missing, or when the renderer does not link `libcef.so` throug
 
 Test without hardware: `LIGHTLOOM_HOME=$(mktemp -d) lightloomd --no-hardware --port 53001`.
 
+`libpipewire-0.3-dev` and `libclang-dev` are for `lightloom-inputs`' `screencast` feature
+(Wayland capture: pipewire-sys links libpipewire and runs bindgen). Its other Linux features,
+`pulseaudio` (audio) and `x11`, are pure Rust. The three are on by default; a build without
+PipeWire drops `screencast` from the `lightloom-inputs` dependency.
+
 ### Where the Linux code lives
 
 | Area | Code | Work package |
@@ -255,7 +292,7 @@ Test without hardware: `LIGHTLOOM_HOME=$(mktemp -d) lightloomd --no-hardware --p
 | serial ports | `crates/lightloom-hal-linux/src/tty.rs` | done |
 | sleep/lock (logind), notifications, tray (StatusNotifierItem) | `crates/lightloom-hal-linux/src/{dbus,logind,notifications}.rs`, `lightloom-runtime/src/{power,notify}.rs`, `crates/lightloom-tray/src/sni.rs` | WP-L8, done |
 | CEF renderer, shm, control socket | `lightloom-renderer/src/ipc.rs` (tmpfs ring, unix socket), `lightloom-render/src/cef.rs`; see `crates/lightloom-renderer/README.md` "Linux" | WP-L5, done (CI only); in the tarball and AppImage, not in the Flatpak |
-| PipeWire audio, ScreenCast portal | `lightloom-inputs` | WP-L6 |
+| audio (sink monitor over the PulseAudio protocol), screen (ScreenCast portal + PipeWire, X11 MIT-SHM) | `crates/lightloom-inputs/src/audio/pulse.rs`, `crates/lightloom-inputs/src/screen/linux/` | WP-L6, done (audio and X11 checked in WSLg; portal not yet on a Wayland desktop) |
 | packaging, release | `packaging/{systemd,appimage,flatpak}`, `tools/package/stage-linux.sh`, `.github/workflows/release.yml` | WP-L7 |
 
 Background research and primary sources: `docs/research/m7-linux-backend.md`.
@@ -321,6 +358,13 @@ Rules for Linux code:
   unprivileged user namespaces (restricted by AppArmor on Ubuntu 24.04 and later); the
   Flatpak needs zypak. A `.deb`/`.rpm` with `chrome-sandbox` root 4755 and an AppArmor
   profile is the fully sandboxed option.
+- Screen capture (WP-L6) links `libpipewire-0.3`. linuxdeploy will bundle the build host's
+  copy (Ubuntu 22.04: 0.3.48) into the AppImage; libpipewire loads its SPA plugins from the
+  host, so a bundled copy older than the host's PipeWire may be the wrong pairing. Excluding
+  it from the bundle (a PipeWire desktop always has it) is the likely fix; not checked yet.
+  The Flatpak build needs libclang (bindgen) and the PipeWire headers from the Freedesktop SDK
+  (expected there, not yet seen in a `flatpak.yml` run); the portal needs no finish-arg, and
+  audio uses the existing `--socket=pulseaudio`.
 
 ### Release
 

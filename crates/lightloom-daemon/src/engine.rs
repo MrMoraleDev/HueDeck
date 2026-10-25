@@ -1776,7 +1776,8 @@ impl Engine {
             _ => None,
         };
         self.shared.sensors.set_effect(sensor_push);
-        self.screen = crate::screen::feed(&self.opts.config.screen, meta, sink.clone());
+        let restore_token = (!self.opts.ephemeral).then(|| self.opts.paths.screencast_token());
+        self.screen = crate::screen::feed(&self.opts.config.screen, meta, sink.clone(), restore_token);
         self.audio = crate::audio::feed(&self.opts.config.audio, fps, uses_audio, sink);
     }
 

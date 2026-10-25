@@ -13,16 +13,21 @@
 //!   the state, the last snapshot is pushed again once a second while nothing
 //!   new arrives (a restarted renderer gets it).
 //! * On Windows, [`desktop`] opens DXGI Desktop Duplication of a display
-//!   (`dxgi.rs`). Frames stay in memory in this process; nothing is stored.
+//!   (`dxgi.rs`). On Linux it uses the ScreenCast portal and PipeWire on
+//!   Wayland, or MIT-SHM grabs on X11 (`linux/`). Frames stay in memory in
+//!   this process; nothing is stored.
 
 #[cfg(windows)]
 mod dxgi;
+#[cfg(target_os = "linux")]
+mod linux;
 pub mod meters;
 pub mod sample;
 
 use crate::ZoneSnapshot;
 pub use meters::{HslWindow, Meter, MeterKind, Rect, RectOverride, VisionValue};
 pub use sample::{Frame, Rotation};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -31,7 +36,7 @@ use std::time::{Duration, Instant};
 /// A display that can be captured.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisplayInfo {
-    /// Device name (`\\.\DISPLAY1`), what `[screen] display` names.
+    /// Device name (`\\.\DISPLAY1`; `DP-1` on Linux), what `[screen] display` names.
     pub name: String,
     /// Width in pixels as shown.
     pub width: u32,
@@ -95,30 +100,47 @@ const BLANK_AFTER: Duration = Duration::from_secs(2);
 /// Unchanged snapshots are pushed again this often.
 const KEEPALIVE: Duration = Duration::from_secs(1);
 
-/// The displays [`desktop`] can capture (Windows; empty elsewhere).
+/// The displays [`desktop`] can capture (Windows, Linux; empty elsewhere).
 pub fn displays() -> Vec<DisplayInfo> {
     #[cfg(windows)]
     {
         dxgi::displays()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::displays()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Vec::new()
     }
 }
 
 /// An [`OpenSource`] duplicating `display` (a name as [`displays`] lists
-/// it; `None` or empty: the primary display).
+/// it; `None` or empty: the primary display). On Wayland the portal's grant
+/// is not kept: see [`desktop_with`].
 pub fn desktop(display: Option<String>) -> OpenSource {
+    desktop_with(display, None)
+}
+
+/// [`desktop`], keeping the Wayland ScreenCast portal's restore token in
+/// `restore_token` so the portal dialog shows once, not at every start
+/// (ignored on Windows and X11).
+pub fn desktop_with(display: Option<String>, restore_token: Option<PathBuf>) -> OpenSource {
     #[cfg(windows)]
     {
+        let _ = restore_token;
         Box::new(move || {
             dxgi::Duplication::open(display.as_deref()).map(|s| Box::new(s) as Box<dyn FrameSource>)
         })
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        let _ = display;
+        linux::desktop(display, restore_token)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = (display, restore_token);
         Box::new(|| Err("screen capture is not available on this platform yet".into()))
     }
 }

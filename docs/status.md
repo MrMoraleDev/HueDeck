@@ -21,7 +21,7 @@ Every feature branch of the plan's work packages is merged; nothing is in flight
 run yet (no tag, no scheduled run so far).
 
 Test counts in `develop` (`#[test]` and `#[tokio::test]` per crate): plugin-host 192, iobroker 77,
-daemon 63, hal-windows 58, hal 42, runtime 39, hal-linux 39, inputs 37, renderer 36, api 35,
+daemon 63, hal-windows 58, inputs 52, hal 42, runtime 39, hal-linux 39, renderer 36, api 35,
 engine 28, cli 27, nvapi 24, adl 24, setup 16, protocol 16, tray 14, effects 13, render 11,
 hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node tests:
 `prelude/tests/*.test.mjs` (7 files), `plugins/*/tests/*.test.mjs`, `plugins/_testkit/*.test.mjs`.
@@ -37,7 +37,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | M4 Dashboard, persistence, API, packaging | **Partial** | Authenticode signing (SignPath account); the MSI never installed on a clean machine (fresh-machine acceptance); the plugin sources manager; save-to-device, exit modes, suspend/resume, tray and import wizard not yet run live |
 | M5 Privileged bus | **Partial** | I801, AMD GPU (ADL) and the sensors not run on hardware; no LpcIO; fan control out of scope (decision 2026-10-25); no CPU temperature on Windows without LibreHardwareMonitor; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not bind WinUSB |
 | M6 Inputs, network, extras | **Partial** | audio, screen zones, meters, OpenRGB SDK server, network plugins, LampArray backend and runtime parameters are in; macro runtime in (untested with real input on hardware); LCD faces are in (mock-tested; no LCD hardware yet, NZXT formats unsupported); latency acceptance and real clients/devices untested; no DTLS |
-| M7 Linux + 1.0 | **Partial** | hidraw, udev hotplug, i2c-dev, hwmon, serial, raw USB (nusb), logind sleep/lock, notifications, the StatusNotifierItem tray, CEF and packaging are in and unit-tested on Ubuntu CI, but nothing has run on a Linux machine; PipeWire audio/screen missing; the CEF renderer is in the tarball and AppImage but not the Flatpak; the release and Flatpak workflows have not run yet; cargo-dist deferred |
+| M7 Linux + 1.0 | **Partial** | hidraw, udev hotplug, i2c-dev, hwmon, serial, raw USB (nusb), logind sleep/lock, notifications, the StatusNotifierItem tray, CEF and packaging are in and unit-tested on Ubuntu CI, but nothing has run on a Linux machine; audio and screen capture are in (audio and X11 checked in WSLg, the Wayland portal not yet run); the CEF renderer is in the tarball and AppImage but not the Flatpak; the release and Flatpak workflows have not run yet; cargo-dist deferred |
 
 ## M0 Bootstrap and risk retirement: Done
 
@@ -165,8 +165,8 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| Audio FFT (`engine.audio`) | Done (Windows) | `crates/lightloom-inputs/src/audio/{wasapi,analyzer}.rs` (cpal WASAPI loopback, realfft, 200 bins, level, density, width), `crates/lightloom-daemon/src/audio.rs`; `docs/audio.md`. Output device picker: `GET/PATCH /v1/inputs`, `ui/src/components/InputDevices.svelte` (saved in the database, wins over `config.toml`); `crates/lightloom-daemon/tests/inputs.rs`. Loopback of output devices only (never microphones), by design |
-| Screen zones (`engine.zone`) | Done (Windows) | `crates/lightloom-inputs/src/screen/{dxgi,sample}.rs` (DXGI duplication, checked on the dev PC), `crates/lightloom-daemon/src/screen.rs`; `docs/screen.md`. Display picker: `GET/PATCH /v1/inputs`, Settings → Inputs |
+| Audio FFT (`engine.audio`) | Done (Windows; Linux checked in WSLg) | `crates/lightloom-inputs/src/audio/{wasapi,analyzer}.rs` (cpal WASAPI loopback, realfft, 200 bins, level, density, width), `audio/pulse.rs` (Linux: sink monitor over the PulseAudio protocol), `crates/lightloom-daemon/src/audio.rs`; `docs/audio.md`. Output device picker: `GET/PATCH /v1/inputs`, `ui/src/components/InputDevices.svelte` (saved in the database, wins over `config.toml`); `crates/lightloom-daemon/tests/inputs.rs`. Loopback of output devices only (never microphones), by design |
+| Screen zones (`engine.zone`) | Done (Windows; Linux X11 checked in WSLg, Wayland not yet run) | `crates/lightloom-inputs/src/screen/{dxgi,sample}.rs` (DXGI duplication, checked on the dev PC), `screen/linux/` (ScreenCast portal + PipeWire, X11 MIT-SHM), `crates/lightloom-daemon/src/screen.rs`; `docs/screen.md`. Display picker: `GET/PATCH /v1/inputs`, Settings → Inputs |
 | Area/linear meters (`engine.vision`) | Done | `crates/lightloom-inputs/src/screen/meters.rs` (area, linear, colormean from `<meta meter>`); OCR out of scope |
 | Network plugins (udp/tcp, DiscoveryService, mDNS, `service`/`controller`/`discovery`, XHR, settings, dashboard section) | Done, untested on hardware; DTLS missing | first-party `wled`, `ddp`, `e131`, `philips-hue` (CLIP v1), `nanoleaf`, `govee`, `lifx`, `yeelight`; `Network.svelte`; `docs/hardware/{wled,…}.md` |
 | LCD faces (`@SignalRGB/lcd`, second browser per device) | Done, untested on hardware | `crates/lightloom-lcd` (JPEG, PNG, BMP, RGBA, RGB, RGB565 encoders; crops, slices); `crates/lightloom-plugin-host/src/lcd.rs` (`initialize`, `getFrame`, `getSlicedFrame`, `getImageBuffer`, typed `LcdError`); `crates/lightloom-daemon/src/lcd.rs` (one `lightloom-renderer --face` per LCD device at its size and `lcdFramerate`, mock pattern without a renderer, sensors); `PUT /v1/devices/{key}/lcd` (face, frame rate, per-face control values kept per device and face, live to the page), `GET /v1/lcd/faces` (with controls), `GET /v1/devices/{key}/lcd/preview` (PNG), `LcdFacePicker.svelte` (controls) and `LcdPreview.svelte` (about 2 fps, only while on screen); starter faces `faces/clock.html`, `faces/sensor.html`; `docs/host-api/lcd-lightloom.md`; tests `crates/lightloom-daemon/src/lcd.rs`, `tests/lcd.rs`, `ui/src/lib/preview-loop.test.ts`. Gaps: `NZXT::RGB565` / `NZXT::Q565` layouts unknown (typed `UNSUPPORTED_FORMAT`), background layer, rotation, idle blanking |
@@ -195,7 +195,7 @@ fake sysfs and fake devices, 39 tests); none of it has run against hardware on a
 | serialport (Linux) | Done, untested on Linux hardware | `crates/lightloom-hal-linux/src/tty.rs`: tty enumeration from sysfs with the USB parent, `serialport` I/O |
 | `tools/gen-udev` | Done | `lightloom udev generate` (`crates/lightloom-cli/src/udev.rs`); generated `packaging/udev/70-lightloom.rules` with a drift test; `packaging/sysusers.d/lightloom.conf`, `packaging/modules-load.d/lightloom.conf` |
 | CEF on Linux (X11/Wayland, headless CI) | Done (CI only) | `crates/lightloom-renderer/src/ipc.rs` (tmpfs ring, unix-socket control), headless ozone by default, `$ORIGIN` rpath; `ci.yml` `renderer-cef-linux` (60-frame smoke run, `lightloom-render/tests/cef_real.rs`). Staged into the tarball and AppImage with its CEF runtime (`stage-linux.sh --require-renderer`; `release-build.yml` `linux` smoke-runs the staged copy, never run yet). Not run on a Linux desktop; not in the Flatpak |
-| PipeWire audio + screen capture | Missing | WP-L6; `lightloom-inputs` has Windows backends only |
+| PipeWire audio + screen capture | Done, partly untested on Linux | WP-L6: `crates/lightloom-inputs/src/audio/pulse.rs` (PulseAudio protocol, pure Rust: PipeWire via `pipewire-pulse`, PulseAudio, Flatpak `--socket=pulseaudio`; only sink monitors, checked to be the monitor of that sink), `crates/lightloom-inputs/src/screen/linux/` (`portal.rs`: ashpd ScreenCast with a persisted restore token + a PipeWire stream; `x11.rs`: RandR + MIT-SHM; `drm.rs`: display list from sysfs); cargo features `pulseaudio`, `screencast`, `x11`; `docs/audio.md`, `docs/screen.md`. Audio and X11 run in WSLg (manual `--ignored` tests); the portal path has not run on a Wayland desktop |
 | Linux sleep/resume, notifications, tray | Done, untested on a Linux desktop | WP-L8, zbus 6 (pure Rust, MIT) through `crates/lightloom-hal-linux/src/dbus.rs`: `logind.rs` (`LogindPower`: `PrepareForSleep` with a `delay` inhibitor lock, session `Lock`/`Unlock` and `LockedHint`), `notifications.rs` (`FreedesktopNotifier`, `org.freedesktop.Notifications`), wired in `lightloom-runtime` (`power.rs`, `notify.rs`); `crates/lightloom-tray/src/sni.rs` (StatusNotifierItem + `com.canonical.dbusmenu`, the Windows menu without Start at sign-in; no watcher: the old message). Tests over peer-to-peer D-Bus (fake logind, notification server and SNI host; Linux CI only). No display on/off from logind |
 | `systemd --user` unit | Partial | `packaging/systemd/lightloomd.service`: user-instance-safe hardening, restart limits; passes `systemd-analyze --user verify`; not yet run as a real service on Linux |
 | AppImage, Flatpak | Partial | `packaging/appimage` (linuxdeploy in two steps so the CEF runtime is not patched, AppRun) and `packaging/flatpak` (25.08 manifest, metainfo, pinned offline source generation); `release-build.yml` `linux` builds the tarball and AppImage with the renderer; `flatpak.yml` builds the Flatpak (flatpak-builder in the Flathub container, weekly and on dispatch). Neither workflow has run yet; no renderer in the Flatpak |
@@ -280,7 +280,7 @@ the WiX installer and issue forms.
    - Touches: `release.yml` signing steps; turning the renderer sandbox on with the signed bootstrap (`lightloom-renderer` README); minisign for the Linux tarball.
    - Then: register the `packaging/msix-identity/` package (needs a signed package) for the WinRT LampArray path.
 4. **WP-LINUX-RUN: first run on a Linux machine. Size M; needs the user's Linux install.**
-   - hidraw, udev rules, `/dev/i2c-*` RAM, hwmon, serial, the systemd user unit, the AppImage, the CEF renderer on a desktop; capture a `report_descriptor` per reference device for `fixtures.rs`; a Linux self-hosted conformance runner.
+   - hidraw, udev rules, `/dev/i2c-*` RAM, hwmon, serial, the systemd user unit, the AppImage, the CEF renderer on a desktop; audio (sink monitor) and screen capture on GNOME and KDE Wayland (the portal dialog, the restore token, SHM buffers) and on X11 (`cargo test -p lightloom-inputs -- --ignored --nocapture pulse x11 portal`); capture a `report_descriptor` per reference device for `fixtures.rs`; a Linux self-hosted conformance runner.
 
 ### Still to do: code work
 
@@ -296,8 +296,7 @@ the WiX installer and issue forms.
 10. **WP-LOGS: dashboard log page.** Done (`feature/housekeeping`).
 11. **WP-PICKERS: audio output and display pickers in Settings.** Done (`feature/housekeeping`).
 12. **WP-L3: nusb on Linux.** Done (`feature/linux-sys`).
-13. **WP-L6: PipeWire audio and screen capture. Size M.**
-    - `lightloom-inputs` Linux backends: cpal ALSA/PipeWire monitor; portal ScreenCast + PipeWire for zones.
+13. **WP-L6: PipeWire audio and screen capture.** Done (`feature/linux-inputs`); the Wayland portal path awaits WP-LINUX-RUN.
 14. **WP-L8: Linux desktop integration.** Done (`feature/linux-sys`): logind power source, freedesktop notifications, StatusNotifierItem tray.
 15. **WP-L7 remainder: release. Size M.**
     - Done (`feature/packaging-linux`): the CEF renderer in the Linux tarball/AppImage (`stage-linux.sh --require-renderer`), the release build as a reusable workflow with a weekly dry run, the Flatpak built in `flatpak.yml`.
@@ -307,5 +306,5 @@ the WiX installer and issue forms.
 ### Suggested order
 
 - **Now (no user needed):** the WP-L7 remainder.
-- **Then:** WP-L6, WP-DTLS; WP-LCD remainder once an LCD device is available.
+- **Then:** WP-DTLS; WP-LCD remainder once an LCD device is available.
 - **With the user:** WP-SOAK, WP-EVISION-V1, WP-SIGN, WP-LINUX-RUN whenever the hardware, capture, account or machine is available.

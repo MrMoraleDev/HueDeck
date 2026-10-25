@@ -10,7 +10,9 @@
 //! * [`stats`] — paint-interval percentiles / dropped-frame count.
 //! * [`snapshot`] — frame hash, "not black" metrics, PNG export.
 //! * [`inject`] — `window.engine` bootstrap + control globals evaluated before page scripts.
-//! * [`control`] — the stdin control pipe of a serving renderer (`--serve`): commands → JS.
+//! * [`control`] — the control channel of a serving renderer (`--serve`): commands → JS.
+//! * [`ipc`] — per-platform transport: where the ring file lives (tmpfs on Linux), the control
+//!   channel (stdin, or a unix domain socket on Linux), bounded line reads.
 //! * [`url`] — `file://` URLs for effect paths.
 //! * [`cache`] — Chromium user-data dir: created/wiped per run, never a directory we did not make.
 //! * [`cli`] — command line.
@@ -22,6 +24,7 @@ pub mod cache;
 pub mod cli;
 pub mod control;
 pub mod inject;
+pub mod ipc;
 pub mod ring;
 pub mod sink;
 pub mod snapshot;

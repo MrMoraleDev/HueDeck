@@ -13,9 +13,19 @@
 //! i.e. before any page script runs.
 //!
 //! Serve mode (`--serve`): no frame limit and no deadline; a thread reads control commands
-//! from stdin (`lightloom_renderer::control`) and posts each to the UI thread, where it becomes
-//! JavaScript in the main frame or a browser call. End of stdin (the daemon is gone) closes
-//! the browser like `quit`.
+//! from the control channel (`--control`: stdin, or on Linux the daemon's unix socket, see
+//! `lightloom_renderer::ipc`) and posts each to the UI thread, where it becomes JavaScript in the
+//! main frame or a browser call. End of input (the daemon is gone) closes the browser like
+//! `quit`.
+//!
+//! Linux specifics (the code is shared; only CI exercises them, see README.md "Linux"):
+//! * no display is needed: windowless (OSR) browsers paint into `OnPaint`, and the default
+//!   Chromium switches select Ozone `headless` (`cli::Args::chromium_switches_for`);
+//! * `cef::args::Args` carries `argc/argv` instead of an `HINSTANCE`; the same executable is
+//!   still every subprocess (zygote, renderer, GPU, utility) via `execute_process`;
+//! * `libcef.so` and its resources sit next to the binary (cef-dll-sys copies them), found
+//!   through the `$ORIGIN` rpath set in build.rs;
+//! * the Chromium sandbox is off (`no_sandbox`), as on Windows: see `run` below.
 
 use cef::*;
 use lightloom_effects::parse_effect_meta;
@@ -25,6 +35,7 @@ use lightloom_renderer::cache;
 use lightloom_renderer::cli::Args;
 use lightloom_renderer::control::{self, Command};
 use lightloom_renderer::inject::{injection_script, INJECT_KEY, INJECT_URL};
+use lightloom_renderer::ipc;
 use lightloom_renderer::ring::RingWriter;
 use lightloom_renderer::sink::{FrameSink, PaintOutcome, SinkConfig, SinkReport};
 use lightloom_renderer::url::{file_url, UrlFilter};
@@ -214,28 +225,25 @@ fn create_browser(host: &Arc<HostCtx>) {
     }
 }
 
-/// Serve mode: read control commands from stdin until it closes; each runs on the UI thread.
-fn spawn_control_reader(host: Arc<HostCtx>, meta: Arc<EffectMeta>) {
+/// Serve mode: read control commands from the control channel until it closes; each runs on the
+/// UI thread.
+fn spawn_control_reader(
+    host: Arc<HostCtx>,
+    meta: Arc<EffectMeta>,
+    mut reader: Box<dyn std::io::BufRead + Send>,
+) {
     let spawned = std::thread::Builder::new()
         .name("lightloom-control".into())
         .spawn(move || {
-            use std::io::BufRead;
-            let stdin = std::io::stdin();
-            let mut reader = stdin.lock();
-            let mut line = String::new();
+            let mut buf = Vec::new();
             loop {
-                line.clear();
-                let cmd = match reader.read_line(&mut line) {
-                    // End of input: the daemon is gone.
-                    Ok(0) | Err(_) => Command::Quit,
-                    Ok(_) => match control::parse_line(&line) {
-                        Ok(Some(cmd)) => cmd,
-                        Ok(None) => continue,
-                        Err(e) => {
-                            eprintln!("lightloom-renderer: {e}");
-                            continue;
-                        }
-                    },
+                // End of input or a read error is `Quit`: the daemon is gone.
+                let cmd = match control::read_command(&mut reader, &mut buf) {
+                    Ok(cmd) => cmd,
+                    Err(e) => {
+                        eprintln!("lightloom-renderer: {e}");
+                        continue;
+                    }
                 };
                 let quit = cmd == Command::Quit;
                 let mut task = ControlTask::new(host.clone(), meta.clone(), cmd);
@@ -672,6 +680,8 @@ struct ModeReport {
     /// DNS blocked (`--allow-network` not given).
     network_blocked: bool,
     message_loop: &'static str,
+    /// Control channel of a serving renderer (`stdin` or `unix:PATH`), `None` without `--serve`.
+    control: Option<String>,
     chromium_switches: Vec<String>,
     injected: bool,
 }
@@ -761,6 +771,17 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
         Ok(r) => r,
         Err(e) => return fail(format!("shm {}: {e}", args.out.display())),
     };
+    // Serve mode: connect the control channel now, before Chromium starts. With a unix socket
+    // the daemon's accept is its sign that this process got this far; commands sent before
+    // the reader thread runs (after `initialize`) wait in the socket buffer.
+    let control_reader = if args.serve {
+        match ipc::connect_control(&args.control) {
+            Ok(r) => Some(r),
+            Err(e) => return fail(format!("control channel {}: {e}", args.control)),
+        }
+    } else {
+        None
+    };
     let sink = FrameSink::new(
         ring,
         SinkConfig {
@@ -813,7 +834,12 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
 
     let settings = Settings {
         // Chromium sandbox: on Windows CEF only supports it through bootstrap(c).exe + a client
-        // DLL, which passes `sandbox_info` (see README); the plain exe runs unsandboxed.
+        // DLL, which passes `sandbox_info` (see README); the plain exe runs unsandboxed. On
+        // Linux `sandbox_info` is always null, so the renderer runs unsandboxed there too: the
+        // setuid `chrome-sandbox` helper needs root:root 4755 next to the binary, and Ubuntu
+        // 24.04+ blocks the user-namespace sandbox for unconfined binaries unless an AppArmor
+        // profile grants `userns` (AppImage cannot be matched by path at all). Packaging
+        // (WP-L7) decides; effects are local files loaded with DNS blocked either way.
         no_sandbox: c_int::from(!sandboxed),
         windowless_rendering_enabled: 1,
         // Our own CLI flags must not be read as Chromium switches / startup URLs.
@@ -840,8 +866,8 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
     }
     let cef_initialize_ms = (init_start.elapsed().as_secs_f64() * 1_000_000.0).round() / 1000.0;
 
-    if host.args.serve {
-        spawn_control_reader(host.clone(), Arc::new(meta.clone()));
+    if let Some(reader) = control_reader {
+        spawn_control_reader(host.clone(), Arc::new(meta.clone()), reader);
     }
     run_message_loop();
     shutdown();
@@ -885,6 +911,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
             sandbox: sandboxed,
             network_blocked: !args.allow_network,
             message_loop: "cef::run_message_loop (main thread)",
+            control: args.serve.then(|| args.control.to_string()),
             chromium_switches: args.chromium_switches(),
             injected: !args.no_inject,
         },

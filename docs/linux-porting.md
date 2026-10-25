@@ -6,7 +6,9 @@ Part 2 is for developers: how the Linux port is put together and what is still m
 
 Status (M7, see `docs/status.md`): the hidraw, udev hotplug and `/dev/i2c-*` backends
 compile and are unit-tested, but none has run on real Linux hardware yet. The CEF effect
-renderer does not build on Linux yet (WP-L5), so Linux builds play the native effects only.
+renderer and its daemon-side client are ported (WP-L5: compile-checked here, built and run
+headless only by CI's `renderer-cef-linux` job) but not yet staged into the Linux packages, so
+packaged Linux builds still play the native effects only.
 USB (nusb), serial, PipeWire audio and screen capture are not ported yet.
 
 ## Part 1: installing
@@ -200,7 +202,7 @@ Test without hardware: `LIGHTLOOM_HOME=$(mktemp -d) lightloomd --no-hardware --p
 | udev rules from manifests | `crates/lightloom-cli/src/udev.rs` (`lightloom udev generate`), `packaging/udev/` | WP-L2, done |
 | `/dev/i2c-*` SMBus, hwmon sensors | `crates/lightloom-hal-linux/src/{i2c,hwmon,sys}.rs`, `lightloom-runtime/src/smbus.rs` | WP-L4, done |
 | USB (nusb), serial | not yet | WP-L3 |
-| CEF renderer, shm, control socket | `lightloom-renderer`, `lightloom-render`, `lightloom-protocol` | WP-L5 |
+| CEF renderer, shm, control socket | `lightloom-renderer/src/ipc.rs` (tmpfs ring, unix socket), `lightloom-render/src/cef.rs`; see `crates/lightloom-renderer/README.md` "Linux" | WP-L5, done (CI only); not yet in the packages |
 | PipeWire audio, ScreenCast portal | `lightloom-inputs` | WP-L6 |
 | packaging, release | `packaging/{systemd,appimage,flatpak}`, `tools/package/stage-linux.sh`, `.github/workflows/release.yml` | WP-L7 |
 

@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! A stand-in for `lightloom-renderer --serve` in the CEF client's tests: no
-//! Chromium, just the frame ring and the control pipe.
+//! Chromium, just the frame ring and the control channel (stdin, or the unix
+//! socket given with `--control unix:PATH`, as on Linux).
 //!
 //! It accepts the real renderer's arguments (most are ignored) and paints
 //! solid frames whose red channel counts the frames painted. `--prop` values
 //! choose the behaviour: `fake_mode=static` paints once, `fake_exit_after=N`
 //! exits after N frames (a crash). Every control line received is appended to
-//! `<out>.control.log`; `{"cmd":"quit"}` or the end of stdin ends it.
+//! `<stats>.control.log` (the client's work dir; the ring may live in a
+//! private tmpfs dir that is gone after the run), or `<out>.control.log`
+//! without `--stats`; `{"cmd":"quit"}` or the end of input ends it.
 
+use lightloom_renderer::ipc::{self, BoundedLine, ControlAddr};
 use lightloom_renderer::ring::RingWriter;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,12 +21,22 @@ use std::time::Duration;
 
 fn main() {
     let mut out: Option<PathBuf> = None;
+    let mut stats: Option<PathBuf> = None;
+    let mut control = ControlAddr::Stdin;
     let mut fps = 30u32;
     let mut props: Vec<(String, String)> = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out = args.next().map(PathBuf::from),
+            "--stats" => stats = args.next().map(PathBuf::from),
+            "--control" => match args.next().map(|a| a.parse::<ControlAddr>()) {
+                Some(Ok(addr)) => control = addr,
+                other => {
+                    eprintln!("bad --control: {other:?}");
+                    std::process::exit(2);
+                }
+            },
             "--fps" => fps = args.next().and_then(|v| v.parse().ok()).unwrap_or(30),
             "--prop" => {
                 if let Some((k, v)) = args.next().as_deref().and_then(|p| p.split_once('=')) {
@@ -48,18 +62,23 @@ fn main() {
 
     let mut ring = RingWriter::create_file(&out, 320, 200).expect("ring");
     let done = Arc::new(AtomicBool::new(false));
-    let log_path = PathBuf::from(format!("{}.control.log", out.display()));
+    let log_path = PathBuf::from(format!(
+        "{}.control.log",
+        stats.as_ref().unwrap_or(&out).display()
+    ));
+    // Like the real renderer: the ring exists before the control channel is connected.
+    let mut reader = ipc::connect_control(&control).expect("control channel");
     {
         let done = Arc::clone(&done);
         std::thread::spawn(move || {
-            let stdin = std::io::stdin();
             let mut log = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(log_path)
                 .expect("control log");
-            for line in stdin.lock().lines() {
-                let Ok(line) = line else { break };
+            let mut buf = Vec::new();
+            while let Ok(BoundedLine::Line) = ipc::read_bounded_line(&mut reader, &mut buf, 1 << 20) {
+                let line = String::from_utf8_lossy(&buf);
                 let _ = writeln!(log, "{line}");
                 if line.contains("\"quit\"") {
                     break;

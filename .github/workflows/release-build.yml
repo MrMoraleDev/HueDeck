@@ -1,0 +1,519 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Lightloom release build (reusable): every file a GitHub release ships, built from one ref and
+# collected with its SHA256SUMS in the `lightloom-release` artifact. Nothing is published here.
+#
+# Called by:
+#   release.yml  on a v* tag; its `publish` job turns `lightloom-release` into a draft release.
+#   ci.yml       `release-dry-run` (weekly schedule and manual dispatch), so the release is
+#                exercised before a tag exists.
+#
+# Jobs:
+#   meta               version strings derived from the ref
+#   windows            daemon, CLI, tray, setup, broker, renderer + CEF runtime, dashboard: the
+#                      portable zip (tools/package/stage-windows.ps1), CycloneDX SBOMs
+#   msi                the per-user WiX MSI from the same staged tree (packaging/wix/build.ps1)
+#   linux              daemon, CLI, renderer + CEF runtime, dashboard on ubuntu-22.04 (glibc 2.35
+#                      baseline): the tarball and the AppImage (tools/package/stage-linux.sh,
+#                      packaging/appimage), CycloneDX SBOMs
+#   linux-reproducible two clean builds of the Linux daemon and CLI must be bit-identical
+#   assemble           checks the file names the in-app updater depends on, writes SHA256SUMS
+#
+# Release builds start clean: no rust-cache (a restored cache would also skip cef-dll-sys's build
+# script, which copies the CEF runtime next to the renderer). Only the CEF distribution, keyed
+# by its version, is cached, as in ci.yml.
+#
+# NOT YET: code signing. See the "SIGNING" block in the `windows` job.
+
+name: Release build
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to build (a v* tag for a release)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CEF_VERSION: "154.0.34"
+  CARGO_AUDITABLE_VERSION: "0.7.7"
+  CARGO_CYCLONEDX_VERSION: "0.5.9"
+
+jobs:
+  meta:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      # File-name version: 1.2.3 / 1.2.3-rc.1 for a v* tag, else <workspace version>-<short sha>.
+      version: ${{ steps.v.outputs.version }}
+      # Windows Installer version (x.y.z, numeric only): names the MSI, Lightloom-<x.y.z>-x64.msi.
+      msi_version: ${{ steps.v.outputs.msi_version }}
+      # 1 when building a v* tag.
+      tagged: ${{ steps.v.outputs.tagged }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - id: v
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -eu
+          ref="${REF#refs/tags/}"
+          workspace="$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          test -n "$workspace"
+          case "$ref" in
+            v[0-9]*.[0-9]*.[0-9]*)
+              version="${ref#v}"
+              tagged=1
+              # A release tag must match the workspace version (pre-release suffix aside), or
+              # the binaries would report another version than the files they ship in.
+              if [ "${version%%[-+]*}" != "${workspace%%[-+]*}" ]; then
+                echo "::error::tag $ref does not match the workspace version $workspace (Cargo.toml)"
+                exit 1
+              fi
+              ;;
+            *)
+              version="$workspace-$(git rev-parse --short=7 HEAD)"
+              tagged=0
+              ;;
+          esac
+          msi_version="${version%%[-+]*}"
+          echo "$msi_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          {
+            echo "version=$version"
+            echo "msi_version=$msi_version"
+            echo "tagged=$tagged"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=$version msi_version=$msi_version tagged=$tagged"
+
+  windows:
+    name: windows (zip)
+    runs-on: windows-latest
+    env:
+      TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      # cargo-auditable embeds the exact dependency tree into each binary (readable later with
+      # `cargo audit bin`); cargo-cyclonedx writes the SBOM files. Pinned versions.
+      - name: Install cargo-auditable and cargo-cyclonedx
+        shell: bash
+        run: |
+          cargo install --locked "cargo-auditable@$CARGO_AUDITABLE_VERSION"
+          cargo install --locked "cargo-cyclonedx@$CARGO_CYCLONEDX_VERSION"
+
+      - name: Build (auditable, release)
+        run: cargo auditable build --release --locked --workspace --target ${{ env.TARGET }}
+
+      # The effect renderer with its CEF runtime: the `cef` feature resolves the CEF minimal
+      # distribution into CEF_PATH and builds libcef_dll_wrapper with CMake + Ninja (as in ci.yml's
+      # `renderer-cef`), then copies the runtime files next to the binary.
+      - name: Point CEF_PATH at the cached distribution
+        shell: bash
+        run: echo "CEF_PATH=$RUNNER_TEMP\\cef" >> "$GITHUB_ENV"
+
+      - name: Cache CEF distribution
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\cef
+          key: cef-${{ env.CEF_VERSION }}-windows-x86_64
+
+      - name: Build the effect renderer (auditable, release, --features cef)
+        shell: bash
+        run: |
+          . crates/lightloom-renderer/tools/cef-env.sh
+          cargo auditable build --release --locked -p lightloom-renderer --features cef --target "$TARGET"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Build the dashboard
+        working-directory: ui
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      # cargo-cyclonedx writes one <crate>.cdx.json per workspace member next to that crate's
+      # Cargo.toml. Collect them into sbom/ with the target as suffix, so the Windows and Linux
+      # SBOMs do not collide in the release.
+      - name: SBOM (CycloneDX)
+        shell: bash
+        run: |
+          set -eu
+          cargo cyclonedx --format json --target "$TARGET"
+          mkdir -p sbom
+          find . \( -path ./target -o -path ./sbom -o -name node_modules \) -prune -o -name '*.cdx.json' -print |
+            while read -r f; do
+              mv "$f" "sbom/$(basename "$f" .cdx.json)-$TARGET.cdx.json"
+            done
+          ls -la sbom
+          ls sbom/*.cdx.json > /dev/null
+
+      # ---------------------------------------------------------------------------
+      # SIGNING (not enabled yet)
+      #
+      # Windows: Authenticode through SignPath Foundation (OSS program).
+      #   - Insert `signpath/github-action-submit-signing-request@v1` here, after the
+      #     build and before staging, with organization-id / project-slug /
+      #     signing-policy-slug stored as repository secrets. The WiX MSI from
+      #     packaging/wix is signed the same way in the `msi` job.
+      #   - Point the signing request at an uploaded artifact so SignPath can verify
+      #     provenance (origin verification against this workflow).
+      # Linux: detached minisign signature of the tarball, the AppImage and SHA256SUMS; key in a
+      #   repository secret; public key published in docs/security.md.
+      # ---------------------------------------------------------------------------
+
+      - name: Stage and zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = "dist/lightloom-$env:TARGET"
+          # Daemon, CLI, renderer + CEF runtime, dashboard, plugins, effects, faces, licenses and
+          # the Chromium notices, laid out the way lightloomd looks for them (next to itself).
+          tools/package/stage-windows.ps1 -Release "target/$env:TARGET/release" -Ui "ui/dist" -Out $out
+          Copy-Item "sbom/*.cdx.json" $out
+          Copy-Item "sbom/*.cdx.json" "dist"
+          # Archive the directory itself so the zip has a lightloom-<target>/ root.
+          Compress-Archive -Path $out -DestinationPath "dist/lightloom-$env:TARGET.zip" -Force
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lightloom-windows
+          path: |
+            dist/lightloom-${{ env.TARGET }}.zip
+            dist/*.cdx.json
+          if-no-files-found: error
+
+  # The per-user MSI (packaging/wix, WiX v5), made from the same staged directory as the zip.
+  # The in-app updater looks for exactly Lightloom-<x.y.z>-x64.msi (crates/lightloom-daemon/src/update.rs).
+  msi:
+    name: MSI (x64)
+    needs: [meta, windows]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: lightloom-windows
+          path: dist
+      - name: Build the MSI
+        shell: pwsh
+        env:
+          MSI_VERSION: ${{ needs.meta.outputs.msi_version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Expand-Archive "dist/lightloom-x86_64-pc-windows-msvc.zip" -DestinationPath "stage"
+          $msi = "msi/Lightloom-$env:MSI_VERSION-x64.msi"
+          packaging/wix/build.ps1 -Stage "stage/lightloom-x86_64-pc-windows-msvc" -InstallWix `
+            -Version $env:MSI_VERSION -Out $msi
+          # SignPath signing of the MSI goes here (see SIGNING in the `windows` job).
+          if (-not (Test-Path $msi)) { throw "no $msi" }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lightloom-msi
+          path: msi/*.msi
+          if-no-files-found: error
+
+  linux:
+    name: linux (tarball + AppImage)
+    needs: meta
+    # glibc 2.35 baseline: binaries built here also run on Ubuntu 22.04 and Debian 12.
+    runs-on: ubuntu-22.04
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      # Build dependencies, the packaging validators, and Chromium's runtime libraries (22.04
+      # names) plus Xvfb for the staged renderer's smoke run.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev libusb-1.0-0-dev pkg-config appstream desktop-file-utils \
+            libnss3 libnspr4 libgbm1 libdrm2 libasound2 libcups2 libdbus-1-3 libexpat1 \
+            libxkbcommon0 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+            libxfixes3 libxrandr2 libxshmfence1 libpango-1.0-0 libcairo2 libatk1.0-0 \
+            libatk-bridge2.0-0 libatspi2.0-0 fonts-liberation xvfb xauth
+
+      - name: SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Install cargo-auditable and cargo-cyclonedx
+        run: |
+          cargo install --locked "cargo-auditable@$CARGO_AUDITABLE_VERSION"
+          cargo install --locked "cargo-cyclonedx@$CARGO_CYCLONEDX_VERSION"
+
+      # Same path remapping as `linux-reproducible`, so that job checks what ships. When
+      # several prefixes match, rustc applies the last one: the target dir comes last.
+      - name: Build daemon and CLI (auditable, release)
+        run: |
+          set -eu
+          export RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/lightloom --remap-path-prefix=$GITHUB_WORKSPACE/target=/target"
+          cargo auditable build --release --locked -p lightloom-daemon -p lightloom-cli --target "$TARGET"
+
+      - name: Point CEF_PATH at the cached distribution
+        run: echo "CEF_PATH=$RUNNER_TEMP/cef" >> "$GITHUB_ENV"
+
+      - name: Cache CEF distribution
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ env.CEF_VERSION }}-linux-x86_64
+
+      # A separate cargo invocation, so feature unification with `cef` cannot change the daemon
+      # and CLI that `linux-reproducible` compares. On Linux cef-dll-sys only links libcef.so and
+      # copies the runtime next to the binary; build.rs adds the $ORIGIN rpath.
+      - name: Build the effect renderer (auditable, release, --features cef)
+        run: |
+          set -eu
+          export RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/lightloom --remap-path-prefix=$GITHUB_WORKSPACE/target=/target"
+          cargo auditable build --release --locked -p lightloom-renderer --features cef --target "$TARGET"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Build the dashboard
+        working-directory: ui
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: SBOM (CycloneDX)
+        run: |
+          set -eu
+          cargo cyclonedx --format json --target "$TARGET"
+          mkdir -p sbom
+          find . \( -path ./target -o -path ./sbom -o -name node_modules \) -prune -o -name '*.cdx.json' -print |
+            while read -r f; do
+              mv "$f" "sbom/$(basename "$f" .cdx.json)-$TARGET.cdx.json"
+            done
+          ls -la sbom
+          ls sbom/*.cdx.json > /dev/null
+
+      # The CEF runtime is about a gigabyte unpacked and now exists in the CEF cache, target/,
+      # the stage, the AppDir and both packages: target/ goes once staged (no later step and no
+      # cache uses it) to keep the runner's disk from filling up.
+      - name: Stage
+        run: |
+          set -eu
+          tools/package/stage-linux.sh --require-renderer --release "target/$TARGET/release" \
+            --ui ui/dist --out "dist/lightloom-$VERSION-linux-x86_64"
+          rm -rf target
+          df -h .
+
+      - name: Check the packaging files
+        run: |
+          set -eu
+          stage="dist/lightloom-$VERSION-linux-x86_64"
+          # systemd user unit, installed the documented way (symlink in ~/.local/bin).
+          mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user"
+          ln -sf "$PWD/$stage/lightloomd" "$HOME/.local/bin/lightloomd"
+          cp packaging/systemd/lightloomd.service "$HOME/.config/systemd/user/"
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg}"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          systemd-analyze --user verify "$HOME/.config/systemd/user/lightloomd.service"
+          # Through the symlink the daemon still finds its dashboard next to the real
+          # executable (not the source-tree fallback) and serves it; no devices are opened.
+          log="$RUNNER_TEMP/lightloomd.log"
+          "$HOME/.local/bin/lightloomd" --home "$RUNNER_TEMP/lightloom-home" --no-hardware \
+            --ephemeral --port 53017 > "$log" 2>&1 &
+          pid=$!
+          ok=0
+          for _ in $(seq 1 100); do
+            if curl -fsS http://127.0.0.1:53017/ -o "$RUNNER_TEMP/index.html"; then ok=1; break; fi
+            sleep 0.2
+          done
+          kill -TERM "$pid"; wait "$pid" || true
+          cat "$log"
+          test "$ok" = 1
+          grep -qi '<html' "$RUNNER_TEMP/index.html"
+          grep -qF "$PWD/$stage/ui" "$log"
+          desktop-file-validate packaging/appimage/lightloom.desktop
+          appstreamcli validate --no-net packaging/flatpak/org.lightloom.Lightloom.metainfo.xml
+          sh -n packaging/appimage/AppRun
+
+      # The staged renderer, not the one in target/: proves the CEF runtime staged next to it is
+      # complete and that libcef.so resolves through $ORIGIN. 60 frames of the spike page, as in
+      # ci.yml's `renderer-cef-linux` (Ozone headless, Xvfb + X11 fallback).
+      - name: Smoke run of the staged renderer
+        run: |
+          set -o pipefail
+          renderer="dist/lightloom-$VERSION-linux-x86_64/lightloom-renderer"
+          if ldd "$renderer" | grep "not found"; then
+            echo "::error title=linux::unresolved shared libraries in the staged renderer"; exit 1
+          fi
+          # shellcheck disable=SC2119,SC2120 # run() gets its arguments in the Xvfb retry
+          run() {
+            "$renderer" --effect crates/lightloom-renderer/testdata/spike.html \
+              --out "$RUNNER_TEMP/hd.shm" --png "$RUNNER_TEMP/hd.png" --frames 60 --fps 30 \
+              --software-compositing --timeout-factor 20 "$@" | tee "$RUNNER_TEMP/smoke.json"
+          }
+          if ! run; then
+            echo "::warning title=linux::Ozone headless run failed; retrying under Xvfb with ozone-platform=x11"
+            tail -50 "$RUNNER_TEMP/hd.shm.cef.log" || true
+            xvfb-run -a -s "-screen 0 1280x800x24" bash -c "set -o pipefail; renderer='$renderer'; $(declare -f run); run --chromium-flag=ozone-platform=x11"
+          fi
+          grep -q '"ok": true' "$RUNNER_TEMP/smoke.json"
+
+      # Sorted, owner 0, mtimes from the commit (stage-linux.sh with SOURCE_DATE_EPOCH), single
+      # xz thread: the same tree gives the same bytes. -6, not -9: the CEF runtime makes the
+      # tree large and -9 single-threaded is several times slower for a few percent.
+      - name: Tarball (reproducible)
+        run: |
+          set -eu
+          name="lightloom-$VERSION-linux-x86_64"
+          tar -C dist --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$SOURCE_DATE_EPOCH" -cf - "$name" | xz -T1 -6 > "dist/$name.tar.xz"
+          cp sbom/*.cdx.json dist/
+
+      - name: AppImage
+        run: |
+          packaging/appimage/build-appimage.sh --stage "dist/lightloom-$VERSION-linux-x86_64" \
+            --version "$VERSION" --out dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lightloom-linux
+          path: |
+            dist/*.tar.xz
+            dist/*.AppImage
+            dist/*.cdx.json
+          if-no-files-found: error
+
+      - name: Upload renderer logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-logs
+          path: |
+            ${{ runner.temp }}/*.json
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/hd.png
+          if-no-files-found: ignore
+
+  linux-reproducible:
+    name: linux reproducibility (daemon + CLI)
+    runs-on: ubuntu-22.04
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libudev-dev libusb-1.0-0-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Install cargo-auditable
+        run: cargo install --locked "cargo-auditable@$CARGO_AUDITABLE_VERSION"
+
+      # Two clean builds from the same checkout into different target directories (nothing
+      # may be shared between them). The checkout path must stay the same:
+      # env!("CARGO_MANIFEST_DIR") is embedded and --remap-path-prefix does not rewrite it
+      # (docs/linux-porting.md, "Reproducibility limits").
+      - name: Build twice
+        run: |
+          set -eu
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          for run in a b; do
+            dir="$RUNNER_TEMP/target-$run"
+            RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/lightloom --remap-path-prefix=$dir=/target" \
+              CARGO_TARGET_DIR="$dir" \
+              cargo auditable build --release --locked -p lightloom-daemon -p lightloom-cli --target "$TARGET"
+          done
+
+      - name: Compare hashes
+        run: |
+          set -eu
+          status=0
+          for b in lightloomd lightloom; do
+            a="$(sha256sum "$RUNNER_TEMP/target-a/$TARGET/release/$b" | cut -d' ' -f1)"
+            c="$(sha256sum "$RUNNER_TEMP/target-b/$TARGET/release/$b" | cut -d' ' -f1)"
+            echo "$b  $a  $c"
+            if [ "$a" != "$c" ]; then
+              echo "::error::$b differs between two builds of the same commit"
+              status=1
+            fi
+          done
+          exit "$status"
+
+  # Everything the release ships, in one flat directory, with one SHA256SUMS over all of it
+  # (the updater reads SHA256SUMS: crates/lightloom-daemon/src/update.rs). Gated on the
+  # reproducibility check.
+  assemble:
+    name: assemble + SHA256SUMS
+    needs: [meta, windows, msi, linux, linux-reproducible]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: lightloom-*
+          path: release
+          merge-multiple: true
+
+      - name: Check names, write SHA256SUMS
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          MSI_VERSION: ${{ needs.meta.outputs.msi_version }}
+        run: |
+          set -eu
+          cd release
+          rm -f SHA256SUMS
+          # The names the in-app updater and the docs depend on.
+          for f in \
+            "Lightloom-$MSI_VERSION-x64.msi" \
+            "lightloom-x86_64-pc-windows-msvc.zip" \
+            "lightloom-$VERSION-linux-x86_64.tar.xz" \
+            "Lightloom-$VERSION-x86_64.AppImage"; do
+            if [ ! -s "$f" ]; then echo "::error::missing release file $f"; exit 1; fi
+          done
+          ls ./*-x86_64-pc-windows-msvc.cdx.json ./*-x86_64-unknown-linux-gnu.cdx.json > /dev/null
+          # Every file the release publishes, and nothing else, plain names only.
+          for f in *; do
+            case "$f" in
+              *[!A-Za-z0-9._+-]*) echo "::error::file name not plain: $f"; exit 1 ;;
+            esac
+          done
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+          ls -la
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lightloom-release
+          path: release/*
+          if-no-files-found: error

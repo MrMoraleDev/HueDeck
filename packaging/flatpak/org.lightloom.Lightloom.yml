@@ -4,7 +4,9 @@
 #
 # Build, from the repository root. cargo-sources.json and node-sources.json (the offline
 # crate and npm sources) are generated, git-ignored files: regenerate them whenever
-# Cargo.lock or ui/package-lock.json changes. Caveats: packaging/flatpak/README.md.
+# Cargo.lock or ui/package-lock.json changes. flatpak-builder gives the build no network, so
+# everything comes from those lists and the working tree. CI: .github/workflows/flatpak.yml.
+# Caveats: packaging/flatpak/README.md.
 #
 #   packaging/flatpak/generate-sources.sh
 #   flatpak-builder --user --install --force-clean build-flatpak \
@@ -18,11 +20,12 @@
 
 app-id: org.lightloom.Lightloom
 runtime: org.freedesktop.Platform
-runtime-version: "24.08"
+runtime-version: "25.08"
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-  - org.freedesktop.Sdk.Extension.node20
+  # The dashboard's Vite needs Node >= 20.19; CI builds it with Node 24.
+  - org.freedesktop.Sdk.Extension.node24
 command: lightloom-launch
 
 finish-args:
@@ -45,17 +48,22 @@ modules:
   - name: lightloom
     buildsystem: simple
     build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node20/bin
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node24/bin
       env:
+        # cargo-sources.json vendors every crate into cargo/vendor and writes cargo/config
+        # (source replacement), read from CARGO_HOME.
         CARGO_HOME: /run/build/lightloom/cargo
         CARGO_NET_OFFLINE: "true"
+        # node-sources.json fills this npm cache.
         npm_config_cache: /run/build/lightloom/flatpak-node/npm-cache
         npm_config_offline: "true"
+        XDG_CACHE_HOME: /run/build/lightloom/flatpak-node/cache
     build-commands:
       - cargo --offline fetch --manifest-path Cargo.toml --verbose
-      # The renderer (lightloom-renderer --features cef) joins this list once it builds on
-      # Linux (WP-L5); it will also need zypak (ZYPAK_CEF_LIBRARY_PATH) for the Chromium
-      # sandbox inside Flatpak.
+      # Not the CEF effect renderer yet: cef-dll-sys would download the CEF distribution at
+      # build time (no network here), so it needs CEF as a pinned archive source plus the
+      # archive.json cef-dll-sys checks, and zypak for Chromium inside the sandbox
+      # (packaging/flatpak/README.md). Without it the daemon plays the native effects.
       - cargo --offline build --release --locked -p lightloom-daemon -p lightloom-cli
       - cd ui && npm ci --offline --ignore-scripts --no-audit --no-fund && npm run build
       - tools/package/stage-linux.sh --release target/release --ui ui/dist --out /app/lib/lightloom
@@ -77,11 +85,17 @@ modules:
       #     commit: <full sha>
       - type: dir
         path: ../..
+        # Build outputs, and flatpak-builder's own directories when it runs from the
+        # repository root (flatpak.yml: flatpak_app, repo, .flatpak-builder).
         skip:
+          - .git
           - target
+          - dist
           - ui/node_modules
           - ui/dist
           - build-flatpak
+          - flatpak_app
+          - repo
           - .flatpak-builder
       - cargo-sources.json
       - node-sources.json

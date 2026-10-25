@@ -6,9 +6,11 @@ Part 2 is for developers: how the Linux port is put together and what is still m
 
 Status (M7, see `docs/status.md`): the hidraw, udev hotplug and `/dev/i2c-*` backends
 compile and are unit-tested, but none has run on real Linux hardware yet. The CEF effect
-renderer and its daemon-side client are ported (WP-L5: compile-checked here, built and run
-headless only by CI's `renderer-cef-linux` job) but not yet staged into the Linux packages, so
-packaged Linux builds still play the native effects only.
+renderer and its daemon-side client are ported (WP-L5: built and run headless by CI's
+`renderer-cef-linux` job) and ship in the tarball and the AppImage with the CEF runtime next to
+them; the release workflow runs the staged renderer once headless, but it has not run on a
+Linux desktop yet. The Flatpak does not include the renderer yet and plays the native effects
+only.
 USB (nusb), serial, PipeWire audio and screen capture are not ported yet.
 
 ## Part 1: installing
@@ -17,7 +19,7 @@ USB (nusb), serial, PipeWire audio and screen capture are not ported yet.
 
 | Build | For | Device setup | Updates |
 |---|---|---|---|
-| Tarball `lightloom-<version>-linux-x86_64.tar.gz` | any x86_64 distribution with glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later) | manual, once (below) | replace the directory |
+| Tarball `lightloom-<version>-linux-x86_64.tar.xz` | any x86_64 distribution with glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later) | manual, once (below) | replace the directory |
 | AppImage `Lightloom-<version>-x86_64.AppImage` | the same, one file, no install | manual, once (`--setup-help`) | replace the file |
 | Flatpak `org.lightloom.Lightloom` | sandboxed install | manual, once, on the host | `flatpak update` |
 | From source | developers | manual, once | `git pull` |
@@ -30,13 +32,20 @@ to the devices.
 
 ```sh
 mkdir -p ~/.local/lib ~/.local/bin
-tar -xzf lightloom-<version>-linux-x86_64.tar.gz -C ~/.local/lib
+tar -xJf lightloom-<version>-linux-x86_64.tar.xz -C ~/.local/lib
 mv ~/.local/lib/lightloom-<version>-linux-x86_64 ~/.local/lib/lightloom
 ln -sf ~/.local/lib/lightloom/lightloomd ~/.local/lib/lightloom/lightloom ~/.local/bin/
 ```
 
 `lightloomd` looks for its plugins, effects and dashboard next to its real executable, so
 keep the directory together and use symlinks (not copies) in `~/.local/bin`.
+
+The CEF effect renderer (`lightloom-renderer`, with `libcef.so` and the rest of the Chromium
+runtime beside it) is in the same directory. It uses the system libraries every Chromium
+browser needs (NSS, libgbm, libdrm, ALSA, CUPS, X11/xkbcommon, Pango/Cairo, ATK); a desktop
+with a browser installed has them. On a server without them, install your distribution's
+`chromium` dependencies, or the daemon plays the native effects only. The Chromium sandbox is
+off (as on Windows until releases are signed), so `chrome-sandbox` is not shipped.
 
 Then do the one-time device setup below, and start the daemon:
 
@@ -75,7 +84,8 @@ An AppImage cannot install udev rules itself; install them with
 `./Lightloom-*.AppImage --udev-rules | sudo tee /etc/udev/rules.d/70-lightloom.rules`, then
 follow the rest of the setup below. If you move the AppImage, regenerate the systemd
 unit. The AppImage needs FUSE 2 (`libfuse2` on Debian and Ubuntu, `fuse-libs` on Fedora);
-without it, set `APPIMAGE_EXTRACT_AND_RUN=1`.
+without it, set `APPIMAGE_EXTRACT_AND_RUN=1`. The AppImage contains the CEF effect renderer
+and takes Chromium's system libraries from the host, as the tarball does.
 
 ### Flatpak
 
@@ -187,9 +197,16 @@ sudo rm /etc/udev/rules.d/70-lightloom.rules /etc/modules-load.d/lightloom.conf 
 ```sh
 sudo apt-get install libudev-dev libusb-1.0-0-dev pkg-config   # Debian/Ubuntu
 cargo build --release -p lightloom-daemon -p lightloom-cli
+cargo build --release -p lightloom-renderer --features cef     # optional; downloads CEF
 (cd ui && npm ci --ignore-scripts && npm run build)
 tools/package/stage-linux.sh --release target/release --ui ui/dist --out dist/lightloom
 ```
+
+`stage-linux.sh` picks up the renderer and the CEF runtime that cef-dll-sys copied next to it
+(`*.so`, `*.pak`, `*.bin`, `*.dat`, `vk_swiftshader_icd.json`, `locales/`, and `CREDITS.html`
+as `THIRD-PARTY/CEF-Chromium-CREDITS.html`). `--require-renderer` (used by the release) fails
+when any of it is missing, or when the renderer does not link `libcef.so` through an
+`$ORIGIN` rpath.
 
 Test without hardware: `LIGHTLOOM_HOME=$(mktemp -d) lightloomd --no-hardware --port 53001`.
 
@@ -202,7 +219,7 @@ Test without hardware: `LIGHTLOOM_HOME=$(mktemp -d) lightloomd --no-hardware --p
 | udev rules from manifests | `crates/lightloom-cli/src/udev.rs` (`lightloom udev generate`), `packaging/udev/` | WP-L2, done |
 | `/dev/i2c-*` SMBus, hwmon sensors | `crates/lightloom-hal-linux/src/{i2c,hwmon,sys}.rs`, `lightloom-runtime/src/smbus.rs` | WP-L4, done |
 | USB (nusb), serial | not yet | WP-L3 |
-| CEF renderer, shm, control socket | `lightloom-renderer/src/ipc.rs` (tmpfs ring, unix socket), `lightloom-render/src/cef.rs`; see `crates/lightloom-renderer/README.md` "Linux" | WP-L5, done (CI only); not yet in the packages |
+| CEF renderer, shm, control socket | `lightloom-renderer/src/ipc.rs` (tmpfs ring, unix socket), `lightloom-render/src/cef.rs`; see `crates/lightloom-renderer/README.md` "Linux" | WP-L5, done (CI only); in the tarball and AppImage, not in the Flatpak |
 | PipeWire audio, ScreenCast portal | `lightloom-inputs` | WP-L6 |
 | packaging, release | `packaging/{systemd,appimage,flatpak}`, `tools/package/stage-linux.sh`, `.github/workflows/release.yml` | WP-L7 |
 
@@ -248,41 +265,67 @@ Rules for Linux code:
 ### AppImage and Flatpak
 
 - `packaging/appimage/`: linuxdeploy with a custom `AppRun`; the staged tree lives in
-  `usr/lib/lightloom` and linuxdeploy bundles its libraries with `--deploy-deps-only`.
-  Details: `packaging/appimage/README.md`.
-- `packaging/flatpak/`: Freedesktop 24.08 runtime, offline cargo and npm sources generated
-  by `packaging/flatpak/generate-sources.sh` (flatpak-builder-tools). Details and caveats:
-  `packaging/flatpak/README.md`.
+  `usr/lib/lightloom` and linuxdeploy bundles the daemon's and CLI's libraries with
+  `--deploy-deps-only`. The renderer and the CEF runtime are moved aside while linuxdeploy
+  runs (it would patch the rpath of libcef.so and the renderer and bundle NSS and Mesa) and
+  put back before linuxdeploy's AppImage plugin writes the image. Details:
+  `packaging/appimage/README.md`.
+- `packaging/flatpak/`: Freedesktop 25.08 runtime with the rust-stable and node24 SDK
+  extensions, offline cargo and npm sources generated by
+  `packaging/flatpak/generate-sources.sh` (flatpak-builder-tools, pinned). Built weekly by
+  `.github/workflows/flatpak.yml`. Details and caveats: `packaging/flatpak/README.md`.
 - Both reuse one launcher (`packaging/appimage/AppRun`) and one desktop entry.
-- Once the renderer builds (WP-L5): the AppImage cannot ship Chromium's SUID sandbox
-  helper and depends on unprivileged user namespaces (restricted by AppArmor on Ubuntu
-  24.04 and later); the Flatpak needs zypak. A `.deb`/`.rpm` with `chrome-sandbox` root
-  4755 and an AppArmor profile is the fully sandboxed option.
+- Chromium sandbox: off in every Linux build, as on Windows (`cef_host.rs`). Turning it on
+  would need the SUID helper (impossible in an AppImage or a tarball run as the user) or
+  unprivileged user namespaces (restricted by AppArmor on Ubuntu 24.04 and later); the
+  Flatpak needs zypak. A `.deb`/`.rpm` with `chrome-sandbox` root 4755 and an AppArmor
+  profile is the fully sandboxed option.
 
 ### Release
 
-`.github/workflows/release.yml`:
+`.github/workflows/release.yml` runs on a `v*` tag: its `build` job calls the reusable
+`.github/workflows/release-build.yml`, and `publish` makes a draft GitHub release from the
+result. `ci.yml`'s `release-dry-run` calls the same reusable workflow weekly (schedule, default
+branch) and on manual dispatch, without publishing, so a tag never runs untested steps.
+`.github/workflows/flatpak.yml` builds the Flatpak on its own weekly schedule.
 
-- `build` (matrix, existing): Windows portable zip and a Linux tarball with only the two
-  binaries and the packaging files.
-- `linux` (WP-L7): on `ubuntu-22.04` (glibc 2.35 baseline), builds the daemon and CLI with
-  cargo-auditable, the dashboard, stages the full tree with `tools/package/stage-linux.sh`,
-  verifies the systemd unit, and produces `lightloom-<version>-linux-x86_64.tar.gz` (sorted,
-  owner 0, mtime from the commit, `gzip -n`) and `Lightloom-<version>-x86_64.AppImage`, with
-  `.sha256` files.
-- `linux-publish`: after `release` creates the draft, uploads those files to it with
-  `gh release upload`. A separate job so `release` and the matrix stay untouched.
+`release-build.yml` jobs:
+
+- `meta`: the version. A `v1.2.3` tag gives `1.2.3` and must match Cargo.toml's
+  `[workspace.package]` version (pre-release suffix aside), or the build stops: the in-app
+  updater compares the version the binaries report with the tag. Other refs give
+  `<workspace version>-<short sha>`.
+- `windows`: the workspace and the CEF renderer with cargo-auditable, `stage-windows.ps1`,
+  `lightloom-x86_64-pc-windows-msvc.zip`, CycloneDX SBOMs.
+- `msi`: `Lightloom-<x.y.z>-x64.msi` from the same staged tree (the name the updater looks
+  for).
+- `linux`: on `ubuntu-22.04` (glibc 2.35 baseline), the daemon and CLI, then the renderer with
+  `--features cef` in a separate cargo run (so the `cef` feature cannot change the binaries
+  `linux-reproducible` compares), all with cargo-auditable; the dashboard; `stage-linux.sh
+  --require-renderer`; the systemd unit and dashboard check; a 60-frame headless smoke run
+  of the staged renderer (Xvfb fallback, as in CI); `lightloom-<version>-linux-x86_64.tar.xz`
+  (sorted, owner 0, mtimes from the commit, single-threaded `xz -6`);
+  `Lightloom-<version>-x86_64.AppImage`; CycloneDX SBOMs.
 - `linux-reproducible`: builds the daemon and CLI twice from the same checkout into two
   target directories, with `--remap-path-prefix` for the workspace, `CARGO_HOME` and the
   target directory, and fails when the SHA-256 of either binary differs.
+- `assemble`: checks that the zip, the MSI, the tarball, the AppImage and both sets of SBOMs
+  are there under their expected names, writes one `SHA256SUMS` over every file (the updater
+  verifies its download against it) and uploads them as the `lightloom-release` artifact.
+  It waits for `linux-reproducible`, so a build that is not reproducible is not released.
 
-Once the `linux` job is trusted, drop the `ubuntu-latest` leg from the `build` matrix:
-its tarball is a subset of the new one, built against a newer glibc.
+Release builds use no rust-cache: they start clean, and a restored cache would skip
+cef-dll-sys's build script, which copies the CEF runtime next to the renderer. Only the CEF
+distribution is cached, keyed by its version. cargo-auditable and cargo-cyclonedx are pinned
+(`CARGO_AUDITABLE_VERSION`, `CARGO_CYCLONEDX_VERSION`).
+
+The `x86_64-unknown-linux-gnu.tar.gz` of the old `build` matrix (two binaries, no dashboard)
+is gone; the updater still accepts that name as a last fallback.
 
 Reproducibility limits: both builds use the same checkout path (`env!("CARGO_MANIFEST_DIR")`
 in `paths.rs` embeds it and `--remap-path-prefix` does not rewrite `env!` strings), the
-same toolchain and the same `Cargo.lock`. The AppImage and the dashboard bundle are not
-checked yet (linuxdeploy writes the squashfs with its own timestamps).
+same toolchain and the same `Cargo.lock`. The renderer, the AppImage and the dashboard bundle
+are not checked yet (linuxdeploy writes the squashfs with its own timestamps).
 
 ### cargo-dist evaluation
 
@@ -306,8 +349,7 @@ Migration plan, after the installer branch and WP-L5 are merged into develop:
    `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`, `cargo-auditable = true`,
    `cargo-cyclonedx = true`, `github-build-setup` for the CEF and Node steps, `include`
    for `ui/dist`, `plugins`, `effects`, `components` and the license texts, `dist = false`
-   on every crate except `lightloom-daemon` and `lightloom-cli` (and `lightloom-renderer` once
-   it ships on Linux).
+   on every crate except `lightloom-daemon`, `lightloom-cli` and `lightloom-renderer`.
 2. Move the MSI, AppImage, Flatpak and reproducibility jobs into reusable workflows and
    hook them in with `local-artifacts-jobs` / `global-artifacts-jobs`; keep
    `stage-windows.ps1` and `stage-linux.sh` as the staging steps.

@@ -43,6 +43,12 @@ finish-args:
   # Data and config stay in ~/.var/app/org.lightloom.Lightloom (XDG dirs inside the sandbox).
   # Printed commands (`--setup-help`, `--systemd-unit`) must name the Flatpak, not /app.
   - --env=LIGHTLOOM_SELF=flatpak run org.lightloom.Lightloom
+  # Desktop integration (docs/linux-porting.md): logind sleep/lock and its delay inhibitor,
+  # desktop notifications, and the tray icon (registered under its unique bus name; the
+  # one-tray-per-session name is under the app id, which needs no permission).
+  - --system-talk-name=org.freedesktop.login1
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
 
 modules:
   - name: lightloom

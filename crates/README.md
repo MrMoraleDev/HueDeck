@@ -15,7 +15,7 @@ Status as of `develop` 2026-10-25; the milestone view is `docs/status.md`.
 | `lightloom-renderer` | `lightloom-renderer` (feature `cef`) | the user | one windowless CEF per effect, frames into shared memory |
 | `lightloom-iobroker` | `lightloom-iobroker` | LocalSystem (optional, Windows) | chipset SMBus through PawnIO, over a named pipe |
 | `lightloom-setup` | `lightloom-setup` | Administrator, once (optional, Windows) | installs PawnIO on request, registers / removes the I/O broker |
-| `lightloom-tray` | `lightloom-tray` | the user (Windows) | notification-area icon: open the dashboard, pause, brightness presets, start at sign-in, quit; talks only to the loopback API |
+| `lightloom-tray` | `lightloom-tray` | the user (Windows, Linux) | notification-area icon (StatusNotifierItem on Linux): open the dashboard, pause, brightness presets, profiles, start at sign-in (Windows), quit; talks only to the loopback API |
 
 ## Dependency graph
 
@@ -43,7 +43,7 @@ Status as of `develop` 2026-10-25; the milestone view is `docs/status.md`.
  lightloom-macros   ◄── hal, plugin-host
  lightloom-daemon   ◄── api, effects, engine, hal, inputs, macros, plugin-host, render, runtime, tray
  lightloom-cli      ◄── api, engine, effects, hal, hal-windows, plugin-host, render, renderer, runtime
- lightloom-tray     ◄── api, runtime
+ lightloom-tray     ◄── api, runtime (Linux: hal, hal-linux)
  lightloom-winres   (build-dependency of every Windows executable)
 ```
 
@@ -56,7 +56,7 @@ Status as of `develop` 2026-10-25; the milestone view is `docs/status.md`.
 |---|---|---|---|
 | `lightloom-hal` | lib | done | `HidBackend/HidHandle`, `Notifier`, `UsbBackend`, `SerialBackend`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend` (+ `plugin_owner`), `PowerSource`, HID record/replay (`trace`), SMBIOS facts, `HalError`, `DeviceKey`; feature `mock`: `MockHid`, `MockUsb`, `MockSmbus`, `MockSerial`, `TransactionRecorder` |
 | `lightloom-hal-windows` | lib | done (WinUSB, serial and LampArray untested on hardware) | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `WinUsbBackend` (`nusb`, WinUSB-bound interfaces only, no INF), `group`, `hotplug` (HID and USB device interfaces), `power` (sleep/resume, lock, display), `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence and the `lightloom-setup` contract, `elevate::run_elevated` (UAC on a user action only), `service::service_state` (read-only), process and port probes, toast notifications, `lamparray` (WinRT Dynamic Lighting), `serial` (COM ports with their USB VID:PID; I/O over `serialport`) |
-| `lightloom-hal-linux` | lib | done, untested on Linux hardware (CI only) | `sysfs` enumeration and `tlc` split (same endpoint tuples as Windows), raw `hidraw` ioctls, `hotplug`/`uevent` (netlink udev monitor), `i2c` (`/dev/i2c-*` by adapter name, SPD writes refused), `hwmon` sensors, `tty` serial ports, `procfs`, `fixtures`. nusb (raw USB) not yet |
+| `lightloom-hal-linux` | lib | done, untested on Linux hardware (CI only) | `sysfs` enumeration and `tlc` split (same endpoint tuples as Windows), raw `hidraw` ioctls, `hotplug`/`uevent` (netlink udev monitor), `i2c` (`/dev/i2c-*` by adapter name, SPD writes refused), `hwmon` sensors, `tty` serial ports, `procfs`, `fixtures`, `usb` (sysfs enumeration, usbfs through nusb), `dbus` + `logind` (sleep/lock) + `notifications` over zbus |
 | `lightloom-hid-desc` | lib | done | HID 1.11 report-descriptor parser: items, top-level collections, report ids and sizes, report fields (LampArray) |
 | `lightloom-protocol` | lib | done | `shm` frame ring (`"HDFR"`, 3 slots, seqlock), `broker` operations (protocol 3: `BusLock`, `Batch`, `SpdRead`), postcard framing |
 | `lightloom-engine` | lib | done | `Rgb`, `Frame`, `FrameStore`, `Layout`/`Placement` (= `schemas/layout.schema.json`), the sampler, brightness math, components and channel instances, `DirectLeds` (OpenRGB SDK colours, and the static layer of the custom per-LED colours), `CustomLeds` |
@@ -73,7 +73,7 @@ Status as of `develop` 2026-10-25; the milestone view is `docs/status.md`.
 | `lightloom-adl` | lib | done; untested on hardware | dynamic `atiadlxx.dll` (legacy ADL) binding, one ADL worker thread, `AdlBus: SmbusBus` (kind `AmdGpu`) per AMD GPU |
 | `lightloom-iobroker` | lib + bin | done (AMD PIIX4; Intel I801 untested on hardware) | LocalSystem service: PawnIO IOCTLs, pinned modules (`pins`, checked against `tools/package/fetch-pawnio-modules.ps1` by `tests/pawnio_pins.rs`), PIIX4 / I801 transfers, global SMBus mutex, static policy and rate limit, named pipe with DACL, audit log; proptest and cargo-fuzz harness |
 | `lightloom-setup` | bin | done | the elevated helper of RAM lighting: `--pawnio-install` (verified download of the official `PawnIO_setup.exe` 2.2.0: size, SHA-256, Authenticode signer `namazso.eu`), `--smbus` (pinned modules and the broker, registers `LightloomIoBroker`), `--uninstall`, `--elevate`, `--pause`, `--plan` |
-| `lightloom-tray` | lib + bin | done, untested live | `Shell_NotifyIconW` icon and menu over the loopback API (profiles quick switch), the `HKCU\...\Run` sign-in entry, one instance per session; prints "no tray icon on this platform yet" elsewhere |
+| `lightloom-tray` | lib + bin | done, untested live | `Shell_NotifyIconW` icon and menu over the loopback API (profiles quick switch), the `HKCU\...\Run` sign-in entry, one instance per session; on Linux a StatusNotifierItem with a dbusmenu (`sni`), which exits with a message when no host runs |
 | `lightloom-winres` | lib (build) | done | build-script helper: icon (`packaging/wix/lightloom.ico`) and version resource of the Windows executables (`winresource`, Windows hosts only) |
 | `lightloom-daemon` | lib + bins `lightloomd`, `lightloomw` | done | single instance, token, port choice, engine thread (sessions, canvas, renderer, SQLite, playlists, profiles and hardware modes, actions, power), audio/screen/sensor feeds and the dashboard's input choice, battery alerts, the log history (`logs`: in-memory ring and `lightloomw`'s files), API serving, a shutdown that restores devices, Settings → PawnIO / RAM lighting |
 | `lightloom-cli` | bin `lightloom` | done | `devices`, `light`, `rainbow`, `effect`, `effects`, `bench` (`--mock`), `plugins`, `compat dry-run` / `replay`, `url`, `action`, `udev generate`, `shm-dump` |

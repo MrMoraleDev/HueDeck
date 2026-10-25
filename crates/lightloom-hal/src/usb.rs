@@ -8,6 +8,11 @@
 //! reports it as not [`UsbInterfaceInfo::accessible`], and transfers that
 //! would need it fail with [`HalError::NeedsDriver`]. Lightloom never installs
 //! or swaps a driver (docs/research/drivers.md §2.4).
+//!
+//! On Linux (usbfs) an interface without a kernel driver is reachable; a
+//! `rawusb` plugin may also take a non-HID interface from its kernel driver
+//! (detached on claim, re-attached on release), through the backend
+//! [`UsbBackend::for_rawusb`] hands out. HID interfaces stay with `usbhid`.
 
 use crate::error::{HalError, HalResult};
 use crate::key::DeviceKey;
@@ -25,8 +30,20 @@ pub const DEFAULT_TIMEOUT_MS: u32 = 1000;
 pub const MAX_TIMEOUT_MS: u32 = 5000;
 
 /// Where the user learns why a device needs WinUSB and how to check it.
+#[cfg(not(target_os = "linux"))]
 pub const WINUSB_HELP_URL: &str =
     "https://github.com/MrMoraleDev/Lightloom/blob/develop/docs/hardware/winusb.md";
+/// Where the user learns which USB interfaces Lightloom may claim on Linux.
+#[cfg(target_os = "linux")]
+pub const WINUSB_HELP_URL: &str =
+    "https://github.com/MrMoraleDev/Lightloom/blob/develop/docs/linux-porting.md#raw-usb-devices";
+
+/// How every unreachable-interface message starts ([`HalError::NeedsDriver`]).
+#[cfg(not(target_os = "linux"))]
+pub const NEEDS_DRIVER: &str = "needs WinUSB driver";
+/// How every unreachable-interface message starts ([`HalError::NeedsDriver`]).
+#[cfg(target_os = "linux")]
+pub const NEEDS_DRIVER: &str = "USB interface held by a kernel driver";
 
 /// `bmRequestType` recipient field (bits 0..=4).
 const RECIPIENT_MASK: u8 = 0x1F;
@@ -246,6 +263,15 @@ pub trait UsbBackend: Send + Sync {
 
     /// Open the device at `path`. Opening claims nothing.
     fn open(&self, path: &str) -> HalResult<Box<dyn UsbHandle>>;
+
+    /// The backend a `rawusb` plugin opens `info` with, and `info` as that
+    /// backend sees it, when they differ from this one (Linux: one that may
+    /// detach kernel drivers from non-HID interfaces). `None`: this backend
+    /// and `info` as they are.
+    fn for_rawusb(&self, info: &UsbDeviceInfo) -> Option<(std::sync::Arc<dyn UsbBackend>, UsbDeviceInfo)> {
+        let _ = info;
+        None
+    }
 }
 
 #[cfg(test)]
@@ -315,7 +341,7 @@ mod tests {
             ..Default::default()
         };
         let problem = d.driver_problem().unwrap();
-        assert!(problem.starts_with("needs WinUSB driver"), "{problem}");
+        assert!(problem.starts_with(NEEDS_DRIVER), "{problem}");
         assert!(problem.contains("interface 0 (HidUsb)") && problem.contains("interface 1 (no driver)"));
         assert!(problem.contains(WINUSB_HELP_URL));
         assert!(matches!(

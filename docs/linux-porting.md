@@ -4,14 +4,16 @@
 Part 1 is for users: how to install Lightloom and give it access to your devices.
 Part 2 is for developers: how the Linux port is put together and what is still missing.
 
-Status (M7, see `docs/status.md`): the hidraw, udev hotplug and `/dev/i2c-*` backends
-compile and are unit-tested, but none has run on real Linux hardware yet. The CEF effect
+Status (M7, see `docs/status.md`): the hidraw, raw USB, serial, udev hotplug and `/dev/i2c-*`
+backends, and the desktop integration (sleep and lock through logind, notifications, the tray
+icon), compile and are unit-tested, but none has run on real Linux hardware or a Linux desktop
+yet. The CEF effect
 renderer and its daemon-side client are ported (WP-L5: built and run headless by CI's
 `renderer-cef-linux` job) and ship in the tarball and the AppImage with the CEF runtime next to
 them; the release workflow runs the staged renderer once headless, but it has not run on a
 Linux desktop yet. The Flatpak does not include the renderer yet and plays the native effects
 only.
-USB (nusb), serial, PipeWire audio and screen capture are not ported yet.
+PipeWire audio and screen capture are not ported yet.
 
 ## Part 1: installing
 
@@ -134,6 +136,23 @@ What the rules do:
   (monitor) buses, touchpads, embedded controllers and the other PIIX4 ports stay
   root-only.
 
+### Raw USB devices
+
+Plugins of type `rawusb` (and the USB side of `hybrid` ones) talk to the device through usbfs,
+the `/dev/bus/usb/BBB/DDD` node the rules tag `uaccess`. Which interfaces Lightloom may use:
+
+- an interface no kernel driver is bound to: always;
+- an interface a kernel driver holds: only for a `rawusb` plugin and only when it is not HID.
+  Lightloom detaches the driver when the plugin first uses the interface and attaches it again
+  when the device is closed (Lightloom quits, the plugin stops, the device sleeps);
+- a HID interface (`usbhid`): never. Hybrid devices keep all their kernel drivers; their HID
+  side goes through hidraw.
+
+When nothing the plugin needs is free, the device list shows "USB interface held by a kernel
+driver" with the interface and its driver (`ls -l /sys/bus/usb/devices/*/driver` shows the
+bindings). Lightloom never installs, blacklists or unbinds drivers otherwise. "Permission
+denied" on `/dev/bus/usb/...` means the udev rules are missing for that VID:PID.
+
 With imported plugins (SignalRGB-format or community ones), generate rules that cover them
 too: `lightloom udev generate --plugins <dir> --plugins <other dir> --out 70-lightloom.rules`.
 
@@ -145,6 +164,20 @@ getfacl /dev/hidraw* | grep "user:$USER"
 ls -l /dev/i2c-*                 # the Lightloom adapters show group i2c
 i2cdetect -l                     # adapter names (i2c-tools); never run a bus scan on a GPU bus
 ```
+
+### Desktop integration
+
+- **Tray icon** (`lightloom-tray`): a StatusNotifierItem with the Windows menu (open the
+  dashboard, pause, brightness, profiles, quit; a left click opens the dashboard). KDE Plasma and
+  most panels show it; GNOME needs the AppIndicator and KStatusNotifierItem Support extension
+  (`gnome-shell-extension-appindicator`). Without a host it prints that and exits. Start at
+  sign-in is not in the menu: use the systemd user unit.
+- **Notifications** (low battery and the like) go to the desktop's notification server
+  (`org.freedesktop.Notifications`); without one they are dropped and logged once.
+- **Sleep and lock** come from systemd-logind (`docs/power.md`): the daemon takes a `delay`
+  sleep inhibitor (`systemd-inhibit --list` shows it) so the devices are put away before the
+  system sleeps, and follows the lock state of your session. Without logind (some containers)
+  the daemon runs without them.
 
 ### PawnIO is not needed
 
@@ -218,7 +251,9 @@ Test without hardware: `LIGHTLOOM_HOME=$(mktemp -d) lightloomd --no-hardware --p
 | hotplug (kernel uevents) | `crates/lightloom-hal-linux/src/{hotplug,uevent}.rs` | WP-L2, done |
 | udev rules from manifests | `crates/lightloom-cli/src/udev.rs` (`lightloom udev generate`), `packaging/udev/` | WP-L2, done |
 | `/dev/i2c-*` SMBus, hwmon sensors | `crates/lightloom-hal-linux/src/{i2c,hwmon,sys}.rs`, `lightloom-runtime/src/smbus.rs` | WP-L4, done |
-| USB (nusb), serial | not yet | WP-L3 |
+| raw USB (usbfs through nusb: sysfs enumeration, kernel-driver policy, transfers) | `crates/lightloom-hal-linux/src/usb.rs`, `lightloom-runtime/src/hardware.rs` | WP-L3, done |
+| serial ports | `crates/lightloom-hal-linux/src/tty.rs` | done |
+| sleep/lock (logind), notifications, tray (StatusNotifierItem) | `crates/lightloom-hal-linux/src/{dbus,logind,notifications}.rs`, `lightloom-runtime/src/{power,notify}.rs`, `crates/lightloom-tray/src/sni.rs` | WP-L8, done |
 | CEF renderer, shm, control socket | `lightloom-renderer/src/ipc.rs` (tmpfs ring, unix socket), `lightloom-render/src/cef.rs`; see `crates/lightloom-renderer/README.md` "Linux" | WP-L5, done (CI only); in the tarball and AppImage, not in the Flatpak |
 | PipeWire audio, ScreenCast portal | `lightloom-inputs` | WP-L6 |
 | packaging, release | `packaging/{systemd,appimage,flatpak}`, `tools/package/stage-linux.sh`, `.github/workflows/release.yml` | WP-L7 |
@@ -228,7 +263,13 @@ Background research and primary sources: `docs/research/m7-linux-backend.md`.
 Rules for Linux code:
 
 - The daemon stays unprivileged. Access comes from udev rules, never from setuid, file
-  capabilities or polkit. Any new device class adds a rule shape to `lightloom udev
+  capabilities or polkit.
+- D-Bus goes through zbus (pure Rust) and the blocking helpers in
+  `lightloom_hal_linux::dbus`. Never call them from a method of a served interface (those run on
+  zbus's runtime): queue the work for another thread, as the tray does.
+- Tests of D-Bus code use peer-to-peer connections over a socket pair with a fake service on
+  the other end (`logind.rs`, `notifications.rs`, `sni.rs`); they never touch the real session
+  or system bus. Any new device class adds a rule shape to `lightloom udev
   generate` and a line in `packaging/udev/README.md`.
 - Regenerate `packaging/udev/70-lightloom.rules` when a manifest changes:
   `lightloom udev generate --plugins plugins --out packaging/udev/70-lightloom.rules`.
@@ -259,8 +300,8 @@ Rules for Linux code:
   the Chromium renderer.
 - Checked with `systemd-analyze verify` and `systemd-analyze --user verify` (systemd 255).
   Not yet run as a real user service on Linux hardware.
-- Open: `Type=notify` with `WatchdogSec=` (needs `sd_notify` in the daemon) and a
-  logind sleep inhibitor (`docs/research/m7-linux-backend.md` section 7).
+- Open: `Type=notify` with `WatchdogSec=` (needs `sd_notify` in the daemon). The logind
+  sleep inhibitor is taken by the daemon itself (`lightloom_hal_linux::logind`).
 
 ### AppImage and Flatpak
 

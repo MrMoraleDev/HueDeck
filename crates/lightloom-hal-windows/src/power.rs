@@ -103,6 +103,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 struct Watcher {
     thread_id: u32,
     thread: JoinHandle<()>,
+    /// The window's handle (as an integer: `HWND` is not `Send`), for tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    hwnd: isize,
 }
 
 /// Power and session events from a hidden window (see the module docs).
@@ -127,8 +130,8 @@ impl WindowsPower {
 }
 
 /// Create the window, register for the notifications, pump messages until
-/// `WM_QUIT`, clean up. `ready` gets the thread id or why it failed.
-fn window_thread(sink: PowerSink, ready: std::sync::mpsc::Sender<Result<u32, String>>) {
+/// `WM_QUIT`, clean up. `ready` gets the thread id and window handle, or why it failed.
+fn window_thread(sink: PowerSink, ready: std::sync::mpsc::Sender<Result<(u32, isize), String>>) {
     SINK.with(|s| *s.borrow_mut() = Some(sink));
     // SAFETY: plain Win32 calls on this thread's own window; the class, window
     // and registrations are released below before the thread ends.
@@ -181,7 +184,7 @@ fn window_thread(sink: PowerSink, ready: std::sync::mpsc::Sender<Result<u32, Str
         let session = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION)
             .map_err(|e| tracing::warn!("lock/unlock notifications unavailable: {e}"))
             .is_ok();
-        let _ = ready.send(Ok(GetCurrentThreadId()));
+        let _ = ready.send(Ok((GetCurrentThreadId(), hwnd.0 as isize)));
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
             let _ = TranslateMessage(&msg);
@@ -207,8 +210,12 @@ impl PowerSource for WindowsPower {
             .spawn(move || window_thread(sink, tx))
             .map_err(|e| HalError::Backend(format!("power events thread: {e}")))?;
         match rx.recv() {
-            Ok(Ok(thread_id)) => {
-                self.watcher = Some(Watcher { thread_id, thread });
+            Ok(Ok((thread_id, hwnd))) => {
+                self.watcher = Some(Watcher {
+                    thread_id,
+                    thread,
+                    hwnd,
+                });
                 Ok(())
             }
             Ok(Err(e)) => {
@@ -278,16 +285,18 @@ mod tests {
 
     #[test]
     fn the_hidden_window_delivers_and_stops_cleanly() {
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SendMessageW};
+        use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut p = WindowsPower::new();
         let s = Arc::clone(&seen);
         p.subscribe(Arc::new(move |e| s.lock().unwrap().push(e)))
             .expect("hidden window");
         // What Windows sends before sleeping, to this process's own window.
-        // SAFETY: a window of this test's class, alive until `stop`.
+        // Its own window by handle: a lookup by class name could find a running lightloomd's
+        // window and send that daemon a fake suspend.
+        let hwnd = HWND(p.watcher.as_ref().expect("watching").hwnd as *mut _);
+        // SAFETY: this test's own window, alive until `stop`.
         unsafe {
-            let hwnd = FindWindowW(CLASS, PCWSTR::null()).expect("window");
             let r = SendMessageW(
                 hwnd,
                 WM_POWERBROADCAST,

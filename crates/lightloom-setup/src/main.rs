@@ -753,6 +753,8 @@ mod tests {
         }
     }
 
+    // Windows paths: `Path` only treats `\` as a separator there.
+    #[cfg(windows)]
     #[test]
     fn install_plan_needs_a_usable_pawnio() {
         for status in [
@@ -795,6 +797,8 @@ mod tests {
         assert!(steps[2].to_string().contains("PawnIO itself stays"));
     }
 
+    // Windows paths: `Path` only treats `\` as a separator there.
+    #[cfg(windows)]
     #[test]
     fn downloads_and_bundled_modules_have_fixed_places() {
         assert_eq!(

@@ -2,13 +2,15 @@
 //! Input sources for lightscripts: audio spectrum (`engine.audio`), screen
 //! zones (`engine.zone`), vision meters (`engine.vision`) and sensors.
 //!
-//! Audio: [`audio`] (WASAPI loopback + FFT, docs/audio.md). Screen capture
-//! and the sensor facade arrive with their work packages; only their snapshot
-//! shapes are defined here.
+//! Audio: [`audio`] (WASAPI loopback + FFT, docs/audio.md). Screen:
+//! [`screen`] (DXGI Desktop Duplication, zones and meters, docs/screen.md).
+//! The sensor facade arrives with its work package.
 
-#![forbid(unsafe_code)]
+// Only the DXGI duplication (`screen/dxgi.rs`) opts back in.
+#![deny(unsafe_code)]
 
 pub mod audio;
+pub mod screen;
 
 use serde::{Deserialize, Serialize};
 

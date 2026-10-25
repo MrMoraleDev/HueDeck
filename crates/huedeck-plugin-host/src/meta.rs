@@ -756,6 +756,26 @@ pub fn coerce_number(raw: &str) -> Option<f64> {
     s.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
+/// A parameter value as its control type expects it: the numeric strings of
+/// the corpus become numbers for `number` / `hue` (`"800"` -> 800), `"true"` /
+/// `"false"` become booleans for `boolean` (docs/host-api/hid-usb.md: numeric
+/// fields are frequently strings). Anything else is returned unchanged.
+pub fn coerce_param_value(param_type: ParamType, value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value as J;
+    match (param_type, value) {
+        (ParamType::Number | ParamType::Hue, J::String(s)) => coerce_number(s)
+            .and_then(serde_json::Number::from_f64)
+            .map_or_else(|| value.clone(), J::Number),
+        (ParamType::Boolean, J::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => J::Bool(true),
+            "false" | "0" | "" => J::Bool(false),
+            _ => value.clone(),
+        },
+        (ParamType::Boolean, J::Number(n)) => J::Bool(n.as_f64().is_some_and(|f| f != 0.0)),
+        _ => value.clone(),
+    }
+}
+
 /// If `export_name` is an `on<Prop>Changed` hook, return `<Prop>`.
 pub fn change_hook_property(export_name: &str) -> Option<&str> {
     let inner = export_name.strip_prefix("on")?.strip_suffix("Changed")?;

@@ -7,6 +7,10 @@
 //!   grouping into physical devices, giving the same
 //!   `{interface, usage, usage_page, collection}` tuples as Windows;
 //! * [`uevent`]: netlink uevent parsing (udev and kernel shapes);
+//! * [`i2c`]: `/dev/i2c-*` adapter discovery by sysfs name and the
+//!   [`SmbusBus`](huedeck_hal::SmbusBus) of each (Windows policy; the
+//!   device and opener are Linux only);
+//! * [`hwmon`]: read-only temperatures and fan speeds;
 //! * `hidraw` (Linux only): [`LinuxHidBackend`], report I/O on `/dev/hidrawN`;
 //! * `hotplug` (Linux only): [`HidrawHotplug`], the udev netlink monitor.
 //!
@@ -14,10 +18,12 @@
 //! fixtures shared with the Windows path logic) run in Windows CI too.
 //! `unsafe` is confined to the Linux-only `sys` module (ioctls, poll, socket).
 //!
-//! Planned: `nusb` raw USB, `serialport`, `/dev/i2c-*` SMBus, hwmon.
+//! Planned: `nusb` raw USB, `serialport`.
 
 #![deny(unsafe_code)]
 
+pub mod hwmon;
+pub mod i2c;
 pub mod sysfs;
 pub mod tlc;
 pub mod uevent;

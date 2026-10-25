@@ -16,15 +16,17 @@
 //! global hardware mux of the primary controller and are never selected for
 //! HueDeck's own use.
 //!
-//! [`Piix4Bus::spd_read`] reads a DDR4 SPD (JEDEC EE1004) across its two
-//! pages: an EE1004 Set Page Address (Send Byte, data 0x00, to 0x36 for page
-//! 0 or 0x37 for page 1, as Linux's `ee1004` driver sends it), the reads,
-//! then page 0 again. That page select is the only transfer to 0x30-0x37 the
-//! broker ever makes; it is private to this module and no client op names
-//! those addresses (the policy denies every write op there).
+//! [`SmbusXfer::spd_read`] (shared with the I801, [`crate::chipset`]) reads
+//! a DDR4 SPD (JEDEC EE1004) across its two pages: an EE1004 Set Page
+//! Address (Send Byte, data 0x00, to 0x36 for page 0 or 0x37 for page 1, as
+//! Linux's `ee1004` driver sends it), the reads, then page 0 again. That
+//! page select is the only transfer to 0x30-0x37 the broker ever makes; it
+//! is private to [`crate::chipset`] and no client op names those addresses
+//! (the policy denies every write op there).
 
+use crate::chipset::SmbusXfer;
 use crate::pawnio::{NtStatus, PawnExec};
-use huedeck_protocol::broker::{BrokerError, BrokerOp, BrokerPayload, SPD_PAGE_LEN, SPD_SET_PAGE};
+use huedeck_protocol::broker::{BrokerError, BrokerOp, BrokerPayload};
 
 /// `I2C_SMBUS_QUICK`.
 pub const PROTO_QUICK: u64 = 0;
@@ -188,89 +190,6 @@ impl<E: PawnExec> Piix4Bus<E> {
         self.port
     }
 
-    /// One SMBus transfer. Caller holds the SMBus mutex.
-    pub fn transfer(&mut self, op: &BrokerOp) -> Result<BrokerPayload, BrokerError> {
-        let input = xfer_input(op)?;
-        let mut out = [0u64; XFER_OUT_CELLS];
-        self.exec
-            .execute("ioctl_smbus_xfer", &input, &mut out)
-            .map_err(map_status)?;
-        Ok(decode_output(op, &out))
-    }
-
-    /// `BrokerOp::SpdRead`: `len` bytes of the DDR4 SPD at `addr` from
-    /// `offset` (arguments already validated). Selects the page, reads byte
-    /// by byte (Read Byte), and selects page 0 again even when a read failed.
-    /// Caller holds the SMBus mutex for the whole sequence.
-    pub fn spd_read(&mut self, addr: u8, offset: u16, len: u8) -> Result<BrokerPayload, BrokerError> {
-        let page = (offset / SPD_PAGE_LEN) as u8;
-        let start = (offset % SPD_PAGE_LEN) as u8;
-        let mut bytes = Vec::with_capacity(usize::from(len));
-        let mut result = self.spd_set_page(page);
-        for i in 0..len {
-            if result.is_err() {
-                break;
-            }
-            let read = BrokerOp::SmbusReadByte {
-                bus: 0,
-                addr,
-                reg: start.wrapping_add(i),
-            };
-            match self.transfer(&read) {
-                Ok(BrokerPayload::Byte(b)) => bytes.push(b),
-                Ok(other) => {
-                    result = Err(BrokerError::BadRequest(format!("unexpected answer {other:?}")));
-                    break;
-                }
-                Err(e) => {
-                    result = Err(e);
-                    break;
-                }
-            }
-        }
-        if page != 0 {
-            if let Err(e) = self.spd_set_page(0) {
-                tracing::warn!(target: "huedeck::audit", "SPD page 0 not selected again: {e}");
-                result = result.and(Err(e));
-            }
-        }
-        result.map(|()| BrokerPayload::Block(bytes))
-    }
-
-    /// EE1004 Set Page Address: a Send Byte (data 0x00) to 0x36 (page 0) or
-    /// 0x37 (page 1). Some modules switch without acknowledging (Linux's
-    /// `ee1004` driver allows for it): a NACKed select of page 0 counts when
-    /// the Read Page Address then answers page 0. A NACKed select of page 1
-    /// fails: a NACK from Read Page Address means page 1 *or* no EE1004 at
-    /// all, which is no evidence (page 0 is still put back after it).
-    fn spd_set_page(&mut self, page: u8) -> Result<(), BrokerError> {
-        let at = SPD_SET_PAGE[usize::from(page & 1)];
-        let input = [u64::from(at), WRITE, 0x00, PROTO_BYTE, 0, 0, 0, 0, 0];
-        let mut out = [0u64; XFER_OUT_CELLS];
-        match self
-            .exec
-            .execute("ioctl_smbus_xfer", &input, &mut out)
-            .map_err(map_status)
-        {
-            Ok(()) => Ok(()),
-            Err(BrokerError::Nack) if page & 1 == 0 && self.spd_page()? == 0 => Ok(()),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// EE1004 Read Page Address: a Receive Byte at 0x36 is acknowledged
-    /// while page 0 is selected and not acknowledged on page 1.
-    fn spd_page(&mut self) -> Result<u8, BrokerError> {
-        match self.transfer(&BrokerOp::SmbusReadByteNoReg {
-            bus: 0,
-            addr: SPD_SET_PAGE[0],
-        }) {
-            Ok(_) => Ok(0),
-            Err(BrokerError::Nack) => Ok(1),
-            Err(e) => Err(e),
-        }
-    }
-
     /// Select this bus's port; returns the port the handle (for port 0: the
     /// primary controller's mux) was on before. Caller holds the SMBus mutex.
     pub fn select_port(&mut self) -> Result<u8, BrokerError> {
@@ -312,6 +231,16 @@ impl<E: PawnExec> Piix4Bus<E> {
         self.exec
             .execute("ioctl_set_sleep_mode", &[u64::from(mode)], &mut [])
             .map_err(map_status)
+    }
+}
+
+impl<E: PawnExec> SmbusXfer for Piix4Bus<E> {
+    fn xfer(&mut self, input: &[u64; XFER_IN_CELLS]) -> Result<[u64; XFER_OUT_CELLS], BrokerError> {
+        let mut out = [0u64; XFER_OUT_CELLS];
+        self.exec
+            .execute("ioctl_smbus_xfer", input, &mut out)
+            .map_err(map_status)?;
+        Ok(out)
     }
 }
 

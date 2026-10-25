@@ -23,6 +23,9 @@ pub struct Snapshot {
     pub effects: Vec<EffectView>,
     /// Saved layouts, by name.
     pub layouts: Vec<String>,
+    /// Effect playlists, by id.
+    #[serde(default)]
+    pub playlists: Vec<Playlist>,
     /// User settings.
     pub settings: Settings,
     /// Network plugins' discovery services (while network lights are on).
@@ -90,6 +93,95 @@ pub struct Lighting {
     pub layout_brightness: u8,
     /// Who paints the canvas.
     pub renderer: RendererView,
+    /// The playlist playing now.
+    #[serde(default)]
+    pub playlist: Option<PlaylistPlayback>,
+    /// The auto-next timer (SignalRGB's "Effect Timer Interval").
+    #[serde(default)]
+    pub timer: EffectTimer,
+    /// When the playlist or the timer shows the next effect (Unix time,
+    /// milliseconds); `None` when nothing will switch by itself.
+    #[serde(default)]
+    pub next_switch_ms: Option<u64>,
+}
+
+/// The auto-next timer: while no playlist plays, show the next effect of the
+/// library every `interval` seconds. It also is the duration of playlist
+/// entries that have none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EffectTimer {
+    /// Advance through the library by itself (off by default).
+    pub enabled: bool,
+    /// Seconds per effect ([`EffectTimer::DEFAULT_INTERVAL`] by default).
+    pub interval: u32,
+}
+
+impl EffectTimer {
+    /// SignalRGB's default: 300 000 ms.
+    pub const DEFAULT_INTERVAL: u32 = 300;
+    /// Shortest interval or entry duration, seconds.
+    pub const MIN_INTERVAL: u32 = 1;
+    /// Longest interval or entry duration, seconds (one day).
+    pub const MAX_INTERVAL: u32 = 86_400;
+}
+
+impl Default for EffectTimer {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval: Self::DEFAULT_INTERVAL,
+        }
+    }
+}
+
+/// An effect playlist: effects shown one after the other, in order or shuffled.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Playlist {
+    /// Stable id (made from the name when the playlist is created).
+    #[serde(default)]
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Play the entries in a random order (a new one every round).
+    #[serde(default)]
+    pub shuffle: bool,
+    /// The effects, in order.
+    #[serde(default)]
+    pub entries: Vec<PlaylistEntry>,
+    /// Last change (RFC 3339); set by the daemon.
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+/// One entry of a playlist.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntry {
+    /// Effect id.
+    pub effect: String,
+    /// A preset of the effect loaded when the entry starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    /// Control values set when the entry starts (after the preset's).
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub values: Map<String, Value>,
+    /// Seconds the entry lasts; `None`: the timer's interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u32>,
+}
+
+/// The playlist playing now.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistPlayback {
+    /// Playlist id.
+    pub id: String,
+    /// Its name.
+    pub name: String,
+    /// The entry shown now (index into `entries`).
+    pub entry: usize,
 }
 
 /// The canvas renderer.
@@ -144,8 +236,14 @@ pub struct DeviceView {
     pub default_scale: f32,
     /// `ImageUrl()` or a `data:` URL of `Image()`.
     pub image: Option<String>,
-    /// `ControllableParameters()` entries, each with its current `value`.
+    /// The plugin's parameters, each with its current `value`: the
+    /// `ControllableParameters()` entries, then as changed at run time by
+    /// `device.addProperty` / `removeProperty` while the device runs.
     pub parameters: Vec<Value>,
+    /// Messages on the device card: `DeviceMessages()`, then as changed at run
+    /// time by `device.addMessage` / `removeMessage` / `notify` / `denotify`.
+    #[serde(default)]
+    pub messages: Vec<DeviceMessageView>,
     /// The device and its children as canvas endpoints.
     pub endpoints: Vec<Endpoint>,
     /// Channel names (component editor).
@@ -188,6 +286,22 @@ pub struct DeviceSaveChoice {
     /// A built-in effect the device advertises; `None`: the current colours.
     #[serde(default)]
     pub effect: Option<String>,
+}
+
+/// A message a device plugin shows on its card.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceMessageView {
+    /// `DeviceMessages()` `property`, `addMessage` id, or the alert id `notify` returned.
+    pub id: String,
+    /// `notify` title.
+    pub title: Option<String>,
+    /// The text.
+    pub message: String,
+    /// Hover text.
+    pub tooltip: Option<String>,
+    /// `notify` priority: 0 info, 1 important, 2 and 3 errors; `None` for plain messages.
+    pub priority: Option<i32>,
 }
 
 /// A device's battery, as its plugin last reported it.
@@ -261,6 +375,10 @@ pub struct EffectView {
     /// A third-party effect read in place (`source` `signalrgb`).
     #[serde(default)]
     pub third_party: bool,
+    /// What the effect reads (`audio`, `video`, `meters`, `input`, `webgl`,
+    /// `engine`); effects with `meters` are game integrations.
+    #[serde(default)]
+    pub uses: Vec<String>,
 }
 
 /// User settings.
@@ -350,7 +468,11 @@ pub enum Request {
         /// Preset name.
         name: String,
     },
-    /// Show the next effect of the library (`previous` goes back).
+    /// Show a random effect of the library, game integrations (effects with
+    /// screen meters) and developer effects excluded; stops a playlist.
+    ShuffleEffect,
+    /// Show the next effect of the library, or of the playing playlist
+    /// (`previous` goes back).
     StepEffect {
         /// `true`: the previous one.
         #[serde(default)]
@@ -523,6 +645,50 @@ pub enum Request {
         /// The document.
         state: Value,
     },
+    /// Create (`id` absent) or replace a playlist; answers with it.
+    SavePlaylist {
+        /// Playlist id; `None` makes one from the name.
+        #[serde(default)]
+        id: Option<String>,
+        /// The playlist (its `id` and `updatedAt` are ignored).
+        playlist: Playlist,
+    },
+    /// Delete a playlist (it stops when it plays).
+    DeletePlaylist {
+        /// Playlist id.
+        id: String,
+    },
+    /// Play a playlist from its first entry, or from the entry showing `start`.
+    PlayPlaylist {
+        /// Playlist id.
+        id: String,
+        /// Effect id of the entry to start with.
+        #[serde(default)]
+        start: Option<String>,
+    },
+    /// Stop the playlist (the effect stays).
+    StopPlaylist,
+    /// The auto-next timer.
+    SetEffectTimer {
+        /// Advance through the library by itself.
+        #[serde(default)]
+        enabled: Option<bool>,
+        /// Seconds per effect.
+        #[serde(default)]
+        interval: Option<u32>,
+    },
+    /// Add a developer's effect page (`developer:<uid>`) and show it.
+    LoadEffect {
+        /// Name of the effect (letters, digits, space, `-`, `_`, `.`).
+        uid: String,
+        /// The page.
+        html: String,
+    },
+    /// Where an effect's picture is (read-only): `{path, contentType}`.
+    EffectImage {
+        /// Effect id.
+        id: String,
+    },
     /// Enumerate devices again now.
     Rescan,
     /// Stop the daemon (every plugin restores its device first).
@@ -538,6 +704,7 @@ impl Request {
             Request::SavePreset { .. } => "savePreset",
             Request::ApplyPreset { .. } => "applyPreset",
             Request::DeletePreset { .. } => "deletePreset",
+            Request::ShuffleEffect => "shuffleEffect",
             Request::StepEffect { .. } => "stepEffect",
             Request::SetLighting { .. } => "setLighting",
             Request::SetDevice { .. } => "setDevice",
@@ -559,6 +726,13 @@ impl Request {
             Request::ListComponents => "listComponents",
             Request::Export => "export",
             Request::Import { .. } => "import",
+            Request::SavePlaylist { .. } => "savePlaylist",
+            Request::DeletePlaylist { .. } => "deletePlaylist",
+            Request::PlayPlaylist { .. } => "playPlaylist",
+            Request::StopPlaylist => "stopPlaylist",
+            Request::SetEffectTimer { .. } => "setEffectTimer",
+            Request::LoadEffect { .. } => "loadEffect",
+            Request::EffectImage { .. } => "effectImage",
             Request::Rescan => "rescan",
             Request::Shutdown => "shutdown",
         }

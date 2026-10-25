@@ -47,8 +47,8 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 
 | crate | kind | status | contents |
 |---|---|---|---|
-| `huedeck-hal` | lib | done | `HidBackend/HidHandle`, `Notifier`, `UsbBackend`, `SerialBackend`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend`, `HalError`, `DeviceKey`; feature `mock`: `MockHid`, `MockSmbus`, `TransactionRecorder` |
-| `huedeck-hal-windows` | lib | HID done; USB and serial missing | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `group`, `hotplug`, `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence, process and port probes, toast notifications |
+| `huedeck-hal` | lib | done | `HidBackend/HidHandle`, `Notifier`, `UsbBackend`, `SerialBackend`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend` (+ `plugin_owner`), `HalError`, `DeviceKey`; feature `mock`: `MockHid`, `MockSmbus`, `TransactionRecorder` |
+| `huedeck-hal-windows` | lib | HID done; USB and serial missing | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `group`, `hotplug`, `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence, process and port probes, toast notifications, `lamparray` (WinRT Windows Dynamic Lighting backend) |
 | `huedeck-hal-linux` | lib | stub (M7) | placeholder for hidraw, nusb, serialport, udev, `/dev/i2c-*`, hwmon |
 | `huedeck-hid-desc` | lib | done | HID 1.11 report-descriptor parser: items, top-level collections, report ids and sizes, report fields (LampArray) |
 | `huedeck-protocol` | lib | done | `shm` frame ring (`"HDFR"`, 3 slots, seqlock), `broker` operations (protocol 3: `BusLock`, `Batch`, `SpdRead`), postcard framing |
@@ -61,7 +61,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 | `huedeck-api` | lib | native done; compat partial | axum routers: native `/v1` REST + WS + dashboard (`docs/api/openapi.yaml`), SignalRGB-compatible REST and canvas events, loopback / Origin / token guard, movable native listener |
 | `huedeck-runtime` | lib | done | what CLI and daemon share: HID backend and device matching, SMBus buses and scans, hotplug, conflict detection, the SignalRGB setup reader, data directories, system info |
 | `huedeck-nvapi` | lib | done | dynamic `nvapi64.dll` binding, one NvAPI worker thread, `NvapiBus: SmbusBus` per GPU |
-| `huedeck-iobroker` | lib + bin | done (AMD PIIX4 only) | LocalSystem service: PawnIO IOCTLs, pinned modules, PIIX4 transfers, global SMBus mutex, static policy and rate limit, named pipe with DACL, audit log |
+| `huedeck-iobroker` | lib + bin | done (AMD PIIX4; Intel I801 untested on hardware) | LocalSystem service: PawnIO IOCTLs, pinned modules, PIIX4 / I801 transfers, global SMBus mutex, static policy and rate limit, named pipe with DACL, audit log |
 | `huedeck-setup` | bin | done | `--smbus` (checks PawnIO, never installs it; copies the broker and modules, registers the service), `--uninstall`, `--plan` |
 | `huedeck-daemon` | lib + bin `huedeckd` | done | single instance, token, port choice, engine thread (sessions, canvas, renderer, SQLite), battery thresholds and alerts, API serving, a shutdown that restores devices |
 | `huedeck-cli` | bin `huedeck` | done | `devices`, `light`, `rainbow`, `bench` (`--mock`), `plugins`, `compat dry-run`, `url` |

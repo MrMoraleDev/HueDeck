@@ -36,7 +36,8 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 
  lightloom-runtime  ◄── hal, hal-windows, nvapi, plugin-host, engine, effects
  lightloom-api      ◄── engine
- lightloom-daemon   ◄── api, engine, hal, plugin-host, render, runtime
+ lightloom-macros   ◄── hal, plugin-host
+ lightloom-daemon   ◄── api, engine, hal, macros, plugin-host, render, runtime
  lightloom-cli      ◄── api, engine, effects, hal, hal-windows, plugin-host, render, runtime
  lightloom-tray     ◄── api, runtime (dirs only)
  lightloom-inputs   (shapes only; nothing depends on it yet)
@@ -59,6 +60,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 | `lightloom-renderer` | lib + bin | done; Chromium sandbox off | CEF windowless host (feature `cef`), shm ring writer, `window.engine` and control injection, URL filter, control pipe, snapshots and stats |
 | `lightloom-plugin-host` | lib | HID, SMBus, network, rawusb, hybrid and serial done | QuickJS-NG runtime per plugin (64 MiB, deadlines), `js/host.js` compat host, natives (`device`, `children`, `bus`, `net`, `serial`), network services (`service`: DiscoveryService, mDNS, settings) and network device sessions (LAN-only sockets and HTTP), `@SignalRGB/*` / `@lightloom/*` resolver, catalogue and VID:PID index, device sessions, the `battery` feature, SMBus policy and SPD check, `compat dry-run` |
 | `lightloom-effects` | lib | done | `parse_effect_meta(html)` (= `schemas/effect-meta.schema.json`), control coercion, JS initialisers |
+| `lightloom-macros` | lib | done; untested with real input | macro runtime: QuickJS runtime and thread per Action/Input script, `system`/`signalrgb`/`keys`/`mouse`/`block`/`console` globals (`js/macro_host.js`), options, key names, event bus, opt-in input hooks, emergency stop (`docs/macros.md`) |
 | `lightloom-inputs` | lib | shapes only (M6) | `AudioSnapshot`, `ZoneSnapshot`, `InputSource` |
 | `lightloom-api` | lib | native done; compat partial | axum routers: native `/v1` REST + WS + dashboard (`docs/api/openapi.yaml`), SignalRGB-compatible REST and canvas events, loopback / Origin / token guard, movable native listener |
 | `lightloom-runtime` | lib | done | what CLI and daemon share: HID backend and device matching, SMBus buses and scans, hotplug, conflict detection, the SignalRGB setup reader, data directories, system info, PawnIO / RAM lighting facts and the elevated helper run (`pawnio`) |

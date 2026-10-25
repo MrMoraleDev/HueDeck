@@ -36,7 +36,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (method !== "GET") headers["Authorization"] = `Bearer ${token()}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";

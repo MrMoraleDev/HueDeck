@@ -24,6 +24,10 @@ Everything else stays on your computer:
 
 - `lightloomd` listens on the loopback interface (`127.0.0.1`) only: the dashboard, the
   local API and the SignalRGB-compatible ports are not reachable from other computers.
+- **Macros** are off by default. The keyboard and mouse hooks they may use are off too and
+  need their own switches in the Macros page: a hook sees every key and click, so Lightloom
+  installs one only while it is allowed, macros are on and an enabled Input listens; events
+  are processed in memory, never logged or sent anywhere (see `docs/macros.md`).
 - **Plugins** may talk to lighting devices on your local network (for example a network
   LED controller or a smart light), the way their device needs. That traffic goes to the
   devices the plugin drives, on your LAN; Lightloom's first-party plugins never contact the

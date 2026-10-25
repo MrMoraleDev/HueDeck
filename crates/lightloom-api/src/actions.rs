@@ -51,7 +51,7 @@ pub enum Action {
     View {
         /// The page as written (`devices`, `settings/Video`, `showdevice`, ...).
         page: String,
-        /// The dashboard tab it maps to (`effects`, `layout`, `devices`, `settings`).
+        /// The dashboard tab it maps to (`effects`, `layout`, `devices`, `macros`, `settings`).
         tab: &'static str,
         /// A device to show (`showdevice?uid=`, `devices?uid=`).
         uid: Option<String>,
@@ -174,7 +174,8 @@ fn view_tab(page: &str) -> Option<Option<&'static str>> {
         "layouts" | "layout" => Some("layout"),
         "devices" | "showdevice" | "network" => Some("devices"),
         "settings" | "addons" | "debuginfo" | "logs" => Some("settings"),
-        "cooling" | "monitoring" | "macros" | "dumps" => None,
+        "macros" => Some("macros"),
+        "cooling" | "monitoring" | "dumps" => None,
         _ => return None,
     })
 }
@@ -594,6 +595,14 @@ mod tests {
             ("lightloom://brightness/0", Action::Brightness(0)),
             ("lightloom://brightness/55", Action::Brightness(55)),
             ("lightloom://brightness/100", Action::Brightness(100)),
+            (
+                "lightloom://view/macros",
+                Action::View {
+                    page: "macros".into(),
+                    tab: "macros",
+                    uid: None,
+                },
+            ),
             ("lightloom://canvas/pause", Action::Canvas { enabled: false }),
             ("lightloom://canvas/resume#x", Action::Canvas { enabled: true }),
         ];
@@ -619,7 +628,6 @@ mod tests {
             "lightloom://app/update?_silent=true&version=2",
             "lightloom://app/autominiplayer?enable=false",
             "lightloom://view/cooling",
-            "lightloom://view/macros",
             "lightloom://view/nowhere",
             "lightloom://layout/rename/x",
             "lightloom://effect/favourite/x",

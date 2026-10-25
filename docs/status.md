@@ -34,7 +34,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | M3 Effects pipeline | **Done** | the Chromium sandbox is off until releases are signed |
 | M4 Dashboard, persistence, API, packaging | **Partial** | Authenticode signing (SignPath account); the MSI never installed on a clean machine (fresh-machine acceptance); the plugin sources manager; the log panel shows only lines since the page opened; save-to-device, exit modes, suspend/resume, tray and import wizard not yet run live |
 | M5 Privileged bus | **Partial** | I801, AMD GPU (ADL) and the sensors not run on hardware; no LpcIO, no fan control; no CPU temperature on Windows without LibreHardwareMonitor; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not bind WinUSB |
-| M6 Inputs, network, extras | **Partial** | audio, screen zones, meters, OpenRGB SDK server, network plugins, LampArray backend and runtime parameters are in; latency acceptance and real clients/devices untested; LCD faces and the macro runtime (Inputs/Actions, `keys`, hooks) missing; no DTLS |
+| M6 Inputs, network, extras | **Partial** | audio, screen zones, meters, OpenRGB SDK server, network plugins, LampArray backend and runtime parameters are in; latency acceptance and real clients/devices untested; macro runtime in (untested with real input on hardware); LCD faces missing; no DTLS |
 | M7 Linux + 1.0 | **Partial** | hidraw, udev hotplug, i2c-dev, hwmon, serial, CEF and packaging are in and unit-tested on Ubuntu CI, but nothing has run on a Linux machine; nusb, PipeWire audio/screen, logind sleep, hwmon `pwm`, Linux tray and notifications missing; the CEF renderer is not staged into the Linux packages; cargo-dist deferred |
 
 ## M0 Bootstrap and risk retirement: Done
@@ -78,7 +78,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | `@SignalRGB/udp`, `tcp`, `XMLHttpRequest`, `addFeature("udp")` | Done | `crates/lightloom-plugin-host/src/net/`, `tests/network.rs`, `tests/network_plugins.rs`; LAN-only (`docs/host-api/network-lightloom.md`) |
 | `addFeature("dtls")`, `https` | Missing | `host.js` throws for `addFeature("dtls")`; no TLS stack |
 | `addFeature("battery")` | Done, untested on hardware | `crates/lightloom-plugin-host/src/battery.rs`, `crates/lightloom-daemon/src/battery.rs` (low-battery toasts through `crates/lightloom-hal-windows/src/toast.rs`), `ui/src/components/BatteryBadge.svelte`; `tests/session_battery.rs`, `crates/lightloom-daemon/tests/battery.rs`. Used by `plugins/razer` and `plugins/sony-gamepad`; `docs/hardware/razer.md`: battery queries untested on hardware |
-| `addFeature("keyboard"/"mouse")` (`sendEvent`, `sendHid`) | Missing | recording stubs (`host.js`); needs the macro/input runtime (WP-MACROS b) |
+| `addFeature("keyboard"/"mouse")` (`sendEvent`, `sendHid`) | Done, untested on hardware | device sessions: `host.js` `inputFeature`, `crates/lightloom-plugin-host/src/input.rs` (`InputSink`), `tests/session_input.rs`; `sendEvent` reaches macro `onKey`/`onMouse`, `sendHid` injects a key or button only while macros are on (`crates/lightloom-macros/src/manager.rs`) |
 | Fan API (`createFanControl`, `setRPM`, …) | Missing | throws in device sessions (`host.js` `unimplemented("device", …)`); `fanControlDisabled()` answers `true` |
 | API_GAP log-and-throw | Done | `prelude/HostApiMissing.js`, `host.js` `gap()`, `prelude/tests/HostApiMissing.test.mjs` |
 | `lightloom-hid-desc` | Done | `crates/lightloom-hid-desc/src/lib.rs`, 8 tests |
@@ -165,7 +165,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | Area/linear meters (`engine.vision`) | Done | `crates/lightloom-inputs/src/screen/meters.rs` (area, linear, colormean from `<meta meter>`); OCR out of scope |
 | Network plugins (udp/tcp, DiscoveryService, mDNS, `service`/`controller`/`discovery`, XHR, settings, dashboard section) | Done, untested on hardware; DTLS missing | first-party `wled`, `ddp`, `e131`, `philips-hue` (CLIP v1), `nanoleaf`, `govee`, `lifx`, `yeelight`; `Network.svelte`; `docs/hardware/{wled,…}.md` |
 | LCD faces (`@SignalRGB/lcd`, second browser per device) | Missing | dry-run recording stub only (`host.js` `lcd`); `getImageBuffer` throws |
-| Macros (Inputs/Actions), key/mouse hooks, `system.*`, `signalrgb.*`, `keys` | Missing | spec in `docs/host-api/macros-system.md`; no runtime (WP-MACROS b) |
+| Macros (Inputs/Actions), key/mouse hooks, `system.*`, `signalrgb.*`, `keys` | Done, untested with real input | `crates/lightloom-macros` (QuickJS runtime and thread per script, `js/macro_host.js` globals, options, key names, `signalrgb.*` mapping, event bus, opt-in hooks, emergency stop), `crates/lightloom-hal-windows/src/input.rs` (`SendInput`, clipboard, `ShellExecuteW`, `GetLastInputInfo`, `WH_KEYBOARD_LL`/`WH_MOUSE_LL`), `crates/lightloom-daemon/src/engine/macros.rs`, `/v1/macros*`, `ui/src/components/Macros.svelte`; `docs/macros.md`. Tests use a recording desktop only (`crates/lightloom-macros/tests/runtime.rs`, `crates/lightloom-daemon/tests/macros.rs`). Missing: macro layers/profiles, Tier-1 native rules, `onSensorUpdate`, `System Time`/`System Logoff`/`Foreground App Changed`/`Audio Capture` events, `elevateWindow`/`cycleWindow`/`getForegroundExplorerPath` (no Explorer integration), Linux input |
 | Action router (`lightloom://`, `signalrgb://`) | Done | see M4 "Action URLs"; `signalrgb://` paths accepted by `actions.rs` |
 | LampArray HAL backend (WinRT `Windows.Devices.Lights`) | Done, untested on hardware | `crates/lightloom-hal-windows/src/lamparray.rs`, built-in session `crates/lightloom-plugin-host/src/lamparray.rs`, ownership `crates/lightloom-runtime/src/lamparray.rs`; identity package recipe `packaging/msix-identity/` (never registered); `docs/windows-dynamic-lighting.md` "Not verified on hardware". `plugins/hid-lamparray` drives HID LampArrays first (tested on the DeathAdder's LampArray collection) |
 | OpenRGB SDK server :6742 | Done, untested with a real client | `crates/lightloom-api/src/openrgb/{mod,wire}.rs` (opt-in, loopback only, Settings "OpenRGB SDK"), direct writes through `crates/lightloom-engine/src/direct.rs`; byte goldens and a TCP session against a fake daemon (`openrgb/tests.rs`); `docs/integrations/openrgb-sdk.md` "Not tested yet" |
@@ -278,9 +278,7 @@ the WiX installer and issue forms.
 
 ### Still to do: code work
 
-5. **WP-MACROS (b): macro runtime. Size L.**
-   - QuickJS runtime per macro script, Inputs/Actions, `signalrgb.*`, `keys`/`mouse` via SendInput, opt-in low-level hooks.
-   - Touches a new crate `lightloom-macros` plus the daemon. It also connects the `keyboard`/`mouse` `sendEvent` feature globals in `host.js`.
+5. **WP-MACROS (b): macro runtime. Done on `feature/macros`** (see the macros row above); left: a hardware check of the hooks and `SendInput` on the user's PC, the missing events and window helpers listed there.
 6. **WP-LCD: LCD faces. Size L.**
    - Touches: `lightloom-renderer` (a second browser per LCD device, its own shm ring); `lightloom-plugin-host` native `lcd` module (`getFrame` in JPEG, PNG, RGB565 and the other formats; `getImageBuffer`); the daemon (face selection).
 7. **WP-SENSORS-FANS (fan half). Size L.**

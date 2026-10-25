@@ -174,9 +174,22 @@ If you'd rather check first: the source is all here, every release is built by t
 
 ### Linux
 
-From the releases page: the AppImage (one file, no install) or the `.tar.xz` tarball. Device
-access needs udev rules once; [docs/linux-porting.md](docs/linux-porting.md) has the steps.
-Linux support is new and has not been tried on real hardware yet.
+From the releases page:
+
+- **Ubuntu 24.04, Debian 13 and later**: `lightloom_<version>_amd64.deb`, then
+  `sudo apt install ./lightloom_<version>_amd64.deb`.
+- **Fedora 40 and later**: `lightloom-<version>-1.x86_64.rpm`, then
+  `sudo dnf install ./lightloom-<version>-1.x86_64.rpm`.
+- **Any other x86_64 distribution** (glibc 2.39 or newer): the AppImage (one file, no install)
+  or the `.tar.xz` tarball.
+- **Flathub**: `flatpak install flathub io.github.MrMoraleDev.Lightloom`, once it is accepted
+  (submitted; the Flatpak does not play the effects written as web pages yet).
+
+The `.deb` and `.rpm` install the udev rules for device access themselves; start Lightloom with
+your session with `systemctl --user enable --now lightloomd` (the package never does that for
+you), or open *Lightloom* from the applications menu. With the AppImage, the tarball or the
+Flatpak, device access needs udev rules once. [docs/linux-porting.md](docs/linux-porting.md)
+has the steps. Linux support is new and has not been tried on real hardware yet.
 
 ## Build from source
 

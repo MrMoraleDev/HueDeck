@@ -706,7 +706,7 @@ fn print_change(mode: &Mode, change: &Change) {
 /// Stop requests from the console: Ctrl-C and Ctrl-Break everywhere; on
 /// Windows also window close, log-off and shutdown, which are held (up to
 /// ~4.5 s) until [`Interrupt::finished`] so plugins can restore devices.
-struct Interrupt {
+pub(crate) struct Interrupt {
     #[cfg(windows)]
     console: Option<lightloom_hal_windows::console::ConsoleStop>,
     #[cfg(not(windows))]
@@ -715,7 +715,7 @@ struct Interrupt {
 
 impl Interrupt {
     #[cfg(windows)]
-    fn install() -> Self {
+    pub(crate) fn install() -> Self {
         let console = lightloom_hal_windows::console::ConsoleStop::install()
             .map_err(|e| eprintln!("lightloom: console handler not installed ({e}); stop with --duration"))
             .ok();
@@ -723,7 +723,7 @@ impl Interrupt {
     }
 
     #[cfg(not(windows))]
-    fn install() -> Self {
+    pub(crate) fn install() -> Self {
         static FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
         let flag = FLAG.get_or_init(|| {
             let flag = Arc::new(AtomicBool::new(false));
@@ -739,7 +739,7 @@ impl Interrupt {
         }
     }
 
-    fn requested(&self) -> bool {
+    pub(crate) fn requested(&self) -> bool {
         #[cfg(windows)]
         {
             self.console.is_some_and(|c| c.requested())
@@ -751,7 +751,7 @@ impl Interrupt {
     }
 
     /// Every session has shut down: a held close/log-off/shutdown may proceed.
-    fn finished(&self) {
+    pub(crate) fn finished(&self) {
         #[cfg(windows)]
         if let Some(c) = self.console {
             c.finished();
@@ -800,7 +800,7 @@ fn smbus_skip_reason() -> anyhow::Result<Option<String>> {
 }
 
 /// Take this process's turn on SMBus: `Err` with the reason it must not.
-fn claim_smbus_now() -> Result<lightloom_runtime::conflicts::SmbusClaim, String> {
+pub(crate) fn claim_smbus_now() -> Result<lightloom_runtime::conflicts::SmbusClaim, String> {
     match smbus_skip_reason() {
         Ok(Some(why)) => Err(why),
         Ok(None) => lightloom_runtime::conflicts::claim_smbus().map_err(|e| format!("{e:#}")),

@@ -10,15 +10,15 @@
 #
 #   packaging/flatpak/generate-sources.sh
 #   flatpak-builder --user --install --force-clean build-flatpak \
-#     packaging/flatpak/org.lightloom.Lightloom.yml
-#   flatpak run org.lightloom.Lightloom
+#     packaging/flatpak/io.github.MrMoraleDev.Lightloom.yml
+#   flatpak run io.github.MrMoraleDev.Lightloom
 #
 # Device access: `--device=all` exposes /dev (hidraw, usb, tty, i2c-*) inside the sandbox,
 # but the kernel still applies the host's permissions. The udev rules, the i2c group and
-# the i2c-dev module must be installed on the host (`flatpak run org.lightloom.Lightloom
+# the i2c-dev module must be installed on the host (`flatpak run io.github.MrMoraleDev.Lightloom
 # --setup-help`); a Flatpak cannot install them.
 
-app-id: org.lightloom.Lightloom
+id: io.github.MrMoraleDev.Lightloom
 runtime: org.freedesktop.Platform
 runtime-version: "25.08"
 sdk: org.freedesktop.Sdk
@@ -40,9 +40,9 @@ finish-args:
   - --socket=pulseaudio
   # The CEF effect renderer renders off-screen and needs no display socket; screen
   # capture (engine.zone) goes through the ScreenCast portal, which needs no permission.
-  # Data and config stay in ~/.var/app/org.lightloom.Lightloom (XDG dirs inside the sandbox).
+  # Data and config stay in ~/.var/app/io.github.MrMoraleDev.Lightloom (XDG dirs inside the sandbox).
   # Printed commands (`--setup-help`, `--systemd-unit`) must name the Flatpak, not /app.
-  - --env=LIGHTLOOM_SELF=flatpak run org.lightloom.Lightloom
+  - --env=LIGHTLOOM_SELF=flatpak run io.github.MrMoraleDev.Lightloom
   # Desktop integration (docs/linux-porting.md): logind sleep/lock and its delay inhibitor,
   # desktop notifications, and the tray icon (registered under its unique bus name; the
   # one-tray-per-session name is under the app id, which needs no permission).
@@ -77,18 +77,17 @@ modules:
       - ln -s ../lib/lightloom/lightloomd /app/bin/lightloomd
       - ln -s ../lib/lightloom/lightloom /app/bin/lightloom
       - >-
-        sed -e 's/^Exec=.*/Exec=lightloom-launch/' -e 's/^Icon=.*/Icon=org.lightloom.Lightloom/'
+        sed -e 's/^Exec=.*/Exec=lightloom-launch/' -e 's/^Icon=.*/Icon=io.github.MrMoraleDev.Lightloom/'
         -e '/^X-AppImage-/d' packaging/appimage/lightloom.desktop
-        > org.lightloom.Lightloom.desktop
-      - install -Dm0644 org.lightloom.Lightloom.desktop /app/share/applications/org.lightloom.Lightloom.desktop
-      - install -Dm0644 packaging/appimage/lightloom.svg /app/share/icons/hicolor/scalable/apps/org.lightloom.Lightloom.svg
-      - install -Dm0644 packaging/flatpak/org.lightloom.Lightloom.metainfo.xml /app/share/metainfo/org.lightloom.Lightloom.metainfo.xml
+        > io.github.MrMoraleDev.Lightloom.desktop
+      - install -Dm0644 io.github.MrMoraleDev.Lightloom.desktop /app/share/applications/io.github.MrMoraleDev.Lightloom.desktop
+      - install -Dm0644 packaging/appimage/lightloom.svg /app/share/icons/hicolor/scalable/apps/io.github.MrMoraleDev.Lightloom.svg
+      - install -Dm0644 packaging/flatpak/io.github.MrMoraleDev.Lightloom.metainfo.xml /app/share/metainfo/io.github.MrMoraleDev.Lightloom.metainfo.xml
     sources:
-      # Local builds use the working tree. Flathub needs a pinned source instead:
-      #   - type: git
-      #     url: https://github.com/MrMoraleDev/Lightloom.git
-      #     tag: v0.1.0
-      #     commit: <full sha>
+      # flathub-source: begin
+      # Local builds use the working tree. packaging/flathub/prepare.sh writes the Flathub
+      # manifest from this file, replacing everything between the two `flathub-source` marker
+      # lines with a git source pinned to a tag and its commit. Keep the markers.
       - type: dir
         path: ../..
         # Build outputs, and flatpak-builder's own directories when it runs from the
@@ -103,5 +102,6 @@ modules:
           - flatpak_app
           - repo
           - .flatpak-builder
+      # flathub-source: end
       - cargo-sources.json
       - node-sources.json

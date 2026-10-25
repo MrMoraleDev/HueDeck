@@ -19,6 +19,12 @@ pub const SMBUS_ADDR_MIN: u8 = 0x03;
 pub const SMBUS_ADDR_MAX: u8 = 0x77;
 /// SMBus block transfers carry at most 32 data bytes.
 pub const SMBUS_BLOCK_MAX: usize = 32;
+/// Longest register-less write (`WriteBlockWithoutRegister`) on an NvAPI bus:
+/// one raw I2C write, no SMBus count byte. MSI's per-LED frame for its GPU
+/// controller is the register byte `0x49` and 136 data bytes, which MSI's own
+/// code hands to NvAPI in one call (docs/research/msi-gpu-perled.md §1.5).
+/// Every other transfer keeps [`SMBUS_BLOCK_MAX`].
+pub const NVIDIA_RAW_WRITE_MAX: usize = 140;
 /// DDR4/DDR5 SPD EEPROM addresses. Never written, on any bus.
 pub const SPD_EEPROM: RangeInclusive<u8> = 0x50..=0x57;
 /// DDR4 SPD write-protect / page-select addresses. Never written on a DIMM bus.
@@ -179,6 +185,16 @@ pub struct SmbusBusDescriptor {
 }
 
 impl SmbusBusDescriptor {
+    /// Longest register-less write the bus takes: [`NVIDIA_RAW_WRITE_MAX`] on
+    /// NvAPI buses, else `max_block_len`.
+    pub fn max_raw_write_len(&self) -> usize {
+        if self.kind == SmbusBusKind::Nvidia {
+            self.max_block_len.max(NVIDIA_RAW_WRITE_MAX)
+        } else {
+            self.max_block_len
+        }
+    }
+
     /// Stable key of the bus: `vendor:device:subvendor:subdevice@instance`
     /// in lower-case hex, e.g. `10de:2504:1462:3903@pci01`.
     pub fn key(&self) -> String {
@@ -441,6 +457,29 @@ mod tests {
         };
         assert_eq!(piix4("0b00").key(), "1022:790b:1022:790b@0b00");
         assert_ne!(piix4("0b00").key(), piix4("0b20").key());
+    }
+
+    #[test]
+    fn only_nvapi_buses_take_long_raw_writes() {
+        let bus = |kind| SmbusBusDescriptor {
+            name: "bus".into(),
+            kind,
+            pci: PciIds::default(),
+            instance: String::new(),
+            max_block_len: SMBUS_BLOCK_MAX,
+        };
+        assert_eq!(
+            bus(SmbusBusKind::Nvidia).max_raw_write_len(),
+            NVIDIA_RAW_WRITE_MAX
+        );
+        for kind in [
+            SmbusBusKind::Amd,
+            SmbusBusKind::Intel,
+            SmbusBusKind::AmdGpu,
+            SmbusBusKind::Nuvoton,
+        ] {
+            assert_eq!(bus(kind).max_raw_write_len(), SMBUS_BLOCK_MAX, "{kind:?}");
+        }
     }
 
     #[test]

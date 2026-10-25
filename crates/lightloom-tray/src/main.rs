@@ -2,7 +2,7 @@
 //! `lightloom-tray`: the Lightloom icon in the notification area (see the
 //! library for what the menu does). A GUI-subsystem program: no console.
 //! One per sign-in session (a named mutex; on Linux the bus name
-//! `org.lightloom.Lightloom.Tray`); a second start exits at once.
+//! `io.github.MrMoraleDev.Lightloom.Tray`); a second start exits at once.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 

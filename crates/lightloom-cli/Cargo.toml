@@ -33,6 +33,8 @@ lightloom-effects = { path = "../lightloom-effects" }
 lightloom-runtime = { path = "../lightloom-runtime" }
 # NATIVE_PORT (the daemon's default port).
 lightloom-api = { path = "../lightloom-api" }
+# `probe msi-gpu-perled`: the GPU's I2C bus.
+lightloom-nvapi = { path = "../lightloom-nvapi" }
 # `shm-dump`: the renderer's frame ring reader and PNG snapshots (no CEF).
 lightloom-renderer = { path = "../lightloom-renderer" }
 

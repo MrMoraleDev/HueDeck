@@ -1,0 +1,37 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Lightloom
+Upstream-Contact: https://github.com/MrMoraleDev/Lightloom/issues
+Source: https://github.com/MrMoraleDev/Lightloom
+
+Files: *
+Copyright: Lightloom contributors
+License: GPL-3.0-or-later
+Comment: With the add-on exception in /usr/lib/lightloom/LICENSE-EXCEPTION.md. Files adapted
+ from OpenRGB (GPL-2.0-or-later) name their sources in their headers.
+
+Files: usr/lib/lightloom/effects/* usr/lib/lightloom/faces/*
+Copyright: Lightloom contributors
+License: CC0-1.0
+ To the extent possible under law, the authors have waived all copyright and related or
+ neighboring rights to these files. On Debian systems, the complete text of the CC0 1.0
+ Universal license can be found in "/usr/share/common-licenses/CC0-1.0".
+
+Files: usr/lib/lightloom/*.so usr/lib/lightloom/*.so.* usr/lib/lightloom/*.pak
+ usr/lib/lightloom/*.bin usr/lib/lightloom/*.dat usr/lib/lightloom/locales/*
+ usr/lib/lightloom/vk_swiftshader_icd.json
+Copyright: The Chromium Authors and the Chromium Embedded Framework Authors
+License: BSD-3-Clause and others
+ The Chromium Embedded Framework runtime and the third-party code it contains. Every
+ licence and notice is in /usr/lib/lightloom/THIRD-PARTY/CEF-Chromium-CREDITS.html.
+
+License: GPL-3.0-or-later
+ This program is free software: you can redistribute it and/or modify it under the terms of
+ the GNU General Public License as published by the Free Software Foundation, either version 3
+ of the License, or (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+ without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+ the GNU General Public License for more details.
+ .
+ On Debian systems, the complete text of the GNU General Public License version 3 can be found
+ in "/usr/share/common-licenses/GPL-3".

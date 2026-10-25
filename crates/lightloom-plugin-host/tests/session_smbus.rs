@@ -144,6 +144,39 @@ fn shutdown_restores_gpu_registers() {
 }
 
 #[test]
+fn msi_gpu_per_led_mode_streams_raw_0x49_frames_through_the_host() {
+    let rec = TransactionRecorder::new();
+    let mut opts = SessionOptions::default();
+    opts.parameters.insert("perLed".into(), serde_json::json!(true));
+    let report = run_gpu(&rec, opts, Rgb::new(0x12, 0x34, 0x56), 3);
+    assert!(report.is_clean(), "{report:#?}");
+    let sent = rec.payloads(TransactionKind::SmbusWrite);
+    assert_eq!(
+        sent[0],
+        vec![0x68, 0x2E, 0x01],
+        "enter first: no brightness or mode write"
+    );
+    let frame = &sent[1];
+    assert_eq!(
+        frame.len(),
+        1 + 1 + 34 * 4,
+        "address, 0x49, 34 records in one raw write"
+    );
+    assert_eq!(&frame[1..6], &[0x49, 0x56, 0x34, 0x12, 0x00], "B, G, R, pad");
+    let leave = sent
+        .iter()
+        .position(|w| w == &vec![0x68, 0x2E, 0x00])
+        .expect("left");
+    assert!(
+        sent[..leave].iter().all(|w| w[1] == 0x2E || w[1] == 0x49),
+        "{sent:02X?}"
+    );
+    assert!(sent.iter().all(|w| w[1] != 0x3F), "never the flash-save register");
+    let stats = report.smbus.expect("SMBus counters");
+    assert_eq!((stats.errors, stats.denied), (0, 0));
+}
+
+#[test]
 fn dry_run_sends_nothing() {
     let rec = TransactionRecorder::new();
     let report = run_gpu(

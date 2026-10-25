@@ -111,6 +111,7 @@ pub(crate) fn install_bus<'js>(
             "address": g.address(),
             "spdSlots": g.spd_slots(),
             "dryRun": g.dry_run(),
+            "maxRawWrite": d.max_raw_write_len(),
         })
         .to_string()
     });

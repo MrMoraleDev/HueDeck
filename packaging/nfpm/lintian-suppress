@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# lintian tags the release workflow suppresses on lightloom_<version>_amd64.deb
+# (`lintian --suppress-tags-from-file`). Only for the prebuilt CEF runtime, which must ship as
+# it comes (packaging/README.md, "Debian and RPM packages"); everything Lightloom builds itself must stay clean.
+#
+# libcef.so and SwiftShader contain copies of zlib, libpng, libjpeg, freetype and others.
+embedded-library
+# lightloom-renderer finds libcef.so through its $ORIGIN RUNPATH, inside /usr/lib/lightloom.
+custom-library-search-path

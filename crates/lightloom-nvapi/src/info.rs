@@ -6,10 +6,13 @@
 //! operation onto one `I2CReadEx` / `I2CWriteEx` follows OpenRGB's
 //! `i2c_smbus_nvapi.cpp` (facts only): a register byte when the operation has
 //! one, words LSB first, a Block Write as `[count, data…]` after the register,
-//! no Quick command.
+//! no Quick command. A register-less write longer than 32 bytes (up to
+//! [`NVIDIA_RAW_WRITE_MAX`], MSI's per-LED GPU frame) is sent with its first
+//! byte as the register, as MSI's own code sends that frame: the same bytes on
+//! the wire, in the transfer shape NvAPI is known to accept at that length.
 
 use crate::NvapiError;
-use lightloom_hal::smbus::SMBUS_BLOCK_MAX;
+use lightloom_hal::smbus::{NVIDIA_RAW_WRITE_MAX, SMBUS_BLOCK_MAX};
 
 /// `NV_I2C_INFO_V3`, x64 layout (64 bytes). Pointer fields are set by the
 /// caller right before the call and must outlive it.
@@ -106,9 +109,9 @@ pub enum I2cOp {
         /// 1..=16 bytes.
         len: usize,
     },
-    /// Raw write without a register byte.
+    /// Raw write without a register byte: one I2C write, no count byte.
     WriteNoReg {
-        /// 1..=32 bytes.
+        /// 1..=140 bytes ([`NVIDIA_RAW_WRITE_MAX`]).
         data: Vec<u8>,
     },
     /// Raw read without a register byte.
@@ -167,10 +170,13 @@ impl I2cPlan {
                 write(Some(*reg), payload)
             }
             I2cOp::ReadBlock { reg, len } => read(Some(*reg), check_len(*len, MAX_REGISTER_READ)?),
-            I2cOp::WriteNoReg { data } => {
-                check_len(data.len(), SMBUS_BLOCK_MAX)?;
-                write(None, data.clone())
-            }
+            I2cOp::WriteNoReg { data } => match check_len(data.len(), NVIDIA_RAW_WRITE_MAX)? {
+                // Up to 32 bytes: register-less, as before (Gigabyte, Colorful).
+                n if n <= SMBUS_BLOCK_MAX => write(None, data.clone()),
+                // Longer: `regAddrSize = 1` with the first byte, `cbSize` the rest,
+                // as MSI's NDA.dll sends its 0x49 frame (research msi-gpu-perled §1.5).
+                _ => write(Some(data[0]), data[1..].to_vec()),
+            },
             I2cOp::ReadNoReg { len } => read(None, check_len(*len, SMBUS_BLOCK_MAX)?),
             I2cOp::ReadByteNoReg => read(None, 1),
         })
@@ -256,6 +262,34 @@ mod tests {
         .is_err());
         assert!(I2cPlan::of(&I2cOp::WriteBlock { reg: 0, data: vec![] }).is_err());
         assert_eq!(plan(I2cOp::WriteNoReg { data: vec![9; 32] }).data.len(), 32);
+    }
+
+    #[test]
+    fn long_raw_writes_go_out_as_register_and_data() {
+        let mut frame = vec![0x49];
+        frame.extend((0..136).map(|i| i as u8));
+        let p = plan(I2cOp::WriteNoReg { data: frame.clone() });
+        assert_eq!((p.write, p.reg), (true, Some(0x49)));
+        assert_eq!(p.data, frame[1..].to_vec(), "no count byte, nothing added");
+        let info = fill_info(&p, 0x68);
+        assert_eq!((info.reg_addr_size, info.size), (1, 136));
+        // Up to 32 bytes the transfer stays register-less.
+        let short = plan(I2cOp::WriteNoReg { data: vec![0x49; 25] });
+        assert_eq!((short.reg, short.data.len()), (None, 25));
+        assert_eq!(fill_info(&short, 0x68).reg_addr_size, 0);
+        assert_eq!(plan(I2cOp::WriteNoReg { data: vec![1; 140] }).data.len(), 139);
+        assert_eq!(
+            I2cPlan::of(&I2cOp::WriteNoReg { data: vec![1; 141] }),
+            Err(NvapiError::Length(141))
+        );
+        assert!(I2cPlan::of(&I2cOp::WriteNoReg { data: vec![] }).is_err());
+        // The other limits are unchanged.
+        assert!(I2cPlan::of(&I2cOp::ReadNoReg { len: 33 }).is_err());
+        assert!(I2cPlan::of(&I2cOp::WriteBlock {
+            reg: 0,
+            data: vec![0; 33]
+        })
+        .is_err());
     }
 
     #[test]

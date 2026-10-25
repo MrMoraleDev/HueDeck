@@ -5,7 +5,8 @@
 # by the Flatpak as /app/bin/lightloom-launch.
 #
 # The staged Linux build (tools/package/stage-linux.sh) lives in usr/lib/lightloom/ of the
-# AppDir (or /app/lib/lightloom in the Flatpak): lightloomd finds plugins/, effects/ and ui/
+# AppDir (/app/lib/lightloom in the Flatpak, /usr/lib/lightloom in the .deb / .rpm, where this
+# launcher sits next to lightloomd): lightloomd finds plugins/, effects/ and ui/
 # next to itself.
 #
 #   Lightloom.AppImage                 open the dashboard; start the daemon first when none runs
@@ -19,12 +20,18 @@
 set -eu
 
 HERE="$(dirname "$(readlink -f "$0")")"
-LIB="$HERE/usr/lib/lightloom"
-[ -d "$LIB" ] || LIB="$(dirname "$HERE")/lib/lightloom"
+if [ -x "$HERE/lightloomd" ] && [ -d "$HERE/plugins" ]; then
+  # Inside the staged tree: the .deb / .rpm install it as /usr/lib/lightloom/lightloom-launch.
+  # (Not the Flatpak's /app/bin, which only has symlinks to the daemon and the CLI.)
+  LIB="$HERE"
+else
+  LIB="$HERE/usr/lib/lightloom"
+  [ -d "$LIB" ] || LIB="$(dirname "$HERE")/lib/lightloom"
+fi
 
 # How the user runs this launcher again, as shell words for the printed commands.
 # The AppImage runtime sets $APPIMAGE to the .AppImage file; the Flatpak sets
-# LIGHTLOOM_SELF (`flatpak run org.lightloom.Lightloom`); else this script (unpacked AppDir).
+# LIGHTLOOM_SELF (`flatpak run io.github.MrMoraleDev.Lightloom`); else this script (unpacked AppDir).
 if [ -n "${LIGHTLOOM_SELF:-}" ]; then
   SELF="$LIGHTLOOM_SELF"
 else

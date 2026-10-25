@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Template: packaging/winget/render.ps1 fills ${...} and writes manifests/h/Lightloom/Lightloom/<version>/.
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+# Template: packaging/winget/render.ps1 fills ${...} and writes manifests/l/Lightloom/Lightloom/<version>/.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
 PackageIdentifier: Lightloom.Lightloom
 PackageVersion: ${VERSION}
 PackageLocale: en-US
@@ -27,4 +27,4 @@ Tags:
 - open-source
 ReleaseNotesUrl: https://github.com/MrMoraleDev/Lightloom/releases/tag/v${VERSION}
 ManifestType: defaultLocale
-ManifestVersion: 1.6.0
+ManifestVersion: 1.10.0

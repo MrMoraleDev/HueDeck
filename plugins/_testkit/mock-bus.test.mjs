@@ -32,6 +32,18 @@ test("WriteBlock clips and pads to len and records the count byte", () => {
   assert.throws(() => mock.fixed.WriteByte(0x100, 0), RangeError);
 });
 
+test("WriteBlockWithoutRegister: first byte is the register, 140 bytes on NVIDIA buses only", () => {
+  const gpu = createMockBus({ kind: "nvidia", address: 0x68, registers: { 0x68: {} } });
+  const frame = [0x49, ...Array.from({ length: 136 }, (_, i) => i)];
+  assert.equal(gpu.fixed.WriteBlockWithoutRegister(frame.length, frame), 0);
+  assert.deepEqual(gpu.writes().map((w) => [w.op, w.reg, w.data.length]), [["WriteBlockWithoutRegister", 0x49, 137]]);
+  assert.equal(gpu.registers(0x68).get(0x4B), 1, "data lands from the register on");
+  assert.throws(() => gpu.fixed.WriteBlockWithoutRegister(141, []), RangeError);
+  const ram = createMockBus({ kind: "amd", address: 0x39, registers: { 0x39: {} } });
+  assert.throws(() => ram.fixed.WriteBlockWithoutRegister(33, []), RangeError);
+  assert.equal(ram.free.WriteBlockWithoutRegister(0x39, 2, [1, 2]), 0);
+});
+
 test("failures are statuses, not exceptions", () => {
   const nv = createMockBus({ kind: "nvidia", address: 0x68, registers: { 0x68: {} }, nack: [0x69] });
   assert.equal(nv.free.WriteQuick(0x68), -1, "NVIDIA buses have no WriteQuick");

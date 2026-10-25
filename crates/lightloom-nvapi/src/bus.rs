@@ -215,6 +215,23 @@ mod tests {
     }
 
     #[test]
+    fn a_long_raw_write_is_one_transfer_without_count_byte() {
+        let fake = FakeNvI2c::new(vec![rtx3060()]).add_device(0, 0x68, []);
+        let log = fake.log();
+        let h = hub(fake);
+        let mut bus = h.buses().remove(0);
+        assert_eq!(bus.descriptor().max_raw_write_len(), 140);
+        let mut frame = vec![0x49];
+        frame.extend(std::iter::repeat_n(0x40, 136));
+        bus.write_block_no_reg(0x68, &frame).unwrap();
+        assert!(bus.write_block_no_reg(0x68, &[0; 141]).is_err(), "never sent");
+        let seen = log.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].plan.reg, Some(0x49));
+        assert_eq!(seen[0].plan.data, frame[1..].to_vec());
+    }
+
+    #[test]
     fn nvapi_status_passes_through_as_negative() {
         let h = hub(FakeNvI2c::new(vec![rtx3060()]).fail_with(-105));
         let mut bus = h.buses().remove(0);

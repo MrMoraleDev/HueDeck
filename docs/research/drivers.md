@@ -20,7 +20,7 @@ vendor's GPU driver does not already provide, and what HueDeck should do about e
 | NVIDIA GPU RGB (I2C over NvAPI) | No. `nvapi64.dll` ships with the NVIDIA driver. | Done (M5, loaded dynamically). | Nothing to do. |
 | AMD GPU RGB (I2C over ADL) | **No.** `atiadlxx.dll` ships with the AMD driver. | Done (WP-AMDGPU, `crates/huedeck-adl`; mock-tested only). | Hardware test on an AMD card. §3. |
 | AMD chipset SMBus (RAM, some boards) | PawnIO (opt-in, signed third-party driver). | Done: broker + `SmbusPIIX4` pinned. | Keep as is. |
-| Intel chipset SMBus (RAM) | PawnIO + `SmbusI801`. | Missing (not pinned, no backend). | Pin `SmbusI801` exactly like PIIX4. §4. |
+| Intel chipset SMBus (RAM) | PawnIO + `SmbusI801`. | Done (WP-I801): pinned, `i801.rs` backend, mock/fake/fuzz tested; not run on an Intel board. | Hardware test on an Intel board. §4. |
 | SuperIO/LPC (NCT6687D fans/LEDs, ITE) | PawnIO + `LpcIO`. | Missing. | Pin `LpcIO` only when a feature uses it, behind closed high-level ops. §5. |
 | Runtime DLLs of our own exes | **Yes: `VCRUNTIME140.dll`** (not part of Windows). | Not shipped and not statically linked. | Build with `+crt-static`. §7. |
 | CEF | No. `libcef.dll` and friends import only system DLLs. | Shipped. | Nothing to do (note on Windows N editions). |
@@ -172,6 +172,17 @@ What HueDeck needs (one agent, no driver):
   ("Intel (`SmbusI801`) can join the same way" is already noted there).
   - Keep the same mutex (`Global\Access_SMBUS.HTP.Method`), the same SPD write denial and the same refusal of block reads.
   - On DDR5 (SPD5 hub), check `ioctl_write_protection` before anything else [U: DDR5 RGB RAM behaviour on i801].
+- **Done (WP-I801, `feature/intel-smbus`).** `SMBUS_I801` in `pins.rs` (`CHIPSET_MODULES` = PIIX4, then
+  I801: each refuses a chipset it does not drive with `STATUS_NOT_SUPPORTED`, `boot::first_chipset`);
+  `i801.rs` (`I801Bus`: `ioctl_smbus_xfer` with the PIIX4 cells, `ioctl_identity` "i801",
+  `ioctl_write_protection` read and logged first, `ioctl_set_sleep_mode`; no port select;
+  `KNOWN_DEVICES` PCH SMBus ids incl. every Intel entry of OpenRGB's `IF_DRAM_SMBUS` except the
+  Skylake-X PCU 0x2085, which `SmbusIntelSkylakeIMC` drives); `chipset.rs` (`SmbusXfer`, shared
+  transfer and EE1004 SPD read; `ChipsetBus` = PIIX4 port or I801 in the server). Bus
+  `Intel ICH8 Bus - 0x<io base>`, kind `Intel`. Batch, `SpdRead`, `BusLock` leases identical to
+  PIIX4. The fuzz rig has a fourth bus, an I801 with an SPD. Module source `SmbusI801.p` at
+  commit 52a7e536 (tag 0.2.11): SHA-256 `fb4e3575fb27f3a5ce0c607ac4e1558f948ab08fd98b8a63cf5072da9e8d6c41`
+  (add it to `tools/package/fetch-pawnio-modules.ps1` with `SmbusI801.bin` once `feature/installer` lands).
 - `SmbusIntelSkylakeIMC` (Intel HEDT IMC SMBus, BYTE/WORD only) is needed only for X299-class DDR4 RGB RAM.
   Pin it later, computing its hash from the same release zip
   (`release_0_2_11.zip`, SHA-256 `43608cb8…05a81f4`).

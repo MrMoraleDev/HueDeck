@@ -2,7 +2,15 @@
 // The daemon's native API (crates/huedeck-api/src/server.rs). Requests that change
 // state carry the token huedeckd embeds in the page it serves.
 
-import type { LibraryComponent, Placement, SaveResult, ShutdownMode, Snapshot } from "./types";
+import type {
+  EffectTimer,
+  LibraryComponent,
+  Placement,
+  Playlist,
+  SaveResult,
+  ShutdownMode,
+  Snapshot,
+} from "./types";
 
 function token(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="huedeck-token"]')?.content ?? "";
@@ -53,6 +61,13 @@ export const api = {
   savePreset: (id: string, name: string) => request("PUT", `/v1/effects/${enc(id)}/presets/${enc(name)}`),
   applyPreset: (id: string, name: string) => request("POST", `/v1/effects/${enc(id)}/presets/${enc(name)}/apply`),
   deletePreset: (id: string, name: string) => request("DELETE", `/v1/effects/${enc(id)}/presets/${enc(name)}`),
+  shuffleEffect: () => request("POST", "/v1/effects/shuffle"),
+  createPlaylist: (p: Omit<Playlist, "id" | "updatedAt">) => request<Playlist>("POST", "/v1/playlists", p),
+  savePlaylist: (p: Playlist) => request<Playlist>("PUT", `/v1/playlists/${enc(p.id)}`, p),
+  deletePlaylist: (id: string) => request("DELETE", `/v1/playlists/${enc(id)}`),
+  playPlaylist: (id: string, start?: string) => request("POST", `/v1/playlists/${enc(id)}/play`, { start }),
+  stopPlaylist: () => request("POST", "/v1/playlists/stop"),
+  setTimer: (patch: Partial<EffectTimer>) => request<EffectTimer>("PATCH", "/v1/lighting/timer", patch),
   setLighting: (patch: { brightness?: number; enabled?: boolean }) => request("PATCH", "/v1/lighting", patch),
   setDevice: (
     key: string,

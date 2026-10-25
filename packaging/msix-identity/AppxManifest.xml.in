@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!--
+  HueDeck identity package (sparse MSIX with external location). It carries no
+  files of its own: it gives huedeckd.exe, installed outside the package, a
+  package identity, and declares the com.microsoft.windows.lighting app
+  extension, which makes HueDeck an ambient (background) lighting controller
+  for Windows Dynamic Lighting. build.ps1 fills the @...@ placeholders.
+  Template: Microsoft "Grant package identity by packaging with external
+  location"; see docs/research/m6-windows-integrations.md section 1.4.
+-->
+<Package IgnorableNamespaces="uap uap3 uap10 rescap"
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
+  <Identity Name="@NAME@" Publisher="@PUBLISHER@" Version="@VERSION@" ProcessorArchitecture="neutral"/>
+  <Properties>
+    <DisplayName>HueDeck</DisplayName>
+    <PublisherDisplayName>HueDeck contributors</PublisherDisplayName>
+    <Logo>assets\StoreLogo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+  <Resources>
+    <Resource Language="en-us"/>
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0"/>
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust"/>
+    <rescap:Capability Name="unvirtualizedResources"/>
+  </Capabilities>
+  <Applications>
+    <Application Id="huedeckd" Executable="@EXECUTABLE@" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements AppListEntry="none" DisplayName="HueDeck" Description="HueDeck lighting engine"
+        BackgroundColor="transparent" Square150x150Logo="assets\Square150x150Logo.png" Square44x44Logo="assets\Square44x44Logo.png"/>
+      <Extensions>
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension Name="com.microsoft.windows.lighting" Id="HueDeck" DisplayName="HueDeck" PublicFolder="public"/>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

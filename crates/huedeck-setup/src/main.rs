@@ -15,10 +15,10 @@
 //!    **This tool never downloads or installs PawnIO** (installing it is the
 //!    user's choice: pawnio.eu, or an option of the HueDeck installer); when
 //!    it is missing or too old this tool stops and says so;
-//! 2. check `SmbusPIIX4.bin` and `Echo.bin` in `<dir>` (the signed PawnIO.Modules
-//!    0.2.11 release the user downloaded) against their SHA-256 pins, and copy
-//!    them with `COPYING` and the module sources found there (LGPL-2.1) to
-//!    `%ProgramFiles%\HueDeck\pawnio\0.2.11\`;
+//! 2. check `SmbusPIIX4.bin`, `SmbusI801.bin` and `Echo.bin` in `<dir>` (the
+//!    signed PawnIO.Modules 0.2.11 release the user downloaded) against
+//!    their SHA-256 pins, and copy them with `COPYING` and the module sources
+//!    found there (LGPL-2.1) to `%ProgramFiles%\HueDeck\pawnio\0.2.11\`;
 //! 3. copy `huedeck-iobroker.exe` to `%ProgramFiles%\HueDeck\` (a LocalSystem
 //!    service must not run from a folder its user can write), and check that
 //!    the copy is byte for byte the file hashed before copying (its SHA-256 is
@@ -171,7 +171,14 @@ fn plan_steps(action: &Action, pawnio: PawnIoStatus, layout: &Layout) -> Result<
 
 /// Files copied with the blobs when present: the licence and the module
 /// sources (LGPL-2.1 asks for the source next to the object code).
-const MODULE_EXTRAS: &[&str] = &["COPYING", "SmbusPIIX4.p", "Echo.p", "sleepmode.inc", "SOURCE.txt"];
+const MODULE_EXTRAS: &[&str] = &[
+    "COPYING",
+    "SmbusPIIX4.p",
+    "SmbusI801.p",
+    "Echo.p",
+    "sleepmode.inc",
+    "SOURCE.txt",
+];
 
 /// Check the pinned blobs in `dir` (and that `COPYING` is there).
 fn check_modules(dir: &Path) -> Result<(), String> {
@@ -587,6 +594,15 @@ mod tests {
             .unwrap_err()
             .contains("not the pinned release file"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_intel_module_and_its_source_are_installed() {
+        let files: Vec<&str> = huedeck_iobroker::pins::MODULES.iter().map(|p| p.file).collect();
+        assert_eq!(files, ["SmbusPIIX4.bin", "SmbusI801.bin", "Echo.bin"]);
+        for source in ["SmbusPIIX4.p", "SmbusI801.p", "Echo.p", "sleepmode.inc"] {
+            assert!(MODULE_EXTRAS.contains(&source), "{source}");
+        }
     }
 
     #[test]

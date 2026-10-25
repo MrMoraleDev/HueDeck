@@ -1132,6 +1132,7 @@ dependencies = [
  "axum",
  "clap",
  "huedeck-api",
+ "huedeck-effects",
  "huedeck-engine",
  "huedeck-hal",
  "huedeck-inputs",
@@ -1185,6 +1186,7 @@ dependencies = [
  "huedeck-hal",
  "huedeck-hal-windows",
  "huedeck-hid-desc",
+ "huedeck-protocol",
  "libc",
  "tracing",
 ]
@@ -1217,6 +1219,7 @@ dependencies = [
  "rtrb",
  "serde",
  "tracing",
+ "windows",
 ]
 
 [[package]]

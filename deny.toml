@@ -23,8 +23,10 @@ allow = [
   "BSL-1.0",
 ]
 confidence-threshold = 0.8
-# Build-only dependencies of cef-dll-sys -> download-cef (fetches and unpacks the CEF binary
-# distribution at build time; nothing of them ships in a Lightloom binary).
+# libbz2-rs-sys: a build-only dependency of cef-dll-sys -> download-cef (fetches and unpacks
+# the CEF binary distribution at build time; nothing of it ships in a Lightloom binary).
+# webpki-roots (Mozilla's CA certificates as data, CDLA-Permissive-2.0): the same build
+# dependency, and the root store of lightloomd's update check (ureq + rustls).
 exceptions = [
   { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" },
   { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },

@@ -271,9 +271,16 @@ pub struct Shared {
     sensors: crate::sensors::SensorPoller,
     shutdown: tokio::sync::Notify,
     power: Sender<PowerSignal>,
+    /// Settings → Updates.
+    updater: Arc<crate::update::Updater>,
 }
 
 impl Shared {
+    /// The update checker.
+    pub fn updater(&self) -> Arc<crate::update::Updater> {
+        Arc::clone(&self.updater)
+    }
+
     /// Resolves once a client asked the daemon to stop (`POST /v1/shutdown`).
     pub async fn shutdown_requested(&self) {
         self.shutdown.notified().await;
@@ -321,6 +328,10 @@ impl Backend for Shared {
 
     fn sensors(&self) -> lightloom_api::model::SensorsView {
         self.sensors.view()
+    }
+
+    fn updates(&self) -> Option<Arc<dyn lightloom_api::Updates>> {
+        Some(self.updater.clone())
     }
 }
 
@@ -374,6 +385,7 @@ pub fn start_with(opts: EngineOptions, url_scheme: crate::scheme::UrlScheme) -> 
     let (tx, rx) = mpsc::channel();
     let (power, power_rx) = mpsc::channel();
     let (events, _) = broadcast::channel(256);
+    let updater = updater(&opts, &events);
     let shared = Arc::new(Shared {
         snapshot: ArcSwap::from_pointee(Snapshot {
             version: env!("CARGO_PKG_VERSION").into(),
@@ -387,6 +399,7 @@ pub fn start_with(opts: EngineOptions, url_scheme: crate::scheme::UrlScheme) -> 
         sensors: sensor_poller(&opts),
         shutdown: tokio::sync::Notify::new(),
         power,
+        updater,
     });
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
@@ -404,6 +417,26 @@ pub fn start_with(opts: EngineOptions, url_scheme: crate::scheme::UrlScheme) -> 
         stop,
         thread: Some(thread),
     })
+}
+
+/// The update checker: options in `update.json` (none for an ephemeral run);
+/// a release the weekly check finds shows as a dashboard toast and a system
+/// notification.
+fn updater(opts: &EngineOptions, events: &broadcast::Sender<Event>) -> Arc<crate::update::Updater> {
+    let file = (!opts.ephemeral).then(|| opts.paths.data.join("update.json"));
+    let (events, notifier) = (events.clone(), Arc::clone(&opts.notifier));
+    crate::update::Updater::system(
+        file,
+        Box::new(move |release| {
+            let title = format!("Lightloom {} is available", release.version);
+            let message = "Settings → Updates shows what is new and downloads it.".to_string();
+            let _ = events.send(Event {
+                kind: "action".into(),
+                data: json!({ "action": "toast", "title": title, "message": message }),
+            });
+            let _ = notifier.notify(&Notification { title, body: message });
+        }),
+    )
 }
 
 /// The sensor poller: this machine's sources on real hardware; without

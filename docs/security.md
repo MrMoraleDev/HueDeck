@@ -194,15 +194,22 @@ the user's rights, bounded only by the request filter.
 
 ## 6. Privacy
 
-No telemetry, no accounts, no crash upload, no update checks. Lightloom makes no network
-connection of its own; the only listeners are the loopback ones above. Battery alerts use the
+No telemetry, no accounts, no crash upload. Lightloom connects out only when the user asks:
+the PawnIO installer download and the update check (Settings → Updates: a manual button, an
+opt-in weekly check, both anonymous requests to GitHub's release API); `docs/privacy.md`
+lists each request exactly. The only listeners are the loopback ones above. Battery alerts use the
 OS's local notifications (on Windows, toasts under the AppUserModelID `Lightloom.Lightloom`,
 registered with one per-user key, `HKCU\Software\Classes\AppUserModelId\Lightloom.Lightloom`).
 
 ## 7. Updates, downloads and plugin sources
 
-- Lightloom does not update itself and downloads nothing at run time: no plugin, effect,
-  component or driver is fetched automatically. Plugins and effects arrive only as files the
+- Lightloom downloads nothing by itself: no plugin, effect, component or driver is fetched
+  automatically. An update is downloaded only on the user's click (Settings → Updates), from
+  the repository's GitHub release, verified against the release's `SHA256SUMS` (size and
+  SHA-256; a release without checksums is refused) and opened with `msiexec /i` (per-user
+  MSI, no elevation). Until Authenticode signing lands, the checksum file comes from the same
+  release as the installer, so it guards against corrupted or truncated downloads and
+  swapped files on the download servers, not against a compromised release. Plugins and effects arrive only as files the
   user puts in place (or the SignalRGB installation the user opted into, read in place).
 - Release artefacts are built in CI with `cargo-auditable` and a CycloneDX SBOM;
   `cargo-deny` checks licences, advisories and banned crates (generic port-I/O drivers such

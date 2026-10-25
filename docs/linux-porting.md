@@ -23,7 +23,7 @@ and X11 capture were checked in WSLg, the portal path has not run on a Wayland d
 
 | Build | For | Device setup | Updates |
 |---|---|---|---|
-| Tarball `lightloom-<version>-linux-x86_64.tar.xz` | any x86_64 distribution with glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and later) | manual, once (below) | replace the directory |
+| Tarball `lightloom-<version>-linux-x86_64.tar.xz` | any x86_64 distribution with glibc 2.39 or newer (Ubuntu 24.04, Debian 13, Fedora 40 and later) | manual, once (below) | replace the directory |
 | AppImage `Lightloom-<version>-x86_64.AppImage` | the same, one file, no install | manual, once (`--setup-help`) | replace the file |
 | Flatpak `io.github.MrMoraleDev.Lightloom` | sandboxed install | manual, once, on the host | `flatpak update` |
 | From source | developers | manual, once | `git pull` |
@@ -359,7 +359,7 @@ Rules for Linux code:
   Flatpak needs zypak. A `.deb`/`.rpm` with `chrome-sandbox` root 4755 and an AppArmor
   profile is the fully sandboxed option.
 - Screen capture (WP-L6) links `libpipewire-0.3`. linuxdeploy will bundle the build host's
-  copy (Ubuntu 22.04: 0.3.48) into the AppImage; libpipewire loads its SPA plugins from the
+  copy (Ubuntu 24.04: 1.0.5) into the AppImage; libpipewire loads its SPA plugins from the
   host, so a bundled copy older than the host's PipeWire may be the wrong pairing. Excluding
   it from the bundle (a PipeWire desktop always has it) is the likely fix; not checked yet.
   The Flatpak build needs libclang (bindgen) and the PipeWire headers from the Freedesktop SDK
@@ -384,7 +384,7 @@ branch) and on manual dispatch, without publishing, so a tag never runs untested
   `lightloom-x86_64-pc-windows-msvc.zip`, CycloneDX SBOMs.
 - `msi`: `Lightloom-<x.y.z>-x64.msi` from the same staged tree (the name the updater looks
   for).
-- `linux`: on `ubuntu-22.04` (glibc 2.35 baseline), the daemon and CLI, then the renderer with
+- `linux`: on `ubuntu-24.04` (glibc 2.39 baseline), the daemon and CLI, then the renderer with
   `--features cef` in a separate cargo run (so the `cef` feature cannot change the binaries
   `linux-reproducible` compares), all with cargo-auditable; the dashboard; `stage-linux.sh
   --require-renderer`; the systemd unit and dashboard check; a 60-frame headless smoke run

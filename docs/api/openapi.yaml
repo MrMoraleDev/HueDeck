@@ -689,10 +689,26 @@ paths:
                 port_in_use:
                   value: { error: { status: 409, code: port_in_use, message: "port 8080 cannot be used (...); another program probably listens on it. Nothing was changed: choose another port" } }
   /v1/import/signalrgb:
+    get:
+      tags: [backup]
+      operationId: previewSignalRgb
+      summary: Preview what the SignalRGB import would bring in (read-only, nothing changes)
+      description: >-
+        Reads the local SignalRGB setup in place (`HKCU\Software\WhirlwindFX\SignalRgb`, read-only)
+        and reports what `POST /v1/import/signalrgb` would import. Effects and plugins from
+        SignalRGB are third-party files and stay where they are.
+      parameters:
+        - { name: name, in: query, required: false, schema: { type: string, default: SignalRGB }, description: Layout name. }
+      responses:
+        "200":
+          description: What would be imported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignalRgbImport" }
     post:
       tags: [backup]
       operationId: importSignalRgb
-      summary: Import the local SignalRGB setup (placements as a layout, channel components)
+      summary: Import the local SignalRGB setup (layout, channel components, effect values and presets, selected effect, brightness, per-device enable)
       security: [{ bearer: [] }]
       requestBody:
         required: false
@@ -704,16 +720,10 @@ paths:
                 name: { type: string, default: SignalRGB, description: Layout name. }
       responses:
         "200":
-          description: What was imported.
+          description: What was imported (the preview's shape plus `imported`, `valuesImported` and `presetsImported`).
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  layout: { type: string }
-                  placements: { type: integer }
-                  channels: { type: integer }
-                  notes: { type: array, items: { type: string } }
+              schema: { $ref: "#/components/schemas/SignalRgbImport" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /v1/export:
     get:
@@ -748,6 +758,55 @@ paths:
                   imported: { const: true }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/pawnio:
+    get:
+      tags: [daemon]
+      operationId: getPawnIo
+      summary: PawnIO / RAM lighting status, read again now
+      description: >-
+        Reads PawnIO's uninstall entry and the `LightloomIoBroker` service state (read-only; the daemon
+        never opens the PawnIO device) and returns the panel the dashboard shows. Also in the snapshot
+        as `pawnio`.
+      responses:
+        "200":
+          description: The status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PawnIoView" }
+  /v1/pawnio/install:
+    post:
+      tags: [daemon]
+      operationId: installPawnIo
+      summary: Set RAM lighting up (Windows shows one UAC prompt)
+      description: >-
+        Starts `lightloom-setup --pawnio-install --smbus` with the `runas` verb: when PawnIO is missing or
+        older than 2.2.0 it downloads the official installer (SHA-256 and signer pinned) and runs it,
+        then (re)registers the Lightloom I/O service. Answers at once with `job.running`; the outcome
+        arrives as a `state` event (`pawnio.job`). Refused (409) while a run is going on, off Windows,
+        without `lightloom-setup.exe` next to the daemon, or in a no-hardware run.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PawnIoView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/pawnio/remove:
+    post:
+      tags: [daemon]
+      operationId: removePawnIo
+      summary: Remove the Lightloom I/O service (Windows shows one UAC prompt); PawnIO stays
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PawnIoView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/rescan:
     post:
       tags: [devices]
@@ -1151,6 +1210,31 @@ components:
         network: { type: array, items: { $ref: "#/components/schemas/NetworkServiceView" } }
         conflicts: { type: array, items: { type: string }, description: Running software that holds the same devices (reported, never terminated). }
         warnings: { type: array, items: { type: string } }
+        pawnio: { $ref: "#/components/schemas/PawnIoView" }
+    PawnIoView:
+      type: object
+      description: PawnIO and the Lightloom I/O service, what RAM lighting needs (Windows).
+      properties:
+        supported: { type: boolean, description: "The Install / Remove buttons can work (Windows, `lightloom-setup.exe` next to the daemon, real hardware)." }
+        installed: { type: boolean, description: PawnIO's uninstall entry exists. }
+        version: { type: [string, "null"], description: Its `DisplayVersion`. }
+        versionOk: { type: boolean, description: 2.2.0 or later. }
+        edition: { type: [string, "null"], enum: [official, unrestricted, unknown, null], description: As the broker reported it; null until the daemon talked to it. }
+        service: { enum: [notInstalled, stopped, pending, running, unknown] }
+        brokerHealthy: { type: boolean }
+        ramBuses: { type: integer, description: Chipset SMBus buses in use. }
+        status: { type: string, description: One line for the user. }
+        job:
+          oneOf:
+            - $ref: "#/components/schemas/PawnIoJob"
+            - type: "null"
+    PawnIoJob:
+      type: object
+      properties:
+        action: { enum: [install, remove] }
+        running: { type: boolean }
+        ok: { type: [boolean, "null"] }
+        message: { type: string }
     Lighting:
       type: object
       properties:
@@ -1212,7 +1296,7 @@ components:
         name: { type: string }
         plugin: { type: string }
         pluginPath: { type: string }
-        state: { enum: [running, starting, stopping, done, disabled, absent] }
+        state: { enum: [running, starting, stopping, stopped, done, disabled, blocked, absent, needs-driver] }
         enabled: { type: boolean }
         connected: { type: boolean }
         frames: { type: integer }
@@ -1246,6 +1330,13 @@ components:
             - type: "null"
           description: The last battery report (plugins with the `battery` feature), kept after the device goes away.
         blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low (user setting). }
+        thirdParty: { type: boolean, description: Driven by a third-party plugin read in place (a local SignalRGB installation's). }
+        driverProblem:
+          type: string
+          description: >-
+            Why the device cannot be driven as plugged in, e.g. "needs WinUSB driver: ..." for a raw USB
+            device Windows bound no WinUSB driver to (Lightloom never installs one). Absent when there is none.
+        helpUrl: { type: string, description: Where to read about `driverProblem`. }
         save:
           oneOf:
             - $ref: "#/components/schemas/SaveSupport"
@@ -1359,10 +1450,65 @@ components:
         controls: { type: array, items: { type: object, additionalProperties: true }, description: "`<meta property>` controls (schemas/effect-meta.schema.json shape)." }
         values: { $ref: "#/components/schemas/ControlValues" }
         presets: { type: array, items: { type: string } }
+        thirdParty: { type: boolean, description: A third-party effect read in place (`source` `signalrgb`). }
         uses:
           type: array
           items: { enum: [audio, video, meters, engine, webgl, input] }
           description: What the effect reads; effects with `meters` are game integrations.
+    SignalRgbImport:
+      type: object
+      description: The SignalRGB import wizard's preview, or the result of the import.
+      properties:
+        available: { type: boolean, description: SignalRGB settings were found. }
+        layout: { type: [string, "null"], description: Name the canvas is imported as; null without placements. }
+        placements: { type: integer }
+        layoutBrightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        globalBrightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        selectedEffect:
+          oneOf:
+            - $ref: "#/components/schemas/SignalRgbImportEffect"
+            - type: "null"
+        effects:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/SignalRgbImportEffect"
+              - type: object
+                properties:
+                  values: { type: integer, description: Stored control values. }
+                  presets: { type: array, items: { type: string } }
+        channels: { type: integer, description: Channel setups. }
+        channelSetups:
+          type: array
+          items:
+            type: object
+            properties:
+              device: { type: string }
+              channel: { type: string }
+              components: { type: integer }
+              leds: { type: integer }
+        devices:
+          type: array
+          description: Per-device enable and brightness (the brightness is the device's placement in the layout).
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              name: { type: [string, "null"] }
+              known: { type: boolean, description: Lightloom has seen this device (its enable state is imported). }
+              enabled: { type: [boolean, "null"] }
+              brightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        notes: { type: array, items: { type: string } }
+        imported: { type: boolean, description: Present (true) on the import's reply. }
+        valuesImported: { type: integer }
+        presetsImported: { type: integer }
+    SignalRgbImportEffect:
+      type: object
+      properties:
+        id: { type: string, description: "Lightloom effect id (`signalrgb:<name>`)." }
+        title: { type: [string, "null"], description: Null when the effect is not in the library. }
+        available: { type: boolean, description: In the library now (the SignalRGB library is on). }
+        thirdParty: { const: true }
     Settings:
       type: object
       properties:

@@ -1,0 +1,10 @@
+{
+  "$comment": "Sapphire Nitro Glow V3 (address 0x28), worked out by hand from OpenRGB d4798c12 SapphireNitroGlowV3Controller.cpp / RGBController_SapphireNitroGlowV3.cpp, not by running the plugin. Each write is [register, value] (SMBus Write Byte Data to 0x28; on ADL the register is the first data byte). scan_probe is the presence read of TestForSapphireGPUController (offset 0). init_reads is what the plugin keeps for Shutdown(): colour R G B, external control, mode. init_writes is DeviceUpdateMode() for Static: external control 0, then mode CUSTOM 0x06. frame_123456 is DeviceUpdateLEDs() for #123456 (SetColor: 0x1A R, 0x1B G, 0x1C B). shutdown_restore writes the startup colour, then the mode, then external control; shutdown_unreadable is shutdownColor #000000 in mode CUSTOM, used when a startup read failed.",
+  "scan_probe": ["0x00"],
+  "init_reads": ["0x1A", "0x1B", "0x1C", "0x0F", "0x10"],
+  "init_writes": [["0x0F", "0x00"], ["0x10", "0x06"]],
+  "frame_123456": [["0x1A", "0x12"], ["0x1B", "0x34"], ["0x1C", "0x56"]],
+  "startup_registers": { "0x1A": "0x00", "0x1B": "0x40", "0x1C": "0xFF", "0x0F": "0x01", "0x10": "0x00" },
+  "shutdown_restore": [["0x1A", "0x00"], ["0x1B", "0x40"], ["0x1C", "0xFF"], ["0x10", "0x00"], ["0x0F", "0x01"]],
+  "shutdown_unreadable": [["0x1A", "0x00"], ["0x1B", "0x00"], ["0x1C", "0x00"], ["0x10", "0x06"]]
+}

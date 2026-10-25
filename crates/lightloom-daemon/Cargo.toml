@@ -18,6 +18,11 @@ path = "src/lib.rs"
 name = "lightloomd"
 path = "src/main.rs"
 
+# Starts lightloomd without a console window (Start menu, sign-in).
+[[bin]]
+name = "lightloomw"
+path = "src/bin/lightloomw.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -44,3 +49,6 @@ lightloom-runtime = { path = "../lightloom-runtime" }
 
 [dev-dependencies]
 lightloom-hal = { path = "../lightloom-hal", features = ["mock"] }
+
+[build-dependencies]
+lightloom-winres = { path = "../lightloom-winres" }

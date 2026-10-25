@@ -1,0 +1,12 @@
+{
+  "ProductName": "Lightloom Generic ARGB Fan 120 mm Ring 16",
+  "DisplayName": "ARGB Fan 120 mm Ring 16 - 16 LED",
+  "Brand": "Generic",
+  "Type": "Fan",
+  "LedCount": 16,
+  "Width": 7,
+  "Height": 7,
+  "LedMapping": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+  "LedCoordinates": [[3,0],[4,0],[5,1],[6,2],[6,3],[6,4],[5,5],[4,6],[3,6],[2,6],[1,5],[0,4],[0,3],[0,2],[1,1],[2,0]],
+  "LedNames": ["Led 1","Led 2","Led 3","Led 4","Led 5","Led 6","Led 7","Led 8","Led 9","Led 10","Led 11","Led 12","Led 13","Led 14","Led 15","Led 16"]
+}

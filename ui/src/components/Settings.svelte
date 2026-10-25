@@ -1,8 +1,9 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
+  import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { daemon } from "../lib/store.svelte";
-  import type { Snapshot } from "../lib/types";
+  import type { SignalRgbImport, Snapshot } from "../lib/types";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let message = $state<string | null>(null);
@@ -39,6 +40,20 @@
     setTimeout(() => location.assign(r.url), 300);
   }
 
+  // PawnIO / RAM lighting: read the facts again whenever this page opens.
+  onMount(() => {
+    void daemon.run(() => api.pawnio());
+  });
+  const pawnio = $derived(snapshot.pawnio);
+  const busy = $derived(pawnio.job?.running ?? false);
+  const serviceNames: Record<string, string> = {
+    notInstalled: "not installed",
+    stopped: "installed, stopped",
+    pending: "starting or stopping",
+    running: "running",
+    unknown: "unknown",
+  };
+
   async function exportState() {
     const state = await daemon.run(() => api.exportState());
     if (!state) return;
@@ -48,6 +63,24 @@
     a.download = `lightloom-settings-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
+  }
+
+  let preview = $state<SignalRgbImport | null>(null);
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+  async function previewSignalRgb() {
+    preview = (await daemon.run(() => api.previewSignalRgb())) ?? null;
+  }
+
+  async function importSignalRgb() {
+    const r = await daemon.run(() => api.importSignalRgb());
+    if (!r) return;
+    preview = null;
+    message =
+      `Imported ${plural(r.placements, "placement")} as layout "${r.layout ?? "-"}", ` +
+      `${plural(r.channels, "channel setup")}, ${plural(r.valuesImported ?? 0, "effect value")} and ` +
+      `${plural(r.presetsImported ?? 0, "preset")}.` +
+      (r.notes.length ? ` ${plural(r.notes.length, "note")}: ${r.notes.slice(0, 3).join("; ")}` : "");
   }
 
   async function importState() {
@@ -80,15 +113,59 @@
         /> Use my SignalRGB plugins, effects and components</label
       >
       <p class="muted">
-        Import copies SignalRGB's device placements into a new layout and its component setup of each channel into
-        Lightloom's settings.
+        Import copies SignalRGB's setup into Lightloom's settings: device placements as a new layout (with the layout
+        and device brightness), the component setup of each channel, effect settings and presets, the selected
+        effect, the global brightness and which devices are on. SignalRGB's settings are only read. Its effects and
+        plugins stay third-party files in its folders.
       </p>
-      <button
-        onclick={async () => {
-          const r = await daemon.run(() => api.importSignalRgb());
-          if (r) message = `Imported ${r.placements} placements as layout "${r.layout}" and ${r.channels} channel setups.`;
-        }}>Import SignalRGB layout and channels</button
-      >
+      <div class="row">
+        <button onclick={previewSignalRgb}>Preview import…</button>
+        {#if preview}
+          <button onclick={importSignalRgb} disabled={!preview.available}>Import</button>
+          <button onclick={() => (preview = null)}>Cancel</button>
+        {/if}
+      </div>
+      {#if preview}
+        {#if !preview.available}
+          <p class="muted">SignalRGB has no settings to import.</p>
+        {:else}
+          <ul class="preview">
+            <li>
+              Layout "{preview.layout ?? "-"}": {plural(preview.placements, "placement")}{preview.layoutBrightness !==
+              null
+                ? `, brightness ${preview.layoutBrightness}%`
+                : ""}
+            </li>
+            {#if preview.globalBrightness !== null}<li>Global brightness {preview.globalBrightness}%</li>{/if}
+            <li>{plural(preview.channels, "channel setup")}</li>
+            <li>
+              {plural(preview.effects.length, "effect")} with settings ({plural(
+                preview.effects.reduce((n, e) => n + e.presets.length, 0),
+                "preset",
+              )}), third-party
+            </li>
+            {#if preview.selectedEffect}
+              <li>
+                Selected effect: {preview.selectedEffect.title ?? preview.selectedEffect.id}
+                {#if !preview.selectedEffect.available}<span class="warn">
+                    (not in the library: turn on the SignalRGB option above to play it)</span
+                  >{/if}
+              </li>
+            {/if}
+            {#if preview.devices.length}
+              <li>
+                Devices:
+                {#each preview.devices as d, i (d.key)}{i ? ", " : ""}{d.name ?? d.key}{d.enabled === false
+                    ? " off"
+                    : ""}{d.brightness !== null ? ` ${d.brightness}%` : ""}{/each}
+              </li>
+            {/if}
+            {#if preview.notes.length}<li class="muted">{plural(preview.notes.length, "note")}: {preview.notes
+                  .slice(0, 3)
+                  .join("; ")}</li>{/if}
+          </ul>
+        {/if}
+      {/if}
     {:else}
       <p class="muted">No SignalRGB installation was found on this computer.</p>
     {/if}
@@ -125,6 +202,47 @@
       does so while SignalRGB, OpenRGB or a vendor lighting service is running. Turn it off to leave these devices
       alone.
     </p>
+  </section>
+
+  <section class="panel">
+    <h2>PawnIO / RAM lighting</h2>
+    <p class="muted">{pawnio.status}</p>
+    <dl>
+      <dt>PawnIO driver</dt>
+      <dd>
+        {pawnio.installed ? `installed${pawnio.version ? ` (${pawnio.version})` : ""}` : "not installed"}{pawnio.installed &&
+        !pawnio.versionOk
+          ? " · needs 2.2.0 or later"
+          : ""}{pawnio.edition ? ` · ${pawnio.edition} edition` : ""}
+      </dd>
+      <dt>Lightloom I/O service</dt>
+      <dd>
+        {serviceNames[pawnio.service] ?? pawnio.service}{pawnio.brokerHealthy
+          ? ` · in use, ${pawnio.ramBuses} RAM bus${pawnio.ramBuses === 1 ? "" : "es"}`
+          : ""}
+      </dd>
+    </dl>
+    {#if pawnio.supported}
+      <div class="row">
+        <button disabled={busy} onclick={() => daemon.run(() => api.pawnioInstall())}
+          >{pawnio.service === "notInstalled" ? "Install" : "Repair / update"}</button
+        >
+        <button
+          class="danger"
+          disabled={busy || pawnio.service === "notInstalled"}
+          onclick={() => daemon.run(() => api.pawnioRemove())}>Remove</button
+        >
+      </div>
+      <p class="muted">
+        Each button asks Windows for permission once (UAC prompt); a window shows each step. Install downloads the
+        official PawnIO 2.2.0 installer from its GitHub release (checked against a pinned SHA-256 and its signature)
+        when PawnIO is missing or too old, and sets up the Lightloom I/O service. Remove takes the service away and
+        leaves PawnIO installed, since other programs may use it.
+      </p>
+    {/if}
+    {#if pawnio.job}
+      <p class:message={pawnio.job.ok === true} class:failed={pawnio.job.ok === false}>{pawnio.job.message}</p>
+    {/if}
   </section>
 
   <section class="panel">
@@ -299,6 +417,21 @@
   .message {
     color: var(--good);
   }
+  .failed {
+    color: var(--bad);
+  }
+  dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    margin: 0 0 12px;
+  }
+  dt {
+    color: var(--muted);
+  }
+  dd {
+    margin: 0;
+  }
   .bad {
     color: var(--bad);
   }
@@ -310,6 +443,11 @@
   }
   .logs {
     margin-top: 16px;
+  }
+  .preview {
+    margin: 8px 0 0;
+    padding-left: 1.2em;
+    font-size: 13px;
   }
   pre {
     max-height: 320px;

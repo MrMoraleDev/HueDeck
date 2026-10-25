@@ -64,6 +64,9 @@
           <span class="muted key">{d.bus ? (d.bus.startsWith("network") ? d.bus : `SMBus · ${d.bus}`) : d.key}</span>
         </div>
         <span class={`badge ${stateBadge(d)}`}>{d.state}</span>
+        {#if d.thirdParty}<span class="badge" title="Driven by a plugin read from your SignalRGB installation"
+            >third-party plugin</span
+          >{/if}
         {#if d.battery}<BatteryBadge battery={d.battery} />{/if}
         {#if d.connected}
           <span class="muted stats"
@@ -87,6 +90,13 @@
         {/if}
       </div>
       <p class="muted plugin">Plugin: {d.plugin} <span class="path">({d.pluginPath})</span></p>
+      {#if d.driverProblem}
+        <p class="driver-problem">
+          <span class="badge bad">needs WinUSB driver</span>
+          {d.driverProblem}
+          {#if d.helpUrl}<a href={d.helpUrl} target="_blank" rel="noreferrer">Why, and what to check</a>{/if}
+        </p>
+      {/if}
       {#each d.messages ?? [] as m (m.id)}
         <p class={`message ${(m.priority ?? 0) >= 2 ? "bad" : m.priority === 1 ? "warn" : ""}`} title={m.tooltip ?? ""}>
           {#if m.title}<strong>{m.title}:</strong>{/if}
@@ -233,6 +243,11 @@
   .plugin {
     margin: 6px 0 0;
     font-size: 12px;
+  }
+  .driver-problem {
+    margin: 6px 0 0;
+    font-size: 12px;
+    overflow-wrap: anywhere;
   }
   .path {
     opacity: 0.6;

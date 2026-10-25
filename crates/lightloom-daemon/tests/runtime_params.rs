@@ -125,6 +125,7 @@ fn runtime_properties_and_messages_reach_the_device_view() {
         plugins_dir: Some(plugins),
         effects_dir: None,
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: Arc::new(MockNotifier::default()),

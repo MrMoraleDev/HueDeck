@@ -261,6 +261,7 @@ fn replay(
             d.key, plugin.meta.name, d.frames
         );
         let device = SessionDevice {
+            usb: None,
             smbus: None,
             lamparray: None,
             key: d.key.clone(),

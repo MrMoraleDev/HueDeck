@@ -13,7 +13,7 @@ use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERRO
 use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW,
     RegQueryInfoKeyW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE,
-    REG_DWORD, REG_EXPAND_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SZ,
+    REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SZ,
 };
 
 /// Values larger than this are skipped (a channel array is a few KB).
@@ -28,6 +28,9 @@ pub enum RegValue {
     Dword(u32),
     /// `REG_QWORD`.
     Qword(u64),
+    /// `REG_BINARY`. Qt's `QSettings` stores a string holding NUL characters
+    /// (`@Variant(...)`, `@ByteArray(...)`) this way, as UTF-16LE.
+    Binary(Vec<u8>),
 }
 
 impl RegValue {
@@ -37,6 +40,7 @@ impl RegValue {
             RegValue::Text(s) => s.clone(),
             RegValue::Dword(v) => v.to_string(),
             RegValue::Qword(v) => v.to_string(),
+            RegValue::Binary(bytes) => utf16(bytes),
         }
     }
 }
@@ -50,6 +54,19 @@ impl Drop for Key {
             let _ = RegCloseKey(self.0);
         }
     }
+}
+
+/// UTF-16LE bytes as text (lossy), without trailing NULs.
+fn utf16(bytes: &[u8]) -> String {
+    let units: Vec<u16> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    String::from_utf16_lossy(&units)
+        .trim_end_matches('\0')
+        .to_string()
 }
 
 fn os_error(err: WIN32_ERROR) -> io::Error {
@@ -168,23 +185,15 @@ fn values(key: &Key) -> io::Result<Vec<(String, RegValue)>> {
         }
         let bytes = &data[..(data_len as usize).min(data.len())];
         let value = if kind == REG_SZ.0 || kind == REG_EXPAND_SZ.0 {
-            let units: Vec<u16> = bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            RegValue::Text(
-                String::from_utf16_lossy(&units)
-                    .trim_end_matches('\0')
-                    .to_string(),
-            )
+            RegValue::Text(utf16(bytes))
         } else if kind == REG_DWORD.0 && bytes.len() >= 4 {
             RegValue::Dword(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
         } else if kind == REG_QWORD.0 && bytes.len() >= 8 {
             let mut b = [0u8; 8];
             b.copy_from_slice(&bytes[..8]);
             RegValue::Qword(u64::from_le_bytes(b))
+        } else if kind == REG_BINARY.0 {
+            RegValue::Binary(bytes.to_vec())
         } else {
             continue;
         };
@@ -328,5 +337,15 @@ mod tests {
             .is_empty());
         let nt = local_machine_strings(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion").unwrap();
         assert!(nt.iter().any(|(n, _)| n == "ProductName"), "{nt:?}");
+    }
+
+    #[test]
+    fn binary_values_read_as_qsettings_text() {
+        // `@Variant(` + NUL + `C)` as UTF-16LE, the way QSettings writes it.
+        let text: Vec<u8> = "@Variant(\u{0}C)"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(RegValue::Binary(text).as_text(), "@Variant(\u{0}C)");
     }
 }

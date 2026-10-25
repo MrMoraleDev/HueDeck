@@ -79,6 +79,7 @@ fn options(home: &Path, notifier: Arc<MockNotifier>, with_device: bool) -> Engin
             devices: vec![SessionDevice {
                 smbus: None,
                 lamparray: None,
+                usb: None,
                 key: KEY.into(),
                 vid: 0x1234,
                 pid: 0x4D4E,
@@ -105,6 +106,7 @@ fn options(home: &Path, notifier: Arc<MockNotifier>, with_device: bool) -> Engin
         notifier,
         api_port: lightloom_api::NATIVE_PORT,
         api_port_notice: None,
+        signalrgb_settings: None,
     }
 }
 

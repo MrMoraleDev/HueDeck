@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! LCD faces end to end, without a renderer (the mock path): a plugin initializes its LCD,
 //! the device view shows it with the default face, `getFrame` streams the face to the
-//! device, `SetLcd` changes face and frame rate (validated, stored), and the face library
-//! holds the starter faces.
+//! device, `SetLcd` changes face, frame rate and face control values (validated, stored),
+//! the preview endpoint's PNG is the face frame, and the face library holds the starter faces.
 
 use lightloom_api::{ApiError, Backend, Request, Snapshot};
 use lightloom_daemon::config::Config;
@@ -57,6 +57,19 @@ fn set_lcd(b: &dyn Backend, face: Option<&str>, framerate: Option<u32>) -> Resul
             key: KEY.into(),
             face: face.map(String::from),
             framerate,
+            values: None,
+        },
+    )
+}
+
+fn set_values(b: &dyn Backend, values: Value) -> Result<Value, ApiError> {
+    call(
+        b,
+        Request::SetLcd {
+            key: KEY.into(),
+            face: None,
+            framerate: None,
+            values: values.as_object().cloned(),
         },
     )
 }
@@ -167,6 +180,33 @@ fn lcd_faces_attach_stream_and_change() {
         (r["face"].clone(), r["framerate"].clone()),
         (Value::Null, Value::from(12))
     );
+
+    // Control values of the face shown, checked against its controls and kept per face.
+    let clock = s.lcd_faces.iter().find(|f| f.id == "lightloom:clock").unwrap();
+    assert!(clock.controls.iter().any(|c| c["property"] == "hour24"));
+    assert_eq!(
+        set_values(b, serde_json::json!({"nope": 1})).unwrap_err().code,
+        "bad_request"
+    );
+    let r = set_values(b, serde_json::json!({"hour24": false, "textColor": "#ff8800"})).unwrap();
+    assert_eq!(
+        r["values"],
+        serde_json::json!({"hour24": false, "textColor": "#ff8800"})
+    );
+    wait_for(b, "the values in the view", |s| {
+        s.devices
+            .iter()
+            .find(|d| d.key == KEY)
+            .and_then(|d| d.lcd.as_ref())
+            .is_some_and(|l| l.values.get("hour24") == Some(&Value::Bool(false)))
+    });
+
+    // The dashboard preview: the face frame as a PNG at the LCD's size.
+    let png = b.lcd_preview(KEY).expect("a preview while the LCD runs");
+    assert_eq!(&png[1..4], b"PNG");
+    assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 8, "width");
+    assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 4, "height");
+    assert!(b.lcd_preview("no:such:device").is_none());
     handle.shutdown();
     let _ = std::fs::remove_dir_all(&home);
 }

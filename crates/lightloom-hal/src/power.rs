@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! System power and session events: sleep and resume, lock and unlock, the
-//! display turning off and on.
+//! display turning off and on, log-off.
 //!
 //! A [`PowerSource`] delivers them to a [`PowerSink`] on its own thread. The
 //! sink of [`PowerEvent::Suspend`] may block until the devices are put away:
@@ -31,6 +31,9 @@ pub enum PowerEvent {
     DisplayOff,
     /// The display turned on (or dimmed).
     DisplayOn,
+    /// The user is logging off (the session ends; the process may be ended
+    /// soon after the sink returns).
+    Logoff,
 }
 
 /// Receives [`PowerEvent`]s (see the module docs: `Suspend` may block).

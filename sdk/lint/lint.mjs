@@ -13,7 +13,9 @@
 //     `HidUsages()` against the hidUsage claims, `SmbusAddresses()`, `SmbusDeniedRegisters()`,
 //     `SpdManufacturers()`, `SmbusBatchWrites()` and `BrandGPUList()` against the SMBus claim,
 //     `SaveCapabilities()` / `ShutdownModes()` against `save` / `shutdownModes` (and a plugin
-//     that can save exports `SaveToDevice(request)`);
+//     that can save exports `SaveToDevice(request)`), the ids of `HardwareModes()` (read like
+//     the host reads them, crates/lightloom-plugin-host/src/hwmode.rs) against `hardwareModes`
+//     (and a plugin with modes exports `SetHardwareMode(request)`);
 //   * the sources for globals a Lightloom plugin does not have (DOM, Node, timers).
 //
 // plugins/_testkit/manifests.test.mjs runs this over every first-party plugin.
@@ -361,6 +363,46 @@ function checkExports(reading, add) {
   }
 }
 
+/** Mode ids, at most this long (hwmode.rs `MAX_TEXT`). */
+const MAX_MODE_TEXT = 64;
+/** Most colour inputs of a mode (hwmode.rs `MAX_COLORS`). */
+const MAX_MODE_COLORS = 8;
+
+/**
+ * The ids of the modes the host keeps from a `HardwareModes()` value, in order (hwmode.rs
+ * `parse`): an entry needs an object with a 1-64 character id, given once, and 0-8 colours.
+ * Why an entry is dropped goes to `warnings`.
+ */
+export function hardwareModeIds(value, warnings = []) {
+  if (!Array.isArray(value)) {
+    warnings.push("HardwareModes() must return an array");
+    return [];
+  }
+  const ids = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      warnings.push(`not an object: ${show(entry)}`);
+      continue;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!id || id.length > MAX_MODE_TEXT) {
+      warnings.push(`an entry needs an id (1-${MAX_MODE_TEXT} characters): ${show(entry)}`);
+      continue;
+    }
+    if (ids.includes(id)) {
+      warnings.push(`id ${show(id)} given twice`);
+      continue;
+    }
+    const c = entry.colors;
+    if (c !== undefined && c !== null && !(Number.isInteger(c) && c >= 0 && c <= MAX_MODE_COLORS)) {
+      warnings.push(`${id}: colors must be 0-${MAX_MODE_COLORS}`);
+      continue;
+    }
+    ids.push(id);
+  }
+  return ids;
+}
+
 function checkExportsAgainstManifest(readings, manifest, add) {
   const ex = readings[0].exports;
   const devices = Array.isArray(manifest.devices) ? manifest.devices.filter((c) => c && typeof c === "object") : [];
@@ -455,6 +497,17 @@ function checkExportsAgainstManifest(readings, manifest, add) {
   }
   if (!deepEqual(ex.ShutdownModes ?? [], manifest.shutdownModes ?? [])) {
     add("error", "manifest", "shutdown-modes-mismatch", `ShutdownModes() ${show(ex.ShutdownModes ?? [])} differs from shutdownModes ${show(manifest.shutdownModes ?? [])}`, "/shutdownModes");
+  }
+
+  // Hardware modes (docs/host-api/hardware-modes.md).
+  const modeWarnings = [];
+  const modes = ex.HardwareModes === undefined ? [] : hardwareModeIds(ex.HardwareModes, modeWarnings);
+  for (const w of modeWarnings) add("warning", "exports", "hardware-mode-dropped", `${w}: the host drops it`, "HardwareModes");
+  if (!deepEqual(modes, manifest.hardwareModes ?? [])) {
+    add("error", "manifest", "hardware-modes-mismatch", `HardwareModes() ids ${show(modes)} differ from hardwareModes ${show(manifest.hardwareModes ?? [])}`, "/hardwareModes");
+  }
+  if (modes.length > 0 && !readings.some((r) => r.lifecycle?.SetHardwareMode)) {
+    add("error", "exports", "hardware-modes-without-export", "HardwareModes() without a SetHardwareMode(request) export: the host offers no mode", "HardwareModes");
   }
 
   // Network.

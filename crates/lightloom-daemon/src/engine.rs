@@ -291,6 +291,9 @@ pub struct Shared {
     direct: Arc<DirectLeds>,
     /// Hardware sensors (`engine.getSensorValue`, `GET /v1/sensors`).
     sensors: crate::sensors::SensorPoller,
+    /// The LCD devices' face renderers (`@SignalRGB/lcd`); the engine drives them, the
+    /// API reads their frames for the dashboard preview.
+    lcd: Arc<crate::lcd::LcdFaces>,
     shutdown: tokio::sync::Notify,
     power: Sender<PowerSignal>,
     /// `lightloomw`'s log files, for `GET /v1/logs`.
@@ -352,6 +355,10 @@ impl Backend for Shared {
 
     fn sensors(&self) -> lightloom_api::model::SensorsView {
         self.sensors.view()
+    }
+
+    fn lcd_preview(&self, key: &str) -> Option<Vec<u8>> {
+        self.lcd.preview_png(key)
     }
 
     fn logs(&self, from: Option<&str>) -> lightloom_api::logs::LogBatch {
@@ -464,6 +471,10 @@ pub fn start_with_desktop(
         frames,
         direct: Arc::new(DirectLeds::new()),
         sensors: sensor_poller(&opts),
+        lcd: Arc::new(crate::lcd::LcdFaces::new(
+            opts.renderer.clone(),
+            opts.paths.renderer_work().join("lcd"),
+        )),
         shutdown: tokio::sync::Notify::new(),
         power,
         log_files: crate::logs::LogFiles::from_env(),
@@ -707,6 +718,8 @@ struct Engine {
     lcd: Arc<crate::lcd::LcdFaces>,
     /// Sensor values go to the LCD faces (one of them reads sensors).
     lcd_sensors: bool,
+    /// Sensor values go to the macros (an Input has `onSensorUpdate`).
+    macro_sensors: bool,
     /// The profile applied or saved last.
     profile: Option<String>,
     /// The profile applied at start.
@@ -777,13 +790,11 @@ impl Engine {
             },
             ..SessionDefaults::default()
         }));
-        let lcd = Arc::new(crate::lcd::LcdFaces::new(
-            opts.renderer.clone(),
-            opts.paths.renderer_work().join("lcd"),
-        ));
+        let lcd = Arc::clone(&shared.lcd);
         let mut e = Self {
             lcd,
             lcd_sensors: false,
+            macro_sensors: false,
             profile: None,
             default_profile: None,
             custom_leds: custom_leds::CustomLedsState::default(),
@@ -1875,6 +1886,7 @@ impl Engine {
             }
             PowerEvent::DisplayOff => self.display_off = true,
             PowerEvent::DisplayOn => self.display_off = false,
+            PowerEvent::Logoff => self.macros.system_logoff(),
         }
         self.follow_idle();
     }
@@ -1970,9 +1982,24 @@ impl Engine {
         self.audio = None;
         self.screen = None;
         self.shared.sensors.set_faces(None);
+        self.shared.sensors.set_macros(None);
         self.lcd.stop_all();
         self.shared.sensors.stop();
         self.canvas.client().stop();
+    }
+
+    /// Hand sensor values to the macros while an enabled Input has `onSensorUpdate`.
+    pub(super) fn follow_macro_sensors(&mut self) {
+        let wanted = self.macros.wants_sensors();
+        if wanted == self.macro_sensors {
+            return;
+        }
+        self.macro_sensors = wanted;
+        let push: Option<crate::sensors::Push> = wanted.then(|| {
+            let sink = self.macros.sensor_sink();
+            Box::new(move |d| sink(&d)) as crate::sensors::Push
+        });
+        self.shared.sensors.set_macros(push);
     }
 
     /// Hand sensor values to the LCD faces while one of them reads sensors.
@@ -2740,8 +2767,13 @@ impl Engine {
             Request::SetLeds { key, uid, edit } => self.set_leds(&key, &uid, edit),
             Request::SaveLedZone { key, uid, name, leds } => self.save_led_zone(&key, &uid, &name, &leds),
             Request::DeleteLedZone { key, uid, name } => self.delete_led_zone(&key, &uid, &name),
-            Request::SetLcd { key, face, framerate } => {
-                let choice = self.lcd.select(&key, face, framerate).map_err(|e| {
+            Request::SetLcd {
+                key,
+                face,
+                framerate,
+                values,
+            } => {
+                let choice = self.lcd.select(&key, face, framerate, values).map_err(|e| {
                     if e.starts_with("no LCD face") {
                         ApiError::not_found(e)
                     } else {
@@ -2751,10 +2783,13 @@ impl Engine {
                 self.store
                     .set(keys::LCD_FACES, &self.lcd.choices())
                     .map_err(internal)?;
+                let values = self.lcd.view(&key).map(|v| v.values).unwrap_or_default();
+                self.dirty = true;
                 Ok(json!({
                     "key": key,
                     "face": choice.face,
                     "framerate": choice.framerate.unwrap_or(crate::lcd::DEFAULT_FRAMERATE),
+                    "values": values,
                 }))
             }
             Request::SetPlacement { uid, placement } => {

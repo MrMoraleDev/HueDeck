@@ -7,6 +7,7 @@
 // sliders bound to the rest of the snapshot are left alone (no re-render, no reset).
 
 import { api, wsUrl } from "./api";
+import { EventBus } from "./events";
 import { reconcile } from "./reconcile";
 import type { DashboardAction, Snapshot } from "./types";
 
@@ -31,6 +32,8 @@ class DaemonState {
   toast = $state<{ title: string; message: string } | null>(null);
   /** Called for `view` and `raiseWindow` actions (the app switches tabs). */
   onAction: ((a: DashboardAction) => void) | null = null;
+  /** Every push event by kind (pages follow theirs, e.g. `macros`), and `open` on (re)connect. */
+  readonly events = new EventBus();
   private socket: WebSocket | null = null;
   private pending = false;
   private again = false;
@@ -75,10 +78,14 @@ class DaemonState {
     void this.refresh();
     const ws = new WebSocket(wsUrl("/v1/events"));
     this.socket = ws;
-    ws.onopen = () => (this.connected = true);
+    ws.onopen = () => {
+      this.connected = true;
+      this.events.emit("open", null);
+    };
     ws.onmessage = (m) => {
       try {
         const e = JSON.parse(m.data as string) as { kind: string; data?: unknown };
+        this.events.emit(e.kind, e.data);
         if (e.kind === "log" && typeof e.data === "string") {
           this.log(e.data);
         } else if (e.kind === "state") {

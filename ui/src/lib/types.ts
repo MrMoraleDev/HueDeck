@@ -107,6 +107,31 @@ export interface DeviceView {
   pluginType?: string;
   /** Interfaces as enumeration saw them, one line each (no paths, no serials). */
   interfaces?: string[];
+  /** The device's LCD, while its plugin drives one. */
+  lcd?: LcdView | null;
+}
+
+/** A device's LCD (docs/host-api/lcd-lightloom.md). */
+export interface LcdView {
+  width: number;
+  height: number;
+  circular: boolean;
+  /** The face shown (null: none installed, a test pattern shows). */
+  face: string | null;
+  framerate: number;
+  /** "cef": the face page renders; "mock": a test pattern (no renderer). */
+  renderer: "cef" | "mock" | string;
+  running: boolean;
+  status?: string | null;
+}
+
+/** An LCD face: an HTML page with onReady(). */
+export interface LcdFace {
+  id: string;
+  title: string;
+  description: string;
+  publisher: string;
+  usesSensors: boolean;
 }
 
 export type ShutdownMode = "restore" | "keep" | "off";
@@ -285,6 +310,8 @@ export interface Snapshot {
   pawnio: PawnIoView;
   /** OS and build ("Windows 11 Pro 25H2 (build 26200.6899)"), for device reports. */
   os?: string;
+  /** LCD faces devices with a screen can show. */
+  lcdFaces?: LcdFace[];
 }
 
 export interface PawnIoJob {

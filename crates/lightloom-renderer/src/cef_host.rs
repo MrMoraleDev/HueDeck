@@ -30,11 +30,13 @@
 use cef::*;
 use lightloom_effects::parse_effect_meta;
 use lightloom_effects::EffectMeta;
-use lightloom_protocol::shm::{FrameHeader, CANVAS_HEIGHT, CANVAS_WIDTH, SLOT_COUNT};
+use lightloom_protocol::shm::{FrameHeader, SLOT_COUNT};
 use lightloom_renderer::cache;
 use lightloom_renderer::cli::Args;
 use lightloom_renderer::control::{self, Command};
-use lightloom_renderer::inject::{injection_script, INJECT_KEY, INJECT_URL};
+use lightloom_renderer::inject::{
+    injection_script_with, EFFECT_READY_HOOK, FACE_READY_HOOK, INJECT_KEY, INJECT_URL,
+};
 use lightloom_renderer::ipc;
 use lightloom_renderer::ring::RingWriter;
 use lightloom_renderer::sink::{FrameSink, PaintOutcome, SinkConfig, SinkReport};
@@ -450,21 +452,21 @@ wrap_render_handler! {
             if let Some(rect) = rect {
                 rect.x = 0;
                 rect.y = 0;
-                rect.width = CANVAS_WIDTH as c_int;
-                rect.height = CANVAS_HEIGHT as c_int;
+                rect.width = self.host.args.width as c_int;
+                rect.height = self.host.args.height as c_int;
             }
         }
 
         fn screen_info(&self, _browser: Option<&mut Browser>, screen_info: Option<&mut ScreenInfo>) -> c_int {
-            // Device scale factor 1 so OnPaint buffers are exactly 320x200 on HiDPI desktops.
+            // Device scale factor 1 so OnPaint buffers are exactly the view size on HiDPI desktops.
             let Some(info) = screen_info else {
                 return 0;
             };
             let full = Rect {
                 x: 0,
                 y: 0,
-                width: CANVAS_WIDTH as c_int,
-                height: CANVAS_HEIGHT as c_int,
+                width: self.host.args.width as c_int,
+                height: self.host.args.height as c_int,
             };
             info.device_scale_factor = 1.0;
             info.depth = 32;
@@ -714,6 +716,8 @@ struct ShmReport {
 struct RunReport {
     ok: bool,
     effect: String,
+    /// Rendered as an LCD face (`--face`).
+    face: bool,
     title: String,
     url: String,
     mode: ModeReport,
@@ -770,10 +774,15 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
         Err(e) => return fail(format!("effect {}: {e}", effect.display())),
     };
     let meta = parse_effect_meta(&html);
-    let (inject_js, skipped_controls) = injection_script(&meta, &args.prop_values());
+    let ready = if args.face {
+        FACE_READY_HOOK
+    } else {
+        EFFECT_READY_HOOK
+    };
+    let (inject_js, skipped_controls) = injection_script_with(&meta, &args.prop_values(), ready);
     let url = file_url(&effect);
 
-    let ring = match RingWriter::create_file(&args.out, CANVAS_WIDTH, CANVAS_HEIGHT) {
+    let ring = match RingWriter::create_file(&args.out, args.width, args.height) {
         Ok(r) => r,
         Err(e) => return fail(format!("shm {}: {e}", args.out.display())),
     };
@@ -895,7 +904,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
         errors.push(format!("last ring error: {e}"));
     }
     let created = st.create_requested_at.unwrap_or(run_start);
-    let geometry = FrameHeader::new(CANVAS_WIDTH, CANVAS_HEIGHT);
+    let geometry = FrameHeader::new(args.width, args.height);
     // A serving renderer ends when told to; it succeeded if the page loaded and painted.
     let ok = if args.serve {
         sink.frames() > 0 && st.load_error.is_none()
@@ -905,6 +914,7 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
     let report = RunReport {
         ok,
         effect: effect.display().to_string(),
+        face: args.face,
         title: meta.title.clone(),
         url,
         mode: ModeReport {
@@ -932,8 +942,8 @@ pub fn run(args: Args, sandbox_info: *mut u8) -> u8 {
         shm: ShmReport {
             path: args.out.display().to_string(),
             bytes: geometry.total_bytes(),
-            width: CANVAS_WIDTH,
-            height: CANVAS_HEIGHT,
+            width: args.width,
+            height: args.height,
             slots: SLOT_COUNT,
         },
         cef_cache_dir: root_cache.display().to_string(),

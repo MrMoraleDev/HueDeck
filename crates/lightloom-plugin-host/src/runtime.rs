@@ -131,7 +131,7 @@ const NATIVE_MODULES: &[&str] = &[
 
 /// Rust-backed modules a device session implements (`js/host.js` `nativeModules`);
 /// the others keep their throwing facade there.
-const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo", "udp", "tcp", "serial"];
+const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo", "udp", "tcp", "serial", "lcd"];
 
 /// Prefix of the generated modules that pick a device-session implementation.
 const NATIVE_PREFIX: &str = "lightloom:native/";
@@ -183,6 +183,8 @@ pub struct RuntimeOptions {
     /// Serial device session: the natives behind `@SignalRGB/serial` (needs
     /// [`RuntimeOptions::device`]).
     pub serial: Option<crate::serial::SharedSerial>,
+    /// Device session: the natives behind `@SignalRGB/lcd` (needs [`RuntimeOptions::device`]).
+    pub lcd: Option<crate::lcd::SharedLcd>,
 }
 
 impl Default for RuntimeOptions {
@@ -198,6 +200,7 @@ impl Default for RuntimeOptions {
             service: None,
             controller: None,
             serial: None,
+            lcd: None,
         }
     }
 }
@@ -780,6 +783,13 @@ impl PluginRuntime {
                 };
                 install().map_err(|e| failure(&ctx, e, d))?;
             }
+            if let (Some(lcd), Some(device)) = (&opts.lcd, &opts.device) {
+                let install = || -> rquickjs::Result<()> {
+                    let natives: Object = ctx.globals().get("__lightloomNative")?;
+                    crate::lcd::install(&ctx, &natives, lcd, d, device)
+                };
+                install().map_err(|e| failure(&ctx, e, d))?;
+            }
             if let Some(controller) = &opts.controller {
                 cfg.set("controller", controller.as_str())
                     .map_err(|e| failure(&ctx, e, d))?;
@@ -1317,7 +1327,7 @@ mod tests {
             r.resolve_name(base, "@SignalRGB/base64").unwrap(),
             "lightloom:prelude/base64.js"
         );
-        // Sockets and serial: the device host's implementation when it has one, else the facade.
+        // Sockets, serial and LCD: the device host's implementation when it has one, else the facade.
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/udp").unwrap(),
             "lightloom:native/udp.js"
@@ -1328,7 +1338,7 @@ mod tests {
         );
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/lcd").unwrap(),
-            "lightloom:prelude/modules/lcd.js"
+            "lightloom:native/lcd.js"
         );
         assert_eq!(
             r.resolve_name("lightloom:prelude/modules/udp.js", "../HostApiMissing.js")
@@ -1378,6 +1388,10 @@ mod tests {
             host_shim_module("permissions", false),
             "lightloom:native/permissions.js"
         );
-        assert_eq!(host_shim_module("lcd", false), "lightloom:prelude/modules/lcd.js");
+        assert_eq!(host_shim_module("lcd", false), "lightloom:native/lcd.js");
+        assert_eq!(
+            host_shim_module("DeviceDiscovery", false),
+            "lightloom:prelude/modules/DeviceDiscovery.js"
+        );
     }
 }

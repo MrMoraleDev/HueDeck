@@ -1,0 +1,105 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Lightloom starter LCD face. Original work, dedicated to the public domain (CC0 1.0). -->
+<html>
+<head>
+  <title>Clock</title>
+  <meta description="An analogue clock ring with the time and date in the middle. Fits round and square screens of any size." />
+  <meta publisher="Lightloom" />
+  <meta property="textColor" label="Text Colour" type="color" default="#ffffff" />
+  <meta property="accentColor" label="Accent Colour" type="color" default="#2e9cff" />
+  <meta property="showSeconds" label="Seconds Ring" type="boolean" default="1" />
+  <meta property="hour24" label="24-hour Time" type="boolean" default="1" />
+</head>
+<body style="margin:0;padding:0;background:#000;overflow:hidden">
+  <canvas id="face" style="display:block;width:100vw;height:100vh"></canvas>
+  <script>
+    // An LCD face: the engine sizes this page to the LCD (window.innerWidth/innerHeight),
+    // assigns the controls above as globals, calls on<control>Changed() once each, then onReady().
+    var canvas = document.getElementById("face");
+    var ctx = canvas.getContext("2d", { alpha: false });
+    var text = "#ffffff", accent = "#2e9cff", seconds = true, h24 = true, started = false;
+
+    function hex(v, fallback) {
+      return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback;
+    }
+    function flag(v, fallback) {
+      if (v === true || v === 1 || v === "1" || v === "true") return true;
+      if (v === false || v === 0 || v === "0" || v === "false") return false;
+      return fallback;
+    }
+    function ontextColorChanged() { text = hex(textColor, text); }
+    function onaccentColorChanged() { accent = hex(accentColor, accent); }
+    function onshowSecondsChanged() { seconds = flag(showSeconds, seconds); }
+    function onhour24Changed() { h24 = flag(hour24, h24); }
+
+    function fit() {
+      canvas.width = Math.max(1, window.innerWidth);
+      canvas.height = Math.max(1, window.innerHeight);
+    }
+    window.addEventListener("resize", fit);
+
+    var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+
+    function draw() {
+      var w = canvas.width, h = canvas.height;
+      var cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2;
+      var now = new Date();
+      var ms = now.getSeconds() * 1000 + now.getMilliseconds();
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, w, h);
+
+      // Minute ticks inside the inscribed circle, so round screens show all of them.
+      var ring = r * 0.92, thick = Math.max(1, r * 0.035);
+      for (var i = 0; i < 60; i++) {
+        var a = i / 60 * Math.PI * 2 - Math.PI / 2;
+        var len = i % 5 === 0 ? r * 0.09 : r * 0.04;
+        ctx.strokeStyle = i % 5 === 0 ? text : "rgba(255,255,255,0.35)";
+        ctx.lineWidth = i % 5 === 0 ? thick : thick / 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * ring, cy + Math.sin(a) * ring);
+        ctx.lineTo(cx + Math.cos(a) * (ring - len), cy + Math.sin(a) * (ring - len));
+        ctx.stroke();
+      }
+      // Seconds as a sweeping arc.
+      if (seconds) {
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = Math.max(2, r * 0.05);
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * 0.78, -Math.PI / 2, -Math.PI / 2 + ms / 60000 * Math.PI * 2);
+        ctx.stroke();
+        ctx.lineCap = "butt";
+      }
+      // Time and date.
+      var hours = now.getHours();
+      var suffix = "";
+      if (!h24) {
+        suffix = hours < 12 ? " AM" : " PM";
+        hours = hours % 12 || 12;
+      }
+      var time = (h24 ? two(hours) : String(hours)) + ":" + two(now.getMinutes());
+      ctx.fillStyle = text;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      var size = Math.max(8, Math.floor(r * (suffix ? 0.36 : 0.44)));
+      ctx.font = "600 " + size + "px Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+      ctx.fillText(time + suffix, cx, cy - r * 0.04);
+      var small = Math.max(6, Math.floor(r * 0.13));
+      ctx.font = small + "px Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+      ctx.fillStyle = accent;
+      ctx.fillText(DAYS[now.getDay()] + " " + now.getDate() + " " + MONTHS[now.getMonth()], cx, cy + r * 0.32);
+      window.requestAnimationFrame(draw);
+    }
+
+    function onReady() {
+      if (started) return;
+      started = true;
+      fit();
+      window.requestAnimationFrame(draw);
+    }
+  </script>
+</body>
+</html>

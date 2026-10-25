@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+publish = false
+name = "lightloom-lcd"
+description = "Lightloom LCD faces: the @SignalRGB/lcd frame encoders (JPEG, PNG, BMP, RGB, RGBA, RGB565), crops and slices, LCD.initialize settings, and the face-renderer provider trait with a mock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+lightloom-engine = { path = "../lightloom-engine" }
+image = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

@@ -38,6 +38,7 @@ Without LibreHardwareMonitor there is no `CPU Temperature` on Windows (GPU tempe
 Nothing is polled unless something reads sensors:
 
 - **An effect**: the active effect's page calls `getSensorValue` or reads `engine.sensors` (its parsed `uses.sensors`). The values are pushed to the renderer after every poll.
+- **An LCD face**: a face showing on a device's LCD reads sensors the same way (`docs/host-api/lcd-lightloom.md`). The values go to that face's renderer.
 - **A client**: each `GET /v1/sensors` keeps polling on for 10 s. The dashboard's Sensors list asks every 2 s while it is shown and the page is visible.
 
 The poller (`crates/lightloom-daemon/src/sensors.rs`, thread `lightloom-sensors`) polls at most once a second (`[sensors] interval_ms`, at least 1000) and sleeps otherwise. The sources, NvAPI included, are opened at the first poll, not at daemon start. The first `GET /v1/sensors` waits up to 1.5 s for that first poll.

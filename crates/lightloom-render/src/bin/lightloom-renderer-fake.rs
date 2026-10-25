@@ -4,7 +4,8 @@
 //! socket given with `--control unix:PATH`, as on Linux).
 //!
 //! It accepts the real renderer's arguments (most are ignored) and paints
-//! solid frames whose red channel counts the frames painted. `--prop` values
+//! solid frames of `--width` x `--height` (default 320x200) whose red channel
+//! counts the frames painted; green is 0x99 with `--face`, else 0. `--prop` values
 //! choose the behaviour: `fake_mode=static` paints once, `fake_exit_after=N`
 //! exits after N frames (a crash). Every control line received is appended to
 //! `<stats>.control.log` (the client's work dir; the ring may live in a
@@ -24,6 +25,7 @@ fn main() {
     let mut stats: Option<PathBuf> = None;
     let mut control = ControlAddr::Stdin;
     let mut fps = 30u32;
+    let (mut width, mut height, mut face) = (320u32, 200u32, false);
     let mut props: Vec<(String, String)> = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -38,6 +40,9 @@ fn main() {
                 }
             },
             "--fps" => fps = args.next().and_then(|v| v.parse().ok()).unwrap_or(30),
+            "--width" => width = args.next().and_then(|v| v.parse().ok()).unwrap_or(320),
+            "--height" => height = args.next().and_then(|v| v.parse().ok()).unwrap_or(200),
+            "--face" => face = true,
             "--prop" => {
                 if let Some((k, v)) = args.next().as_deref().and_then(|p| p.split_once('=')) {
                     props.push((k.to_string(), v.to_string()));
@@ -60,7 +65,8 @@ fn main() {
     let paint_once = prop("fake_mode").as_deref() == Some("static");
     let exit_after: Option<u64> = prop("fake_exit_after").and_then(|v| v.parse().ok());
 
-    let mut ring = RingWriter::create_file(&out, 320, 200).expect("ring");
+    let mut ring = RingWriter::create_file(&out, width, height).expect("ring");
+    let green = if face { 0x99 } else { 0 };
     let done = Arc::new(AtomicBool::new(false));
     let log_path = PathBuf::from(format!(
         "{}.control.log",
@@ -92,11 +98,11 @@ fn main() {
     while !done.load(Ordering::Acquire) {
         if !(paint_once && n > 0) {
             n += 1;
-            let mut px = vec![0u8; 320 * 200 * 4];
+            let mut px = vec![0u8; width as usize * height as usize * 4];
             for p in px.as_chunks_mut::<4>().0 {
-                p.copy_from_slice(&[0, 0, (n % 256) as u8, 255]);
+                p.copy_from_slice(&[0, green, (n % 256) as u8, 255]);
             }
-            ring.publish(&px, 320, 200).expect("publish");
+            ring.publish(&px, width, height).expect("publish");
             if exit_after.is_some_and(|max| n >= max) {
                 std::process::exit(3);
             }

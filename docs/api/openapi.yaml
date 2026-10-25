@@ -172,6 +172,54 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/lcd:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    put:
+      tags: [devices]
+      operationId: putLcd
+      summary: Choose a device's LCD face and frame rate (kept per device; a running face restarts)
+      description: |
+        The face is an HTML page from `GET /v1/lcd/faces`, rendered at the size the device's
+        plugin gave `LCD.initialize` (docs/host-api/lcd-lightloom.md). Either field may be
+        left out; `face: ""` goes back to the default face.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                face: { type: string, description: "Face id, e.g. `lightloom:clock`" }
+                framerate: { type: integer, minimum: 1, maximum: 60 }
+      responses:
+        "200":
+          description: The device's LCD choice.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key: { type: string }
+                  face: { type: [string, "null"] }
+                  framerate: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/lcd/faces:
+    get:
+      tags: [devices]
+      operationId: listLcdFaces
+      summary: The LCD faces (Lightloom's starter faces, then the user's `faces` directory)
+      responses:
+        "200":
+          description: Faces by id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LcdFaceView" }
   /v1/effects:
     get:
       tags: [effects]
@@ -1543,6 +1591,7 @@ components:
         warnings: { type: array, items: { type: string } }
         pawnio: { $ref: "#/components/schemas/PawnIoView" }
         os: { type: string, description: "Operating system and build (`Windows 11 Pro 25H2 (build 26200.6899)`, `Ubuntu 24.04.1 LTS (kernel 6.8.0)`), for device reports." }
+        lcdFaces: { type: array, items: { $ref: "#/components/schemas/LcdFaceView" } }
     PawnIoView:
       type: object
       description: PawnIO and the Lightloom I/O service, what RAM lighting needs (Windows).
@@ -1619,9 +1668,30 @@ components:
         running: { type: boolean }
         fps: { type: integer }
         status: { type: [string, "null"] }
+    LcdFaceView:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        publisher: { type: string }
+        usesSensors: { type: boolean }
+    LcdView:
+      type: object
+      description: A device's LCD while its plugin drives one (`LCD.initialize` was called).
+      properties:
+        width: { type: integer }
+        height: { type: integer }
+        circular: { type: boolean }
+        face: { type: [string, "null"] }
+        framerate: { type: integer }
+        renderer: { enum: [cef, mock] }
+        running: { type: boolean }
+        status: { type: string }
     DeviceView:
       type: object
       properties:
+        lcd: { $ref: "#/components/schemas/LcdView" }
         key: { type: string }
         vid: { type: integer }
         pid: { type: integer }

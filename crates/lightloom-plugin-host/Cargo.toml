@@ -20,6 +20,8 @@ tracing = { workspace = true }
 lightloom-hal = { path = "../lightloom-hal" }
 lightloom-hid-desc = { path = "../lightloom-hid-desc" }
 lightloom-engine = { path = "../lightloom-engine" }
+# `@SignalRGB/lcd`: frame encoders and the face-renderer provider.
+lightloom-lcd = { path = "../lightloom-lcd" }
 
 [dev-dependencies]
 lightloom-hal = { path = "../lightloom-hal", features = ["mock"] }

@@ -29,6 +29,8 @@
 //!   Validate → Initialize → Render per frame → Shutdown.
 //! * [`serial`]: `@SignalRGB/serial` for `Type() == "serial"` sessions, bound
 //!   to the matched USB device's own ports (dry-run writes, read timeouts).
+//! * [`lcd`]: `@SignalRGB/lcd` in device sessions: `LCD.initialize` attaches to the
+//!   device's face renderer, `getFrame` and friends encode its frames.
 //! * [`lamparray`]: the built-in session of a LampArray of the OS backend
 //!   (Windows Dynamic Lighting), sampled like a plugin device.
 //! * [`manager`]: one session per present device, following hotplug
@@ -57,6 +59,7 @@ pub mod dryrun;
 pub mod exports;
 pub mod input;
 pub mod lamparray;
+pub mod lcd;
 pub mod loader;
 pub mod manager;
 pub mod manifest;

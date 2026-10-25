@@ -26,6 +26,10 @@ fn work_dir(name: &str) -> PathBuf {
 }
 
 fn client(name: &str, props: &[(&str, Value)]) -> (CefRenderer, PathBuf) {
+    client_with(name, props, None)
+}
+
+fn client_with(name: &str, props: &[(&str, Value)], face: Option<(u32, u32)>) -> (CefRenderer, PathBuf) {
     let dir = work_dir(name);
     let cfg = CefRendererConfig {
         renderer: PathBuf::from(env!("CARGO_BIN_EXE_lightloom-renderer-fake")),
@@ -37,8 +41,31 @@ fn client(name: &str, props: &[(&str, Value)]) -> (CefRenderer, PathBuf) {
             .collect::<Map<_, _>>(),
         software_compositing: false,
         work_dir: dir.clone(),
+        face,
     };
     (CefRenderer::new(cfg), dir)
+}
+
+#[test]
+fn an_lcd_face_renders_at_its_own_size() {
+    let (mut r, dir) = client_with("face", &[], Some((48, 32)));
+    // The canvas size is refused: the store must have the face's size.
+    let canvas = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
+    assert!(matches!(
+        r.start(canvas),
+        Err(lightloom_render::RenderError::SizeMismatch {
+            renderer: (48, 32),
+            ..
+        })
+    ));
+    let store = Arc::new(FrameStore::new(48, 32));
+    r.start(Arc::clone(&store)).unwrap();
+    wait_until("face frames", 20, || r.status().frames >= 3);
+    let (_, frame) = store.latest();
+    assert_eq!((frame.width(), frame.height()), (48, 32));
+    assert_eq!(frame.pixel(47, 31).g, 0x99, "the renderer was told --face");
+    r.stop();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -146,6 +173,7 @@ fn a_missing_renderer_is_reported() {
         properties: Map::new(),
         software_compositing: false,
         work_dir: dir.clone(),
+        face: None,
     });
     let store = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     r.start(store).unwrap();

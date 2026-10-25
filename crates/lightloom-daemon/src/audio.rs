@@ -98,6 +98,7 @@ mod tests {
             properties: Map::new(),
             software_compositing: false,
             work_dir: std::env::temp_dir(),
+            face: None,
         });
         let off = AudioConfig {
             enabled: false,

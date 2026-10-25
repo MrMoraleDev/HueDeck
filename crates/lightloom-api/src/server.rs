@@ -227,6 +227,8 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/devices", get(devices))
         .route("/v1/devices/{key}", get(device).patch(patch_device))
         .route("/v1/devices/{key}/channels/{channel}", put(put_channel))
+        .route("/v1/devices/{key}/lcd", put(put_lcd))
+        .route("/v1/lcd/faces", get(lcd_faces))
         .route("/v1/save/preview", post(save_preview))
         .route("/v1/save", post(save_to_devices))
         .route("/v1/effects", get(effects))
@@ -394,6 +396,29 @@ async fn put_channel(
         })
         .await,
     )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LcdBody {
+    face: Option<String>,
+    framerate: Option<u32>,
+}
+
+/// Choose a device's LCD face / frame rate.
+async fn put_lcd(State(ctx): State<ApiContext>, Path(key): Path<String>, Json(b): Json<LcdBody>) -> Response {
+    reply(
+        ctx.call(Request::SetLcd {
+            key,
+            face: b.face,
+            framerate: b.framerate,
+        })
+        .await,
+    )
+}
+
+async fn lcd_faces(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().lcd_faces).into_response()
 }
 
 async fn effects(State(ctx): State<ApiContext>) -> Response {

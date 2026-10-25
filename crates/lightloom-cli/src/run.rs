@@ -266,6 +266,7 @@ impl Mode {
                     properties: e.props.iter().cloned().collect(),
                     software_compositing: !e.gpu_compositing,
                     work_dir,
+                    face: None,
                 }))
             }
             _ => Box::new(NullRenderer::new(self.pattern(), self.fps())),

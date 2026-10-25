@@ -7,6 +7,7 @@
   import SaveDialog from "./SaveDialog.svelte";
   import BatteryBadge from "./BatteryBadge.svelte";
   import DeviceReport, { skipWorksPreview } from "./DeviceReport.svelte";
+  import LcdFacePicker from "./LcdFacePicker.svelte";
   import { groupParameters, groupTitle } from "../lib/params";
   import { token } from "../lib/api";
   import { buildReport, type ReportResult } from "../lib/report";
@@ -155,6 +156,7 @@
           {m.message}
         </p>
       {/each}
+      {#if d.lcd}<LcdFacePicker device={d} faces={snapshot.lcdFaces ?? []} />{/if}
       {#if d.battery}
         <label class="check blink"
           ><input

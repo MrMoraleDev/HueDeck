@@ -90,6 +90,8 @@ done
 
 # Starter effects (CC0) and component descriptors.
 cp -a "$repo/effects" "$out/effects"
+# Starter LCD faces (CC0).
+cp -a "$repo/faces" "$out/faces"
 if [ -d "$repo/components" ]; then cp -a "$repo/components" "$out/components"; fi
 
 # Linux integration files (installed by the user or a package, never by the daemon).

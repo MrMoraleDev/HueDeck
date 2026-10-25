@@ -18,7 +18,7 @@ vendor's GPU driver does not already provide, and what Lightloom should do about
 | Raw USB (`Type() == "rawusb"`/`"hybrid"`: Lian Li Uni Fan SL/AL/original, Aqua Computer, Thermalright/Turzx LCDs, Lian Li Universal Screen, Asus Ryujin and NZXT Kraken LCD streams) | **Depends on the device.** Yes for vendor-class interfaces without MS OS descriptors. | **Not implemented.** `UsbBackend` is a trait with no Windows implementation; the plugin host has no `bulk_transfer`/`control_transfer`; `catalog.rs` refuses rawusb/hybrid plugins. | Implement with `nusb` (WinUSB) for devices that self-bind WinUSB. Do **not** ship an INF yet. §2. |
 | Serial (7 corpus plugins) | CDC-ACM: no (inbox `usbser.sys`, Windows 10+). FTDI/CP210x/CH340: the vendor VCP driver, usually delivered by Windows Update [U]. | Not implemented. | Document it; no Lightloom action. |
 | NVIDIA GPU RGB (I2C over NvAPI) | No. `nvapi64.dll` ships with the NVIDIA driver. | Done (M5, loaded dynamically). | Nothing to do. |
-| AMD GPU RGB (I2C over ADL) | **No.** `atiadlxx.dll` ships with the AMD driver. | Missing. | Add an unprivileged `AmdGpu` bus over legacy ADL, whose headers are MIT. §3. |
+| AMD GPU RGB (I2C over ADL) | **No.** `atiadlxx.dll` ships with the AMD driver. | Done (WP-AMDGPU, `crates/lightloom-adl`; mock-tested only). | Hardware test on an AMD card. §3. |
 | AMD chipset SMBus (RAM, some boards) | PawnIO (opt-in, signed third-party driver). | Done: broker + `SmbusPIIX4` pinned. | Keep as is. |
 | Intel chipset SMBus (RAM) | PawnIO + `SmbusI801`. | Done (WP-I801): pinned, `i801.rs` backend, mock/fake/fuzz tested; not run on an Intel board. | Hardware test on an Intel board. §4. |
 | SuperIO/LPC (NCT6687D fans/LEDs, ITE) | PawnIO + `LpcIO`. | Missing. | Pin `LpcIO` only when a feature uses it, behind closed high-level ops. §5. |
@@ -120,6 +120,10 @@ How to settle it per device, with no driver install (a task for a contributor wh
 | **F. UsbDk** (OpenRGB's route) | Users install Red Hat's signed UsbDk filter driver themselves. | none | It is a kernel filter on all USB devices. It conflicts with ADR-0007 if Lightloom ships it, so leave it out. |
 
 ### 2.4 Recommendation for raw USB
+
+Status: points 1 and 3 implemented on `feature/rawusb` (`WinUsbBackend`, the device list's
+`needs-driver` state, `docs/hardware/winusb.md`); no INF is shipped.
+
 1. Implement `UsbBackend` for Windows with `nusb` (WinUSB only). Set `driver_bound = true` only when the
    interface's service is `WinUSB`. When it is not, the plugin session fails with a clear message
    ("this device needs a WinUSB driver that Windows did not install; see docs/hardware/…").

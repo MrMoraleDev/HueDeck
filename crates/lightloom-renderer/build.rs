@@ -9,11 +9,13 @@
 //! Chromium subprocess, which is this executable again.
 //!
 //! The CEF runtime files themselves (libcef.dll / libcef.so, *.pak, locales/ ...) are copied
-//! next to the binary by `cef-dll-sys`'s own build script, see README.md.
+//! next to the binary by `cef-dll-sys`'s own build script, see README.md. The icon and version
+//! resource come from lightloom-winres.
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=lightloom-renderer.exe.manifest");
+    lightloom_winres::embed("Lightloom effect renderer");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     if target_os == "windows" && target_env == "msvc" {

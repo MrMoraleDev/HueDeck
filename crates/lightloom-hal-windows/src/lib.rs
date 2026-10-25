@@ -27,12 +27,19 @@
 //!   RAM lighting) as `lightloom_hal::SmbusBus` objects; the named-pipe
 //!   transport is Windows only.
 //! * [`pawnio`]: whether the PawnIO driver is installed (its uninstall entry,
-//!   never the device) and what to tell the user.
+//!   never the device), what to tell the user, and the contract with the
+//!   elevated helper `lightloom-setup`.
+//! * [`elevate`] (Windows only): start a program through the UAC prompt
+//!   (`runas`) on an explicit user action, and wait for it.
+//! * [`service`] (Windows only): read-only state of the I/O broker service.
 //! * [`owner`] (Windows only): the named mutex that lets one Lightloom process
 //!   at a time drive SMBus / GPU I2C.
 //!
-//! * [`hotplug`] (Windows only): HID arrival/removal notifications
-//!   (`CM_Register_Notification`).
+//! * [`hotplug`] (Windows only): HID and USB device arrival/removal
+//!   notifications (`CM_Register_Notification`).
+//! * [`usb`]: [`WinUsbBackend`] (Windows only), raw USB over WinUSB with
+//!   `nusb` for `rawusb`/`hybrid` plugins; it claims only interfaces WinUSB
+//!   owns and never installs a driver. The driver bookkeeping is pure.
 //! * [`toast`] (Windows only): system notifications as toasts, under a
 //!   per-user AppUserModelID registration (`lightloom_hal::Notifier`).
 //!
@@ -40,7 +47,7 @@
 //!   WinRT `Windows.Devices.Lights` (`DeviceWatcher` discovery, availability,
 //!   package-identity check).
 //!
-//! Raw USB (`nusb`) and serial follow in later milestones.
+//! Serial follows in later milestones.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -48,9 +55,12 @@ pub mod broker;
 pub mod group;
 pub mod path;
 pub mod pawnio;
+pub mod usb;
 
 #[cfg(windows)]
 pub mod console;
+#[cfg(windows)]
+pub mod elevate;
 #[cfg(windows)]
 pub mod hid;
 #[cfg(windows)]
@@ -66,6 +76,8 @@ pub mod probe;
 #[cfg(windows)]
 pub mod registry;
 #[cfg(windows)]
+pub mod service;
+#[cfg(windows)]
 pub mod system;
 #[cfg(windows)]
 pub mod toast;
@@ -74,5 +86,7 @@ pub mod toast;
 pub use hid::WindowsHidBackend;
 #[cfg(windows)]
 pub use native::NativeHidBackend;
+#[cfg(windows)]
+pub use usb::WinUsbBackend;
 
 pub use group::{group_endpoints, DeviceGroup, GroupingSource, ProbedEndpoint};

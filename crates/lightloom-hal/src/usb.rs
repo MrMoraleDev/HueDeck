@@ -32,11 +32,11 @@ pub const MAX_TIMEOUT_MS: u32 = 5000;
 /// Where the user learns why a device needs WinUSB and how to check it.
 #[cfg(not(target_os = "linux"))]
 pub const WINUSB_HELP_URL: &str =
-    "https://github.com/MrMoraleDev/Lightloom/blob/develop/docs/hardware/winusb.md";
+    "https://github.com/MrMoraleDev/Lightloom/blob/main/docs/hardware/winusb.md";
 /// Where the user learns which USB interfaces Lightloom may claim on Linux.
 #[cfg(target_os = "linux")]
 pub const WINUSB_HELP_URL: &str =
-    "https://github.com/MrMoraleDev/Lightloom/blob/develop/docs/linux-porting.md#raw-usb-devices";
+    "https://github.com/MrMoraleDev/Lightloom/blob/main/docs/linux-porting.md#raw-usb-devices";
 
 /// How every unreachable-interface message starts ([`HalError::NeedsDriver`]).
 #[cfg(not(target_os = "linux"))]
@@ -137,9 +137,12 @@ impl UsbDeviceInfo {
         } else {
             format!(" ({})", owners.join(", "))
         };
+        #[cfg(not(target_os = "linux"))]
+        let why = "Windows did not bind WinUSB to";
+        #[cfg(target_os = "linux")]
+        let why = "no interface Lightloom may claim on";
         Some(format!(
-            "needs WinUSB driver: Windows did not bind WinUSB to {:04x}:{:04x}{owners}; Lightloom never installs \
-             drivers, see {WINUSB_HELP_URL}",
+            "{NEEDS_DRIVER}: {why} {:04x}:{:04x}{owners}; Lightloom never installs drivers, see {WINUSB_HELP_URL}",
             self.vid, self.pid
         ))
     }
@@ -217,9 +220,13 @@ impl UsbDeviceInfo {
         } else {
             &iface.driver
         };
+        #[cfg(not(target_os = "linux"))]
+        let not = ", not WinUSB";
+        #[cfg(target_os = "linux")]
+        let not = "";
         Err(HalError::NeedsDriver(format!(
-            "needs WinUSB driver: interface {} of {:04x}:{:04x} is bound to {driver}, not WinUSB; Lightloom never \
-             claims it or swaps its driver, see {WINUSB_HELP_URL}",
+            "{NEEDS_DRIVER}: interface {} of {:04x}:{:04x} is bound to {driver}{not}; Lightloom never claims it or \
+             swaps its driver, see {WINUSB_HELP_URL}",
             iface.number, self.vid, self.pid
         )))
     }

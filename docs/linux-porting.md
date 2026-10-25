@@ -436,7 +436,7 @@ branch) and on manual dispatch, without publishing, so a tag never runs untested
   updater compares the version the binaries report with the tag. Other refs give
   `<workspace version>-<short sha>`.
 - `windows`: the workspace and the CEF renderer with cargo-auditable, `stage-windows.ps1`,
-  `lightloom-x86_64-pc-windows-msvc.zip`, CycloneDX SBOMs.
+  `Lightloom-<version>-x64.zip` (renamed by `assemble`), CycloneDX SBOMs (one `lightloom-<version>-sbom.zip` in the release).
 - `msi`: `Lightloom-<x.y.z>-x64.msi` from the same staged tree (the name the updater looks
   for).
 - `linux`: on `ubuntu-24.04` (glibc 2.39 baseline), the daemon and CLI, then the renderer with

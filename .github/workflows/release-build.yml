@@ -573,17 +573,23 @@ jobs:
           set -eu
           cd release
           rm -f SHA256SUMS
+          # Published names: the portable zip like the MSI, and the per-crate CycloneDX SBOMs of
+          # both targets in one archive instead of ~40 loose files.
+          mv lightloom-x86_64-pc-windows-msvc.zip "Lightloom-$VERSION-x64.zip"
+          ls ./*-x86_64-pc-windows-msvc.cdx.json ./*-x86_64-unknown-linux-gnu.cdx.json > /dev/null
+          zip -q -9 -X "lightloom-$VERSION-sbom.zip" ./*.cdx.json
+          rm ./*.cdx.json
           # The names the in-app updater and the docs depend on.
           for f in \
             "Lightloom-$MSI_VERSION-x64.msi" \
-            "lightloom-x86_64-pc-windows-msvc.zip" \
+            "Lightloom-$VERSION-x64.zip" \
+            "lightloom-$VERSION-sbom.zip" \
             "lightloom-$VERSION-linux-x86_64.tar.xz" \
             "Lightloom-$VERSION-x86_64.AppImage" \
             "lightloom_${VERSION}_amd64.deb" \
             "lightloom-$VERSION-1.x86_64.rpm"; do
             if [ ! -s "$f" ]; then echo "::error::missing release file $f"; exit 1; fi
           done
-          ls ./*-x86_64-pc-windows-msvc.cdx.json ./*-x86_64-unknown-linux-gnu.cdx.json > /dev/null
           # Every file the release publishes, and nothing else, plain names only.
           for f in *; do
             case "$f" in

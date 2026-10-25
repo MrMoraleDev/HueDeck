@@ -80,6 +80,12 @@
     <binary>lightloom</binary>
   </provides>
   <releases>
+    <release version="0.1.1" date="2026-10-25">
+      <url type="details">https://github.com/MrMoraleDev/Lightloom/releases/tag/v0.1.1</url>
+      <description>
+        <p>Linux packages (.deb, .rpm) and the Flathub app id; a tidier release page; MSI GPU per-LED research tools (the RTX 3060 Gaming X Trio stays one colour).</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-25">
       <url type="details">https://github.com/MrMoraleDev/Lightloom/releases/tag/v0.1.0</url>
       <description>

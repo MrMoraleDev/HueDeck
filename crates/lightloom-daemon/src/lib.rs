@@ -20,6 +20,7 @@ pub mod lifecycle;
 pub mod paths;
 pub mod pawnio;
 pub mod port;
+pub mod scheme;
 pub mod screen;
 pub mod sensors;
 pub mod store;
@@ -106,7 +107,13 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
     engine_opts.api_port = native_port;
     engine_opts.api_port_notice = notice;
 
-    let engine = engine::start(engine_opts)?;
+    // The URL-scheme setting may write HKCU only in a real (persistent) run.
+    let url_scheme = if opts.ephemeral {
+        scheme::UrlScheme::unavailable()
+    } else {
+        scheme::UrlScheme::system()
+    };
+    let engine = engine::start_with(engine_opts, url_scheme)?;
     let shared = engine.shared();
     let data_dir = opts.paths.data.clone();
     let native = Arc::new(

@@ -98,6 +98,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, oneshot};
 
+mod actions;
 mod playlists;
 
 /// Settings keys in the database.
@@ -125,6 +126,8 @@ mod keys {
     /// The auto-next timer.
     pub const EFFECT_TIMER: &str = "lighting.effectTimer";
     pub const NETWORK: &str = "settings.network";
+    /// The `lightloom://` URL-scheme registration is wanted (opt-in).
+    pub const URL_SCHEME: &str = "settings.urlScheme";
     /// Black canvas while the PC is locked or the display is off.
     pub const LIGHTS_OFF_WHEN_IDLE: &str = "settings.lightsOffWhenIdle";
 }
@@ -353,8 +356,15 @@ impl Drop for EngineHandle {
     }
 }
 
-/// Open the database and start the engine thread.
+/// Open the database and start the engine thread. The `lightloom://` URL scheme
+/// cannot be registered ([`crate::scheme::UrlScheme::unavailable`]); see [`start_with`].
 pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
+    start_with(opts, crate::scheme::UrlScheme::unavailable())
+}
+
+/// [`start`], registering the `lightloom://` URL scheme through `url_scheme`
+/// when the user turns the setting on.
+pub fn start_with(opts: EngineOptions, url_scheme: crate::scheme::UrlScheme) -> anyhow::Result<EngineHandle> {
     let store = if opts.ephemeral {
         Store::in_memory()?
     } else {
@@ -384,7 +394,7 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
         std::thread::Builder::new()
             .name("lightloom-engine".into())
             .spawn(move || {
-                let mut engine = Engine::boot(opts, store, shared, rx, power_rx);
+                let mut engine = Engine::boot(opts, store, shared, rx, power_rx, url_scheme);
                 engine.run(&stop);
                 engine.shut_down();
             })?
@@ -563,6 +573,8 @@ struct Engine {
     lamp_present: Vec<Present>,
     /// LampArrays left to a plugin, already logged.
     lamp_owned: BTreeSet<String>,
+    /// The action router's state (previous layout, URL scheme).
+    actions: actions::ActionState,
     /// Power events ([`Shared::power_sink`]).
     power_rx: Receiver<PowerSignal>,
     /// This OS's power events (real hardware only).
@@ -607,6 +619,7 @@ impl Engine {
         shared: Arc<Shared>,
         requests: Receiver<Envelope>,
         power_rx: Receiver<PowerSignal>,
+        url_scheme: crate::scheme::UrlScheme,
     ) -> Self {
         let defaults = Arc::new(Mutex::new(SessionDefaults {
             write_mode: if opts.dry_run {
@@ -675,6 +688,7 @@ impl Engine {
             lamp_generation: 0,
             lamp_present: Vec::new(),
             lamp_owned: BTreeSet::new(),
+            actions: actions::ActionState::new(url_scheme),
             power_rx,
             _power_source: lightloom_runtime::power::Power::inactive(),
             lights_off_when_idle: false,
@@ -684,6 +698,7 @@ impl Engine {
         };
         e.enter(LifecycleState::LoadingConfig);
         e.load_state();
+        e.sync_url_scheme(true);
         e.enter(LifecycleState::RendererProbe);
         if e.opts.renderer.is_none() {
             e.warnings.push(
@@ -1803,6 +1818,9 @@ impl Engine {
                 battery_critical: self.thresholds.critical,
                 battery_notifications: self.battery_notify,
                 notifications_available: cfg!(windows),
+                url_scheme: self.actions.url_scheme_on,
+                url_scheme_available: self.actions.url_scheme.available(),
+                url_scheme_notice: self.actions.url_scheme_notice.clone(),
                 lights_off_when_idle: self.lights_off_when_idle,
             },
             conflicts: {
@@ -2721,6 +2739,8 @@ impl Engine {
                 serde_json::to_value(self.pawnio_view()).map_err(internal)
             }
             Request::PawnIoSetup { action } => self.pawnio_setup(action),
+            Request::Action { url } => self.run_action(&url),
+            Request::SetUrlScheme { enabled } => self.set_url_scheme(enabled),
             Request::Rescan => {
                 self.smbus_scan_due = true;
                 self.rescan();
@@ -3005,6 +3025,9 @@ impl Engine {
 
     fn switch_layout(&mut self, layout: Layout) -> anyhow::Result<()> {
         self.store.set(keys::LAYOUT, &layout.name)?;
+        if layout.name != self.layout.name && !self.layout.name.is_empty() {
+            self.actions.previous_layout = Some(self.layout.name.clone());
+        }
         self.layout = layout;
         lock(&self.defaults).layout = self.layout.clone();
         self.push_brightness();
@@ -3262,6 +3285,7 @@ impl Engine {
         self.reconcile_with(Vec::new());
         self.warnings.clear();
         self.load_state();
+        self.sync_url_scheme(false);
         lock(&self.defaults).use_signalrgb = self.signalrgb;
         self.load_libraries();
         self.start_canvas();

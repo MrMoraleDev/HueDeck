@@ -244,7 +244,19 @@ export interface Settings {
   batteryCritical: number;
   batteryNotifications: boolean;
   notificationsAvailable: boolean;
+  /** lightloom:// links are registered for this user (opt-in). */
+  urlScheme?: boolean;
+  /** This OS and install can register the URL scheme. */
+  urlSchemeAvailable?: boolean;
+  /** Why the registration is not what the setting says. */
+  urlSchemeNotice?: string | null;
 }
+
+/** An `action` event: an action URL for the dashboard. */
+export type DashboardAction =
+  | { action: "view"; page: string; tab: string; uid?: string | null }
+  | { action: "raiseWindow" }
+  | { action: "toast"; title: string; message: string };
 
 export interface Snapshot {
   version: string;

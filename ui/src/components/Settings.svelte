@@ -293,6 +293,27 @@
   </section>
 
   <section class="panel">
+    <h2>lightloom:// links</h2>
+    <label class="check"
+      ><input
+        type="checkbox"
+        checked={snapshot.settings.urlScheme ?? false}
+        disabled={!snapshot.settings.urlSchemeAvailable && !snapshot.settings.urlScheme}
+        onchange={(e) => daemon.run(() => api.setSettings({ urlScheme: (e.target as HTMLInputElement).checked }))}
+      /> Open lightloom:// links with Lightloom (stream decks, shortcuts, browsers)</label
+    >
+    <p class="muted">
+      Registers the lightloom:// URL scheme for your Windows user (HKCU\Software\Classes\lightloom, no administrator
+      rights); turning it off removes the key. Links such as lightloom://effect/apply/Rainbow or lightloom://brightness/50
+      then run in Lightloom. {#if !snapshot.settings.urlSchemeAvailable}Not available here (it needs Windows and the
+        lightloom command-line client next to lightloomd).{/if}
+    </p>
+    {#if snapshot.settings.urlSchemeNotice}
+      <p class="warn">{snapshot.settings.urlSchemeNotice}</p>
+    {/if}
+  </section>
+
+  <section class="panel">
     <h2>Effects</h2>
     <label class="check"
       ><input

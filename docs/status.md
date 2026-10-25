@@ -122,6 +122,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Native API 16138 (REST + WS, token, Host check) | Done | `crates/lightloom-api/src/server.rs` (`/v1/*`, `/v1/events`, `/v1/preview`); `docs/hardware/daemon-m4.md` |
 | Configurable API port | In progress (`feature/api-port`) | today: fixed 16138 |
 | Compat REST 16038 | Done | `compat_router()`: every route of SignalRGB's local API (app, new, partners, lighting, global_brightness, enabled, effects, effect, image, apply, presets, next, previous, shuffle, loadEffect, playlists, playlist, play, scenes/current_layout, scenes/layouts); envelope contract test for every route; `docs/integrations/signalrgb-api.md` |
+| Action URLs (`lightloom://`) | Done | `POST /v1/actions`, `lightloom action <url>`, SignalRGB `system.action` paths (app, view, layout, effect, device, playlist, brightness, canvas), dashboard `action` events, opt-in per-user URL-scheme registration; `docs/integrations/actions.md` |
 | Compat canvas events 16034 | Done | `server.rs` `compat_canvas_event`; listeners wait while SignalRGB owns the ports |
 | Dashboard: devices, layout editor (drag, scale, rotate, flip), effects + controls + presets, channels/components, settings | Done | `ui/src/components/{Devices,Layout,Effects,Preview,Settings,ControlInput}.svelte` |
 | Dashboard: logs page | Missing | no log view in `ui/src` |
@@ -309,6 +310,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
     - (a) Action router: `lightloom://` URL scheme and `system.action` endpoints for app, view, effect, layout and device, in the daemon and API.
     - (b) Macro runtime: QuickJS runtime per macro script, Inputs/Actions, `signalrgb.*`, `keys`/`mouse` via SendInput, opt-in low-level hooks.
     - (b) touches a new crate `lightloom-macros` plus the daemon. It also connects the `keyboard`/`mouse` `sendEvent` feature globals in `host.js`.
+    - **(a) Done** on `feature/action-router`: `lightloom-api/src/actions.rs` parses `lightloom://` URLs strictly (SignalRGB's paths: `app/raiseWindow|restart|toast`, `view/<page>[?uid=]`, `layout/apply/<name>|applyprevious`, `effect/apply/<name>?<prop>=<v>`, `device/<uid>/enable|disable`, `playlist/<id>/play|stop`, `brightness/<0-100>`, `canvas/pause|resume`; `effect/install|update` refused; unknown paths dropped with a warning); `lightloom-daemon/src/engine/actions.rs` dispatches them to the existing requests (effect properties coerced to the controls' types). `POST /v1/actions`, `lightloom action <url>`, `action` WS events the dashboard follows (tabs, device scroll, toasts), and the opt-in per-user URL-scheme registration (`HKCU\Software\Classes\lightloom`, Settings; `lightloom_hal::UserRegistry`, in-memory in tests). Docs: `docs/integrations/actions.md`.
 14. **WP-LCD: LCD faces. Size L.**
     - Touches: `lightloom-renderer` (a second browser per LCD device, its own shm ring); `lightloom-plugin-host` native `lcd` module (`getFrame` in JPEG, PNG, RGB565 and the other formats); the daemon (face selection).
     - Needs WP-USB first: most LCD coolers are rawusb.

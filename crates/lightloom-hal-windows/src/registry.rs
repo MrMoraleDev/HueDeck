@@ -2,16 +2,18 @@
 //! Read-only access to registry values: under `HKEY_CURRENT_USER`, importing
 //! another application's per-user settings (SignalRGB keeps its component
 //! assignments and canvas placements there); under `HKEY_LOCAL_MACHINE`,
-//! whether a driver is installed (PawnIO's uninstall entry). Nothing here
-//! writes the registry (the one key Lightloom writes, its notification sender,
-//! is in [`crate::toast`]).
+//! whether a driver is installed (PawnIO's uninstall entry). The one writer
+//! here, [`CurrentUserRegistry`], is Lightloom's `lightloom_hal::UserRegistry`
+//! over `HKEY_CURRENT_USER`, used only for keys the user asked for (the opt-in
+//! `lightloom://` URL scheme); the notification sender's key is in [`crate::toast`].
 
 use std::io;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, HKEY, HKEY_CURRENT_USER,
-    HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_QWORD, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW,
+    RegQueryInfoKeyW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE,
+    REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SZ,
 };
 
 /// Values larger than this are skipped (a channel array is a few KB).
@@ -245,6 +247,68 @@ pub fn current_user_subkeys(subkey: &str) -> io::Result<Vec<String>> {
         ));
     }
     Ok(out)
+}
+
+/// `lightloom_hal::UserRegistry` over `HKEY_CURRENT_USER` (no administrator
+/// rights involved). Callers write only keys the user asked for.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CurrentUserRegistry;
+
+fn hal_error(e: io::Error) -> lightloom_hal::HalError {
+    lightloom_hal::HalError::Io(e)
+}
+
+impl lightloom_hal::UserRegistry for CurrentUserRegistry {
+    fn read_string(&self, key: &str, name: &str) -> lightloom_hal::HalResult<Option<String>> {
+        let Some(k) = open(key).map_err(hal_error)? else {
+            return Ok(None);
+        };
+        Ok(strings(values(&k).map_err(hal_error)?)
+            .into_iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v))
+    }
+
+    fn write_string(&self, key: &str, name: &str, value: &str) -> lightloom_hal::HalResult<()> {
+        let wkey = wide(key);
+        let mut hkey = HKEY::default();
+        // SAFETY: NUL-terminated key name that outlives the call; valid out pointer.
+        let err = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(wkey.as_ptr()),
+                None,
+                PCWSTR::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_SET_VALUE,
+                None,
+                &mut hkey,
+                None,
+            )
+        };
+        if err != ERROR_SUCCESS {
+            return Err(hal_error(os_error(err)));
+        }
+        let k = Key(hkey);
+        let wname = wide(name);
+        let data: Vec<u8> = wide(value).iter().flat_map(|u| u.to_le_bytes()).collect();
+        // SAFETY: the key is open; value name and data outlive the call.
+        let err = unsafe { RegSetValueExW(k.0, PCWSTR(wname.as_ptr()), None, REG_SZ, Some(&data)) };
+        if err != ERROR_SUCCESS {
+            return Err(hal_error(os_error(err)));
+        }
+        Ok(())
+    }
+
+    fn delete_tree(&self, key: &str) -> lightloom_hal::HalResult<()> {
+        let wkey = wide(key);
+        // SAFETY: NUL-terminated key name that outlives the call.
+        let err = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(wkey.as_ptr())) };
+        if err == ERROR_SUCCESS || err == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        Err(hal_error(os_error(err)))
+    }
 }
 
 #[cfg(test)]

@@ -17,6 +17,8 @@
 //! * [`pawnio`]: PawnIO / RAM lighting facts (read-only) and the elevated
 //!   helper run behind the dashboard's Install / Remove buttons;
 //! * [`system`]: machine facts for `@SignalRGB/systeminfo` and the process's memory.
+//! * [`user_registry`]: the per-user registry for keys Lightloom writes on request
+//!   (the opt-in `lightloom://` URL scheme).
 
 #![forbid(unsafe_code)]
 
@@ -33,3 +35,4 @@ pub mod sensors;
 pub mod signalrgb;
 pub mod smbus;
 pub mod system;
+pub mod user_registry;

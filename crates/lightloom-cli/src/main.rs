@@ -5,7 +5,8 @@
 //! `light` / `rainbow` / `bench` (null renderer → plugin sessions → hardware,
 //! see [`run`]) and `compat dry-run` (corpus harness). `url` prints where the
 //! daemon serves (`--addr`, else the `api-port` file lightloomd writes, else
-//! 127.0.0.1:53000). `udev generate` writes the Linux udev rules for the
+//! 127.0.0.1:53000). `action <url>` hands a `lightloom://` action URL to the
+//! running daemon (`POST /v1/actions`). `udev generate` writes the Linux udev rules for the
 //! devices the plugins claim.
 //!
 //! Exit codes: `0` success; `1` a device session failed, faulted or saw I/O
@@ -17,6 +18,7 @@
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 
+mod action;
 mod compat;
 mod devices;
 mod run;
@@ -120,6 +122,15 @@ enum Command {
     /// Print the address of the daemon's dashboard and API (--addr / LIGHTLOOM_ADDR, else the
     /// port lightloomd serves on, else the default 127.0.0.1:53000).
     Url,
+    /// Run a lightloom:// action URL in the running daemon (e.g. lightloom://effect/apply/Rainbow,
+    /// lightloom://brightness/50, lightloom://view/devices); see docs/integrations/actions.md.
+    Action {
+        /// The URL (or a bare action path such as layout/apply/Desk).
+        url: String,
+        /// Print the daemon's JSON answer.
+        #[arg(long)]
+        json: bool,
+    },
     /// SignalRGB-compatibility tooling.
     Compat {
         #[command(subcommand)]
@@ -175,6 +186,17 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
             let (data, _) = lightloom_runtime::dirs::from_env();
             println!("http://{}/", daemon_addr(cli.addr.as_deref(), &data));
             Ok(run::Outcome::Clean)
+        }
+        Command::Action { url, json } => {
+            let (data, _) = lightloom_runtime::dirs::from_env();
+            let addr = daemon_addr(cli.addr.as_deref(), &data);
+            action::run(&addr, &data, &url, json).map(|ok| {
+                if ok {
+                    run::Outcome::Clean
+                } else {
+                    run::Outcome::Failed
+                }
+            })
         }
         Command::Devices { json, filters } => run_devices(json, &filters).map(|_| run::Outcome::Clean),
         Command::Light { color, run } => run::run(run::Mode::Light(color), &run),
@@ -371,6 +393,15 @@ mod tests {
         let cli = Cli::try_parse_from(["lightloom", "--addr", "127.0.0.1:1234", "url"]).unwrap();
         assert_eq!(cli.addr.as_deref(), Some("127.0.0.1:1234"));
         assert!(matches!(cli.command, Command::Url));
+    }
+
+    #[test]
+    fn action_parses() {
+        let cli = Cli::try_parse_from(["lightloom", "action", "lightloom://brightness/40", "--json"]).unwrap();
+        assert!(
+            matches!(cli.command, Command::Action { ref url, json: true } if url == "lightloom://brightness/40")
+        );
+        assert!(Cli::try_parse_from(["lightloom", "action"]).is_err());
     }
 
     #[test]

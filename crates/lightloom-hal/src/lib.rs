@@ -31,6 +31,7 @@ pub mod smbios;
 pub mod smbus;
 pub mod trace;
 pub mod usb;
+pub mod user_registry;
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
@@ -45,3 +46,4 @@ pub use serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};
 pub use smbios::SystemInfo;
 pub use smbus::{PciIds, SmbusBatch, SmbusBus, SmbusBusDescriptor, SmbusBusKind, SmbusOp, SmbusReply};
 pub use usb::{UsbBackend, UsbDeviceInfo, UsbHandle, UsbInterfaceInfo};
+pub use user_registry::UserRegistry;

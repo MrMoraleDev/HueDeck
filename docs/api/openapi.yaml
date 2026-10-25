@@ -43,6 +43,7 @@ tags:
   - name: sensors
   - name: backup
   - name: canvas
+  - name: actions
   - name: streams
 paths:
   /v1/health:
@@ -651,6 +652,7 @@ paths:
                 batteryNotifications: { type: boolean, description: Show low and critical battery alerts as system notifications. }
                 shutdownMode: { enum: [restore, keep, off], description: "What devices show when Lightloom closes: their own lighting, the last colours (not stored) or off; else `400 bad_request`." }
                 port: { type: integer, minimum: 1024, maximum: 65535, description: "Port of the native API and the dashboard (loopback only)." }
+                urlScheme: { type: boolean, description: "Register (or remove) the per-user `lightloom://` URL scheme (`HKCU\\Software\\Classes\\lightloom`; opt-in). Not available: `409 conflict`; the registry refused: `500 url_scheme_failed`; either way nothing else changes." }
       responses:
         "200":
           description: The settings now, and where the API serves.
@@ -669,6 +671,7 @@ paths:
                   shutdownMode: { enum: [restore, keep, off] }
                   port: { type: integer }
                   url: { type: string, examples: ["http://127.0.0.1:53000/"] }
+                  urlScheme: { type: boolean, description: Present when the request changed it. }
         "400":
           description: "`invalid_port` (out of range or reserved) or `bad_request`."
           content:
@@ -1011,6 +1014,57 @@ paths:
         "200": { $ref: "#/components/responses/Empty" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/actions:
+    post:
+      tags: [actions]
+      operationId: runAction
+      summary: Run a `lightloom://` action URL
+      description: |
+        The action router (docs/integrations/actions.md): `lightloom://<endpoint>/<verb>[/<arg>][?k=v]`,
+        the paths of SignalRGB's `signalrgb://` router under Lightloom's scheme; a bare path
+        (`brightness/50`) works too. `app/raiseWindow`, `app/restart`, `app/toast?title=&message=`,
+        `view/<page>[?uid=]`, `layout/apply/<name>`, `layout/applyprevious`,
+        `effect/apply/<name>?<property>=<value>` (`_location` and other `_` keys ignored),
+        `device/<uid>/enable|disable`, `playlist/<id>/play|stop`, `brightness/<0-100>`,
+        `canvas/pause|resume`. A malformed URL, or a value an effect control does not take, is
+        `400 invalid_action`; an unknown path is dropped with a warning (`200`, `dropped: true`);
+        `effect/install` and `effect/update` are `409 action_refused` (no marketplace).
+        `app/raiseWindow`, `view` and `app/toast` reach the dashboard as an `action` event.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, maxLength: 2048, examples: ["lightloom://effect/apply/Rainbow%20Rise?speed=3"] }
+      responses:
+        "200":
+          description: Carried out (`result`, what the underlying request answered), or dropped.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [action]
+                properties:
+                  action: { type: string, description: "Canonical name (`effect/apply`, `view`, `unknown`, ...)." }
+                  result: { description: "The underlying request's answer; `effect/apply` adds `effect` (the id) and `ignored` (properties the effect lacks)." }
+                  dropped: { type: boolean, description: An unknown action was dropped. }
+                  warning: { type: string, description: Why it was dropped. }
+        "400":
+          description: "`invalid_action`: the URL is malformed or a value is not valid for its control."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`action_refused` (`effect/install`, `effect/update`) or `conflict` (no previous layout)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
   /v1/events:
     get:
       tags: [streams]
@@ -1020,7 +1074,9 @@ paths:
         Upgrade to a WebSocket. The server sends text frames, each one `Event` as JSON; the first
         is `{"kind": "state"}`. `state` means the snapshot changed (refetch `GET /v1/state`),
         `stats` that only counters changed, `log` carries a log line in `data`, `battery` a low
-        or critical battery alert (`data`: `{key, name, level, severity}`). A client too slow
+        or critical battery alert (`data`: `{key, name, level, severity}`), `action` an action URL
+        for the dashboard (`data`: `{action: "view", page, tab, uid}`, `{action: "raiseWindow"}` or
+        `{action: "toast", title, message}`). A client too slow
         to keep up gets `state` again instead of the events it missed. Client frames are ignored.
       responses:
         "101":
@@ -1489,6 +1545,9 @@ components:
         batteryNotifications: { type: boolean }
         shutdownMode: { enum: [restore, keep, off], description: What devices show when Lightloom closes. }
         notificationsAvailable: { type: boolean, description: This OS has system notifications Lightloom can show. }
+        urlScheme: { type: boolean, description: "`lightloom://` links are registered for this user (opt-in)." }
+        urlSchemeAvailable: { type: boolean, description: This OS and install can register the URL scheme. }
+        urlSchemeNotice: { type: [string, "null"], description: Why the registration is not what the setting says. }
     SensorsView:
       type: object
       properties:
@@ -1539,5 +1598,5 @@ components:
       type: object
       required: [kind]
       properties:
-        kind: { enum: [state, stats, log, battery] }
-        data: { description: "`log`: the line; `battery`: `{key, name, level, severity}`." }
+        kind: { enum: [state, stats, log, battery, action] }
+        data: { description: "`log`: the line; `battery`: `{key, name, level, severity}`; `action`: `{action, ...}` (see `/v1/events`)." }

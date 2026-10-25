@@ -96,6 +96,7 @@ export const api = {
     batteryNotifications?: boolean;
     shutdownMode?: ShutdownMode;
     openrgbSdk?: boolean;
+    urlScheme?: boolean;
     lightsOffWhenIdle?: boolean;
   }) =>
     request("PATCH", "/v1/settings", patch),

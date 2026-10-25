@@ -9,6 +9,7 @@
 //! * [`MockUsb`] is a scripted raw USB backend (bulk IN data per endpoint,
 //!   control IN answers, timeouts, unplug) that records every transfer.
 //! * [`MockNotifier`] keeps the system notifications it was asked to show.
+//! * [`MockRegistry`] is an in-memory per-user registry.
 //! * [`MockLampArray`] is a fake LampArray provider (plug, unplug,
 //!   availability, recorded colour updates).
 //! * [`MockSerial`] has serial ports with an input queue and canned replies
@@ -1180,6 +1181,59 @@ impl crate::notify::Notifier for MockNotifier {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(notification.clone());
+        Ok(())
+    }
+}
+
+/// An in-memory [`crate::user_registry::UserRegistry`]: `(key, value name) -> text`,
+/// keys compared case-insensitively as the Windows registry does.
+#[derive(Debug, Default)]
+pub struct MockRegistry {
+    values: Mutex<BTreeMap<(String, String), String>>,
+    /// Fail every write (an unwritable registry).
+    pub fail_writes: std::sync::atomic::AtomicBool,
+}
+
+impl MockRegistry {
+    fn norm(key: &str) -> String {
+        key.trim_matches('\\').to_ascii_lowercase()
+    }
+
+    /// Every value, as `(key, name, value)` with keys lower-cased.
+    pub fn dump(&self) -> Vec<(String, String, String)> {
+        self.values
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|((k, n), v)| (k.clone(), n.clone(), v.clone()))
+            .collect()
+    }
+}
+
+impl crate::user_registry::UserRegistry for MockRegistry {
+    fn read_string(&self, key: &str, name: &str) -> HalResult<Option<String>> {
+        let values = self.values.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(values.get(&(Self::norm(key), name.to_ascii_lowercase())).cloned())
+    }
+
+    fn write_string(&self, key: &str, name: &str, value: &str) -> HalResult<()> {
+        if self.fail_writes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(HalError::PermissionDenied(format!("HKCU\\{key}")));
+        }
+        self.values
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((Self::norm(key), name.to_ascii_lowercase()), value.to_string());
+        Ok(())
+    }
+
+    fn delete_tree(&self, key: &str) -> HalResult<()> {
+        let root = Self::norm(key);
+        let prefix = format!("{root}\\");
+        self.values
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(k, _), _| *k != root && !k.starts_with(&prefix));
         Ok(())
     }
 }

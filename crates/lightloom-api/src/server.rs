@@ -240,6 +240,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/shutdown", post(shutdown))
         .route("/v1/canvas/event", post(canvas_event))
         .route("/v1/canvas/tap", post(canvas_tap))
+        .route("/v1/actions", post(run_action))
         .route("/v1/events", get(events_ws))
         .route("/v1/preview", get(preview_ws))
         .route("/", get(index))
@@ -569,6 +570,9 @@ struct SettingsPatch {
     /// Wider than `u16` so an out-of-range number gets a clear 400.
     port: Option<u32>,
     openrgb_sdk: Option<bool>,
+    /// The per-user `lightloom://` URL-scheme registration (opt-in).
+    #[serde(default)]
+    url_scheme: Option<bool>,
     #[serde(default)]
     lights_off_when_idle: Option<bool>,
 }
@@ -615,6 +619,14 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
             Some(port)
         }
     };
+    // The URL scheme first: when it cannot be registered nothing else changes.
+    let mut scheme = None;
+    if let Some(enabled) = p.url_scheme {
+        match ctx.call(Request::SetUrlScheme { enabled }).await {
+            Ok(v) => scheme = Some(v),
+            Err(e) => return error_response(&e),
+        }
+    }
     let result = ctx
         .call(Request::SetSettings {
             signalrgb: p.signalrgb,
@@ -642,6 +654,9 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
         }
         None => ctx.native.as_ref().map(|n| n.port()),
     };
+    if let (Some(Value::Object(extra)), Some(obj)) = (scheme, value.as_object_mut()) {
+        obj.extend(extra);
+    }
     if let (Some(port), Some(obj)) = (serving, value.as_object_mut()) {
         obj.insert("port".into(), json!(port));
         obj.insert("url".into(), json!(crate::native_url(port)));
@@ -757,6 +772,17 @@ struct Tap {
 
 async fn canvas_tap(State(ctx): State<ApiContext>, Json(t): Json<Tap>) -> Response {
     reply(ctx.call(Request::CanvasTap { x: t.x, y: t.y }).await)
+}
+
+#[derive(Deserialize)]
+struct ActionBody {
+    url: String,
+}
+
+/// `POST /v1/actions {url}`: run a `lightloom://` action URL
+/// (docs/integrations/actions.md).
+async fn run_action(State(ctx): State<ApiContext>, Json(b): Json<ActionBody>) -> Response {
+    reply(ctx.call(Request::Action { url: b.url }).await)
 }
 
 // --------------------------------------------------------------- websockets

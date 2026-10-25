@@ -218,6 +218,14 @@ their per-LED effect 4), then brightness at the maximum (`DeviceUpdateMode()` ap
 brightness). The three products switched to software mode at start go back to hardware mode
 (`00 04 00 00`). Nothing is saved: the device's own stored effect returns at its next power-up.
 
+After a "Save to devices" in the same session (since `Initialize()`), `Shutdown(false, "restore")`
+shows what was saved instead of the spectrum cycle, on each device that stored something: the
+same effect report (`0F 02` static with the saved colour, or spectrum `[00, led, 03]`) and the
+brightness report `0F 04` at the maximum, with storage `00` (nothing is written again). The
+recorded DeathAdder V2 Pro gets its recorded exit first (black frame, hardware mode), then those
+two reports on LED `00`. A new session (Lightloom started again) forgets the save and exits with
+the spectrum cycle, as the device's stored state is not read back.
+
 Exit modes (Lightloom extension, [docs/host-api/save-shutdown.md](../host-api/save-shutdown.md)):
 `Shutdown(false, "keep")` sends the last frame again and `"off"` a black frame, through the
 device's own frame reports, and leaves it in custom-frame (or software) mode: no spectrum cycle,

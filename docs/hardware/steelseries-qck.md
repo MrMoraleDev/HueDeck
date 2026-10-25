@@ -55,6 +55,12 @@ stated in the manifest description too.
 **Shutdown.** No exit step and no other mode in OpenRGB: both LEDs are set black (one pair). If
 `0x0D` stores the colours, the mat stays dark after Lightloom exits, until other software sets it.
 
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more as one `0x0E` + `0x0D` pair, the reports of every frame, `off` the
+same black; `restore` (and SignalRGB's call without a mode) and suspend are the shutdown above.
+Nothing is stored. OpenRGB sends no keepalive, so the device is expected to hold the colours until
+it loses power or other software takes it over (unverified on hardware).
+
 ## Left out
 
 Nothing lighting-related.

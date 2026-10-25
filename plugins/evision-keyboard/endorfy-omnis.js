@@ -49,6 +49,12 @@ export function Render() {
   keyboard.render();
 }
 
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md): only "restore". The keyboard
+// does not hold direct colours without the host refreshing them (see evision-v2.js, shutdown()),
+// and the only lights-off or static colour it keeps are its stored modes, which Lightloom never
+// writes; so "keep" and "off" end as "restore" does, and the dashboard says so.
+export function ShutdownModes() { return ["restore"]; }
+
 export function Shutdown(SystemSuspending) {
   keyboard.shutdown(SystemSuspending);
 }

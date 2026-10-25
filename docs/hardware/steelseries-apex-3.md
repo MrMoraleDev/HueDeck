@@ -58,6 +58,12 @@ brightness, so the brightness byte stays at the maximum.
   lighting according to the notes in `SteelSeriesApex8ZoneController.h`.
 - Apex 3: OpenRGB has no onboard-effect command for it: the ten zones are set black.
 
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more in Direct with the reports of a frame (on the Apex 3 TKL too; never
+`Save()`), `off` the same black; `restore` (and SignalRGB's call without a mode) and suspend are
+the shutdown above. Nothing is stored. OpenRGB sends no keepalive, so the device is expected to
+hold the colours until it loses power or other software takes it over (unverified on hardware).
+
 ## Left out
 
 - `SteelSeriesApexTZoneController::Save()` (`00 06 00 08`, `00 09`): a write to the keyboard's

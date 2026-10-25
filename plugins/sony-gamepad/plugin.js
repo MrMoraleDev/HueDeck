@@ -29,7 +29,8 @@
 //     are read with non-blocking reads every few seconds and handed to the host's battery feature.
 //     Nothing is sent for it.
 //   * OpenRGB sends nothing when it exits; Shutdown() turns the LEDs it drove off (black), since
-//     the protocol as OpenRGB uses it has no command that hands the lighting back.
+//     the protocol as OpenRGB uses it has no command that hands the lighting back; the "keep"
+//     exit mode (Lightloom extension) sends the last frame once more instead.
 //
 // Tested on hardware (2026-10-22): DualSense (054C:0CE6) over USB, light bar. The DualShock 4 ids
 // and the DualSense Edge (0x0DF2) are untested.
@@ -289,14 +290,25 @@ export function Render() {
   batteryPoll();
 }
 
-// Light bar black, player LEDs off; the same on system suspend (SystemSuspending is not needed).
-export function Shutdown() {
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
+
+// Light bar black, player LEDs off ("restore", "off", SignalRGB's call without a mode, and system
+// suspend). "keep" (Lightloom extension) sends the last frame once more in the same output report:
+// the controller keeps the colours of its last output report while it has power (OpenRGB sends a
+// report only when the colours change, with no keepalive), until other software (a game, Steam)
+// sends its own; nothing is stored (the controller has no lighting memory).
+export function Shutdown(SystemSuspending, mode) {
   if (!enabled) {
     return;
   }
+  const keep = !SystemSuspending && mode === "keep";
   const black = [0, 0, 0];
   if (product.protocol === DS4) {
-    device.write(ds4Report(black), DS4_REPORT_LENGTH);
+    device.write(ds4Report(keep ? sample(DS4_GEOMETRY.positions[0]) : black), DS4_REPORT_LENGTH);
+  } else if (keep) {
+    const [lightbar, ...players] = DUALSENSE_GEOMETRY.positions.map(sample);
+    device.write(dualSenseReport(lightbar, players, playerBrightness()), DS_REPORT_LENGTH);
   } else {
     device.write(dualSenseReport(black, [black, black, black, black, black], playerBrightness()), DS_REPORT_LENGTH);
   }

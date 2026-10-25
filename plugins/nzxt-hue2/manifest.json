@@ -43,6 +43,7 @@
     "hid"
   ],
   "conflictingProcesses": ["NZXT CAM.exe"],
+  "shutdownModes": ["restore", "keep", "off"],
   "keywords": [
     "nzxt",
     "hue 2",

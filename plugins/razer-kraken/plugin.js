@@ -122,13 +122,35 @@ export function Render() {
   lastSentAt = now;
 }
 
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
+
 /**
  * OpenRGB has no exit step. Lightloom gives the headset a hardware effect back: the spectrum cycle
  * on the Kraken 7.1 family (SetModeSpectrumCycle()), the wave at full brightness on the V3
- * family (SetModeWave(), the effect the V3 starts with).
+ * family (SetModeWave(), the effect the V3 starts with). That is "restore", SignalRGB's call
+ * without a mode, and suspend. Lightloom exit modes, nothing stored (OpenRGB has no save command):
+ * "keep" sends the last frame once more as a frame does (Kraken 7.1: the custom colour and the
+ * effect byte "on"; V3: the Direct colours), "off" a black V3 frame or, on the Kraken 7.1, OpenRGB's
+ * SetModeOff() (effect byte 0). OpenRGB sends no keepalive in either mode, so the headset is
+ * expected to hold them while it has power (unverified on hardware).
  */
-export function Shutdown(_systemSuspending) {
+export function Shutdown(systemSuspending, mode) {
   if (!product) {
+    return;
+  }
+  if (!systemSuspending && (mode === "keep" || mode === "off")) {
+    const colours = product.cells.map(([x, y]) => {
+      const c = mode === "keep" ? device.color(x, y) : [0, 0, 0];
+      return [c[0] & 0xFF, c[1] & 0xFF, c[2] & 0xFF];
+    });
+    if (product.protocol === "kraken-v3") {
+      v3SetDirect(colours);
+    } else if (mode === "keep") {
+      krakenSetModeCustom(colours[0]);
+    } else {
+      krakenSetModeNone();
+    }
     return;
   }
   if (product.protocol === "kraken-v3") {
@@ -190,6 +212,12 @@ function krakenSetModeCustom([r, g, b]) {
     device.write(krakenReport(KRAKEN_DESTINATION_WRITE, 3, addresses.custom, [r, g, b]), KRAKEN_REPORT_LENGTH);
   }
   device.write(krakenReport(KRAKEN_DESTINATION_WRITE, 0x01, addresses.ledMode, [EFFECT_ON]), KRAKEN_REPORT_LENGTH);
+}
+
+/** razer_set_mode_none() (SetModeOff()): effect byte 0, the lights off. */
+function krakenSetModeNone() {
+  const addresses = KRAKEN_ADDRESSES[product.pid];
+  device.write(krakenReport(KRAKEN_DESTINATION_WRITE, 0x01, addresses.ledMode, [0x00]), KRAKEN_REPORT_LENGTH);
 }
 
 /** razer_set_mode_spectrum_cycle(): effect byte "on" + "spectrum cycling". */

@@ -170,7 +170,9 @@ scripts:
 rpm:
   summary: Open source RGB lighting manager
   group: Applications/System
-  compression: zstd
+  # xz, not zstd: Ubuntu's rpm2cpio (used by rpmlint in the release job) cannot unpack a zstd
+  # payload, and every rpm-based distribution reads xz.
+  compression: xz
 deb:
   compression: zstd
   fields:

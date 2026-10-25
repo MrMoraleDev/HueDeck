@@ -780,3 +780,55 @@ test("save: the DeathAdder V2 Pro (recorded profile) stores on LED 0x00, then as
     restore();
   }
 });
+
+test("restore after a save shows what was stored (storage 0x00), not the spectrum cycle; only in that session", async () => {
+  const entry = DEVICES[DOCK];
+  const led = LED_ID_ZERO.includes(DOCK) ? 0x00 : 0x05;
+  const max = MAX_BRIGHTNESS_100.includes(DOCK) ? 100 : 255;
+  const tid = entry.transactionId;
+  const spectrum = razerReport(tid, 0x0F, 0x02, 0x06, [0x00, led, 0x03]);
+  for (const effect of [null, "spectrum"]) {
+    const { device, plugin, restore } = await setup({ productId: DOCK, color: [0x12, 0x34, 0x56] });
+    try {
+      plugin.Initialize();
+      plugin.Render();
+      plugin.SaveToDevice({ action: "save", effect, colors: [] });
+      device.setColor([0x99, 0x88, 0x77]);
+      plugin.Render();
+      drain(device);
+      plugin.Shutdown(false, "restore");
+      const sent = drain(device);
+      assert.deepEqual(sent, [
+        effect === null
+          ? razerReport(tid, 0x0F, 0x02, 0x09, [0x00, led, 0x01, 0x00, 0x00, 0x01, 0x12, 0x34, 0x56])
+          : spectrum,
+        razerReport(tid, 0x0F, 0x04, 0x03, [0x00, led, max]),
+      ]);
+      assert.ok(sent.every((r) => !storesSomething(r)));
+      // A new session (Initialize) forgets the save: the spectrum cycle again.
+      plugin.Initialize();
+      drain(device);
+      plugin.Shutdown(false, "restore");
+      assert.deepEqual(drain(device)[0], spectrum);
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("restore after a save on the DeathAdder V2 Pro: recorded shutdown, then the stored colour (storage 0x00)", async () => {
+  const { device, plugin, restore } = await setup({ productId: 0x007C, color: [9, 8, 7] });
+  try {
+    plugin.Initialize();
+    plugin.SaveToDevice({ action: "save", effect: null, colors: [] });
+    drain(device);
+    plugin.Shutdown(false, "restore");
+    const sent = drain(device);
+    assert.equal(sent[0], hex(recorded.frameBlack));
+    const effect = sent[sent.length - 2].split(" ").map((h) => parseInt(h, 16));
+    assert.deepEqual(effect.slice(7, 18), [0x0F, 0x02, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 9, 8, 7]);
+    assert.ok(sent.every((r) => !storesSomething(r)));
+  } finally {
+    restore();
+  }
+});

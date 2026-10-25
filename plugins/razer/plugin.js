@@ -244,6 +244,8 @@ export function Render() {
  * cycle (RazerController::SetModeSpectrumCycle() at full brightness), the wave on the Kraken V4
  * family (SetModeWave()), and the products OpenRGB switches to software mode go back to hardware
  * mode. The DeathAdder V2 Pro keeps its recorded shutdown (black frame, hardware mode).
+ * After a "Save to devices" in this session, a target that stored something shows it again
+ * instead of the spectrum cycle: the same effect and brightness reports, with storage 0x00.
  */
 export function Shutdown(_systemSuspending, mode) {
   if (!main) {
@@ -263,6 +265,9 @@ export function Shutdown(_systemSuspending, mode) {
   switch (protocol) {
     case "recorded":
       recordedShutdown();
+      if (main.stored) {
+        showStored(main);
+      }
       return;
     case "kraken-v4":
       write(rz.krakenV4Wave(main.ctx), rz.KRAKEN_V4_REPORT_LENGTH);
@@ -275,8 +280,12 @@ export function Shutdown(_systemSuspending, mode) {
       return;
     default:
       for (const target of [main, ...paired]) {
-        setModeSpectrumCycle(target);
-        setBrightness(target, target.maxBrightness);
+        if (target.stored) {
+          showStored(target);
+        } else {
+          setModeSpectrumCycle(target);
+          setBrightness(target, target.maxBrightness);
+        }
         if (SOFTWARE_MODE_AT_START.includes(target.pid)) {
           usbSend(target, rz.deviceMode(target.ctx, rz.DEVICE_MODE_HARDWARE, 0x00));
         }
@@ -327,6 +336,7 @@ export function SaveToDevice(request) {
     }
     usbSend(target, rz.brightnessExtended(target.ctx, rz.STORAGE_SAVE, ledId, target.maxBrightness));
     target.lastColours = null;
+    target.stored = { effect: effect ?? "static", colour };
   }
   // Back to custom frames: the next Render() sends the frame and the custom-frame effect again
   // (the recorded DeathAdder V2 Pro needs its frame-mode request first).
@@ -334,6 +344,18 @@ export function SaveToDevice(request) {
     recordedRequest(0x0F, 0x02, [0x00, 0x00, 0x08, 0x00, 0x01, 0x00]);
   }
   return result;
+}
+
+/**
+ * Shutdown(false, "restore") after a save: what the target stored, set live (the effect report and
+ * the brightness report SaveToDevice() sent, with storage 0x00, so nothing is written again).
+ */
+function showStored(target) {
+  const ledId = saveLedId(target);
+  usbSend(target, target.stored.effect === "spectrum"
+    ? rz.spectrumExtended(target.ctx, rz.STORAGE_NO_SAVE, ledId)
+    : rz.staticExtended(target.ctx, rz.STORAGE_NO_SAVE, ledId, target.stored.colour));
+  usbSend(target, rz.brightnessExtended(target.ctx, rz.STORAGE_NO_SAVE, ledId, target.maxBrightness));
 }
 
 /** The targets whose effect reports carry a storage byte (extended matrix). */
@@ -418,6 +440,9 @@ function makeTarget(pid, name, subdeviceId = null) {
     layout: layoutOf(entry, "ansi"),
     lastColours: null,
     lastSentAt: 0,
+    // What SaveToDevice() stored in this session ({ effect: "static" | "spectrum", colour }), shown
+    // again by Shutdown(false, "restore"); null: nothing stored since Initialize().
+    stored: null,
   };
 }
 

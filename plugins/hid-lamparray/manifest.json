@@ -13,5 +13,6 @@
     { "hidUsage": { "usagePage": "0x59", "usage": "0x01" }, "transport": "hid" }
   ],
   "permissions": ["hid"],
+  "shutdownModes": ["restore", "keep", "off"],
   "keywords": ["lamparray", "dynamic-lighting", "hid", "generic", "keyboard", "mouse"]
 }

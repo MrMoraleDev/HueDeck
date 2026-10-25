@@ -176,9 +176,21 @@ All of them are in `plugins/crucial-ballistix/fixtures/expected.json`, worked ou
   effect colour under one hold), so neither another session's scan nor another program
   moves the pointer in between; when the bus cannot be held nothing is sent. The host also
   stops the RAM sessions before a rescan.
-- **Shutdown**: the shutdown colour (parameter `shutdownColor`, default black; black when
-  the system suspends) as effect colours on all 8 LEDs, then static mode (S4's
-  `DeviceUpdateLEDs()` order for "Static").
+- **Shutdown**: effect colours on all 8 LEDs, then static mode (S4's `DeviceUpdateLEDs()`
+  order for "Static"). Which colours depends on the exit mode (Lightloom extension,
+  [save-shutdown.md](../host-api/save-shutdown.md)):
+  - `restore` (and SignalRGB's call without a mode): the shutdown colour (parameter
+    `shutdownColor`, default black). The modules' own lighting cannot be given back: OpenRGB
+    reads no state from the controller (its mode starts as `CRUCIAL_MODE_UNKNOWN`), the effect
+    colours go in through the write-only mailbox `0x82E9..0x82F0`, and there is no save register,
+    so there is nothing to read at start and put back. The modules' own effect returns at the next
+    power cycle. Reading undocumented registers to guess it was left out on purpose.
+  - `keep`: the last frame, one effect colour per LED.
+  - `off`: black.
+  - System suspend: black, whatever the mode.
+
+  The controller has no keepalive in OpenRGB, so static mode stays until the next power cycle;
+  nothing is stored. Only the mode register and the effect mailbox are written.
 
 ## Bus and safety
 

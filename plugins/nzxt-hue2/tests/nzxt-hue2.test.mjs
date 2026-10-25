@@ -345,3 +345,30 @@ test("Kraken X3: header and ring reports equal what the device received in Light
     }
   }
 });
+
+test("exit modes: keep sends the last frame once more, off and restore send black, suspend stays black", async () => {
+  for (const c of expected.cases) {
+    for (const [systemSuspending, mode, want] of [
+      [false, "keep", c.expected.frame],
+      [false, "off", c.expected.shutdown],
+      [false, "restore", c.expected.shutdown],
+      [false, undefined, c.expected.shutdown],
+      [true, "keep", c.expected.shutdown],
+    ]) {
+      const { device, plugin, restore } = await setup(caseOptions(c));
+      try {
+        assert.deepEqual(plugin.ShutdownModes(), ["restore", "keep", "off"]);
+        plugin.Initialize();
+        plugin.Render();
+        device.written.length = 0;
+        plugin.Shutdown(systemSuspending, mode);
+        assert.deepEqual(written(device), hex(want), `${c.name} ${mode} ${systemSuspending}`);
+        // Only the colour and apply reports of a frame: no hardware effect, no fan report.
+        assert.ok(device.written.every((w) => w.bytes[0] === 0x22 && [0x10, 0x11, 0xA0].includes(w.bytes[1])));
+      } finally {
+        restore();
+      }
+    }
+  }
+  assert.deepEqual(manifest.shutdownModes, ["restore", "keep", "off"]);
+});

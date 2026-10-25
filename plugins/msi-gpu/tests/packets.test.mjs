@@ -97,6 +97,45 @@ test("unchanged frame writes nothing", async () => {
   }
 });
 
+test("a failed write is retried, and a colour the card missed is sent again next frame", async () => {
+  const { mock, plugin, restore } = await setup({ color: [0xFF, 0xFF, 0xFF] });
+  try {
+    plugin.Initialize();
+    const real = mock.fixed.WriteByte.bind(mock.fixed);
+    // Blue fails twice (the write and its retry), then the bus is fine again.
+    let blueFailures = 2;
+    mock.fixed.WriteByte = (reg, value) => (reg === 0x32 && blueFailures-- > 0 ? -1 : real(reg, value));
+    mock.ops.length = 0;
+    plugin.Render();
+    assert.deepEqual(writes(mock), [[0x26, 0], [0x30, 0xFF], [0x31, 0xFF]], "blue never reached the card");
+    mock.ops.length = 0;
+    plugin.Render();
+    assert.deepEqual(writes(mock), [[0x26, 0], [0x30, 0xFF], [0x31, 0xFF], [0x32, 0xFF]], "the whole colour again");
+    mock.ops.length = 0;
+    plugin.Render();
+    assert.deepEqual(mock.ops, [], "then it is remembered");
+  } finally {
+    restore();
+  }
+});
+
+test("an unchanged colour is sent again every 60 frames", async () => {
+  const { mock, plugin, restore } = await setup({ color: [9, 8, 7] });
+  try {
+    plugin.Initialize();
+    plugin.Render();
+    mock.ops.length = 0;
+    for (let i = 0; i < 59; i++) {
+      plugin.Render();
+    }
+    assert.deepEqual(mock.ops, []);
+    plugin.Render();
+    assert.deepEqual(writes(mock), pairs(expected.frame_123456).map(([r], i) => [r, [0, 9, 8, 7][i]]));
+  } finally {
+    restore();
+  }
+});
+
 test("shutdown restores the startup registers, mode last", async () => {
   const { mock, plugin, restore } = await setup({ color: [9, 9, 9] });
   try {
@@ -119,7 +158,8 @@ test("a card whose state cannot be read gets the static shutdown colour", async 
     plugin.Initialize();
     mock.ops.length = 0;
     plugin.Shutdown(false);
-    assert.deepEqual(writes(mock), pairs(expected.shutdown_unreadable));
+    // The card answers nothing, so every write is also tried a second time.
+    assert.deepEqual(writes(mock), pairs(expected.shutdown_unreadable).flatMap((w) => [w, w]));
     assert.ok(device.logs.length >= 1, "the failed read is logged");
   } finally {
     restore();

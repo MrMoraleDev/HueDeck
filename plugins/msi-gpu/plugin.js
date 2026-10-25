@@ -122,17 +122,28 @@ export function Scan(freeBus) {
 
 let saved = null;
 let lastColor = null;
+let framesSinceSend = 0;
 let failureLogged = false;
 
+// The colour is sent again after this many unchanged frames (about 2 s at 30 fps), so a register
+// the card dropped, or another program changed, does not stay wrong until the colour changes.
+const RESEND_FRAMES = 60;
+
+// One register write, tried a second time when NvAPI reports a failure (single writes do fail now
+// and then on a busy bus). True when the card took it.
 function write(reg, value) {
   if (reg === REG_SAVE) {
-    return;
+    return false;
   }
-  const status = bus.WriteByte(reg, value & 0xFF);
+  let status = bus.WriteByte(reg, value & 0xFF);
+  if (status < 0) {
+    status = bus.WriteByte(reg, value & 0xFF);
+  }
   if (status < 0 && !failureLogged) {
     failureLogged = true;
     device.log(`MSI GPU: WriteByte(0x${reg.toString(16)}) failed with ${status} (further failures are not logged)`);
   }
+  return status >= 0;
 }
 
 function readStartupState() {
@@ -169,21 +180,25 @@ export function Initialize() {
   lastColor = null;
 }
 
-// RGBController_MSIGPU::DeviceUpdateLEDs(): register 0x26 cleared, then SetRGB1.
+// RGBController_MSIGPU::DeviceUpdateLEDs(): register 0x26 cleared, then SetRGB1. True when every
+// write went through.
 function setColor(r, g, b) {
-  write(REG_UNKNOWN, 0x00);
-  write(REG_R1, r);
-  write(REG_G1, g);
-  write(REG_B1, b);
+  let ok = write(REG_UNKNOWN, 0x00);
+  ok = write(REG_R1, r) && ok;
+  ok = write(REG_G1, g) && ok;
+  ok = write(REG_B1, b) && ok;
+  return ok;
 }
 
 export function Render() {
   const [r, g, b] = device.color(0, 0);
-  if (lastColor && lastColor[0] === r && lastColor[1] === g && lastColor[2] === b) {
+  const same = lastColor && lastColor[0] === r && lastColor[1] === g && lastColor[2] === b;
+  if (same && ++framesSinceSend < RESEND_FRAMES) {
     return;
   }
-  setColor(r, g, b);
-  lastColor = [r, g, b];
+  framesSinceSend = 0;
+  // A colour the card did not fully take is not remembered: the next frame sends it again.
+  lastColor = setColor(r, g, b) ? [r, g, b] : null;
 }
 
 function hexColor(text) {

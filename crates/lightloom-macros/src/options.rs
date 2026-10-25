@@ -23,6 +23,7 @@ pub const TYPES: &[&str] = &[
     "mousecode",
     "effectname",
     "layoutname",
+    "profilename",
     "effectpreset",
     "device",
     "playlist",
@@ -285,7 +286,7 @@ pub fn coerce(spec: &OptionSpec, value: &Value) -> Result<Value, String> {
             Value::Array(a) if a.len() <= MAX_OPTIONS * 4 => Ok(value.clone()),
             _ => Err(format!("{p} must be a list")),
         },
-        // textfield, effectname, layoutname, device, playlist, sensor
+        // textfield, effectname, layoutname, profilename, device, playlist, sensor
         _ => string().map(Value::String),
     }
 }

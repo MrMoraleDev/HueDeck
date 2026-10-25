@@ -69,7 +69,9 @@ pub fn modes_from_json(v: &Value, warnings: &mut Vec<String>) -> Vec<HardwareMod
                 .map(String::from)
         };
         let Some(id) = text("id") else {
-            warnings.push(format!("HardwareModes(): an entry needs an id (1-{MAX_TEXT} characters): {entry}"));
+            warnings.push(format!(
+                "HardwareModes(): an entry needs an id (1-{MAX_TEXT} characters): {entry}"
+            ));
             continue;
         };
         if out.iter().any(|m| m.id == id) {
@@ -144,7 +146,11 @@ impl HardwareModeChoice {
             return Err(if known.is_empty() {
                 "this device has no hardware modes".into()
             } else {
-                format!("no hardware mode {:?} (this device has {})", self.id, known.join(", "))
+                format!(
+                    "no hardware mode {:?} (this device has {})",
+                    self.id,
+                    known.join(", ")
+                )
             });
         };
         if self.colors.len() > usize::from(mode.colors) {

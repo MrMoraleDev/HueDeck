@@ -63,6 +63,11 @@ pub enum Action {
     },
     /// `layout/applyprevious`: the layout before the current one.
     ApplyPreviousLayout,
+    /// `profile/apply/<name>`: a saved profile (Lightloom's own).
+    ApplyProfile {
+        /// Profile name.
+        name: String,
+    },
     /// `effect/apply/<name>?<property>=<value>&...`.
     ApplyEffect {
         /// Effect id or title.
@@ -121,6 +126,7 @@ impl Action {
             Action::View { .. } => "view",
             Action::ApplyLayout { .. } => "layout/apply",
             Action::ApplyPreviousLayout => "layout/applyprevious",
+            Action::ApplyProfile { .. } => "profile/apply",
             Action::ApplyEffect { .. } => "effect/apply",
             Action::Refused { .. } => "refused",
             Action::SetDevice { enabled: true, .. } => "device/enable",
@@ -370,6 +376,10 @@ fn route(segments: &[String], params: &[(String, String)], path: &str) -> Result
             no_args("layout/applyprevious", tail).map(|_| Action::ApplyPreviousLayout)
         }
         ("layout", _) => unknown(path, format!("no layout action {path:?}")),
+        ("profile", Some("apply")) => Ok(Action::ApplyProfile {
+            name: one_arg("profile/apply", tail)?.to_string(),
+        }),
+        ("profile", _) => unknown(path, format!("no profile action {path:?}")),
         ("effect", Some("apply")) => {
             let name = one_arg("effect/apply", tail)?.to_string();
             let properties = params
@@ -544,6 +554,12 @@ mod tests {
             ),
             ("lightloom://layout/applyprevious", Action::ApplyPreviousLayout),
             (
+                "lightloom://profile/apply/Night%20Mode",
+                Action::ApplyProfile {
+                    name: "Night Mode".into(),
+                },
+            ),
+            (
                 "lightloom://effect/apply/Rainbow%20Rise?reverse=false&scale=1&speed=3&xPos=120&yPos=200",
                 Action::ApplyEffect {
                     name: "Rainbow Rise".into(),
@@ -630,6 +646,7 @@ mod tests {
             "lightloom://view/cooling",
             "lightloom://view/nowhere",
             "lightloom://layout/rename/x",
+            "lightloom://profile/delete/x",
             "lightloom://effect/favourite/x",
             "lightloom://device/K/identify",
             "lightloom://playlist/p/shuffle",
@@ -667,6 +684,8 @@ mod tests {
             "lightloom://layout/apply/%20",
             "lightloom://layout/apply/a/b",
             "lightloom://layout/applyprevious/x",
+            "lightloom://profile/apply",
+            "lightloom://profile/apply/a/b",
             "lightloom://effect/apply",
             "lightloom://effect/apply/x/y",
             "lightloom://effect/apply/x?speed=1&speed=2",

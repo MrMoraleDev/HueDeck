@@ -228,6 +228,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/devices/{key}", get(device).patch(patch_device))
         .route("/v1/devices/{key}/channels/{channel}", put(put_channel))
         .route("/v1/devices/{key}/lcd", put(put_lcd))
+        .route("/v1/devices/{key}/mode", put(put_hardware_mode))
         .route("/v1/lcd/faces", get(lcd_faces))
         .route("/v1/save/preview", post(save_preview))
         .route("/v1/save", post(save_to_devices))
@@ -259,6 +260,17 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         )
         .route("/v1/layouts/{name}/apply", post(apply_layout))
         .route("/v1/layout", axum::routing::patch(patch_layout))
+        .route(
+            "/v1/profiles",
+            get(profiles).post(import_profile).patch(patch_profiles),
+        )
+        .route(
+            "/v1/profiles/{name}",
+            get(get_profile).put(save_profile).delete(delete_profile),
+        )
+        .route("/v1/profiles/{name}/apply", post(apply_profile))
+        .route("/v1/profiles/{name}/rename", post(rename_profile))
+        .route("/v1/profiles/{name}/duplicate", post(duplicate_profile))
         .route("/v1/placements/{uid}", put(put_placement))
         .route("/v1/components", get(components))
         .route("/v1/settings", get(settings).patch(patch_settings))
@@ -609,6 +621,93 @@ async fn patch_layout(State(ctx): State<ApiContext>, Json(p): Json<LayoutPatch>)
         })
         .await,
     )
+}
+
+/// Put a device in a hardware mode (`{"id": "rainbow", "colors": [...], "speed",
+/// "brightness"}`), or back on the effect (`{"id": null}` or `{}`).
+async fn put_hardware_mode(
+    State(ctx): State<ApiContext>,
+    Path(key): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let mode = match body.get("id") {
+        None | Some(Value::Null) => None,
+        Some(_) => match serde_json::from_value(body) {
+            Ok(m) => Some(m),
+            Err(e) => return error_response(&ApiError::bad_request(format!("not a hardware mode: {e}"))),
+        },
+    };
+    reply(ctx.call(Request::SetHardwareMode { key, mode }).await)
+}
+
+async fn profiles(State(ctx): State<ApiContext>) -> Response {
+    Json(&ctx.backend.snapshot().profiles).into_response()
+}
+
+async fn get_profile(State(ctx): State<ApiContext>, Path(name): Path<String>) -> Response {
+    reply(ctx.call(Request::GetProfile { name }).await)
+}
+
+async fn save_profile(State(ctx): State<ApiContext>, Path(name): Path<String>) -> Response {
+    reply(ctx.call(Request::SaveProfile { name }).await)
+}
+
+async fn delete_profile(State(ctx): State<ApiContext>, Path(name): Path<String>) -> Response {
+    reply(ctx.call(Request::DeleteProfile { name }).await)
+}
+
+async fn apply_profile(State(ctx): State<ApiContext>, Path(name): Path<String>) -> Response {
+    reply(ctx.call(Request::ApplyProfile { name }).await)
+}
+
+#[derive(Deserialize)]
+struct ProfileNameBody {
+    name: String,
+}
+
+async fn rename_profile(
+    State(ctx): State<ApiContext>,
+    Path(name): Path<String>,
+    Json(b): Json<ProfileNameBody>,
+) -> Response {
+    reply(ctx.call(Request::RenameProfile { name, to: b.name }).await)
+}
+
+async fn duplicate_profile(
+    State(ctx): State<ApiContext>,
+    Path(name): Path<String>,
+    Json(b): Json<ProfileNameBody>,
+) -> Response {
+    reply(ctx.call(Request::DuplicateProfile { name, to: b.name }).await)
+}
+
+#[derive(Deserialize)]
+struct ImportProfileBody {
+    profile: Value,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Add a profile from an exported document (`{profile, name?}`).
+async fn import_profile(State(ctx): State<ApiContext>, Json(b): Json<ImportProfileBody>) -> Response {
+    reply(
+        ctx.call(Request::ImportProfile {
+            profile: b.profile,
+            name: b.name,
+        })
+        .await,
+    )
+}
+
+#[derive(Deserialize)]
+struct ProfilesPatch {
+    #[serde(default)]
+    default: Option<String>,
+}
+
+/// `{"default": "<name>" | null}`: the profile applied at start.
+async fn patch_profiles(State(ctx): State<ApiContext>, Json(p): Json<ProfilesPatch>) -> Response {
+    reply(ctx.call(Request::SetDefaultProfile { name: p.default }).await)
 }
 
 async fn put_placement(

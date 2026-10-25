@@ -9,7 +9,7 @@
 //! byte (everything is ordered by key).
 
 use anyhow::{bail, Context};
-use lightloom_api::model::Playlist;
+use lightloom_api::model::{Playlist, Profile};
 use lightloom_engine::{Layout, Placement};
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
@@ -92,6 +92,14 @@ CREATE TABLE playlists (
     updated_at TEXT NOT NULL
 );
 "#,
+    r#"
+CREATE TABLE profiles (
+    name       TEXT PRIMARY KEY NOT NULL,
+    data       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"#,
 ];
 
 /// `format` of an export document.
@@ -160,6 +168,9 @@ pub struct StateExport {
     /// They may hold pairing keys (Hue user names, Nanoleaf tokens).
     #[serde(default, rename = "pluginSettings")]
     pub plugin_settings: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
+    /// Profiles, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<Profile>,
 }
 
 /// The database.
@@ -595,6 +606,95 @@ impl Store {
         Ok(self.conn.execute("DELETE FROM playlists WHERE id = ?1", [id])? > 0)
     }
 
+    // ------------------------------------------------------------------ profiles
+
+    /// Every profile, by name.
+    pub fn profiles(&self) -> anyhow::Result<Vec<Profile>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, data, created_at, updated_at FROM profiles ORDER BY name")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(name, data, created_at, updated_at)| {
+                let mut p: Profile =
+                    serde_json::from_str(&data).with_context(|| format!("profile {name}"))?;
+                p.name = name;
+                p.created_at = created_at;
+                p.updated_at = updated_at;
+                Ok(p)
+            })
+            .collect()
+    }
+
+    /// The profile `name`.
+    pub fn profile(&self, name: &str) -> anyhow::Result<Option<Profile>> {
+        Ok(self.profiles()?.into_iter().find(|p| p.name == name))
+    }
+
+    /// Create or replace a profile: `updated_at` is now, `created_at` the existing
+    /// profile's (or the given one, or now). Answers with it as stored.
+    pub fn save_profile(&self, profile: &Profile) -> anyhow::Result<Profile> {
+        if profile.name.trim().is_empty() {
+            bail!("a profile needs a name");
+        }
+        let mut p = profile.clone();
+        let t = now();
+        let existing: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT created_at FROM profiles WHERE name = ?1",
+                [&p.name],
+                |r| r.get(0),
+            )
+            .optional()?;
+        p.created_at = existing
+            .or_else(|| (!p.created_at.is_empty()).then(|| p.created_at.clone()))
+            .unwrap_or_else(|| t.clone());
+        p.updated_at = t;
+        Self::insert_profile(&self.conn, &p)?;
+        Ok(p)
+    }
+
+    fn insert_profile(conn: &Connection, p: &Profile) -> anyhow::Result<()> {
+        conn.execute(
+            "INSERT INTO profiles (name, data, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(name) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+            params![p.name, to_json(p)?, p.created_at, p.updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Rename a profile; `false` when there was none. The new name must be free.
+    pub fn rename_profile(&mut self, from: &str, to: &str) -> anyhow::Result<bool> {
+        let Some(mut p) = self.profile(from)? else {
+            return Ok(false);
+        };
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM profiles WHERE name = ?1", [from])?;
+        p.name = to.to_string();
+        p.updated_at = now();
+        Self::insert_profile(&tx, &p)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Delete a profile; `false` when there was none.
+    pub fn delete_profile(&self, name: &str) -> anyhow::Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM profiles WHERE name = ?1", [name])?
+            > 0)
+    }
+
     // ------------------------------------------------------------ export/import
 
     /// Everything, as one document ordered by key.
@@ -663,6 +763,7 @@ impl Store {
                 }
                 all
             },
+            profiles: self.profiles()?,
         })
     }
 
@@ -722,6 +823,7 @@ impl Store {
             "playlists",
             "kv",
             "plugin_settings",
+            "profiles",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
@@ -809,6 +911,12 @@ impl Store {
         }
         for p in &state.playlists {
             Self::insert_playlist(&tx, p)?;
+        }
+        for p in &state.profiles {
+            if p.name.trim().is_empty() {
+                bail!("a profile needs a name");
+            }
+            Self::insert_profile(&tx, p)?;
         }
         tx.commit()?;
         Ok(())
@@ -902,6 +1010,46 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
+        store.save_profile(&profile("Night")).unwrap();
+    }
+
+    fn profile(name: &str) -> Profile {
+        serde_json::from_value(json!({
+            "format": "lightloom-profile",
+            "version": 1,
+            "name": name,
+            "lighting": {"effect": "lightloom:plasma", "values": {"speed": 3}, "brightness": 40},
+            "layout": {"name": "Desk", "brightness": 70, "endpoints": {}},
+            "devices": {"1462:7c91:A0": {"enabled": true, "ledColors": {"0": "#ff0000"}}}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn profiles_are_saved_renamed_and_deleted() {
+        let mut s = Store::in_memory().unwrap();
+        let first = s.save_profile(&profile("Night")).unwrap();
+        assert!(!first.created_at.is_empty());
+        let again = s.save_profile(&profile("Night")).unwrap();
+        assert_eq!(
+            again.created_at, first.created_at,
+            "a replace keeps its creation time"
+        );
+        s.save_profile(&profile("Day")).unwrap();
+        let names: Vec<String> = s.profiles().unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["Day", "Night"]);
+        let night = s.profile("Night").unwrap().unwrap();
+        assert_eq!(night.lighting.brightness, 40);
+        assert_eq!(
+            night.devices["1462:7c91:A0"].extra["ledColors"]["0"], "#ff0000",
+            "unknown device keys are kept"
+        );
+        assert!(s.rename_profile("Night", "Evening").unwrap());
+        assert!(!s.rename_profile("Night", "X").unwrap());
+        assert_eq!(s.profile("Evening").unwrap().unwrap().name, "Evening");
+        assert!(s.delete_profile("Evening").unwrap());
+        assert!(!s.delete_profile("Evening").unwrap());
+        assert!(s.save_profile(&profile(" ")).is_err());
     }
 
     #[test]

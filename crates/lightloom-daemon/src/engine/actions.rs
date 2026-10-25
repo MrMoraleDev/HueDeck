@@ -11,6 +11,9 @@
 //!   effect does not have is ignored and reported) and applies it.
 //! * `layout/applyprevious` goes back to the layout shown before the current
 //!   one in this run.
+//! * `profile/apply/<name>` applies a saved profile; `layout/apply/<name>`
+//!   applies the profile `<name>` when there is no such layout but such a
+//!   profile (SignalRGB macros switch "layouts", which hold more than placements).
 //! * `app/restart` reloads everything in place (devices, plugins, effects);
 //!   the process and the API stay up.
 //! * `app/raiseWindow`, `view/<page>` and `app/toast` reach the dashboard as an
@@ -170,7 +173,16 @@ impl Engine {
                 self.reload_everything();
                 Ok(json!({ "restarted": true }))
             }
-            Action::ApplyLayout { name } => self.handle(Request::ApplyLayout { name }),
+            // SignalRGB's macros switch "layouts"; a name that is no layout but a
+            // profile applies the profile (the closer match of SignalRGB's layouts).
+            Action::ApplyLayout { name } => {
+                let is_layout = self.store.layout(&name).map_err(internal)?.is_some();
+                if !is_layout && self.store.profile(&name).map_err(internal)?.is_some() {
+                    return self.handle(Request::ApplyProfile { name });
+                }
+                self.handle(Request::ApplyLayout { name })
+            }
+            Action::ApplyProfile { name } => self.handle(Request::ApplyProfile { name }),
             Action::ApplyPreviousLayout => {
                 let Some(name) = self.actions.previous_layout.clone() else {
                     return Err(ApiError::conflict("no previous layout in this run"));

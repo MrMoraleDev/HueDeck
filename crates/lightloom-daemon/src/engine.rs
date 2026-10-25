@@ -102,6 +102,7 @@ mod actions;
 mod device_facts;
 mod macros;
 mod playlists;
+mod profiles;
 
 /// Settings keys in the database.
 mod keys {
@@ -138,6 +139,12 @@ mod keys {
     pub const DISPLAY: &str = "settings.display";
     /// Every device's LCD face and frame rate (`{key: {face, framerate}}`).
     pub const LCD_FACES: &str = "lcd.faces";
+    /// The profile applied or saved last.
+    pub const PROFILE: &str = "lighting.profile";
+    /// The profile applied at start.
+    pub const DEFAULT_PROFILE: &str = "settings.defaultProfile";
+    /// Followed by the device key: that device's hardware mode (`null`: it follows the effect).
+    pub const DEVICE_HARDWARE_MODE: &str = "hardwareMode.";
 }
 
 /// Longest a sleep notification waits for the engine (Windows gives sleep
@@ -530,6 +537,8 @@ struct SessionDefaults {
     shutdown_overrides: BTreeMap<String, ShutdownMode>,
     /// `battery.lowBatteryWarningLevel` of new sessions.
     battery_low: u8,
+    /// Devices in a hardware mode (live; their sessions start in it).
+    hardware_modes: BTreeMap<String, lightloom_plugin_host::hwmode::HardwareModeChoice>,
 }
 
 impl SessionDefaults {
@@ -697,6 +706,10 @@ struct Engine {
     lcd: Arc<crate::lcd::LcdFaces>,
     /// Sensor values go to the LCD faces (one of them reads sensors).
     lcd_sensors: bool,
+    /// The profile applied or saved last.
+    profile: Option<String>,
+    /// The profile applied at start.
+    default_profile: Option<String>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -768,6 +781,8 @@ impl Engine {
         let mut e = Self {
             lcd,
             lcd_sensors: false,
+            profile: None,
+            default_profile: None,
             opts,
             store,
             shared,
@@ -854,6 +869,7 @@ impl Engine {
         }
         e.enter(LifecycleState::LoadingPlugins);
         e.load_libraries();
+        e.apply_default_profile();
         e.enter(LifecycleState::LoadingEffects);
         e.start_canvas();
         e.enter(LifecycleState::ScanningHardware);
@@ -963,8 +979,16 @@ impl Engine {
                 Some((r.key.clone(), ShutdownMode::parse(v.as_str()?)?))
             })
             .collect();
+        d.hardware_modes = rows
+            .iter()
+            .filter_map(|r| {
+                let v = get(&format!("{}{}", keys::DEVICE_HARDWARE_MODE, r.key))?;
+                Some((r.key.clone(), serde_json::from_value(v).ok()?))
+            })
+            .collect();
         d.parameters = rows.into_iter().map(|r| (r.key, r.parameters)).collect();
         drop(d);
+        self.load_profiles();
         self.reload_channels();
         self.load_player();
         self.lcd.set_choices(
@@ -1135,6 +1159,7 @@ impl Engine {
                 battery_warning_level: d.battery_low,
                 input_sink: Some(Arc::clone(&input_sink)),
                 lcd: Some(Arc::clone(&lcd)),
+                hardware_mode: d.hardware_modes.get(&key).cloned(),
                 ..SessionOptions::default()
             }
         });
@@ -1989,6 +2014,7 @@ impl Engine {
                 playlist: self.player.playback(),
                 timer: self.player.timer(),
                 next_switch_ms: self.player.next_switch_ms(),
+                profile: self.profile.clone(),
             },
             devices: self.device_views(),
             effects: self
@@ -2040,6 +2066,7 @@ impl Engine {
                 lights_off_when_idle: self.lights_off_when_idle,
                 audio_device: self.opts.config.audio.device.clone(),
                 display: self.opts.config.screen.display.clone(),
+                default_profile: self.default_profile.clone(),
             },
             conflicts: {
                 let mut all = self.conflicts.clone();
@@ -2061,6 +2088,7 @@ impl Engine {
             pawnio: self.pawnio_view(),
             os: self.os.clone(),
             lcd_faces: self.lcd.faces_view(),
+            profiles: self.profile_views(),
         }
     }
 
@@ -2396,6 +2424,8 @@ impl Engine {
                 blink_low_battery: self.blink.contains(key),
                 driver_problem: usb_driver_problem(p),
                 help_url: usb_driver_problem(p).map(|_| lightloom_hal::usb::WINUSB_HELP_URL.to_string()),
+                hardware_modes: meta.hardware_modes.iter().map(profiles::mode_view).collect(),
+                hardware_mode: defaults.hardware_modes.get(key).map(profiles::from_choice),
                 ..DeviceView::default()
             };
             if enabled && needs_driver(p) {
@@ -3045,6 +3075,15 @@ impl Engine {
             | Request::RunMacro { .. }
             | Request::AnswerPrompt { .. }) => self.handle_macros(r),
             Request::SetUrlScheme { enabled } => self.set_url_scheme(enabled),
+            Request::SetHardwareMode { key, mode } => self.set_hardware_mode(&key, mode, true),
+            r @ (Request::SaveProfile { .. }
+            | Request::GetProfile { .. }
+            | Request::ApplyProfile { .. }
+            | Request::DeleteProfile { .. }
+            | Request::RenameProfile { .. }
+            | Request::DuplicateProfile { .. }
+            | Request::ImportProfile { .. }
+            | Request::SetDefaultProfile { .. }) => self.handle_profiles(r),
             Request::Rescan => {
                 self.smbus_scan_due = true;
                 self.manifests.clear();

@@ -79,10 +79,10 @@ use crate::catalog::CatalogEntry;
 use crate::children::ChildSetup;
 pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
 use crate::device::Protocol;
-use crate::hwmode::HardwareModeChoice;
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
+use crate::hwmode::HardwareModeChoice;
 use crate::lcd::{lock_lcd, LcdContext, SharedLcd};
 use crate::meta::{PluginMeta, PluginType};
 use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
@@ -1825,18 +1825,16 @@ fn set_hardware_mode(
         None => (serde_json::Value::Null, None),
     };
     let called = catch_unwind(AssertUnwindSafe(|| {
-        rt.call_export_json(
-            "SetHardwareMode",
-            &request,
-            budgets.call(budgets.shutdown),
-            stop,
-        )
+        rt.call_export_json("SetHardwareMode", &request, budgets.call(budgets.shutdown), stop)
     }));
     match called {
         Ok(Ok(Some(_))) => Ok(applied),
         Ok(Ok(None)) => Err("the plugin has no SetHardwareMode(request) export".into()),
         Ok(Err(e)) => Err(format!("SetHardwareMode failed: {e}")),
-        Err(panic) => Err(format!("SetHardwareMode panicked: {}", panic_text(panic.as_ref()))),
+        Err(panic) => Err(format!(
+            "SetHardwareMode panicked: {}",
+            panic_text(panic.as_ref())
+        )),
     }
 }
 

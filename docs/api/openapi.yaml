@@ -38,6 +38,7 @@ tags:
   - name: lighting
   - name: playlists
   - name: layouts
+  - name: profiles
   - name: settings
   - name: network
   - name: sensors
@@ -204,6 +205,45 @@ paths:
                   key: { type: string }
                   face: { type: [string, "null"] }
                   framerate: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/mode:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    put:
+      tags: [devices]
+      operationId: putHardwareMode
+      summary: Put a device in one of its hardware modes, or back on the effect
+      description: |
+        A hardware mode is one of the device's built-in effects (`DeviceView.hardwareModes`, the plugin's
+        `HardwareModes()`), set live with `SetHardwareMode(request)`: never stored in the device (no flash
+        write; "Save to devices" stays the only way to store lighting). While a device runs one, Lightloom
+        sends it no frames. `{"id": null}` (or `{}`) is "Follow effect". The choice is kept by Lightloom
+        and set again when the device's session starts (docs/host-api/hardware-modes.md).
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: [string, "null"], description: "A mode id of `DeviceView.hardwareModes`; null: follow the effect" }
+                colors: { type: array, items: { type: string, pattern: "^#[0-9a-fA-F]{6}$" }, description: One per colour of the mode (missing ones are white) }
+                speed: { type: integer, minimum: 0, maximum: 100 }
+                brightness: { type: integer, minimum: 0, maximum: 100 }
+      responses:
+        "200":
+          description: The device and the mode chosen now (null when it follows the effect).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device: { type: string }
+                  hardwareMode: { oneOf: [{ $ref: "#/components/schemas/DeviceHardwareMode" }, { type: "null" }] }
+                  applied: { type: boolean, description: A running session took it (false while the device is absent or disabled) }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -612,6 +652,152 @@ paths:
                   layoutBrightness: { type: integer }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/profiles:
+    get:
+      tags: [profiles]
+      operationId: listProfiles
+      summary: Saved profiles (named snapshots of the whole lighting setup), by name
+      responses:
+        "200":
+          description: The profiles.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ProfileView" } }
+    post:
+      tags: [profiles]
+      operationId: importProfile
+      summary: Add a profile from an exported document
+      description: The document is what `GET /v1/profiles/{name}` answers. It gets `name`, else its own name, made unique with " (2)", " (3)", ...
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile: { $ref: "#/components/schemas/Profile" }
+                name: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/ProfileDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [profiles]
+      operationId: patchProfiles
+      summary: The profile applied when Lightloom starts
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                default: { type: [string, "null"], description: "A profile name; null or empty: none (the setup as it was left)" }
+      responses:
+        "200":
+          description: The default profile now.
+          content:
+            application/json:
+              schema: { type: object, properties: { defaultProfile: { type: [string, "null"] } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/profiles/{name}:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    get:
+      tags: [profiles]
+      operationId: getProfile
+      summary: A profile document (what an export file holds)
+      responses:
+        "200":
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [profiles]
+      operationId: saveProfile
+      summary: Save the current lighting setup as this profile (created or replaced)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/ProfileDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      tags: [profiles]
+      operationId: deleteProfile
+      summary: Delete a profile (it stops being the default one)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/profiles/{name}/apply:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    post:
+      tags: [profiles]
+      operationId: applyProfile
+      summary: Apply a profile
+      description: |
+        The effect with its control values, the global brightness and canvas pause, the layout (saved under its
+        name and switched to), then per device: enable, plugin parameters, channel components, exit mode and
+        hardware mode. Devices Lightloom has never seen are skipped (listed in `notes`). A playlist stops.
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile: { type: string }
+                  notes: { type: array, items: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/profiles/{name}/rename:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    post:
+      tags: [profiles]
+      operationId: renameProfile
+      summary: Rename a profile
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        "200": { $ref: "#/components/responses/ProfileDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/profiles/{name}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/ProfileName"
+    post:
+      tags: [profiles]
+      operationId: duplicateProfile
+      summary: Copy a profile under a new name
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        "200": { $ref: "#/components/responses/ProfileDone" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/placements/{uid}:
     parameters:
       - name: uid
@@ -1462,7 +1648,17 @@ components:
       in: path
       required: true
       schema: { type: string }
+    ProfileName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
   responses:
+    ProfileDone:
+      description: The profile's name.
+      content:
+        application/json:
+          schema: { type: object, properties: { profile: { type: string } } }
     Empty:
       description: Done.
       content:
@@ -1519,6 +1715,64 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorBody" }
   schemas:
+    ProfileView:
+      type: object
+      properties:
+        name: { type: string }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        effect: { type: [string, "null"] }
+        layout: { type: string }
+        devices: { type: integer }
+    Profile:
+      type: object
+      description: |
+        A profile document (format `lightloom-profile`, version 1). `devices` holds one open object per device
+        key: the keys below are read by this build; any other key (a later build's, such as per-LED colours) is
+        kept through save, export and import, and ignored when applied.
+      required: [format, version, name, lighting, layout]
+      properties:
+        format: { const: lightloom-profile }
+        version: { type: integer }
+        name: { type: string }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        lighting:
+          type: object
+          properties:
+            effect: { type: [string, "null"] }
+            values: { type: object }
+            brightness: { type: integer, minimum: 0, maximum: 100 }
+            enabled: { type: boolean }
+        layout: { $ref: "../../schemas/layout.schema.json" }
+        devices:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: true
+            properties:
+              enabled: { type: boolean }
+              parameters: { type: object }
+              channels: { type: object, additionalProperties: { type: array } }
+              shutdownMode: { enum: [restore, keep, off] }
+              hardwareMode: { $ref: "#/components/schemas/DeviceHardwareMode" }
+    HardwareModeView:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        colors: { type: integer, minimum: 0, maximum: 8 }
+        colorNames: { type: array, items: { type: string } }
+        speed: { type: boolean }
+        brightness: { type: boolean }
+    DeviceHardwareMode:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        colors: { type: array, items: { type: string } }
+        speed: { type: integer, minimum: 0, maximum: 100 }
+        brightness: { type: integer, minimum: 0, maximum: 100 }
     MacrosView:
       type: object
       required: [enabled, keyboardHook, mouseHook, allowLaunch, hooksAvailable, hooks, emergencyStop, folders, scripts]
@@ -1592,6 +1846,7 @@ components:
         pawnio: { $ref: "#/components/schemas/PawnIoView" }
         os: { type: string, description: "Operating system and build (`Windows 11 Pro 25H2 (build 26200.6899)`, `Ubuntu 24.04.1 LTS (kernel 6.8.0)`), for device reports." }
         lcdFaces: { type: array, items: { $ref: "#/components/schemas/LcdFaceView" } }
+        profiles: { type: array, items: { $ref: "#/components/schemas/ProfileView" }, description: Saved profiles by name. }
     PawnIoView:
       type: object
       description: PawnIO and the Lightloom I/O service, what RAM lighting needs (Windows).
@@ -1633,6 +1888,7 @@ components:
           description: The playlist playing now.
         timer: { $ref: "#/components/schemas/EffectTimer" }
         nextSwitchMs: { type: [integer, "null"], description: "When the playlist or the timer shows the next effect (Unix time, ms); null when nothing switches by itself." }
+        profile: { type: [string, "null"], description: The profile applied or saved last. }
     EffectTimer:
       type: object
       properties:
@@ -1692,6 +1948,12 @@ components:
       type: object
       properties:
         lcd: { $ref: "#/components/schemas/LcdView" }
+        hardwareModes: { type: array, items: { $ref: "#/components/schemas/HardwareModeView" }, description: The device's built-in effects it can run live }
+        hardwareMode:
+          oneOf:
+            - $ref: "#/components/schemas/DeviceHardwareMode"
+            - type: "null"
+          description: The hardware mode chosen for it; null when it follows the effect.
         key: { type: string }
         vid: { type: integer }
         pid: { type: integer }
@@ -1944,6 +2206,7 @@ components:
         urlScheme: { type: boolean, description: "`lightloom://` links are registered for this user (opt-in)." }
         urlSchemeAvailable: { type: boolean, description: This OS and install can register the URL scheme. }
         urlSchemeNotice: { type: [string, "null"], description: Why the registration is not what the setting says. }
+        defaultProfile: { type: [string, "null"], description: The profile applied when Lightloom starts (null: the setup as it was left). }
         audioDevice: { type: [string, "null"], description: "The output device `engine.audio` captures (`null`: the system default); see `/v1/inputs`." }
         display: { type: [string, "null"], description: "The display screen capture uses (`null`: the primary one); see `/v1/inputs`." }
     UpdateView:

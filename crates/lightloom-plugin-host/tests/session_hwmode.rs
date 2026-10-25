@@ -65,7 +65,8 @@ impl Rig {
     fn new(p: Present, opts: SessionOptions) -> Self {
         let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
         let backend: Arc<dyn HidBackend> = Arc::new(lightloom_hal::hid::NoHid);
-        let mut manager = DeviceManager::new(backend, Arc::clone(&frames), Box::new(move |_, _| opts.clone()));
+        let mut manager =
+            DeviceManager::new(backend, Arc::clone(&frames), Box::new(move |_, _| opts.clone()));
         manager.reconcile(vec![p]);
         let rig = Self { manager, frames };
         rig.until("the session running", |r| {
@@ -79,8 +80,11 @@ impl Rig {
     }
 
     fn tick(&self) {
-        self.frames
-            .publish(Frame::solid(CANVAS_WIDTH, CANVAS_HEIGHT, Rgb::new(0x12, 0x34, 0x56)));
+        self.frames.publish(Frame::solid(
+            CANVAS_WIDTH,
+            CANVAS_HEIGHT,
+            Rgb::new(0x12, 0x34, 0x56),
+        ));
         std::thread::sleep(Duration::from_millis(5));
     }
 
@@ -148,7 +152,11 @@ fn a_hardware_mode_from_the_options_stops_frames_until_follow_effect() {
     let sent = writes(&rec);
     assert_eq!(
         sent[sent.len() - 3..],
-        [vec![0x68, 0x36, 100], vec![0x68, 0x38, 0x01], vec![0x68, 0x22, 0x08]]
+        [
+            vec![0x68, 0x36, 100],
+            vec![0x68, 0x38, 0x01],
+            vec![0x68, 0x22, 0x08]
+        ]
     );
     // No Render() while the card runs its own effect.
     for _ in 0..20 {
@@ -162,12 +170,21 @@ fn a_hardware_mode_from_the_options_stops_frames_until_follow_effect() {
     assert!(!rig.live().hardware_mode);
     rig.until("frames again", |r| r.live().frames >= 2);
     let after = writes(&rec);
-    assert_eq!(after[sent.len()..sent.len() + 2], [vec![0x68, 0x36, 100], vec![0x68, 0x22, 0x13]]);
-    assert!(after.iter().any(|w| w[1..] == [0x30, 0x12]), "the frame's colour reaches the card");
+    assert_eq!(
+        after[sent.len()..sent.len() + 2],
+        [vec![0x68, 0x36, 100], vec![0x68, 0x22, 0x13]]
+    );
+    assert!(
+        after.iter().any(|w| w[1..] == [0x30, 0x12]),
+        "the frame's colour reaches the card"
+    );
 
     let report = rig.finish();
     assert!(report.is_clean(), "{report:#?}");
-    assert!(writes(&rec).iter().all(|w| w[1] != 0x3F), "never the save register");
+    assert!(
+        writes(&rec).iter().all(|w| w[1] != 0x3F),
+        "never the save register"
+    );
     assert_eq!(report.smbus.unwrap().denied, 0, "nothing refused either");
 }
 
@@ -223,7 +240,10 @@ fn choices_are_checked_and_a_save_returns_to_the_mode() {
 
     // A preview in the mode: nothing reaches the card; the mode is set again after it.
     let key = rig.manager.sessions().next().unwrap().key().to_string();
-    let rx = rig.manager.save(&key, SaveAction::Preview, SaveChoice::default()).unwrap();
+    let rx = rig
+        .manager
+        .save(&key, SaveAction::Preview, SaveChoice::default())
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
     let outcome = loop {
         if let Ok(o) = rx.try_recv() {
@@ -244,7 +264,14 @@ fn choices_are_checked_and_a_save_returns_to_the_mode() {
     assert_eq!(rig.live().frames, frames, "still no frames");
 
     let report = rig.finish();
-    assert!(writes(&rec).iter().all(|w| w[1] != 0x3F), "never the save register");
+    assert!(
+        writes(&rec).iter().all(|w| w[1] != 0x3F),
+        "never the save register"
+    );
     assert_eq!(report.smbus.unwrap().denied, 0);
-    assert!(report.notes.iter().any(|n| n.contains("no hardware mode")), "{:?}", report.notes);
+    assert!(
+        report.notes.iter().any(|n| n.contains("no hardware mode")),
+        "{:?}",
+        report.notes
+    );
 }

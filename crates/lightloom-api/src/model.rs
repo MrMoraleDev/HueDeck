@@ -43,6 +43,148 @@ pub struct Snapshot {
     /// LCD faces devices with a screen can show, by id.
     #[serde(default)]
     pub lcd_faces: Vec<LcdFaceView>,
+    /// Saved profiles (named snapshots of the whole lighting setup), by name.
+    #[serde(default)]
+    pub profiles: Vec<ProfileView>,
+}
+
+/// A saved profile in the list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileView {
+    /// Its name.
+    pub name: String,
+    /// RFC 3339.
+    pub created_at: String,
+    /// RFC 3339.
+    pub updated_at: String,
+    /// The effect it shows.
+    #[serde(default)]
+    pub effect: Option<String>,
+    /// The layout it brings.
+    #[serde(default)]
+    pub layout: String,
+    /// Devices it has settings for.
+    #[serde(default)]
+    pub devices: usize,
+}
+
+/// `format` of a profile document.
+pub const PROFILE_FORMAT: &str = "lightloom-profile";
+/// Profile document version this build writes and reads.
+pub const PROFILE_VERSION: u32 = 1;
+
+/// A profile: a named snapshot of the whole lighting setup (OpenRGB-style), as
+/// kept in the database and as `GET /v1/profiles/{name}` exports it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    /// Always [`PROFILE_FORMAT`].
+    pub format: String,
+    /// [`PROFILE_VERSION`].
+    pub version: u32,
+    /// Its name.
+    pub name: String,
+    /// RFC 3339 (set by the daemon).
+    #[serde(default)]
+    pub created_at: String,
+    /// RFC 3339 (set by the daemon).
+    #[serde(default)]
+    pub updated_at: String,
+    /// The effect, its control values, the global brightness and the canvas pause.
+    pub lighting: ProfileLighting,
+    /// The layout: placements (position, scale, rotation, per-device brightness
+    /// and enable) and the layout brightness. Applying the profile saves it
+    /// under its name and switches to it.
+    pub layout: lightloom_engine::Layout,
+    /// Per-device settings by device key.
+    #[serde(default)]
+    pub devices: std::collections::BTreeMap<String, ProfileDevice>,
+}
+
+/// The canvas part of a profile.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLighting {
+    /// Effect id.
+    #[serde(default)]
+    pub effect: Option<String>,
+    /// That effect's control values.
+    #[serde(default)]
+    pub values: Map<String, Value>,
+    /// Global brightness `0..=100`.
+    pub brightness: u8,
+    /// `false`: the canvas paused.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// One device's settings in a profile: a generic, open blob. The keys below are
+/// the ones this build reads and writes; any other key (a later build's, such as
+/// per-LED colours) is kept as is through saving, exporting and importing, and
+/// ignored when applied.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileDevice {
+    /// Driven at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Plugin parameter values (`ControllableParameters`).
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub parameters: Map<String, Value>,
+    /// Component arrays by channel name (SignalRGB's JSON shape).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub channels: std::collections::BTreeMap<String, Value>,
+    /// The device's own exit mode (`None`: the setting's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shutdown_mode: Option<String>,
+    /// A live hardware mode (`None`: the device follows the effect).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware_mode: Option<DeviceHardwareMode>,
+    /// Keys this build does not know, kept as they are.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// A device's built-in effect, from its plugin's `HardwareModes()`
+/// (docs/host-api/hardware-modes.md).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareModeView {
+    /// Mode id.
+    pub id: String,
+    /// Shown name.
+    pub name: String,
+    /// Colours it takes.
+    pub colors: u8,
+    /// Names of those colours (empty: "Colour 1", ...).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_names: Vec<String>,
+    /// It has a speed (0-100).
+    pub speed: bool,
+    /// It has a brightness (0-100).
+    pub brightness: bool,
+}
+
+/// A hardware mode chosen for a device (live: never stored in the device).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceHardwareMode {
+    /// Mode id.
+    pub id: String,
+    /// `#rrggbb` colours, one per colour of the mode.
+    #[serde(default)]
+    pub colors: Vec<String>,
+    /// 0-100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<u8>,
+    /// 0-100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<u8>,
 }
 
 /// An LCD face (docs/host-api/lcd-lightloom.md): an HTML page with `onReady()`.
@@ -368,6 +510,9 @@ pub struct Lighting {
     /// milliseconds); `None` when nothing will switch by itself.
     #[serde(default)]
     pub next_switch_ms: Option<u64>,
+    /// The profile applied or saved last (`None`: none yet, or it was deleted).
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
 /// The auto-next timer: while no playlist plays, show the next effect of the
@@ -556,6 +701,12 @@ pub struct DeviceView {
     /// The device's LCD, while its plugin drives one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lcd: Option<LcdView>,
+    /// The device's built-in effects it can run live (its plugin's `HardwareModes()`).
+    #[serde(default)]
+    pub hardware_modes: Vec<HardwareModeView>,
+    /// The hardware mode chosen for it (`None`: it follows the effect).
+    #[serde(default)]
+    pub hardware_mode: Option<DeviceHardwareMode>,
 }
 
 /// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).
@@ -738,6 +889,9 @@ pub struct Settings {
     /// else `[screen] display`); `None`: the primary display.
     #[serde(default)]
     pub display: Option<String>,
+    /// The profile applied when Lightloom starts (`None`: the setup as it was left).
+    #[serde(default)]
+    pub default_profile: Option<String>,
 }
 
 /// A state change asked of the daemon.
@@ -1087,6 +1241,64 @@ pub enum Request {
         #[serde(default)]
         text: Option<String>,
     },
+    /// Put a device in one of its hardware modes (`mode`), or back on the
+    /// effect (`None`). Live only: kept by Lightloom, never stored in the device.
+    SetHardwareMode {
+        /// Device key.
+        key: String,
+        /// The mode; `None`: follow the effect.
+        #[serde(default)]
+        mode: Option<DeviceHardwareMode>,
+    },
+    /// Save the whole lighting setup as a profile (created or replaced).
+    SaveProfile {
+        /// Profile name.
+        name: String,
+    },
+    /// A profile document (read-only; what an export file holds).
+    GetProfile {
+        /// Profile name.
+        name: String,
+    },
+    /// Apply a profile: effect and values, brightness, layout, device settings.
+    ApplyProfile {
+        /// Profile name.
+        name: String,
+    },
+    /// Delete a profile.
+    DeleteProfile {
+        /// Profile name.
+        name: String,
+    },
+    /// Rename a profile.
+    RenameProfile {
+        /// Current name.
+        name: String,
+        /// New name.
+        to: String,
+    },
+    /// Copy a profile under a new name.
+    DuplicateProfile {
+        /// Profile to copy.
+        name: String,
+        /// The copy's name.
+        to: String,
+    },
+    /// Add a profile from an exported document; answers with the name it got
+    /// (`name`, else the document's, made unique).
+    ImportProfile {
+        /// The document.
+        profile: Value,
+        /// Name to give it.
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// The profile applied when Lightloom starts (`None` or `""`: none).
+    SetDefaultProfile {
+        /// Profile name.
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// Enumerate devices again now.
     Rescan,
     /// Stop the daemon (every plugin restores its device first).
@@ -1142,6 +1354,15 @@ impl Request {
             Request::SetMacro { .. } => "setMacro",
             Request::RunMacro { .. } => "runMacro",
             Request::AnswerPrompt { .. } => "answerPrompt",
+            Request::SetHardwareMode { .. } => "setHardwareMode",
+            Request::SaveProfile { .. } => "saveProfile",
+            Request::GetProfile { .. } => "getProfile",
+            Request::ApplyProfile { .. } => "applyProfile",
+            Request::DeleteProfile { .. } => "deleteProfile",
+            Request::RenameProfile { .. } => "renameProfile",
+            Request::DuplicateProfile { .. } => "duplicateProfile",
+            Request::ImportProfile { .. } => "importProfile",
+            Request::SetDefaultProfile { .. } => "setDefaultProfile",
             Request::Rescan => "rescan",
             Request::Shutdown => "shutdown",
         }
@@ -1252,6 +1473,17 @@ impl std::error::Error for ApiError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_device_settings_keep_keys_this_build_does_not_know() {
+        let text = r##"{"enabled":false,"parameters":{"mode":"Forced"},"ledColors":{"0":"#ff0000"},"hardwareMode":{"id":"rainbow","colors":[],"speed":10}}"##;
+        let d: ProfileDevice = serde_json::from_str(text).unwrap();
+        assert_eq!(d.enabled, Some(false));
+        assert_eq!(d.hardware_mode.as_ref().unwrap().speed, Some(10));
+        assert_eq!(d.extra["ledColors"]["0"], "#ff0000");
+        let back = serde_json::to_value(&d).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(text).unwrap());
+    }
 
     #[test]
     fn requests_are_tagged_by_op() {

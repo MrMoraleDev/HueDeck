@@ -116,6 +116,15 @@ jobs:
           . crates/lightloom-renderer/tools/cef-env.sh
           cargo clippy -p lightloom-renderer --features cef --all-targets -- -D warnings
           cargo build -p lightloom-renderer --features cef
+          # rust-cache restores cef-dll-sys's build-script output without rerunning it, so the
+          # CEF runtime files it copies next to the binary can be missing: copy them here.
+          cef_dist=$(ls -d "$CEF_PATH"/*/cef_*_x86_64 | head -1)
+          for f in "$cef_dist"/*; do
+            case "$f" in
+              *.dll|*.so|*.so.*|*.pak|*.bin|*.dat|*.json) cp -f "$f" target/debug/ ;;
+            esac
+          done
+          cp -rf "$cef_dist/locales" target/debug/
 
       # The daemon-side client (lightloom-render) against the real renderer: frames through the
       # shm ring, control lines over stdin.
@@ -172,6 +181,15 @@ jobs:
         run: |
           cargo clippy -p lightloom-renderer --features cef --all-targets -- -D warnings
           cargo build -p lightloom-renderer --features cef
+          # rust-cache restores cef-dll-sys's build-script output without rerunning it, so the
+          # CEF runtime files it copies next to the binary can be missing: copy them here.
+          cef_dist=$(ls -d "$CEF_PATH"/*/cef_*_x86_64 | head -1)
+          for f in "$cef_dist"/*; do
+            case "$f" in
+              *.dll|*.so|*.so.*|*.pak|*.bin|*.dat|*.json) cp -f "$f" target/debug/ ;;
+            esac
+          done
+          cp -rf "$cef_dist/locales" target/debug/
           ls -la target/debug | grep -E "libcef|icudtl|snapshot|\.pak" || true
           # libcef.so must resolve through the $ORIGIN rpath, without LD_LIBRARY_PATH.
           readelf -d target/debug/lightloom-renderer | grep -E "RUNPATH|RPATH|NEEDED.*libcef"

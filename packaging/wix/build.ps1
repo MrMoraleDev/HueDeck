@@ -89,13 +89,16 @@ wix build `
   -ext WixToolset.UI.wixext `
   -d "Version=$Version" `
   -d "StageDir=$Stage" `
-  -sice ICE38 -sice ICE64 -sice ICE91 `
   -bindpath $PSScriptRoot `
   -intermediatefolder (Join-Path ([System.IO.Path]::GetTempPath()) "lightloom-wix-obj") `
   -o $Out `
   (Join-Path $PSScriptRoot "lightloom.wxs") `
   (Join-Path $PSScriptRoot "LightloomUI.wxs")
 if ($LASTEXITCODE -ne 0) { throw "wix build failed ($LASTEXITCODE)" }
+# WiX 5 validates outside `wix build`; the ICE suppressions are explained above.
+wix msi validate -sice ICE38 -sice ICE64 -sice ICE91 `
+  -intermediatefolder (Join-Path ([System.IO.Path]::GetTempPath()) "lightloom-wix-obj") $Out
+if ($LASTEXITCODE -ne 0) { throw "wix msi validate failed ($LASTEXITCODE)" }
 
 $hash = (Get-FileHash $Out -Algorithm SHA256).Hash.ToLower()
 "built $Out ({0:N0} MB) SHA-256 $hash" -f ((Get-Item $Out).Length / 1MB)

@@ -95,6 +95,7 @@ pub mod toast;
 pub use hid::WindowsHidBackend;
 #[cfg(windows)]
 pub use native::NativeHidBackend;
+#[cfg(windows)]
 pub use serial::WindowsSerialBackend;
 #[cfg(windows)]
 pub use usb::WinUsbBackend;

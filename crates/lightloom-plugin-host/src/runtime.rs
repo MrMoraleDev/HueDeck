@@ -131,7 +131,7 @@ const NATIVE_MODULES: &[&str] = &[
 
 /// Rust-backed modules a device session implements (`js/host.js` `nativeModules`);
 /// the others keep their throwing facade there.
-const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo", "udp", "tcp"];
+const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo", "udp", "tcp", "serial"];
 
 /// Prefix of the generated modules that pick a device-session implementation.
 const NATIVE_PREFIX: &str = "lightloom:native/";
@@ -180,6 +180,9 @@ pub struct RuntimeOptions {
     pub service: Option<crate::service::ServiceNatives>,
     /// Network device session: the announced controller data (JSON) bound to `controller`.
     pub controller: Option<String>,
+    /// Serial device session: the natives behind `@SignalRGB/serial` (needs
+    /// [`RuntimeOptions::device`]).
+    pub serial: Option<crate::serial::SharedSerial>,
 }
 
 impl Default for RuntimeOptions {
@@ -194,6 +197,7 @@ impl Default for RuntimeOptions {
             net: None,
             service: None,
             controller: None,
+            serial: None,
         }
     }
 }
@@ -769,6 +773,13 @@ impl PluginRuntime {
                 };
                 install().map_err(|e| failure(&ctx, e, d))?;
             }
+            if let (Some(serial), Some(device)) = (&opts.serial, &opts.device) {
+                let install = || -> rquickjs::Result<()> {
+                    let natives: Object = ctx.globals().get("__lightloomNative")?;
+                    crate::serial::install(&ctx, &natives, serial, d, device)
+                };
+                install().map_err(|e| failure(&ctx, e, d))?;
+            }
             if let Some(controller) = &opts.controller {
                 cfg.set("controller", controller.as_str())
                     .map_err(|e| failure(&ctx, e, d))?;
@@ -1305,14 +1316,18 @@ mod tests {
             r.resolve_name(base, "@SignalRGB/base64").unwrap(),
             "lightloom:prelude/base64.js"
         );
-        // Sockets: the device host's implementation when it has one, else the facade.
+        // Sockets and serial: the device host's implementation when it has one, else the facade.
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/udp").unwrap(),
             "lightloom:native/udp.js"
         );
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/serial").unwrap(),
-            "lightloom:prelude/modules/serial.js"
+            "lightloom:native/serial.js"
+        );
+        assert_eq!(
+            r.resolve_name(base, "@SignalRGB/lcd").unwrap(),
+            "lightloom:prelude/modules/lcd.js"
         );
         assert_eq!(
             r.resolve_name("lightloom:prelude/modules/udp.js", "../HostApiMissing.js")

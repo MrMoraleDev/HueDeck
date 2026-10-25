@@ -99,6 +99,7 @@ fn rig_with(info: HidEndpointInfo) -> Rig {
         usb: None,
         smbus: None,
         lamparray: None,
+        serial: None,
         key: "1462:7c91:A00000000001".into(),
         vid: 0x1462,
         pid: 0x7C91,

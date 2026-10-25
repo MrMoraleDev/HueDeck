@@ -35,6 +35,10 @@
 // the `udp` feature; `controller` is then the announced controller data
 // (docs/host-api/network-lightloom.md).
 //
+// A serial device session (`Type() == "serial"`) also gets the `serial*`
+// natives (src/serial.rs): `@SignalRGB/serial` is then the real module, bound
+// to the ports of the matched USB device (docs/host-api/hid-usb.md §3).
+//
 // The Rust side reads state back through `globalThis.__lightloomHost`
 // (non-writable, non-configurable: plugin code cannot replace it).
 
@@ -1762,9 +1766,85 @@ const systeminfoModule = freeze({
   },
 });
 
+// `@SignalRGB/serial` (hid-usb.md §3) over the `serial*` natives. The Rust
+// side only opens the ports of the device's own USB parent; here the options
+// are checked and mapped. Settings the backends cannot do (1.5 stop bits,
+// mark / space parity) make `connect` return false with a log line.
+const serialNative = native !== undefined && typeof native.serialConnect === "function";
+const STOP_BITS = { one: 1, two: 2 };
+const PARITIES = { none: 0, odd: 1, even: 2 };
+const MAX_SERIAL_WRITE = 1 << 20;
+
+/** Bytes of a serial write: a byte array, typed array, ArrayBuffer or string (UTF-8). */
+function serialBytes(data) {
+  if (typeof data === "string") {
+    return utf8(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return arrayFrom(new Uint8Array(data, 0, Math.min(data.byteLength, MAX_SERIAL_WRITE)));
+  }
+  if (isView(data)) {
+    return arrayFrom(new Uint8Array(data.buffer, data.byteOffset, Math.min(data.byteLength, MAX_SERIAL_WRITE)));
+  }
+  if (data != null && typeof data.length === "number") {
+    const n = Math.min(data.length >>> 0, MAX_SERIAL_WRITE);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      out[i] = Number(data[i]) & 0xff;
+    }
+    return out;
+  }
+  return [];
+}
+
+function serialOption(value, table, name) {
+  const key = typeof value === "number" ? { 1: "one", 2: "two" }[value] : String(value).toLowerCase();
+  if (key === undefined || !hasOwn(table, key)) {
+    hostLog(`serial.connect: ${name} ${stringify(value)} is not supported by this host`);
+    return undefined;
+  }
+  return table[key];
+}
+
+function serialJson(text) {
+  return text === "" ? undefined : parseJson(text);
+}
+
+const serialModule = serialNative
+  ? freeze({
+      connect(options) {
+        const o = options ?? {};
+        const stop = serialOption(o.stopBits ?? "One", STOP_BITS, "stopBits");
+        const parity = serialOption(o.parity ?? "None", PARITIES, "parity");
+        if (stop === undefined || parity === undefined) {
+          return false;
+        }
+        const port = o.portName === undefined || o.portName === null ? "" : String(o.portName);
+        const baud = Number(o.baudRate ?? 115200);
+        const dataBits = Number(o.dataBits ?? 8);
+        return native.serialConnect(port, isFiniteNumber(baud) ? baud : 0, dataBits | 0, stop, parity);
+      },
+      disconnect: () => {
+        native.serialDisconnect();
+      },
+      isConnected: () => native.serialIsConnected(),
+      write: (data) => native.serialWrite(serialBytes(data)),
+      read: (maxBytes, timeoutMs = 1000) => {
+        const max = maxBytes === undefined || maxBytes === null ? -1 : Math.max(0, Number(maxBytes) | 0);
+        return native.serialRead(max, Number(timeoutMs) || 0);
+      },
+      readAll: () => native.serialRead(-1, 0),
+      availablePorts: () => parseJson(native.serialPorts()),
+      getDeviceInfo: (portName) => serialJson(native.serialInfo(portName == null ? "" : String(portName))),
+      getPortName: () => native.serialPortName(),
+      getBaudRate: () => native.serialBaudRate(),
+    })
+  : undefined;
+
 const netModules = netNative ? { udp: udpModule, tcp: tcpModule } : {};
+const serialModules = serialModule === undefined ? {} : { serial: serialModule };
 const nativeModules = deviceMode
-  ? { permissions: permissionsModule, systeminfo: systeminfoModule, ...netModules }
+  ? { permissions: permissionsModule, systeminfo: systeminfoModule, ...netModules, ...serialModules }
   : { ...netModules };
 
 // ---------------------------------------------------------------- install

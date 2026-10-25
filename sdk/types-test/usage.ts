@@ -8,6 +8,7 @@ import systeminfo from "@lightloom/systeminfo";
 import { createColorArray } from "@lightloom/createColorArray";
 import { hexToRgb } from "@lightloom/hexToRgb";
 import base64mod from "@SignalRGB/base64";
+import serial from "@SignalRGB/serial";
 
 export const exportsShape: Lightloom.PluginExports = {
   Name: "Typed",
@@ -46,7 +47,11 @@ const p: boolean = permissions.permissions().MSI.lighting;
 const board = systeminfo.GetMotherboardInfo()?.model;
 const text: string = base64mod.Encode([1, 2, 3]);
 const sensor = engine.getSensorValue("CPU Load")?.value;
-void [p, board, text, sensor];
+const connected: boolean = serial.connect({ baudRate: 115200, stopBits: "One", parity: "None" });
+const sent: number = serial.write(new Uint8Array([0x55, 1, 2, 3]));
+const reply: number[] = serial.read(4, 200);
+const deviceId = serial.getDeviceInfo()?.deviceId;
+void [p, board, text, sensor, connected, sent, reply, deviceId];
 
 // @ts-expect-error the fixed bus takes no address
 bus.ReadByte(0x39, 0x00);
@@ -54,3 +59,5 @@ bus.ReadByte(0x39, 0x00);
 device.setSubdeviceSize("a", [1, 2]);
 // @ts-expect-error not a feature
 device.addFeature("teleport");
+// @ts-expect-error parity is a name, not a number
+serial.connect({ parity: 2 });

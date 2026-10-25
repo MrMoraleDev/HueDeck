@@ -38,6 +38,7 @@ fn start(opts: SessionOptions) -> (SessionHandle, Arc<MockHid>, Arc<FrameStore>)
             usb: None,
             smbus: None,
             lamparray: None,
+            serial: None,
             key: "1234:2222:B".into(),
             vid: 0x1234,
             pid: 0x2222,

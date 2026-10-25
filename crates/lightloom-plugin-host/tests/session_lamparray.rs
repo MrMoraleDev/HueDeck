@@ -99,6 +99,7 @@ fn a_lamp_array_device_is_driven_by_the_generic_plugin() {
         usb: None,
         smbus: None,
         lamparray: None,
+        serial: None,
         key: "1234:5678:L".into(),
         vid: 0x1234,
         pid: 0x5678,

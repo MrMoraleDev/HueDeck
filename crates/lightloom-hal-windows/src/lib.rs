@@ -49,7 +49,9 @@
 //! * [`power`] (Windows only): sleep/resume, lock/unlock and display off/on
 //!   from a hidden window (`lightloom_hal::PowerSource`).
 //!
-//! Serial follows in later milestones.
+//! * [`serial`] (Windows and Linux): COM port enumeration with the USB
+//!   VID:PID behind each port (Windows) and port I/O over `serialport`
+//!   (shared with the Linux backend).
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -79,6 +81,8 @@ pub mod power;
 pub mod probe;
 #[cfg(windows)]
 pub mod registry;
+#[cfg(any(windows, target_os = "linux"))]
+pub mod serial;
 #[cfg(windows)]
 pub mod service;
 #[cfg(windows)]
@@ -90,6 +94,7 @@ pub mod toast;
 pub use hid::WindowsHidBackend;
 #[cfg(windows)]
 pub use native::NativeHidBackend;
+pub use serial::WindowsSerialBackend;
 #[cfg(windows)]
 pub use usb::WinUsbBackend;
 

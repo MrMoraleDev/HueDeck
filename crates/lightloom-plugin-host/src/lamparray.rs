@@ -82,6 +82,7 @@ impl SessionDevice {
             usb: None,
             lamparray: Some(LampArrayTarget { backend, info }),
             network: None,
+            serial: None,
         }
     }
 }

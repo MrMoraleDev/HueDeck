@@ -486,6 +486,7 @@ pub(crate) fn permissive_mock(vid: u16, pid: u16) -> anyhow::Result<(Arc<MockHid
         usb: None,
         smbus: None,
         lamparray: None,
+        serial: None,
         key: format!("{vid:04x}:{pid:04x}:MOCK"),
         vid,
         pid,

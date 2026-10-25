@@ -36,7 +36,8 @@ arc-swap = "1"
 clap = { version = "4", features = ["derive", "env"] }
 hidapi = { version = "2.6", default-features = false }
 nusb = "0.2"
-serialport = "4.10"
+# No libudev (a C build): Linux enumerates ttys from sysfs itself (lightloom-hal-linux).
+serialport = { version = "4.10", default-features = false, features = ["usbportinfo-interface"] }
 rquickjs = { version = "0.14", features = ["loader", "array-buffer", "futures", "parallel"] }
 axum = "0.8"
 tower = { version = "0.5", features = ["util"] }

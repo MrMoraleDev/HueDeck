@@ -25,6 +25,8 @@
 //!   each placed and sampled on the canvas on its own.
 //! * [`session`]: one device session = one plugin thread running
 //!   Validate → Initialize → Render per frame → Shutdown.
+//! * [`serial`]: `@SignalRGB/serial` for `Type() == "serial"` sessions, bound
+//!   to the matched USB device's own ports (dry-run writes, read timeouts).
 //! * [`lamparray`]: the built-in session of a LampArray of the OS backend
 //!   (Windows Dynamic Lighting), sampled like a plugin device.
 //! * [`manager`]: one session per present device, following hotplug
@@ -60,6 +62,7 @@ pub mod plugin_ui;
 pub mod resolve;
 pub mod runtime;
 pub mod save;
+pub mod serial;
 pub mod service;
 pub mod session;
 pub mod smbus;

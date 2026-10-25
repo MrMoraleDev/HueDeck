@@ -24,3 +24,8 @@ windows = { workspace = true }
 # Also WinRT Windows.Devices.Lights (LampArray) and the package-identity check.
 # Raw USB over WinUSB (`Type() == "rawusb"` / `"hybrid"` plugins).
 nusb = { workspace = true }
+
+# COM port enumeration (SetupAPI, USB VID:PID of the parent) and port I/O;
+# the I/O half (`serial::open_port`) is shared with lightloom-hal-linux.
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+serialport = { workspace = true }

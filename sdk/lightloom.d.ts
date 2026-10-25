@@ -885,7 +885,30 @@ declare namespace Lightloom {
     }>;
   }
 
-  /** @signalrgb @unimplemented (the facade throws HostApiMissing) */
+  /** A serial port of the device (`availablePorts()`, `getDeviceInfo()`). Lightloom extras: `serialNumber`, `manufacturer`, `product`, `interface`. */
+  interface SerialPortDescription {
+    portName: string;
+    vendorId: number;
+    productId: number;
+    /** The USB serial number, else the port name. */
+    deviceId: string;
+    serialNumber: string;
+    manufacturer: string;
+    product: string;
+    /** USB interface number of the port, -1 when unknown. */
+    interface: number;
+  }
+
+  /**
+   * `@SignalRGB/serial` (docs/host-api/hid-usb.md section 3). Real only in a
+   * `Type() == "serial"` device session, bound to the ports of the USB device
+   * matched by VID:PID: `connect()` without `portName` opens the port whose
+   * interface `Validate(endpoint)` accepted; a `portName` of another device is
+   * refused. Elsewhere the facade throws HostApiMissing.
+   * Unsupported here: `stopBits: "OneAndHalf"`, `parity: "Mark" | "Space"` (`connect` returns false).
+   * In a dry run writes are recorded and reported as sent, never sent.
+   * @signalrgb
+   */
   interface SerialModule {
     connect(options?: {
       portName?: string; baudRate?: number; dataBits?: 5 | 6 | 7 | 8;
@@ -893,13 +916,20 @@ declare namespace Lightloom {
     }): boolean;
     disconnect(): void;
     isConnected(): boolean;
-    write(data: Bytes): boolean | number;
-    read(maxBytes?: number, timeout?: number): number[] | null;
+    /** Bytes written; 0 on failure (not connected, the port went away). */
+    write(data: Bytes | string): number;
+    /** Up to `maxBytes` (default: what is waiting, or what arrives first) within `timeout` ms (default 1000, at most 5000); empty on timeout. */
+    read(maxBytes?: number, timeout?: number): number[];
+    /** What is waiting now. */
     readAll(): number[];
-    getDeviceInfo(portName?: string): { deviceId: string; vendorId: number; productId: number; portName: string };
+    /** The open port (else the default one), or `portName`; undefined for a port of another device. */
+    getDeviceInfo(portName?: string): SerialPortDescription | undefined;
+    /** The open port, "" when none is. */
     getPortName(): string;
+    /** Of the open port, 0 when none is. */
     getBaudRate(): number;
-    availablePorts(): Array<{ portName: string; vendorId: number; productId: number; [key: string]: unknown }>;
+    /** The ports of this device only. */
+    availablePorts(): SerialPortDescription[];
   }
 
   /** @signalrgb @unimplemented */

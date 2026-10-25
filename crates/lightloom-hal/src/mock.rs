@@ -11,12 +11,15 @@
 //! * [`MockNotifier`] keeps the system notifications it was asked to show.
 //! * [`MockLampArray`] is a fake LampArray provider (plug, unplug,
 //!   availability, recorded colour updates).
+//! * [`MockSerial`] has serial ports with an input queue and canned replies
+//!   (exclusive opens, read timeouts, unplug).
 //!
 //! Golden tests compare `recorder.snapshot()` (or just `recorder.writes()`)
 //! against checked-in fixtures.
 
 use crate::error::{HalError, HalResult};
 use crate::hid::{HidBackend, HidEndpointInfo, HidHandle, ReportLengths};
+use crate::serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};
 use crate::smbus::{validate_address, PciIds, SmbusBus, SmbusBusDescriptor, SmbusBusKind};
 use crate::usb::{UsbBackend, UsbDeviceInfo, UsbHandle, UsbInterfaceInfo};
 use serde::{Deserialize, Serialize};
@@ -1371,9 +1374,287 @@ impl crate::lamparray::LampArrayBackend for MockLampArray {
     }
 }
 
+// ---------------------------------------------------------------- serial
+
+/// Mutable state behind one scripted serial port.
+#[derive(Debug, Default)]
+pub struct MockSerialPortState {
+    /// Static description handed to `available_ports()`.
+    pub info: SerialPortInfo,
+    /// Bytes waiting in the input queue.
+    pub input: VecDeque<u8>,
+    /// Replies: a write starting with the first bytes queues the second as input.
+    pub replies: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Every write fails with [`HalError::Backend`].
+    pub fail_writes: bool,
+    /// Unplugged: absent from `available_ports()`, `open` fails, I/O fails
+    /// with [`HalError::Disconnected`].
+    pub unplugged: bool,
+    /// Times the port was opened.
+    pub open_count: usize,
+    /// A handle is open (COM ports are exclusive: a second `open` is `Busy`).
+    pub is_open: bool,
+    /// Configuration of the last `open`.
+    pub last_config: Option<SerialConfig>,
+}
+
+type SharedPort = Arc<Mutex<MockSerialPortState>>;
+
+fn lock_port(p: &SharedPort) -> MutexGuard<'_, MockSerialPortState> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Scripted serial backend: ports with an input queue and canned replies.
+/// Opens, writes, reads (with data) and closes go to the recorder, `target` =
+/// the port name.
+#[derive(Debug, Default)]
+pub struct MockSerial {
+    ports: Vec<SharedPort>,
+    recorder: TransactionRecorder,
+}
+
+impl MockSerial {
+    /// Empty backend with a fresh recorder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A USB serial port description.
+    pub fn usb_port(
+        port_name: &str,
+        vid: u16,
+        pid: u16,
+        serial: &str,
+        interface: Option<u8>,
+    ) -> SerialPortInfo {
+        SerialPortInfo {
+            port_name: port_name.to_string(),
+            vid: Some(vid),
+            pid: Some(pid),
+            serial: Some(serial.to_string()),
+            interface,
+            manufacturer: Some("Lightloom Mock".into()),
+            product: Some(format!("Mock serial {vid:04x}:{pid:04x}")),
+        }
+    }
+
+    /// Add a port (builder style).
+    pub fn add_port(mut self, info: SerialPortInfo) -> Self {
+        self.ports.push(Arc::new(Mutex::new(MockSerialPortState {
+            info,
+            ..Default::default()
+        })));
+        self
+    }
+
+    /// The shared recorder.
+    pub fn recorder(&self) -> TransactionRecorder {
+        self.recorder.clone()
+    }
+
+    /// Shared state of `port_name`, for scripting from tests.
+    pub fn port(&self, port_name: &str) -> Option<SharedPort> {
+        self.ports
+            .iter()
+            .find(|p| lock_port(p).info.port_name == port_name)
+            .cloned()
+    }
+
+    fn with_port<T>(&self, port_name: &str, f: impl FnOnce(&mut MockSerialPortState) -> T) -> HalResult<T> {
+        let p = self
+            .port(port_name)
+            .ok_or_else(|| HalError::NotFound(port_name.to_string()))?;
+        let mut s = lock_port(&p);
+        Ok(f(&mut s))
+    }
+
+    /// Queue bytes in the input of `port_name`.
+    pub fn push_input(&self, port_name: &str, bytes: &[u8]) -> HalResult<()> {
+        self.with_port(port_name, |s| s.input.extend(bytes.iter().copied()))
+    }
+
+    /// Answer every write starting with `request` with `reply`.
+    pub fn reply(&self, port_name: &str, request: &[u8], reply: &[u8]) -> HalResult<()> {
+        self.with_port(port_name, |s| s.replies.push((request.to_vec(), reply.to_vec())))
+    }
+
+    /// Unplug (`true`) or plug back (`false`) `port_name`.
+    pub fn set_unplugged(&self, port_name: &str, unplugged: bool) -> HalResult<()> {
+        self.with_port(port_name, |s| s.unplugged = unplugged)
+    }
+}
+
+impl SerialBackend for MockSerial {
+    fn available_ports(&self) -> HalResult<Vec<SerialPortInfo>> {
+        Ok(self
+            .ports
+            .iter()
+            .filter_map(|p| {
+                let s = lock_port(p);
+                (!s.unplugged).then(|| s.info.clone())
+            })
+            .collect())
+    }
+
+    fn open(&self, port_name: &str, config: &SerialConfig) -> HalResult<Box<dyn SerialHandle>> {
+        config.validate()?;
+        let state = self
+            .port(port_name)
+            .ok_or_else(|| HalError::NotFound(port_name.to_string()))?;
+        {
+            let mut s = lock_port(&state);
+            if s.unplugged {
+                return Err(HalError::NotFound(port_name.to_string()));
+            }
+            if s.is_open {
+                return Err(HalError::Busy(port_name.to_string()));
+            }
+            s.is_open = true;
+            s.open_count += 1;
+            s.last_config = Some(config.clone());
+        }
+        self.recorder.record(TransactionKind::Open, port_name, Vec::new());
+        Ok(Box::new(MockSerialHandle {
+            state,
+            recorder: self.recorder.clone(),
+            port_name: port_name.to_string(),
+            config: config.clone(),
+        }))
+    }
+}
+
+/// An open [`MockSerial`] port.
+#[derive(Debug)]
+pub struct MockSerialHandle {
+    state: SharedPort,
+    recorder: TransactionRecorder,
+    port_name: String,
+    config: SerialConfig,
+}
+
+impl SerialHandle for MockSerialHandle {
+    fn port_name(&self) -> &str {
+        &self.port_name
+    }
+
+    fn config(&self) -> &SerialConfig {
+        &self.config
+    }
+
+    fn write(&mut self, data: &[u8]) -> HalResult<usize> {
+        let mut s = lock_port(&self.state);
+        if s.unplugged {
+            return Err(HalError::Disconnected);
+        }
+        if s.fail_writes {
+            return Err(HalError::Backend("scripted write failure".into()));
+        }
+        let reply = s
+            .replies
+            .iter()
+            .find(|(req, _)| data.starts_with(req))
+            .map(|(_, r)| r.clone());
+        if let Some(r) = reply {
+            s.input.extend(r);
+        }
+        drop(s);
+        self.recorder
+            .record(TransactionKind::Write, &self.port_name, data);
+        Ok(data.len())
+    }
+
+    fn read(&mut self, buf: &mut [u8], timeout_ms: u32) -> HalResult<usize> {
+        let started = Instant::now();
+        let limit = Duration::from_millis(u64::from(timeout_ms.min(5000)));
+        loop {
+            {
+                let mut s = lock_port(&self.state);
+                if s.unplugged {
+                    return Err(HalError::Disconnected);
+                }
+                if !s.input.is_empty() || buf.is_empty() {
+                    let n = buf.len().min(s.input.len());
+                    for (dst, src) in buf.iter_mut().zip(s.input.drain(..n)) {
+                        *dst = src;
+                    }
+                    drop(s);
+                    if n > 0 {
+                        self.recorder
+                            .record(TransactionKind::Read, &self.port_name, &buf[..n]);
+                    }
+                    return Ok(n);
+                }
+            }
+            if started.elapsed() >= limit {
+                return Ok(0);
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn bytes_to_read(&mut self) -> HalResult<usize> {
+        let s = lock_port(&self.state);
+        if s.unplugged {
+            return Err(HalError::Disconnected);
+        }
+        Ok(s.input.len())
+    }
+}
+
+impl Drop for MockSerialHandle {
+    fn drop(&mut self) {
+        lock_port(&self.state).is_open = false;
+        self.recorder
+            .record(TransactionKind::Close, &self.port_name, Vec::new());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mock_serial_replies_times_out_and_is_exclusive() {
+        let m = MockSerial::new().add_port(MockSerial::usb_port("COM7", 0x1A86, 0x7523, "A1", Some(0)));
+        m.reply("COM7", &[0x01, 0x02], &[0xAA, 0xBB, 0xCC]).unwrap();
+        let cfg = SerialConfig {
+            baud_rate: 115_200,
+            ..SerialConfig::default()
+        };
+        let mut h = m.open("COM7", &cfg).unwrap();
+        assert!(matches!(m.open("COM7", &cfg), Err(HalError::Busy(_))));
+        assert_eq!(h.write(&[0x01, 0x02, 0x03]).unwrap(), 3);
+        assert_eq!(h.bytes_to_read().unwrap(), 3);
+        let mut buf = [0u8; 2];
+        assert_eq!(h.read(&mut buf, 100).unwrap(), 2);
+        assert_eq!(buf, [0xAA, 0xBB]);
+        assert_eq!(h.read(&mut buf, 100).unwrap(), 1);
+        let t = Instant::now();
+        assert_eq!(h.read(&mut buf, 30).unwrap(), 0, "timeout without data");
+        assert!(t.elapsed() >= Duration::from_millis(30));
+        m.set_unplugged("COM7", true).unwrap();
+        assert!(matches!(h.write(&[1]), Err(HalError::Disconnected)));
+        assert!(m.available_ports().unwrap().is_empty());
+        drop(h);
+        let kinds: Vec<_> = m.recorder().snapshot().iter().map(|t| t.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                TransactionKind::Open,
+                TransactionKind::Write,
+                TransactionKind::Read,
+                TransactionKind::Read,
+                TransactionKind::Close
+            ]
+        );
+        m.set_unplugged("COM7", false).unwrap();
+        assert!(m.open("COM7", &cfg).is_ok(), "closed handles release the port");
+        let bad = SerialConfig {
+            data_bits: 4,
+            ..SerialConfig::default()
+        };
+        assert!(m.open("COM7", &bad).is_err());
+    }
 
     #[test]
     fn mock_lamparray_records_and_follows_plugs() {

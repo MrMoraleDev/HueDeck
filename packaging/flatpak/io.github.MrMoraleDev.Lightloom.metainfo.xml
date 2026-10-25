@@ -83,7 +83,7 @@
     <release version="0.1.1" date="2026-10-25">
       <url type="details">https://github.com/MrMoraleDev/Lightloom/releases/tag/v0.1.1</url>
       <description>
-        <p>Linux packages (.deb, .rpm) and the Flathub app id; a tidier release page; MSI GPU per-LED research tools (the RTX 3060 Gaming X Trio stays one colour).</p>
+        <p>Exit modes Keep and Off for NZXT, SteelSeries, DualSense, Crucial and more Razer devices; after Save to devices, Restore shows what was saved. Linux packages (.deb, .rpm) and the Flathub app id; a tidier release page.</p>
       </description>
     </release>
     <release version="0.1.0" date="2026-10-25">

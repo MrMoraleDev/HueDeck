@@ -30,10 +30,10 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 |---|---|---|
 | M0 Bootstrap + spikes | **Done** | none |
 | M1 First light | **Done** | the "within 100 ms" first light is met on the native backend only (56-58 ms) |
-| M2 Compatible plugin host | **Partial** | rawusb/hybrid and serial sessions are mock-tested only (no WinUSB or serial device on the bench); `addFeature("dtls")`, `keyboard`/`mouse` and the fan API are stubs; no replayable `HidTrace` in `plugins/*/fixtures`; the Sonix 320F keyboard is not driven (EVision V1, needs a USB capture); the physical hot-unplug test has not been run |
+| M2 Compatible plugin host | **Partial** | rawusb/hybrid and serial sessions are mock-tested only (no WinUSB or serial device on the bench); `addFeature("dtls")`, `keyboard`/`mouse` are stubs; the fan API is a no-op by decision (out of scope); no replayable `HidTrace` in `plugins/*/fixtures`; the Sonix 320F keyboard is not driven (EVision V1, needs a USB capture); the physical hot-unplug test has not been run |
 | M3 Effects pipeline | **Done** | the Chromium sandbox is off until releases are signed |
 | M4 Dashboard, persistence, API, packaging | **Partial** | Authenticode signing (SignPath account); the MSI never installed on a clean machine (fresh-machine acceptance); the plugin sources manager; save-to-device, exit modes, suspend/resume, tray and import wizard not yet run live |
-| M5 Privileged bus | **Partial** | I801, AMD GPU (ADL) and the sensors not run on hardware; no LpcIO, no fan control; no CPU temperature on Windows without LibreHardwareMonitor; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not bind WinUSB |
+| M5 Privileged bus | **Partial** | I801, AMD GPU (ADL) and the sensors not run on hardware; no LpcIO; fan control out of scope (decision 2026-10-25); no CPU temperature on Windows without LibreHardwareMonitor; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not bind WinUSB |
 | M6 Inputs, network, extras | **Partial** | audio, screen zones, meters, OpenRGB SDK server, network plugins, LampArray backend and runtime parameters are in; macro runtime in (untested with real input on hardware); LCD faces are in (mock-tested; no LCD hardware yet, NZXT formats unsupported); latency acceptance and real clients/devices untested; no DTLS |
 | M7 Linux + 1.0 | **Partial** | hidraw, udev hotplug, i2c-dev, hwmon, serial, CEF and packaging are in and unit-tested on Ubuntu CI, but nothing has run on a Linux machine; nusb, PipeWire audio/screen, logind sleep, hwmon `pwm`, Linux tray and notifications missing; the CEF renderer is not staged into the Linux packages; cargo-dist deferred |
 
@@ -79,7 +79,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | `addFeature("dtls")`, `https` | Missing | `host.js` throws for `addFeature("dtls")`; no TLS stack |
 | `addFeature("battery")` | Done, untested on hardware | `crates/lightloom-plugin-host/src/battery.rs`, `crates/lightloom-daemon/src/battery.rs` (low-battery toasts through `crates/lightloom-hal-windows/src/toast.rs`), `ui/src/components/BatteryBadge.svelte`; `tests/session_battery.rs`, `crates/lightloom-daemon/tests/battery.rs`. Used by `plugins/razer` and `plugins/sony-gamepad`; `docs/hardware/razer.md`: battery queries untested on hardware |
 | `addFeature("keyboard"/"mouse")` (`sendEvent`, `sendHid`) | Done, untested on hardware | device sessions: `host.js` `inputFeature`, `crates/lightloom-plugin-host/src/input.rs` (`InputSink`), `tests/session_input.rs`; `sendEvent` reaches macro `onKey`/`onMouse`, `sendHid` injects a key or button only while macros are on (`crates/lightloom-macros/src/manager.rs`) |
-| Fan API (`createFanControl`, `setRPM`, …) | Missing | throws in device sessions (`host.js` `unimplemented("device", …)`); `fanControlDisabled()` answers `true` |
+| Fan API (`createFanControl`, `setRPM`, …) | Out of scope | decided 2026-10-25: Lightloom does not control fans; throws in device sessions (`host.js` `unimplemented("device", …)`); `fanControlDisabled()` answers `true` |
 | API_GAP log-and-throw | Done | `prelude/HostApiMissing.js`, `host.js` `gap()`, `prelude/tests/HostApiMissing.test.mjs` |
 | `lightloom-hid-desc` | Done | `crates/lightloom-hid-desc/src/lib.rs`, 8 tests |
 | `set_endpoint` / `getHidEndpoints` | Done | `host.js`, `src/device.rs` |
@@ -149,7 +149,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | `lightloom-nvapi` GPU I2C | Done | `crates/lightloom-nvapi/`, 24 tests; `plugins/msi-gpu`, `docs/hardware/msi-gpu.md` |
 | AMD GPU I2C (ADL) | Done, untested on hardware | `crates/lightloom-adl/` (legacy ADL, fake-backed tests, 24); `plugins/sapphire-nitro-glow`, `docs/hardware/sapphire-nitro-glow.md`; no AMD card on the reference PC |
 | Sensors (NvAPI thermal, LibreHardwareMonitor JSON, system load, hwmon) | Done, read-only, untested on hardware | `docs/sensors.md`: registry `crates/lightloom-runtime/src/sensors.rs`, NvAPI queries `crates/lightloom-nvapi/src/sensors.rs`, poller `crates/lightloom-daemon/src/sensors.rs` (at most 1 Hz, on demand), `engine.sensors` / `getSensorValue`, `GET /v1/sensors`, `Sensors.svelte`. NvAPI queries and LHM's real server not run; CPU MSRs through PawnIO left as future work |
-| Fan curves + SuperIO | Missing | stretch goal in the plan; the plugin fan API stays a no-op |
+| Fan curves + SuperIO | Out of scope | decided 2026-10-25: Lightloom is lighting-only; the plugin fan API stays a no-op |
 | Accept: Crucial Ballistix via SmbusPIIX4, unmodified imported plugin | Done with a first-party plugin | `docs/hardware/crucial-ballistix.md`: both modules tested 2026-10-22 with Lightloom's `plugins/crucial-ballistix` (the standalone direction replaces the imported plugin) |
 | Accept: RTX 3060 via NvAPI I2C | Done | commit `9311108`, `docs/hardware/msi-gpu.md` |
 | Accept: 30-min soak with HWiNFO/OpenRGB running, no bus errors | Missing | not run |
@@ -186,7 +186,7 @@ fake sysfs and fake devices, 39 tests); none of it has run against hardware on a
 | udev hotplug | Done, untested on Linux hardware | `crates/lightloom-hal-linux/src/{hotplug,uevent}.rs`: netlink udev monitor, pure Rust |
 | i2c-dev SMBus, hwmon sensors | Done, untested on Linux hardware | `crates/lightloom-hal-linux/src/{i2c,hwmon}.rs`: adapters by sysfs name (PIIX4 ports 0/1, i801, NVIDIA port 1, AMDGPU OEM), Windows policy plus the broker write allowlist on DIMM buses, SPD from the kernel `eeprom` file or a host-internal EE1004 page select; wired in `lightloom-runtime` (`smbus.rs`, `sensors.rs`); udev i2c rules per adapter name. AMDGPU DDC and DP AUX buses left out |
 | nusb (raw USB on Linux) | Missing | WP-L3; `docs/linux-porting.md` "USB (nusb), serial: not yet" |
-| hwmon `pwm` (fan control) | Missing | WP-SENSORS-FANS; hwmon is read-only |
+| hwmon `pwm` (fan control) | Out of scope | decided 2026-10-25; hwmon stays read-only |
 | serialport (Linux) | Done, untested on Linux hardware | `crates/lightloom-hal-linux/src/tty.rs`: tty enumeration from sysfs with the USB parent, `serialport` I/O |
 | `tools/gen-udev` | Done | `lightloom udev generate` (`crates/lightloom-cli/src/udev.rs`); generated `packaging/udev/70-lightloom.rules` with a drift test; `packaging/sysusers.d/lightloom.conf`, `packaging/modules-load.d/lightloom.conf` |
 | CEF on Linux (X11/Wayland, headless CI) | Done (CI only) | `crates/lightloom-renderer/src/ipc.rs` (tmpfs ring, unix-socket control), headless ozone by default, `$ORIGIN` rpath; `ci.yml` `renderer-cef-linux` (60-frame smoke run, `lightloom-render/tests/cef_real.rs`). Not run on a Linux desktop; not yet staged into the Linux packages (`release.yml` `linux` builds daemon + CLI only) |
@@ -282,9 +282,7 @@ the WiX installer and issue forms.
 6. **WP-LCD remainder: LCD faces on hardware. Size M; needs an LCD device.**
    - Done: face renderer per device, the `lcd` module and encoders, face selection, starter faces (`docs/host-api/lcd-lightloom.md`).
    - Left: a real LCD device run; the NZXT formats (needs a capture of NZXT CAM and a Kraken Elite/Z3); per-face control values in the dashboard; background layer, rotation, idle blanking; a face preview.
-7. **WP-SENSORS-FANS (fan half). Size L.**
-   - The plugin fan API (`createFanControl`, …) with curves; LpcIO/NCT6687D through PawnIO LpcIO in the broker; hwmon `pwm` on Linux; optionally CPU MSRs (`AMDFamily17` / `IntelMSR`) as a read-only broker op.
-   - Opt-in only. Touches `lightloom-iobroker`, `lightloom-nvapi`, `host.js`, the daemon and a UI page.
+7. **WP-SENSORS-FANS (fan half): dropped.** Decided 2026-10-25: Lightloom does not control fans (no fan API, curves, LpcIO/SuperIO or hwmon `pwm`). Read-only sensors stay.
 8. **WP-DTLS: `addFeature("dtls")` and `https`. Size M.**
    - A TLS stack for the network host (Hue Entertainment needs DTLS-PSK). Touches `lightloom-plugin-host/src/net/`, `host.js`.
 9. **WP-SOURCES: plugin sources manager. Size M. Optional under the standalone direction.**
@@ -302,5 +300,5 @@ the WiX installer and issue forms.
 ### Suggested order
 
 - **Now (no user needed):** WP-L3, WP-L8 in parallel; then the WP-L7 remainder.
-- **Then:** WP-SENSORS-FANS (fan half), WP-L6, WP-DTLS; WP-LCD remainder once an LCD device is available.
+- **Then:** WP-L6, WP-DTLS; WP-LCD remainder once an LCD device is available.
 - **With the user:** WP-SOAK, WP-EVISION-V1, WP-SIGN, WP-LINUX-RUN whenever the hardware, capture, account or machine is available.

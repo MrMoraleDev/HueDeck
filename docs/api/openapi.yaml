@@ -686,10 +686,26 @@ paths:
                 port_in_use:
                   value: { error: { status: 409, code: port_in_use, message: "port 8080 cannot be used (...); another program probably listens on it. Nothing was changed: choose another port" } }
   /v1/import/signalrgb:
+    get:
+      tags: [backup]
+      operationId: previewSignalRgb
+      summary: Preview what the SignalRGB import would bring in (read-only, nothing changes)
+      description: >-
+        Reads the local SignalRGB setup in place (`HKCU\Software\WhirlwindFX\SignalRgb`, read-only)
+        and reports what `POST /v1/import/signalrgb` would import. Effects and plugins from
+        SignalRGB are third-party files and stay where they are.
+      parameters:
+        - { name: name, in: query, required: false, schema: { type: string, default: SignalRGB }, description: Layout name. }
+      responses:
+        "200":
+          description: What would be imported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignalRgbImport" }
     post:
       tags: [backup]
       operationId: importSignalRgb
-      summary: Import the local SignalRGB setup (placements as a layout, channel components)
+      summary: Import the local SignalRGB setup (layout, channel components, effect values and presets, selected effect, brightness, per-device enable)
       security: [{ bearer: [] }]
       requestBody:
         required: false
@@ -701,16 +717,10 @@ paths:
                 name: { type: string, default: SignalRGB, description: Layout name. }
       responses:
         "200":
-          description: What was imported.
+          description: What was imported (the preview's shape plus `imported`, `valuesImported` and `presetsImported`).
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  layout: { type: string }
-                  placements: { type: integer }
-                  channels: { type: integer }
-                  notes: { type: array, items: { type: string } }
+              schema: { $ref: "#/components/schemas/SignalRgbImport" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /v1/export:
     get:
@@ -1264,6 +1274,7 @@ components:
             - type: "null"
           description: The last battery report (plugins with the `battery` feature), kept after the device goes away.
         blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low (user setting). }
+        thirdParty: { type: boolean, description: Driven by a third-party plugin read in place (a local SignalRGB installation's). }
         save:
           oneOf:
             - $ref: "#/components/schemas/SaveSupport"
@@ -1377,10 +1388,65 @@ components:
         controls: { type: array, items: { type: object, additionalProperties: true }, description: "`<meta property>` controls (schemas/effect-meta.schema.json shape)." }
         values: { $ref: "#/components/schemas/ControlValues" }
         presets: { type: array, items: { type: string } }
+        thirdParty: { type: boolean, description: A third-party effect read in place (`source` `signalrgb`). }
         uses:
           type: array
           items: { enum: [audio, video, meters, engine, webgl, input] }
           description: What the effect reads; effects with `meters` are game integrations.
+    SignalRgbImport:
+      type: object
+      description: The SignalRGB import wizard's preview, or the result of the import.
+      properties:
+        available: { type: boolean, description: SignalRGB settings were found. }
+        layout: { type: [string, "null"], description: Name the canvas is imported as; null without placements. }
+        placements: { type: integer }
+        layoutBrightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        globalBrightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        selectedEffect:
+          oneOf:
+            - $ref: "#/components/schemas/SignalRgbImportEffect"
+            - type: "null"
+        effects:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/SignalRgbImportEffect"
+              - type: object
+                properties:
+                  values: { type: integer, description: Stored control values. }
+                  presets: { type: array, items: { type: string } }
+        channels: { type: integer, description: Channel setups. }
+        channelSetups:
+          type: array
+          items:
+            type: object
+            properties:
+              device: { type: string }
+              channel: { type: string }
+              components: { type: integer }
+              leds: { type: integer }
+        devices:
+          type: array
+          description: Per-device enable and brightness (the brightness is the device's placement in the layout).
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              name: { type: [string, "null"] }
+              known: { type: boolean, description: Lightloom has seen this device (its enable state is imported). }
+              enabled: { type: [boolean, "null"] }
+              brightness: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        notes: { type: array, items: { type: string } }
+        imported: { type: boolean, description: Present (true) on the import's reply. }
+        valuesImported: { type: integer }
+        presetsImported: { type: integer }
+    SignalRgbImportEffect:
+      type: object
+      properties:
+        id: { type: string, description: "Lightloom effect id (`signalrgb:<name>`)." }
+        title: { type: [string, "null"], description: Null when the effect is not in the library. }
+        available: { type: boolean, description: In the library now (the SignalRGB library is on). }
+        thirdParty: { const: true }
     Settings:
       type: object
       properties:

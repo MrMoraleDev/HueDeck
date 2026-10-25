@@ -10,6 +10,7 @@ import type {
   Playlist,
   SaveResult,
   ShutdownMode,
+  SignalRgbImport,
   Snapshot,
 } from "./types";
 
@@ -100,11 +101,9 @@ export const api = {
   networkAdd: (plugin: string, ip: string) => request("POST", `/v1/network/${enc(plugin)}/add`, { ip }),
   networkAction: (plugin: string, id: string, action: "pair" | "forget") =>
     request("POST", `/v1/network/${enc(plugin)}/controllers/${enc(id)}/${action}`),
-  importSignalRgb: () => request<{ placements: number; channels: number; layout: string }>(
-    "POST",
-    "/v1/import/signalrgb",
-    {},
-  ),
+  /** What the SignalRGB import would bring in (read-only). */
+  previewSignalRgb: () => request<SignalRgbImport>("GET", "/v1/import/signalrgb"),
+  importSignalRgb: () => request<SignalRgbImport>("POST", "/v1/import/signalrgb", {}),
   exportState: () => request<unknown>("GET", "/v1/export"),
   importState: (state: unknown) => request("POST", "/v1/import", state),
   pawnio: () => request<PawnIoView>("GET", "/v1/pawnio"),

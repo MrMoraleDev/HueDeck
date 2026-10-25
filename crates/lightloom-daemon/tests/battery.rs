@@ -134,6 +134,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
         plugins_dir: Some(plugins),
         effects_dir: None,
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: notifier.clone(),

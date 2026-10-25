@@ -161,6 +161,7 @@ pub const NATIVE_ROUTES: &[Route] = &[
     r("GET", "/components", false),
     r("GET", "/settings", false),
     r("PATCH", "/settings", true),
+    r("GET", "/import/signalrgb", false),
     r("POST", "/import/signalrgb", true),
     r("GET", "/export", false),
     r("POST", "/import", true),

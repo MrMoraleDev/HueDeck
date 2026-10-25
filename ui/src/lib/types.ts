@@ -93,6 +93,8 @@ export interface DeviceView {
   battery?: BatteryView | null;
   /** Pulse red while the battery is low. */
   blinkLowBattery: boolean;
+  /** Driven by a third-party plugin read in place (a local SignalRGB installation's). */
+  thirdParty?: boolean;
 }
 
 export type ShutdownMode = "restore" | "keep" | "off";
@@ -145,8 +147,37 @@ export interface EffectView {
   controls: EffectControl[];
   values: Record<string, unknown>;
   presets: string[];
+  /** A third-party effect read in place (SignalRGB's). */
+  thirdParty?: boolean;
   /** What the effect reads; "meters" marks game integrations. */
   uses?: ("audio" | "video" | "meters" | "engine" | "webgl" | "input")[];
+}
+
+/** An effect in the SignalRGB import (preview or result). */
+export interface SignalRgbImportEffect {
+  id: string;
+  title: string | null;
+  /** In the library now (the SignalRGB library is on). */
+  available: boolean;
+  thirdParty: true;
+}
+
+/** What the SignalRGB import brings in (`GET /v1/import/signalrgb`), or brought in (`POST`). */
+export interface SignalRgbImport {
+  available: boolean;
+  layout: string | null;
+  placements: number;
+  layoutBrightness: number | null;
+  globalBrightness: number | null;
+  selectedEffect: SignalRgbImportEffect | null;
+  effects: (SignalRgbImportEffect & { values: number; presets: string[] })[];
+  channels: number;
+  channelSetups: { device: string; channel: string; components: number; leds: number }[];
+  devices: { key: string; name: string | null; known: boolean; enabled: boolean | null; brightness: number | null }[];
+  notes: string[];
+  imported?: boolean;
+  valuesImported?: number;
+  presetsImported?: number;
 }
 
 /** The auto-next timer (SignalRGB's "Effect Timer Interval"). */

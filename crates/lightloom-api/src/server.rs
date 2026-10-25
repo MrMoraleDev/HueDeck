@@ -214,7 +214,10 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/placements/{uid}", put(put_placement))
         .route("/v1/components", get(components))
         .route("/v1/settings", get(settings).patch(patch_settings))
-        .route("/v1/import/signalrgb", post(import_signalrgb))
+        .route(
+            "/v1/import/signalrgb",
+            get(preview_signalrgb).post(import_signalrgb),
+        )
         .route("/v1/export", get(export))
         .route("/v1/import", post(import))
         .route("/v1/pawnio", get(pawnio))
@@ -639,6 +642,10 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
 #[derive(Deserialize, Default)]
 struct ImportLayoutBody {
     name: Option<String>,
+}
+
+async fn preview_signalrgb(State(ctx): State<ApiContext>, Query(q): Query<ImportLayoutBody>) -> Response {
+    reply(ctx.call(Request::PreviewSignalRgb { name: q.name }).await)
 }
 
 async fn import_signalrgb(State(ctx): State<ApiContext>, body: Option<Json<ImportLayoutBody>>) -> Response {

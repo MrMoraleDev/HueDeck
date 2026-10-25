@@ -42,7 +42,7 @@ use crate::battery::{self, BatteryMonitor, Severity, Thresholds};
 use crate::config::Config;
 use crate::lifecycle::LifecycleState;
 use crate::paths::{self, Paths};
-use crate::store::{StateExport, Store};
+use crate::store::{EffectState, StateExport, Store};
 use arc_swap::ArcSwap;
 use lightloom_api::model::{
     BatteryView, ChannelView, DeviceMessageView, DeviceSaveChoice, DeviceView, EffectView, Endpoint,
@@ -75,6 +75,7 @@ use lightloom_runtime::conflicts::{SmbusClaim, SMBUS_RECHECK};
 use lightloom_runtime::effects::{EffectLibrary, EffectSource};
 use lightloom_runtime::hotplug::{Hotplug, HOTPLUG_SETTLE};
 use lightloom_runtime::pawnio::{PawnIoFacts, SetupAction};
+use lightloom_runtime::signalrgb::{self, SettingsSource, Setup};
 use lightloom_runtime::smbus::SmbusHardware;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -220,6 +221,9 @@ pub struct EngineOptions {
     pub api_port: u16,
     /// Why that is not the configured port (busy at startup), for the settings.
     pub api_port_notice: Option<String>,
+    /// SignalRGB's settings for the import wizard (`None`: this user's registry,
+    /// read-only; tests pass a [`lightloom_runtime::signalrgb::Fixture`]).
+    pub signalrgb_settings: Option<Arc<dyn SettingsSource + Send + Sync>>,
 }
 
 struct Envelope {
@@ -428,6 +432,8 @@ struct Engine {
     enabled: bool,
     layout: Layout,
     signalrgb: bool,
+    /// SignalRGB's plugin, effect and component directories while that library is on.
+    third_party: Vec<PathBuf>,
     gpu: bool,
     /// SMBus devices are driven.
     smbus: bool,
@@ -544,6 +550,7 @@ impl Engine {
             enabled: true,
             layout: Layout::default(),
             signalrgb: false,
+            third_party: Vec::new(),
             gpu: false,
             smbus: false,
             openrgb_sdk: false,
@@ -720,6 +727,11 @@ impl Engine {
     }
 
     fn load_libraries(&mut self) {
+        self.third_party = if self.signalrgb {
+            signalrgb::third_party_dirs()
+        } else {
+            Vec::new()
+        };
         // Plugins: SignalRGB's first (when enabled), then Lightloom's, then the user's; later wins.
         let mut dirs = Vec::new();
         if self.signalrgb {
@@ -1541,6 +1553,7 @@ impl Engine {
                         .presets(&e.id)
                         .map(|p| p.into_keys().collect())
                         .unwrap_or_default(),
+                    third_party: e.source == EffectSource::SignalRgb,
                     uses: effect_uses(e),
                 })
                 .collect(),
@@ -1873,6 +1886,7 @@ impl Engine {
                 plugin: meta.name.clone(),
                 device_type: format!("{:?}", meta.device_type).to_ascii_lowercase(),
                 plugin_path: meta.source_path.to_string_lossy().into_owned(),
+                third_party: signalrgb::is_inside(&meta.source_path, &self.third_party),
                 state: if !enabled {
                     "disabled".into()
                 } else if !self.conflicts.is_empty() {
@@ -1972,6 +1986,7 @@ impl Engine {
                 name: r.name.clone(),
                 plugin: r.name.clone(),
                 plugin_path: r.plugin.clone(),
+                third_party: signalrgb::is_inside(std::path::Path::new(&r.plugin), &self.third_party),
                 state: "absent".into(),
                 enabled: r.enabled,
                 connected: false,
@@ -2414,6 +2429,13 @@ impl Engine {
             Request::ImportSignalRgb { name } => {
                 self.import_signalrgb(name.unwrap_or_else(|| "SignalRGB".into()))
             }
+            Request::PreviewSignalRgb { name } => {
+                let setup = signalrgb::read_setup(
+                    &*self.signalrgb_settings(),
+                    name.as_deref().unwrap_or("SignalRGB"),
+                );
+                self.signalrgb_preview(&setup)
+            }
             Request::GetLayout { name } => match self.store.layout(&name).map_err(internal)? {
                 Some(l) => serde_json::to_value(l).map_err(internal),
                 None => Err(ApiError::not_found("The requested layout was not found")),
@@ -2751,38 +2773,191 @@ impl Engine {
         Ok(())
     }
 
-    fn import_signalrgb(&mut self, name: String) -> Result<Value, ApiError> {
-        let (layout, notes) = lightloom_runtime::signalrgb::layout(&name);
-        let mut imported_channels = 0;
-        // Devices whose sessions use something else than what is imported now.
-        let mut changed = std::collections::BTreeSet::new();
-        let keys: Vec<String> = self
+    /// SignalRGB's settings tree (read-only).
+    fn signalrgb_settings(&self) -> Arc<dyn SettingsSource + Send + Sync> {
+        self.opts
+            .signalrgb_settings
+            .clone()
+            .unwrap_or_else(|| Arc::from(signalrgb::local()))
+    }
+
+    /// What importing `setup` brings in (the import wizard's preview; the
+    /// import's reply has the same shape plus what was written).
+    fn signalrgb_preview(&self, setup: &Setup) -> Result<Value, ApiError> {
+        let known: BTreeMap<String, String> = self
             .store
             .devices()
             .map_err(internal)?
             .into_iter()
-            .map(|r| r.key)
+            .map(|r| (r.key, r.name))
             .collect();
-        for key in &keys {
-            let (channels, _) = lightloom_runtime::signalrgb::channels(key);
+        let effect = |id: &str| {
+            let file = self.effects.get(id);
+            json!({
+                "id": id,
+                "title": file.map(|f| f.meta.title.clone()),
+                "available": file.is_some(),
+                "thirdParty": true,
+            })
+        };
+        let effects: Vec<Value> = setup
+            .effects
+            .iter()
+            .map(|(id, s)| {
+                let mut v = effect(id);
+                v["values"] = json!(s.params.len());
+                v["presets"] = json!(s.presets.keys().collect::<Vec<_>>());
+                v
+            })
+            .collect();
+        let channel_setups: Vec<Value> = setup
+            .channels
+            .iter()
+            .flat_map(|(device, channels)| {
+                channels.iter().map(move |(channel, list)| {
+                    json!({
+                        "device": device,
+                        "channel": channel,
+                        "components": list.len(),
+                        "leds": list.iter().map(|c| u64::from(c.component.led_count)).sum::<u64>(),
+                    })
+                })
+            })
+            .collect();
+        let devices: Vec<Value> = setup
+            .devices
+            .iter()
+            .map(|d| {
+                json!({
+                    "key": d.key,
+                    "name": known.get(&d.key),
+                    "known": known.contains_key(&d.key),
+                    "enabled": d.enabled,
+                    "brightness": d.brightness,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "available": setup.layout.is_some() || !setup.effects.is_empty() || !setup.channels.is_empty(),
+            "layout": setup.layout.as_ref().map(|l| l.name.clone()),
+            "placements": setup.layout.as_ref().map_or(0, |l| l.endpoints.len()),
+            "layoutBrightness": setup.layout.as_ref().map(|l| l.brightness),
+            "globalBrightness": setup.global_brightness,
+            "selectedEffect": setup.selected_effect.as_deref().map(effect),
+            "effects": effects,
+            "channels": channel_setups.len(),
+            "channelSetups": channel_setups,
+            "devices": devices,
+            "notes": setup.notes,
+        }))
+    }
+
+    /// Imported control values as the effect's control types when the effect is
+    /// in the library (names it has no control for are dropped); as read otherwise.
+    fn coerce_imported(
+        &self,
+        id: &str,
+        values: &Map<String, Value>,
+        notes: &mut Vec<String>,
+    ) -> Map<String, Value> {
+        let Some(file) = self.effects.get(id) else {
+            return values.clone();
+        };
+        let mut out = Map::new();
+        for (name, value) in values {
+            match file.meta.properties.iter().find(|c| c.property == *name) {
+                Some(control) => match control.coerce(value).and_then(|v| serde_json::to_value(v).ok()) {
+                    Some(v) => {
+                        out.insert(name.clone(), v);
+                    }
+                    None => notes.push(format!(
+                        "{id}: {name} = {value} does not fit the control, skipped"
+                    )),
+                },
+                None => notes.push(format!("{id}: {name} is not a control of this effect, skipped")),
+            }
+        }
+        out
+    }
+
+    fn import_signalrgb(&mut self, name: String) -> Result<Value, ApiError> {
+        let setup = signalrgb::read_setup(&*self.signalrgb_settings(), &name);
+        let mut summary = self.signalrgb_preview(&setup)?;
+        let mut notes = Vec::new();
+
+        // Channel components.
+        let mut imported_channels = 0;
+        // Devices whose sessions use something else than what is imported now.
+        let mut changed = BTreeSet::new();
+        for (key, channels) in &setup.channels {
             let before = self.store.channels(key).map_err(internal)?;
             for (channel, list) in channels {
                 let array = Value::Array(list.iter().map(ComponentInstance::to_json).collect());
                 // Without a stored setup the session already reads SignalRGB's when that is on.
-                let same = match before.get(&channel) {
+                let same = match before.get(channel) {
                     Some(old) => *old == array,
                     None => self.signalrgb,
                 };
                 if !same {
                     changed.insert(key.clone());
                 }
-                self.store.set_channel(key, &channel, &array).map_err(internal)?;
+                self.store.set_channel(key, channel, &array).map_err(internal)?;
                 imported_channels += 1;
             }
         }
         self.reload_channels();
-        let endpoints = layout.as_ref().map_or(0, |l| l.endpoints.len());
-        if let Some(l) = layout {
+
+        // Effect control values and presets.
+        let mut effects = BTreeMap::new();
+        for (id, s) in &setup.effects {
+            let params = self.coerce_imported(id, &s.params, &mut notes);
+            let presets = s
+                .presets
+                .iter()
+                .map(|(n, v)| (n.clone(), self.coerce_imported(id, v, &mut notes)))
+                .collect();
+            effects.insert(id.clone(), EffectState { params, presets });
+        }
+        let (values, presets) = self.store.merge_effects(&effects).map_err(internal)?;
+
+        // Global brightness.
+        if let Some(b) = setup.global_brightness {
+            self.brightness = b;
+            self.store.set(keys::BRIGHTNESS, &b).map_err(internal)?;
+            self.push_brightness();
+        }
+
+        // Per-device enable (the device brightness is the placement's).
+        let known: BTreeMap<String, bool> = self
+            .store
+            .devices()
+            .map_err(internal)?
+            .into_iter()
+            .map(|r| (r.key, r.enabled))
+            .collect();
+        for d in &setup.devices {
+            let Some(on) = d.enabled else { continue };
+            match known.get(&d.key) {
+                Some(&now) if now != on => {
+                    self.handle(Request::SetDevice {
+                        key: d.key.clone(),
+                        enabled: Some(on),
+                        parameters: None,
+                        shutdown_mode: None,
+                        blink_low_battery: None,
+                    })?;
+                }
+                Some(_) => {}
+                None => notes.push(format!(
+                    "{}: not seen by Lightloom yet, its enable state is only in the layout",
+                    d.key
+                )),
+            }
+        }
+
+        // The canvas as a layout (layout brightness, per-device brightness and enable).
+        let endpoints = setup.layout.as_ref().map_or(0, |l| l.endpoints.len());
+        if let Some(l) = setup.layout.clone() {
             self.store.save_layout(&l).map_err(internal)?;
             let saved = self.store.layout(&l.name).map_err(internal)?.unwrap_or(l);
             self.switch_layout(saved).map_err(internal)?;
@@ -2791,10 +2966,35 @@ impl Engine {
         for key in present.iter().filter(|k| changed.contains(*k)) {
             self.restart_device(key);
         }
+
+        // The selected effect, last, so it starts with the imported values.
+        match &setup.selected_effect {
+            Some(id) if self.effects.get(id).is_some() => {
+                self.handle(Request::ApplyEffect {
+                    id: id.clone(),
+                    values: Map::new(),
+                })?;
+            }
+            Some(id) => notes.push(format!(
+                "the selected effect {id} is not in the library (turn on the SignalRGB library to play it)"
+            )),
+            None => {
+                if self.effect.as_ref().is_some_and(|e| effects.contains_key(e)) {
+                    self.start_canvas();
+                }
+            }
+        }
+
         self.log(format!(
-            "imported from SignalRGB: {endpoints} placements as layout {name}, {imported_channels} channel setups"
+            "imported from SignalRGB: {endpoints} placements as layout {name}, {imported_channels} channel setups, {values} effect values, {presets} presets"
         ));
-        Ok(json!({ "layout": name, "placements": endpoints, "channels": imported_channels, "notes": notes }))
+        summary["imported"] = json!(true);
+        summary["valuesImported"] = json!(values);
+        summary["presetsImported"] = json!(presets);
+        if let Some(list) = summary["notes"].as_array_mut() {
+            list.extend(notes.into_iter().map(Value::String));
+        }
+        Ok(summary)
     }
 
     /// The plugin, effect and component libraries changed (SignalRGB on/off).
@@ -2894,6 +3094,7 @@ pub fn locate(paths: Paths, config: Config, dry_run: bool, hardware: HardwareMod
         plugins_dir: paths::resource_dir("plugins", "plugins"),
         effects_dir: paths::resource_dir("effects", "effects"),
         components_dir: paths::resource_dir("components", "components"),
+        signalrgb_settings: None,
         renderer,
         plugin_cache: lightloom_plugin_host::catalog::default_cache_path(),
         notifier: lightloom_runtime::notify::system_notifier(),

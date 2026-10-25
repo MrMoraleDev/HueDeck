@@ -140,7 +140,9 @@ fn want_bool(v: Option<&Value>, what: &str) -> Result<bool, NativeError> {
         Some(Value::String(s)) if s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("false") => {
             Ok(s.eq_ignore_ascii_case("true"))
         }
-        _ => Err(NativeError::type_error(format!("{what}: Parameter must be a boolean!"))),
+        _ => Err(NativeError::type_error(format!(
+            "{what}: Parameter must be a boolean!"
+        ))),
     }
 }
 
@@ -222,7 +224,10 @@ pub fn signalrgb(
         "SetGlobalBrightness" => match want_num(a0) {
             Some(v) if (0.0..=100.0).contains(&v) => run(EngineCall::Brightness(v.round() as u8)),
             _ => {
-                log(&format!("SetGlobalBrightness ignored invalid value: {}", a0.cloned().unwrap_or(Value::Null)));
+                log(&format!(
+                    "SetGlobalBrightness ignored invalid value: {}",
+                    a0.cloned().unwrap_or(Value::Null)
+                ));
                 Ok(Value::Null)
             }
         },
@@ -246,10 +251,17 @@ pub fn signalrgb(
         }
         "GetDeviceEnabled" => {
             let uid = want_str(a0, "GetDeviceEnabled()")?;
-            match host.state().devices.iter().find(|(k, _)| k.eq_ignore_ascii_case(uid)) {
+            match host
+                .state()
+                .devices
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(uid))
+            {
                 Some((_, on)) => Ok(Value::Bool(*on)),
                 None => {
-                    log(&format!("GetDeviceEnabled: Failed to find device with uid: {uid}"));
+                    log(&format!(
+                        "GetDeviceEnabled: Failed to find device with uid: {uid}"
+                    ));
                     Ok(Value::Bool(false))
                 }
             }
@@ -266,12 +278,16 @@ pub fn signalrgb(
             match key {
                 Some(key) => run(EngineCall::DeviceEnabled { key, enabled }),
                 None => {
-                    log(&format!("SetDeviceEnabled: Failed to find device with uid: {uid}"));
+                    log(&format!(
+                        "SetDeviceEnabled: Failed to find device with uid: {uid}"
+                    ));
                     Ok(Value::Null)
                 }
             }
         }
-        other => Err(NativeError::type_error(format!("signalrgb.{other} is not a function"))),
+        other => Err(NativeError::type_error(format!(
+            "signalrgb.{other} is not a function"
+        ))),
     }
 }
 

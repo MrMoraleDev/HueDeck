@@ -466,7 +466,10 @@ impl DeviceContext {
         };
         match crate::input::parse(kind, json) {
             Some(event) => sink(event),
-            None => self.warn_once("input", "keyboard/mouse feature call with malformed arguments (dropped)"),
+            None => self.warn_once(
+                "input",
+                "keyboard/mouse feature call with malformed arguments (dropped)",
+            ),
         }
     }
 
@@ -1831,7 +1834,8 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
     }
     .to_string());
     // The `keyboard` / `mouse` features (crate::input).
-    native!("inputEvent", |d, kind: String, json: String| d.input_event(&kind, &json));
+    native!("inputEvent", |d, kind: String, json: String| d
+        .input_event(&kind, &json));
     // The `battery` feature (docs/host-api/hid-usb.md §addFeature).
     native!("batteryEnable", |d| d.enable_battery());
     native!("batterySetLevel", |d, level: f64| d.set_battery_level(level));

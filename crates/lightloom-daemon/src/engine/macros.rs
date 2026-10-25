@@ -77,7 +77,10 @@ impl MacroHost for EngineLink {
                     .find(|e| e.id == effect || e.title.trim().eq_ignore_ascii_case(effect.trim()))
                     .map(|e| e.id.clone())
                     .ok_or_else(|| format!("Failed to find effect with name: {effect}"))?;
-                Request::ApplyPreset { effect: id, name: preset }
+                Request::ApplyPreset {
+                    effect: id,
+                    name: preset,
+                }
             }
             EngineCall::PlayPlaylist(id) => {
                 let id = snapshot
@@ -164,7 +167,11 @@ fn api_error(e: MacroError) -> ApiError {
 impl Engine {
     /// The saved macro settings.
     pub(super) fn macro_config(store: &crate::store::Store) -> MacroConfig {
-        store.get::<MacroConfig>(MACROS_KEY).ok().flatten().unwrap_or_default()
+        store
+            .get::<MacroConfig>(MACROS_KEY)
+            .ok()
+            .flatten()
+            .unwrap_or_default()
     }
 
     /// The user's macro folder.
@@ -224,7 +231,8 @@ impl Engine {
 
     /// The macro requests.
     pub(super) fn handle_macros(&mut self, request: Request) -> Result<Value, ApiError> {
-        let view = |e: &Engine| serde_json::to_value(e.macros.view()).map_err(|e| ApiError::internal(e.to_string()));
+        let view =
+            |e: &Engine| serde_json::to_value(e.macros.view()).map_err(|e| ApiError::internal(e.to_string()));
         match request {
             Request::Macros => view(self),
             Request::SetMacros {
@@ -233,7 +241,8 @@ impl Engine {
                 mouse_hook,
                 allow_launch,
             } => {
-                self.macros.update_settings(enabled, keyboard_hook, mouse_hook, allow_launch);
+                self.macros
+                    .update_settings(enabled, keyboard_hook, mouse_hook, allow_launch);
                 self.save_macros();
                 view(self)
             }

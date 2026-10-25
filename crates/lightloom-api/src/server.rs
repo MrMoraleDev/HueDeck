@@ -896,7 +896,11 @@ struct MacroBody {
     actions: Option<Vec<String>>,
 }
 
-async fn patch_macro(State(ctx): State<ApiContext>, Path(id): Path<String>, Json(b): Json<MacroBody>) -> Response {
+async fn patch_macro(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<String>,
+    Json(b): Json<MacroBody>,
+) -> Response {
     reply(
         ctx.call(Request::SetMacro {
             id,
@@ -918,7 +922,11 @@ struct PromptBody {
     text: Option<String>,
 }
 
-async fn answer_prompt(State(ctx): State<ApiContext>, Path(id): Path<u64>, Json(b): Json<PromptBody>) -> Response {
+async fn answer_prompt(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<u64>,
+    Json(b): Json<PromptBody>,
+) -> Response {
     reply(ctx.call(Request::AnswerPrompt { id, text: b.text }).await)
 }
 

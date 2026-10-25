@@ -73,7 +73,14 @@ fn user_actions_run_through_the_engine() {
     assert_eq!(view["hooksAvailable"], false);
     assert_eq!(view["scripts"][0]["id"], id);
     assert_eq!(view["scripts"][0]["options"][0]["value"], 30);
-    assert!(Paths::under(&home).config.join("macroscripts").join("Inputs").is_dir(), "the folders are created");
+    assert!(
+        Paths::under(&home)
+            .config
+            .join("macroscripts")
+            .join("Inputs")
+            .is_dir(),
+        "the folders are created"
+    );
 
     let e = call(b, Request::RunMacro { id: id.into() }).unwrap_err();
     assert_eq!(e.status, 409, "macros are off");
@@ -88,7 +95,17 @@ fn user_actions_run_through_the_engine() {
     )
     .unwrap_err();
     assert_eq!(e.status, 400);
-    assert_eq!(call(b, Request::RunMacro { id: "user:action:Nope".into() }).unwrap_err().status, 404);
+    assert_eq!(
+        call(
+            b,
+            Request::RunMacro {
+                id: "user:action:Nope".into()
+            }
+        )
+        .unwrap_err()
+        .status,
+        404
+    );
 
     call(
         b,
@@ -112,16 +129,31 @@ fn user_actions_run_through_the_engine() {
     .unwrap();
     call(b, Request::RunMacro { id: id.into() }).unwrap();
     let end = Instant::now() + Duration::from_secs(20);
-    while !(b.snapshot().lighting.brightness == 25 && !b.snapshot().lighting.enabled && desktop.inputs().len() == 6) {
+    while !(b.snapshot().lighting.brightness == 25
+        && !b.snapshot().lighting.enabled
+        && desktop.inputs().len() == 6)
+    {
         assert!(Instant::now() < end, "timed out: {:?}", desktop.calls());
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(
         desktop.inputs()[..3],
         [
-            SynthInput::Key { vk: 0x11, down: true, extended: false },
-            SynthInput::Key { vk: 0x10, down: true, extended: false },
-            SynthInput::Key { vk: 0x1B, down: true, extended: false },
+            SynthInput::Key {
+                vk: 0x11,
+                down: true,
+                extended: false
+            },
+            SynthInput::Key {
+                vk: 0x10,
+                down: true,
+                extended: false
+            },
+            SynthInput::Key {
+                vk: 0x1B,
+                down: true,
+                extended: false
+            },
         ]
     );
     handle.shutdown();

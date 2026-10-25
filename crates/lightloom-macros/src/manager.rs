@@ -386,7 +386,11 @@ impl Core {
                     "injected": injected,
                 });
                 drop(m);
-                self.deliver("onKey", &envelope("Key", "Key Press", "SignalRGB", "Input", data), Some(HOOK_WAIT))
+                self.deliver(
+                    "onKey",
+                    &envelope("Key", "Key Press", "SignalRGB", "Input", data),
+                    Some(HOOK_WAIT),
+                )
             }
             HookEvent::Button {
                 button,
@@ -394,7 +398,11 @@ impl Core {
                 injected,
             } => {
                 let (name, code) = keys::button_event(button, released);
-                self.deliver("onMouse", &mouse_event(name, code, released, injected), Some(HOOK_WAIT))
+                self.deliver(
+                    "onMouse",
+                    &mouse_event(name, code, released, injected),
+                    Some(HOOK_WAIT),
+                )
             }
             HookEvent::Wheel {
                 horizontal,
@@ -402,7 +410,11 @@ impl Core {
                 injected,
             } => {
                 let (name, code) = keys::wheel_event(horizontal, notches);
-                self.deliver("onMouse", &mouse_event(name, code, false, injected), Some(HOOK_WAIT))
+                self.deliver(
+                    "onMouse",
+                    &mouse_event(name, code, false, injected),
+                    Some(HOOK_WAIT),
+                )
             }
         }
     }
@@ -430,7 +442,11 @@ impl Core {
                     "keyString": m.key_string(u16::try_from(key_code).unwrap_or(0), &key),
                     "injected": true,
                 });
-                self.deliver("onKey", &envelope("Key", "Key Press", "SignalRGB", "Input", data), None);
+                self.deliver(
+                    "onKey",
+                    &envelope("Key", "Key Press", "SignalRGB", "Input", data),
+                    None,
+                );
             }
             PluginInput::Button {
                 name,
@@ -446,7 +462,11 @@ impl Core {
                     extended: keys::extended(vk),
                 }]);
             }
-            PluginInput::ButtonHid { vk, released, xbutton } => {
+            PluginInput::ButtonHid {
+                vk,
+                released,
+                xbutton,
+            } => {
                 if let Some(button) = keys::hid_button(vk, xbutton) {
                     let _ = self.desktop.send(&[SynthInput::Button {
                         button,
@@ -541,15 +561,26 @@ pub fn url_policy(url: &str) -> Result<Option<String>, NativeError> {
     if url.is_empty() || url.len() > 2048 || has_control(url) {
         return Err(NativeError::type_error("openUrl(): not a URL"));
     }
-    let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+    let scheme = url
+        .split_once(':')
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_default();
     match scheme.as_str() {
         "http" | "https" | "mailto" => Ok(None),
         "lightloom" => Ok(Some(url.to_string())),
         s if APP_SCHEMES.contains(&s) => Ok(None),
         _ => Err(NativeError::refused(format!(
             "openUrl(): {} links are not opened by macros (http, https, mailto and {} are)",
-            if scheme.is_empty() { "these".to_string() } else { format!("{scheme}:") },
-            APP_SCHEMES.iter().map(|s| format!("{s}:")).collect::<Vec<_>>().join(", ")
+            if scheme.is_empty() {
+                "these".to_string()
+            } else {
+                format!("{scheme}:")
+            },
+            APP_SCHEMES
+                .iter()
+                .map(|s| format!("{s}:"))
+                .collect::<Vec<_>>()
+                .join(", ")
         ))),
     }
 }
@@ -614,7 +645,9 @@ impl Natives for WorkerNatives {
         }
         let path = path.trim();
         if path.is_empty() || has_control(path) || has_control(cwd) {
-            return Err(NativeError::type_error("openApplication(): Parameter must be a string!"));
+            return Err(NativeError::type_error(
+                "openApplication(): Parameter must be a string!",
+            ));
         }
         let args: Vec<String> = match args {
             Value::Array(a) => a
@@ -718,7 +751,9 @@ impl Natives for WorkerNatives {
     fn log(&self, level: &str, text: &str) {
         if self.private.load(Ordering::Acquire) {
             if !self.hidden_noted.swap(true, Ordering::AcqRel) {
-                self.log_line("console output inside onKey / onMouse is not logged (it could hold typed text)");
+                self.log_line(
+                    "console output inside onKey / onMouse is not logged (it could hold typed text)",
+                );
             }
             return;
         }
@@ -798,7 +833,11 @@ fn worker_main(
                     natives.log_line(&format!("prompt callback failed: {e}"));
                 }
             }
-            Cmd::Handle { handler, event, reply } => {
+            Cmd::Handle {
+                handler,
+                event,
+                reply,
+            } => {
                 let private = handler == "onKey" || handler == "onMouse";
                 natives.private.store(private, Ordering::Release);
                 let r = rt.handle(handler, &event);
@@ -1064,7 +1103,9 @@ impl MacroManager {
     fn sync(&mut self) {
         let on = self.config.enabled;
         self.core.enabled.store(on, Ordering::Release);
-        self.core.allow_launch.store(self.config.allow_launch, Ordering::Release);
+        self.core
+            .allow_launch
+            .store(self.config.allow_launch, Ordering::Release);
         if !on {
             self.stop_all();
         } else {
@@ -1105,7 +1146,8 @@ impl MacroManager {
         let keyboard = self.config.enabled && self.config.keyboard_hook && self.running_with("onKey");
         let mouse = self.config.enabled && self.config.mouse_hook && self.running_with("onMouse");
         let Some(hook) = self.hook.as_mut() else {
-            self.hook_error = (keyboard || mouse).then(|| "this system has no keyboard and mouse hooks".into());
+            self.hook_error =
+                (keyboard || mouse).then(|| "this system has no keyboard and mouse hooks".into());
             return;
         };
         if hook.active() == (keyboard, mouse) {
@@ -1129,7 +1171,9 @@ impl MacroManager {
             }
             Err(e) => {
                 self.hook_error = Some(format!("the input hooks could not be installed: {e}"));
-                self.core.host.log("", self.hook_error.as_deref().unwrap_or_default());
+                self.core
+                    .host
+                    .log("", self.hook_error.as_deref().unwrap_or_default());
             }
         }
     }
@@ -1158,7 +1202,14 @@ impl MacroManager {
         if self.config != before {
             self.changed = true;
             if self.config.enabled != before.enabled {
-                self.core.host.log("", if self.config.enabled { "macros on" } else { "macros off" });
+                self.core.host.log(
+                    "",
+                    if self.config.enabled {
+                        "macros on"
+                    } else {
+                        "macros off"
+                    },
+                );
                 self.errors.clear();
             }
             self.sync();
@@ -1194,7 +1245,9 @@ impl MacroManager {
                 return Err(MacroError::Invalid("only an Input has a chain of Actions".into()));
             }
             if actions.len() > MAX_CHAIN {
-                return Err(MacroError::Invalid(format!("at most {MAX_CHAIN} Actions per Input")));
+                return Err(MacroError::Invalid(format!(
+                    "at most {MAX_CHAIN} Actions per Input"
+                )));
             }
             for a in &actions {
                 if !self.scripts.iter().any(|s| &s.id == a && s.kind == Kind::Action) {
@@ -1289,7 +1342,12 @@ impl MacroManager {
 
     /// The layout changed (`Layout Changed`).
     pub fn layout_changed(&self, name: &str) {
-        self.application("Layout Changed", "LayoutManager", "Layouts", json!({ "LayoutName": name }));
+        self.application(
+            "Layout Changed",
+            "LayoutManager",
+            "Layouts",
+            json!({ "LayoutName": name }),
+        );
     }
 
     /// The session was locked or unlocked (`Session Lock`).
@@ -1299,7 +1357,11 @@ impl MacroManager {
 
     /// The system goes to sleep or woke up (`System Suspend`, `System Resume`).
     pub fn system_power(&self, suspend: bool) {
-        let t = if suspend { "System Suspend" } else { "System Resume" };
+        let t = if suspend {
+            "System Suspend"
+        } else {
+            "System Resume"
+        };
         self.application(t, "SignalRGB", "System", json!({}));
     }
 
@@ -1352,7 +1414,12 @@ impl MacroManager {
         if self.last_idle.elapsed() >= IDLE_EVERY {
             self.last_idle = Instant::now();
             if let Some(idle) = self.core.desktop.idle_seconds() {
-                self.application("System Idle Time", "SignalRGB", "Input", json!({ "idleTime": idle }));
+                self.application(
+                    "System Idle Time",
+                    "SignalRGB",
+                    "Input",
+                    json!({ "idleTime": idle }),
+                );
             }
         }
         if self.last_processes.elapsed() >= PROCESSES_EVERY {
@@ -1369,10 +1436,20 @@ impl MacroManager {
         let now: BTreeSet<String> = now.into_iter().collect();
         if let Some(before) = &self.processes {
             for name in now.difference(before) {
-                self.application("Process Started", "SignalRGB", "Process", json!({ "exeName": name }));
+                self.application(
+                    "Process Started",
+                    "SignalRGB",
+                    "Process",
+                    json!({ "exeName": name }),
+                );
             }
             for name in before.difference(&now) {
-                self.application("Process Ended", "SignalRGB", "Process", json!({ "exeName": name }));
+                self.application(
+                    "Process Ended",
+                    "SignalRGB",
+                    "Process",
+                    json!({ "exeName": name }),
+                );
             }
         }
         self.processes = Some(now);
@@ -1511,7 +1588,10 @@ mod tests {
 
     #[test]
     fn command_lines_split() {
-        assert_eq!(split_args("-NoExit -Command cd ~"), vec!["-NoExit", "-Command", "cd", "~"]);
+        assert_eq!(
+            split_args("-NoExit -Command cd ~"),
+            vec!["-NoExit", "-Command", "cd", "~"]
+        );
         assert_eq!(split_args(r#"-d "C:\My Dir" x"#), vec!["-d", r"C:\My Dir", "x"]);
         assert_eq!(split_args(r#"a \"b\" """#), vec!["a", "\"b\"", ""]);
         assert!(split_args("   ").is_empty());
@@ -1522,8 +1602,17 @@ mod tests {
         assert_eq!(url_policy("https://example.com"), Ok(None));
         assert_eq!(url_policy("discord://open"), Ok(None));
         assert_eq!(url_policy("mailto:a@b"), Ok(None));
-        assert_eq!(url_policy("lightloom://app/raiseWindow"), Ok(Some("lightloom://app/raiseWindow".into())));
-        for bad in ["file:///C:/Windows/System32/cmd.exe", "ms-msdt:/id", "search-ms:query=x", "C:\\x.exe", "javascript:alert(1)"] {
+        assert_eq!(
+            url_policy("lightloom://app/raiseWindow"),
+            Ok(Some("lightloom://app/raiseWindow".into()))
+        );
+        for bad in [
+            "file:///C:/Windows/System32/cmd.exe",
+            "ms-msdt:/id",
+            "search-ms:query=x",
+            "C:\\x.exe",
+            "javascript:alert(1)",
+        ] {
             let e = url_policy(bad).unwrap_err();
             assert_eq!(e.class, "MacroRefused", "{bad}");
         }
@@ -1532,7 +1621,13 @@ mod tests {
 
     #[test]
     fn envelopes_carry_the_handler_fields() {
-        let e = envelope("Application", "Process Started", "SignalRGB", "Process", json!({"exeName": "a.exe"}));
+        let e = envelope(
+            "Application",
+            "Process Started",
+            "SignalRGB",
+            "Process",
+            json!({"exeName": "a.exe"}),
+        );
         assert_eq!(e["EventHandler"], "Application");
         assert_eq!(e["data"]["exeName"], "a.exe");
     }

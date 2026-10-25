@@ -397,9 +397,10 @@ pub fn start_with_desktop(
 ) -> anyhow::Result<EngineHandle> {
     let platform: MacroPlatform = match desktop {
         Some(d) => (d, None),
-        None if matches!(opts.hardware, HardwareMode::Real) => {
-            (lightloom_runtime::input::desktop(), lightloom_runtime::input::hooks())
-        }
+        None if matches!(opts.hardware, HardwareMode::Real) => (
+            lightloom_runtime::input::desktop(),
+            lightloom_runtime::input::hooks(),
+        ),
         None => (lightloom_hal::input::RecordingDesktop::new(), None),
     };
     let store = if opts.ephemeral {

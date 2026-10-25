@@ -42,8 +42,12 @@ fn feature_events_reach_the_input_sink() {
         backend,
         Arc::clone(&frames),
         SessionOptions {
-            input_sink: Some(Arc::new(move |key: &str, e| s.lock().unwrap().push((key.to_string(), e)))),
-            log_sink: Some(Arc::new(move |line: &str| l.lock().unwrap().push(line.to_string()))),
+            input_sink: Some(Arc::new(move |key: &str, e| {
+                s.lock().unwrap().push((key.to_string(), e))
+            })),
+            log_sink: Some(Arc::new(move |line: &str| {
+                l.lock().unwrap().push(line.to_string())
+            })),
             ..SessionOptions::default()
         },
     )

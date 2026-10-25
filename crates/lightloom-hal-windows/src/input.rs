@@ -36,10 +36,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP, LLMHF_INJECTED,
-    MSG, MSLLHOOKSTRUCT, SW_SHOWNORMAL, WHEEL_DELTA, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_XBUTTONDOWN, WM_XBUTTONUP,
+    UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP,
+    LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, SW_SHOWNORMAL, WHEEL_DELTA, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 /// `dwExtraInfo` of the input Lightloom injects ("LLMC").
@@ -173,7 +173,8 @@ impl Desktop for WindowsDesktop {
             OpenClipboard(None).map_err(|e| os_err("OpenClipboard", e))?;
             let result = (|| -> HalResult<()> {
                 EmptyClipboard().map_err(|e| os_err("EmptyClipboard", e))?;
-                let block: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| os_err("GlobalAlloc", e))?;
+                let block: HGLOBAL =
+                    GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| os_err("GlobalAlloc", e))?;
                 let ptr = GlobalLock(block) as *mut u16;
                 if ptr.is_null() {
                     let _ = GlobalFree(Some(block));
@@ -209,7 +210,10 @@ impl Desktop for WindowsDesktop {
         if r.0 as isize > 32 {
             Ok(())
         } else {
-            Err(HalError::Backend(format!("ShellExecuteW failed ({})", r.0 as isize)))
+            Err(HalError::Backend(format!(
+                "ShellExecuteW failed ({})",
+                r.0 as isize
+            )))
         }
     }
 
@@ -286,7 +290,13 @@ fn mouse_event(msg: u32, data: u32, injected: bool) -> Option<HookEvent> {
             injected,
         })
     };
-    let x = || if (data >> 16) == XBUTTON2 { MouseButton::X2 } else { MouseButton::X1 };
+    let x = || {
+        if (data >> 16) == XBUTTON2 {
+            MouseButton::X2
+        } else {
+            MouseButton::X1
+        }
+    };
     match msg {
         WM_LBUTTONDOWN => button(MouseButton::Left, false),
         WM_LBUTTONUP => button(MouseButton::Left, true),
@@ -339,7 +349,9 @@ pub struct LowLevelHooks {
 
 impl std::fmt::Debug for LowLevelHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LowLevelHooks").field("active", &self.active()).finish()
+        f.debug_struct("LowLevelHooks")
+            .field("active", &self.active())
+            .finish()
     }
 }
 
@@ -350,7 +362,12 @@ impl LowLevelHooks {
     }
 }
 
-fn hook_thread(keyboard: bool, mouse: bool, sink: HookSink, ready: std::sync::mpsc::Sender<Result<u32, String>>) {
+fn hook_thread(
+    keyboard: bool,
+    mouse: bool,
+    sink: HookSink,
+    ready: std::sync::mpsc::Sender<Result<u32, String>>,
+) {
     SINK.with(|s| *s.borrow_mut() = Some(sink));
     // SAFETY: hooks installed and removed on this thread, which pumps
     // messages until WM_QUIT as low-level hooks require.
@@ -434,7 +451,9 @@ impl InputHook for LowLevelHooks {
     }
 
     fn active(&self) -> (bool, bool) {
-        self.thread.as_ref().map_or((false, false), |t| (t.keyboard, t.mouse))
+        self.thread
+            .as_ref()
+            .map_or((false, false), |t| (t.keyboard, t.mouse))
     }
 }
 
@@ -463,7 +482,10 @@ mod tests {
                 down: false,
                 extended: true,
             },
-            SynthInput::Unicode { unit: 0x20AC, down: true },
+            SynthInput::Unicode {
+                unit: 0x20AC,
+                down: true,
+            },
             SynthInput::Button {
                 button: MouseButton::X2,
                 down: false,

@@ -113,7 +113,9 @@ pub fn parse(options: &Value, warnings: &mut Vec<String>) -> Vec<OptionSpec> {
         };
         let kind = text(d.get("type")).unwrap_or_default().to_ascii_lowercase();
         if !TYPES.contains(&kind.as_str()) {
-            warnings.push(format!("Unknown Property Type: [{kind}] for property [{property}]. Property will be ignored."));
+            warnings.push(format!(
+                "Unknown Property Type: [{kind}] for property [{property}]. Property will be ignored."
+            ));
             continue;
         }
         if out.iter().any(|o| o.property == property) {
@@ -240,7 +242,11 @@ pub fn coerce(spec: &OptionSpec, value: &Value) -> Result<Value, String> {
             } else {
                 Err(format!(
                     "{p} must be one of {}",
-                    spec.values.iter().map(|c| c.key.as_str()).collect::<Vec<_>>().join(", ")
+                    spec.values
+                        .iter()
+                        .map(|c| c.key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
             }
         }
@@ -269,7 +275,9 @@ pub fn coerce(spec: &OptionSpec, value: &Value) -> Result<Value, String> {
             }
         }
         "effectpreset" => {
-            let o = value.as_object().ok_or_else(|| format!("{p} must be {{effect, preset}}"))?;
+            let o = value
+                .as_object()
+                .ok_or_else(|| format!("{p} must be {{effect, preset}}"))?;
             let field = |k: &str| text(o.get(k)).unwrap_or_default();
             Ok(serde_json::json!({ "effect": field("effect"), "preset": field("preset") }))
         }
@@ -325,7 +333,13 @@ mod tests {
         assert_eq!(s[0].default, json!(true));
         assert_eq!(s[1].default, json!(100));
         assert_eq!(s[2].default, json!("b"));
-        assert_eq!(s[3].values[1], Choice { key: "Previous".into(), label: "Previous".into() });
+        assert_eq!(
+            s[3].values[1],
+            Choice {
+                key: "Previous".into(),
+                label: "Previous".into()
+            }
+        );
         assert_eq!(s[4].filter.as_deref(), Some("^\\d+$"));
         assert_eq!(s[5].default, json!({"effect": "", "preset": ""}));
         assert!(w[0].contains("Unknown Property Type: [weird]"));
@@ -348,14 +362,21 @@ mod tests {
         assert!(coerce(&s[2], &json!("z")).is_err());
         assert_eq!(coerce(&s[3], &json!("#FF00AA")), Ok(json!("#ff00aa")));
         assert!(coerce(&s[3], &json!("red")).is_err());
-        assert_eq!(coerce(&s[4], &json!("Ctrl + Shift + F1")), Ok(json!("Ctrl + Shift + F1")));
+        assert_eq!(
+            coerce(&s[4], &json!("Ctrl + Shift + F1")),
+            Ok(json!("Ctrl + Shift + F1"))
+        );
         assert!(coerce(&s[4], &json!("Ctrl + Nope")).is_err());
         assert!(coerce(&s[5], &json!("Right Click")).is_ok());
         let mut stored = Map::new();
         stored.insert("Level".into(), json!(500));
         stored.insert("Flag".into(), json!(true));
         let e = effective(&s, &stored);
-        assert_eq!(e["Level"], json!(0), "an out-of-range stored value falls back to the default");
+        assert_eq!(
+            e["Level"],
+            json!(0),
+            "an out-of-range stored value falls back to the default"
+        );
         assert_eq!(e["Flag"], json!(true));
     }
 }

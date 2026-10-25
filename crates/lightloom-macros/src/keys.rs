@@ -206,8 +206,8 @@ pub fn name_of(vk: u16, extended: bool) -> Option<&'static str> {
     }
     if (0x41..=0x5A).contains(&vk) {
         const LETTERS: [&str; 26] = [
-            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U",
-            "V", "W", "X", "Y", "Z",
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
+            "T", "U", "V", "W", "X", "Y", "Z",
         ];
         return Some(LETTERS[usize::from(vk - 0x41)]);
     }
@@ -480,10 +480,22 @@ mod tests {
 
     #[test]
     fn names_and_combos() {
-        assert_eq!(key("a"), Some(Key { vk: 0x41, extended: false }));
+        assert_eq!(
+            key("a"),
+            Some(Key {
+                vk: 0x41,
+                extended: false
+            })
+        );
         assert_eq!(key("back space"), key("Backspace"));
-        assert_eq!(key("Num Enter"), Some(Key { vk: 0x0D, extended: true }));
-        assert_eq!(key("Right Arrow").unwrap().extended, true);
+        assert_eq!(
+            key("Num Enter"),
+            Some(Key {
+                vk: 0x0D,
+                extended: true
+            })
+        );
+        assert!(key("Right Arrow").unwrap().extended);
         assert_eq!(key("nope"), None);
         let c = combo("Left Ctrl + Left Win + Right Arrow").unwrap();
         assert_eq!(c.iter().map(|k| k.vk).collect::<Vec<_>>(), vec![0xA2, 0x5B, 0x27]);
@@ -512,7 +524,10 @@ mod tests {
                 _ => unreachable!(),
             })
             .collect();
-        assert_eq!(order, vec![(0x11, true), (0x43, true), (0x43, false), (0x11, false)]);
+        assert_eq!(
+            order,
+            vec![(0x11, true), (0x43, true), (0x43, false), (0x11, false)]
+        );
         assert_eq!(unicode("é").len(), 2);
         assert_eq!(unicode("😀").len(), 4, "a surrogate pair is two units");
     }
@@ -537,7 +552,13 @@ mod tests {
         assert_eq!(click("Right Click"), Ok(Click::Button(MouseButton::Right)));
         assert_eq!(click("xbutton2"), Ok(Click::Button(MouseButton::X2)));
         assert_eq!(click("4"), Ok(Click::Button(MouseButton::Middle)));
-        assert!(matches!(click("Scroll Left"), Ok(Click::Wheel { horizontal: true, notches: -1 })));
+        assert!(matches!(
+            click("Scroll Left"),
+            Ok(Click::Wheel {
+                horizontal: true,
+                notches: -1
+            })
+        ));
         assert!(click("Nose").is_err());
         assert_eq!(click_input(click("Left Click").unwrap()).len(), 2);
         assert_eq!(button_event(MouseButton::Left, false), ("Left Click", 513));

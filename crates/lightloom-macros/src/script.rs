@@ -197,9 +197,9 @@ fn install<'js>(ctx: &Ctx<'js>, natives: &Arc<dyn Natives>, deadline: &Deadline)
     let parse = |s: &str| serde_json::from_str::<Value>(s).unwrap_or(Value::Null);
     native!("action", |n, path: String| encode(n.action(&path)));
     native!("openUrl", |n, url: String| encode(n.open_url(&url)));
-    native!("openApplication", |n, path: String, args: String, cwd: String| encode(
-        n.open_application(&path, &parse(&args), &cwd)
-    ));
+    native!("openApplication", |n, path: String, args: String, cwd: String| {
+        encode(n.open_application(&path, &parse(&args), &cwd))
+    });
     native!("prompt", |n, options: String| encode(n.prompt(&parse(&options))));
     native!("clipboard", |n, text: String| encode(n.clipboard(&text)));
     native!("signalrgb", |n, method: String, args: String| {
@@ -209,12 +209,14 @@ fn install<'js>(ctx: &Ctx<'js>, natives: &Arc<dyn Natives>, deadline: &Deadline)
         };
         encode(n.signalrgb(&method, &args))
     });
-    native!("keys", |n, op: String, arg: String| encode(n.keys(&op, &parse(&arg))));
+    native!("keys", |n, op: String, arg: String| encode(
+        n.keys(&op, &parse(&arg))
+    ));
     native!("click", |n, arg: String| encode(n.click(&parse(&arg))));
     native!("trigger", |n| encode(n.trigger()));
-    native!("unsupported", |_n, what: String| encode(Err(NativeError::failed(format!(
-        "{what}() is not supported by Lightloom"
-    )))));
+    native!("unsupported", |_n, what: String| encode(Err(
+        NativeError::failed(format!("{what}() is not supported by Lightloom"))
+    )));
     native!("log", |n, level: String, text: String| {
         n.log(&level, &text);
         encode(Ok(Value::Null))
@@ -361,7 +363,9 @@ pub fn inspect(path: &Path) -> Result<Described, JsFailure> {
         std::thread::Builder::new()
             .name("lightloom-macro-scan".into())
             .stack_size(THREAD_STACK)
-            .spawn_scoped(s, move || ScriptRuntime::load(&path, Arc::new(Inspecting)).map(|(_, d)| d))
+            .spawn_scoped(s, move || {
+                ScriptRuntime::load(&path, Arc::new(Inspecting)).map(|(_, d)| d)
+            })
             .map_err(|e| host_failure(e.to_string()))?
             .join()
             .unwrap_or_else(|p| Err(host_failure(format!("panic: {}", panic_text(p.as_ref())))))

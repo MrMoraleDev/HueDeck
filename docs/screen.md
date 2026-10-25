@@ -17,7 +17,7 @@ Research and design notes: `docs/research/m6-inputs-network.md` §2.
 ```toml
 [screen]
 enabled = true          # capture while the active effect reads engine.zone or declares meters
-# display = "DISPLAY2"  # a display by device name; default: the primary display
+# display = "DISPLAY2"  # a display by device name ("DP-1" on Linux); default: the primary display
 fps = 30                # capture rate, 10-60
 ```
 

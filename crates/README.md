@@ -14,6 +14,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 | `lightloom-renderer` | `lightloom-renderer` (feature `cef`) | the user | one windowless CEF per effect, frames into shared memory |
 | `lightloom-iobroker` | `lightloom-iobroker` | LocalSystem (optional) | chipset SMBus through PawnIO, over a named pipe |
 | `lightloom-setup` | `lightloom-setup` | Administrator, once (optional) | registers / removes the I/O broker |
+| `lightloom-tray` | `lightloom-tray` | the user (Windows) | notification-area icon: open the dashboard, pause, brightness presets, start at sign-in, quit; talks only to the loopback API |
 
 ## Dependency graph
 
@@ -37,6 +38,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
  lightloom-api      ◄── engine
  lightloom-daemon   ◄── api, engine, hal, plugin-host, render, runtime
  lightloom-cli      ◄── api, engine, effects, hal, hal-windows, plugin-host, render, runtime
+ lightloom-tray     ◄── api, runtime (dirs only)
  lightloom-inputs   (shapes only; nothing depends on it yet)
 ```
 

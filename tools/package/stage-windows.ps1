@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 <#
 .SYNOPSIS
-  Stage Lightloom's Windows build in one directory: the daemon and its windowless launcher, the
-  CLI, the effect renderer with its CEF runtime, the RAM lighting helper and I/O broker with the
+  Stage Lightloom's Windows build in one directory: the daemon, its windowless launcher and the
+  tray icon, the CLI, the effect renderer with its CEF runtime, the RAM lighting helper and I/O broker with the
   pinned PawnIO modules, the dashboard, the first-party plugins and starter effects, and the
   license texts. lightloomd finds everything next to its executable. The portable zip and the MSI
   (packaging/wix/build.ps1) are both made from this directory.
 
 .PARAMETER Release
-  Cargo's release directory holding lightloomd.exe, lightloomw.exe, lightloom.exe,
+  Cargo's release directory holding lightloomd.exe, lightloomw.exe, lightloom-tray.exe, lightloom.exe,
   lightloom-setup.exe, lightloom-iobroker.exe, lightloom-renderer.exe (built with --features cef)
   and the CEF runtime files the cef build copied next to them.
 
@@ -49,7 +49,7 @@ if (Test-Path $Out) { Remove-Item -Recurse -Force $Out }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 # Programs.
-foreach ($exe in "lightloomd.exe", "lightloomw.exe", "lightloom.exe", "lightloom-renderer.exe",
+foreach ($exe in "lightloomd.exe", "lightloomw.exe", "lightloom-tray.exe", "lightloom.exe", "lightloom-renderer.exe",
   "lightloom-setup.exe", "lightloom-iobroker.exe") {
   Copy-Required (Join-Path $Release $exe) $Out
 }

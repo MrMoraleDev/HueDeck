@@ -313,7 +313,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $stage = Join-Path $env:RUNNER_TEMP "stage"
           New-Item -ItemType Directory -Force "$stage/ui", "$stage/plugins/sample", "$stage/locales" | Out-Null
-          foreach ($exe in "lightloomd", "lightloomw", "lightloom", "lightloom-renderer", "lightloom-setup", "lightloom-iobroker") {
+          foreach ($exe in "lightloomd", "lightloomw", "lightloom-tray", "lightloom", "lightloom-renderer", "lightloom-setup", "lightloom-iobroker") {
             Set-Content "$stage/$exe.exe" "stand-in"
           }
           Set-Content "$stage/ui/index.html" "<!doctype html>"

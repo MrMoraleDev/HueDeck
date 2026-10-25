@@ -39,6 +39,16 @@
     <Property Id="INSTALLPAWNIO" Value="1" Secure="yes" />
     <Property Id="AUTOSTART" Value="1" Secure="yes" />
 
+    <!-- The user's sign-in entry before this install (an upgrade keeps it as
+         it is, on or off). -->
+    <Property Id="AUTOSTARTPREV" Secure="yes">
+      <RegistrySearch Id="AutostartSearch"
+                      Root="HKCU"
+                      Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                      Name="Lightloom"
+                      Type="raw" />
+    </Property>
+
     <!-- Is the I/O service registered? (read-only; every user may read it) -->
     <Property Id="BROKERINSTALLED" Secure="yes">
       <RegistrySearch Id="BrokerServiceSearch"
@@ -61,10 +71,9 @@
       <ComponentRef Id="Launcher" />
       <ComponentRef Id="SetupHelper" />
       <ComponentRef Id="StartMenuShortcut" />
-      <ComponentRef Id="Autostart" />
     </Feature>
 
-    <!-- Everything staged (daemon, CLI, renderer + CEF, dashboard, plugins,
+    <!-- Everything staged (daemon, tray icon, CLI, renderer + CEF, dashboard, plugins,
          effects, broker, pinned PawnIO modules with their sources, licences),
          except the two files referenced below by id. -->
     <ComponentGroup Id="StagedFiles" Directory="INSTALLFOLDER">
@@ -94,12 +103,24 @@
                      Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
-    <!-- Start at sign-in, without a window (lightloomw starts lightloomd hidden). -->
-    <Component Id="Autostart" Directory="INSTALLFOLDER" Guid="865B33E0-6407-4651-9548-19D0C4376177"
-               Condition="AUTOSTART = 1">
-      <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="Lightloom"
-                     Type="string" Value="&quot;[#LightloomW]&quot;" KeyPath="yes" />
-    </Component>
+    <!-- Start at sign-in, without a window (lightloomw starts lightloomd hidden,
+         and the tray icon). The HKCU Run value Lightloom belongs to the user,
+         not to a component: the tray's "Start at sign-in" turns it on and
+         off, and a repair or an upgrade must not bring back an entry the user
+         removed. lightloomw writes it (option checked on a first install, or
+         it was there before an upgrade: RemoveExistingProducts of an older
+         package that owned it as a component may have just removed it) and
+         removes it on uninstall. -->
+    <CustomAction Id="SetAutostart"
+                  FileRef="LightloomW"
+                  ExeCommand="--autostart on"
+                  Execute="immediate"
+                  Return="ignore" />
+    <CustomAction Id="RemoveAutostart"
+                  FileRef="LightloomW"
+                  ExeCommand="--autostart off"
+                  Execute="immediate"
+                  Return="ignore" />
 
     <!-- After the install (Finish button, see LightloomUI.wxs): RAM lighting
          setup through lightloom-setup's own UAC prompt, not waited for, so
@@ -135,6 +156,10 @@
                   Return="ignore" />
 
     <InstallExecuteSequence>
+      <Custom Action="SetAutostart" After="InstallFinalize"
+              Condition="NOT REMOVE AND ((NOT Installed AND NOT WIX_UPGRADE_DETECTED AND AUTOSTART = 1) OR (WIX_UPGRADE_DETECTED AND AUTOSTARTPREV))" />
+      <Custom Action="RemoveAutostart" Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="StopLightloom" Before="InstallValidate" Condition="Installed OR WIX_UPGRADE_DETECTED" />
       <Custom Action="RemoveRamLighting" Before="RemoveFiles"
               Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND BROKERINSTALLED" />

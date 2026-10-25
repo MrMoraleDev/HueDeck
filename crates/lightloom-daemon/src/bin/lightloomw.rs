@@ -13,7 +13,17 @@
 //! `lightloomw --stop` asks a running daemon to stop (`POST /v1/shutdown` with
 //! the token from the data directory, so every plugin restores its device)
 //! and waits up to 15 s for it to end: the installer runs it before it
-//! replaces or removes the files.
+//! replaces or removes the files. It closes the tray icon too.
+//!
+//! The tray: when `lightloom-tray.exe` sits next to it, `lightloomw` also starts
+//! it (after starting the daemon, or when one already runs; the tray keeps
+//! one instance per session itself). `--no-tray` skips it.
+//!
+//! `lightloomw --autostart on|off` writes or removes the per-user sign-in entry
+//! (`HKCU\...\Run`, value `Lightloom` = this executable), the same value as
+//! the tray's *Start at sign-in*. The installer runs it on a first install
+//! (option checked) and on uninstall, so the entry belongs to the user: a
+//! repair or an upgrade does not bring back an entry they turned off.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
@@ -27,20 +37,42 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// `--open`, `--stop` and the arguments for `lightloomd`.
-fn split_args(args: impl Iterator<Item = OsString>) -> (bool, bool, Vec<OsString>) {
-    let (mut open, mut stop) = (false, false);
-    let mut rest = Vec::new();
-    for a in args {
+/// What `lightloomw` was asked to do.
+#[derive(Debug, Default, PartialEq)]
+struct Args {
+    open: bool,
+    stop: bool,
+    no_tray: bool,
+    /// `--autostart on|off`.
+    autostart: Option<bool>,
+    /// The arguments for `lightloomd`.
+    rest: Vec<OsString>,
+}
+
+fn split_args(args: impl Iterator<Item = OsString>) -> Args {
+    let mut out = Args::default();
+    let mut args = args.peekable();
+    while let Some(a) = args.next() {
         if a == "--open" {
-            open = true;
+            out.open = true;
         } else if a == "--stop" {
-            stop = true;
+            out.stop = true;
+        } else if a == "--no-tray" {
+            out.no_tray = true;
+        } else if a == "--autostart" {
+            out.autostart = match args.peek().and_then(|v| v.to_str()) {
+                Some("on") => Some(true),
+                Some("off") => Some(false),
+                _ => None,
+            };
+            if out.autostart.is_some() {
+                args.next();
+            }
         } else {
-            rest.push(a);
+            out.rest.push(a);
         }
     }
-    (open, stop, rest)
+    out
 }
 
 /// The shutdown request for the daemon on `port`.
@@ -90,14 +122,53 @@ fn daemon_listens(port: u16) -> bool {
     .is_ok()
 }
 
-fn daemon_exe() -> Option<PathBuf> {
-    let name = if cfg!(windows) { "lightloomd.exe" } else { "lightloomd" };
+/// `name` (plus `.exe` on Windows) next to this executable, if it is there.
+fn sibling(name: &str) -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
     let exe = std::env::current_exe().ok()?;
     Some(exe.parent()?.join(name)).filter(|p| p.is_file())
 }
 
+fn daemon_exe() -> Option<PathBuf> {
+    sibling("lightloomd")
+}
+
+/// Start the tray icon when it ships next to us (it exits at once if one
+/// already runs in this session).
+fn start_tray(skip: bool) {
+    if skip {
+        return;
+    }
+    if let Some(tray) = sibling("lightloom-tray") {
+        let mut cmd = Command::new(&tray);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(dir) = tray.parent() {
+            cmd.current_dir(dir);
+        }
+        let _ = cmd.spawn();
+    }
+}
+
 fn main() {
-    let (open, stop, args) = split_args(std::env::args_os().skip(1));
+    let Args {
+        open,
+        stop,
+        no_tray,
+        autostart,
+        rest: args,
+    } = split_args(std::env::args_os().skip(1));
+    if let Some(on) = autostart {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = lightloom_tray::set_user_autostart(on, &exe);
+        }
+        return;
+    }
     let paths = Paths::from_env();
     // A running daemon writes its port to `api-port`; else the port it would choose.
     let port = lightloom_runtime::dirs::read_api_port(&paths.data)
@@ -109,12 +180,16 @@ fn main() {
             let token = std::fs::read_to_string(paths.token_file()).unwrap_or_default();
             stop_daemon(port, &token);
         }
+        // The tray too, so its executable is not in use.
+        #[cfg(windows)]
+        lightloom_tray::close_tray(Duration::from_secs(3));
         return;
     }
     if daemon_listens(port) {
         if open {
             lightloom_daemon::open_in_browser(&lightloom_api::native_url(port));
         }
+        start_tray(no_tray);
         return;
     }
     let Some(exe) = daemon_exe() else {
@@ -140,7 +215,9 @@ fn main() {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let _ = cmd.spawn();
+    if cmd.spawn().is_ok() {
+        start_tray(no_tray);
+    }
 }
 
 #[cfg(test)]
@@ -149,13 +226,19 @@ mod tests {
 
     #[test]
     fn open_is_ours_the_rest_goes_on() {
-        let (open, stop, rest) = split_args(["--open", "--log", "debug"].into_iter().map(OsString::from));
-        assert!(open && !stop);
-        assert_eq!(rest, ["--log", "debug"]);
-        let (open, stop, rest) = split_args(std::iter::empty());
-        assert!(!open && !stop && rest.is_empty());
-        let (_, stop, _) = split_args(std::iter::once(OsString::from("--stop")));
-        assert!(stop);
+        let a = split_args(["--open", "--log", "debug"].into_iter().map(OsString::from));
+        assert!(a.open && !a.stop && !a.no_tray && a.autostart.is_none());
+        assert_eq!(a.rest, ["--log", "debug"]);
+        assert_eq!(split_args(std::iter::empty()), Args::default());
+        assert!(split_args(std::iter::once(OsString::from("--stop"))).stop);
+        assert!(split_args(std::iter::once(OsString::from("--no-tray"))).no_tray);
+        let a = split_args(["--autostart", "on"].into_iter().map(OsString::from));
+        assert_eq!((a.autostart, a.rest.len()), (Some(true), 0));
+        let a = split_args(["--autostart", "off"].into_iter().map(OsString::from));
+        assert_eq!(a.autostart, Some(false));
+        // Without on/off nothing changes, and the next argument is not eaten.
+        let a = split_args(["--autostart", "--open"].into_iter().map(OsString::from));
+        assert!(a.autostart.is_none() && a.open);
     }
 
     #[test]

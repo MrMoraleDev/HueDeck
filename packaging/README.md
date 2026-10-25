@@ -27,7 +27,8 @@ for Windows (see the SIGNING block in the release workflow).
 ### What gets built
 
 - `tools/package/stage-windows.ps1` stages one directory: `lightloomd.exe`, `lightloomw.exe`
-  (starts the daemon without a window), `lightloom.exe`, `lightloom-renderer.exe` and its CEF
+  (starts the daemon without a window, and the tray icon), `lightloom-tray.exe` (the
+  notification-area icon), `lightloom.exe`, `lightloom-renderer.exe` and its CEF
   runtime, `lightloom-setup.exe` and `lightloom-iobroker.exe` (RAM lighting), `pawnio-modules/`
   (PawnIO.Modules 0.2.11: `SmbusPIIX4.bin`, `SmbusI801.bin`, `Echo.bin`, `COPYING` and their sources, every
   file SHA-256 pinned, fetched by `tools/package/fetch-pawnio-modules.ps1`), `ui/`,
@@ -52,7 +53,14 @@ checked by default.
   explanation, checked by default; *Start Lightloom when I sign in* (an `HKCU\...\Run` value
   starting `lightloomw.exe`, which runs the daemon with a hidden console and logs to
   `%LOCALAPPDATA%\Lightloom\logs`, like the portable `start-lightloom.ps1` did), checked by
-  default. A Start-menu shortcut *Lightloom* (`lightloomw.exe --open`: starts the daemon if needed
+  default. The sign-in entry belongs to the user, not to an MSI component: `lightloomw.exe
+  --autostart on` writes it after a first install with the option checked, the tray's
+  *Start at sign-in* turns it on and off, an upgrade keeps it as it was (rewriting it only if
+  it was there before), a repair never brings it back, and uninstall removes it
+  (`lightloomw.exe --autostart off`).
+- **Tray icon**: `lightloomw` starts `lightloom-tray.exe` (one per session) when it sits next to
+  it; `--no-tray` skips it. `lightloomw.exe --stop` closes it as well, so upgrades and uninstalls find no file in use. Menu: Open dashboard, Pause/Resume lighting, Brightness presets,
+  Start at sign-in, Quit Lightloom (`POST /v1/shutdown`, plugins restore their devices). A Start-menu shortcut *Lightloom* (`lightloomw.exe --open`: starts the daemon if needed
   and opens the dashboard) is always created. The Finish page offers *Start Lightloom now*.
   English and Italian strings (`-Culture it-IT`).
 - **RAM lighting** is the only privileged part. When the option is checked, pressing Finish

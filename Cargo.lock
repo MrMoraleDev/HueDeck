@@ -1162,6 +1162,7 @@ dependencies = [
  "lightloom-plugin-host",
  "lightloom-render",
  "lightloom-runtime",
+ "lightloom-tray",
  "lightloom-winres",
  "humantime",
  "rusqlite",
@@ -1354,6 +1355,17 @@ dependencies = [
  "lightloom-winres",
  "windows",
  "windows-service",
+]
+
+[[package]]
+name = "lightloom-tray"
+version = "0.0.1"
+dependencies = [
+ "lightloom-api",
+ "lightloom-runtime",
+ "lightloom-winres",
+ "serde_json",
+ "windows",
 ]
 
 [[package]]

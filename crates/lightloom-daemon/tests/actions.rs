@@ -85,6 +85,7 @@ fn options(home: &Path, notifier: Arc<MockNotifier>, with_device: bool) -> Engin
                 pid: 0x4D4E,
                 endpoints: vec![info],
                 network: None,
+                serial: None,
             }],
             smbus: Vec::new(),
             lamparrays: None,

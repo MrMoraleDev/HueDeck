@@ -79,6 +79,7 @@ impl SessionDevice {
             pid: info.pid,
             endpoints: Vec::new(),
             smbus: None,
+            usb: None,
             lamparray: Some(LampArrayTarget { backend, info }),
             network: None,
         }

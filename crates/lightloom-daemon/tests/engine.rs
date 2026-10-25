@@ -83,6 +83,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
         hardware: HardwareMode::Fixed {
             backend,
             devices: vec![SessionDevice {
+                usb: None,
                 smbus: None,
                 lamparray: None,
                 key: KEY.into(),

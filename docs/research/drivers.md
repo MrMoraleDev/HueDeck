@@ -120,6 +120,10 @@ How to settle it per device, with no driver install (a task for a contributor wh
 | **F. UsbDk** (OpenRGB's route) | Users install Red Hat's signed UsbDk filter driver themselves. | none | It is a kernel filter on all USB devices. It conflicts with ADR-0007 if Lightloom ships it, so leave it out. |
 
 ### 2.4 Recommendation for raw USB
+
+Status: points 1 and 3 implemented on `feature/rawusb` (`WinUsbBackend`, the device list's
+`needs-driver` state, `docs/hardware/winusb.md`); no INF is shipped.
+
 1. Implement `UsbBackend` for Windows with `nusb` (WinUSB only). Set `driver_bound = true` only when the
    interface's service is `WinUSB`. When it is not, the plugin session fails with a clear message
    ("this device needs a WinUSB driver that Windows did not install; see docs/hardware/…").

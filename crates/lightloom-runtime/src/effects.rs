@@ -4,8 +4,9 @@
 //!
 //! Ids are `<source>:<name>`: `lightloom:plasma` for Lightloom's starter effects,
 //! `user:<file stem>` for the user's own directory, `signalrgb:<file stem>` for
-//! effects bundled with SignalRGB and `signalrgb:<catalog id>` for its catalog
-//! cache (one directory per effect holding `effect.html`). The id is what
+//! effects bundled with SignalRGB, `signalrgb:<catalog id>` for its catalog
+//! cache (one directory per effect holding `effect.html`) and `developer:<uid>`
+//! for pages loaded through the compatible API. The id is what
 //! persistence and the APIs refer to; paths can move between versions.
 
 use lightloom_effects::EffectMeta;
@@ -23,6 +24,8 @@ pub enum EffectSource {
     User,
     /// A local SignalRGB installation, read in place.
     SignalRgb,
+    /// Pages a developer loaded through the compatible API (`lighting/loadEffect`).
+    Developer,
 }
 
 impl EffectSource {
@@ -32,6 +35,7 @@ impl EffectSource {
             EffectSource::Lightloom => "lightloom",
             EffectSource::User => "user",
             EffectSource::SignalRgb => "signalrgb",
+            EffectSource::Developer => "developer",
         }
     }
 }
@@ -47,6 +51,34 @@ pub struct EffectFile {
     pub source: EffectSource,
     /// Parsed `<head>` metadata.
     pub meta: EffectMeta,
+}
+
+/// Image file types an effect's picture may have, with their media types.
+const IMAGE_TYPES: [(&str, &str); 4] = [
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("webp", "image/webp"),
+];
+
+impl EffectFile {
+    /// The effect's picture and its media type, when one sits next to the page:
+    /// `<stem>.png` (or `.jpg`, `.jpeg`, `.webp`) beside `<stem>.html`, and for
+    /// a catalog-cache `effect.html` also `image.*` or `thumbnail.*` in its directory.
+    pub fn image(&self) -> Option<(PathBuf, &'static str)> {
+        let dir = self.path.parent()?;
+        let stem = self.path.file_stem()?.to_string_lossy().into_owned();
+        let mut stems = vec![stem.clone()];
+        if stem.eq_ignore_ascii_case("effect") {
+            stems.extend(["image".to_string(), "thumbnail".to_string()]);
+        }
+        stems.iter().find_map(|s| {
+            IMAGE_TYPES.iter().find_map(|(ext, mime)| {
+                let p = dir.join(format!("{s}.{ext}"));
+                p.is_file().then_some((p, *mime))
+            })
+        })
+    }
 }
 
 /// Effects from several directories, by id. A later directory's effect with the
@@ -179,6 +211,17 @@ mod tests {
         );
         assert_eq!(lib.get("signalrgb:-Mabc123").unwrap().meta.title, "Cobalt");
         assert_eq!(lib.len(), 2);
+        // Pictures next to the page.
+        assert!(neon.image().is_none());
+        std::fs::write(dir.join("Static").join("Neon Shift.png"), b"png").unwrap();
+        std::fs::write(dir.join("-Mabc123").join("thumbnail.jpg"), b"jpg").unwrap();
+        let (path, mime) = neon.image().unwrap();
+        assert_eq!(
+            (path.file_name().unwrap().to_str(), mime),
+            (Some("Neon Shift.png"), "image/png")
+        );
+        let (_, mime) = lib.get("signalrgb:-Mabc123").unwrap().image().unwrap();
+        assert_eq!(mime, "image/jpeg");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -36,7 +36,11 @@
 //! * [`toast`] (Windows only): system notifications as toasts, under a
 //!   per-user AppUserModelID registration (`lightloom_hal::Notifier`).
 //!
-//! Raw USB (`nusb`), serial and LampArray follow in later milestones.
+//! * [`lamparray`] (Windows only): Windows Dynamic Lighting LampArrays through
+//!   WinRT `Windows.Devices.Lights` (`DeviceWatcher` discovery, availability,
+//!   package-identity check).
+//!
+//! Raw USB (`nusb`) and serial follow in later milestones.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -51,6 +55,8 @@ pub mod console;
 pub mod hid;
 #[cfg(windows)]
 pub mod hotplug;
+#[cfg(windows)]
+pub mod lamparray;
 #[cfg(windows)]
 pub mod native;
 #[cfg(windows)]

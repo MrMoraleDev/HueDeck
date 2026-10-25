@@ -22,7 +22,10 @@
 //!    placement (then `onBrightnessChanged()` for a new device brightness),
 //!    the alert override and `battery.lowBatteryWarningLevel`. What the plugin
 //!    reports through the `battery` feature is readable meanwhile
-//!    ([`LiveSnapshot::battery`]);
+//!    ([`LiveSnapshot::battery`]), and so are its parameters and messages
+//!    ([`SessionHandle::plugin_ui`]): `device.addProperty` / `addMessage` /
+//!    `notify` change them at run time, and each change is announced on the
+//!    session's events channel ([`SessionHandle::events`]);
 //! 6. on stop calls `Shutdown(false, mode)` (unless told not to; `mode` is the
 //!    [`ShutdownMode`], a Lightloom extension, with the `shutdownColor` fallback of
 //!    [`crate::save::shutdown_fallback`] for plugins that do not implement it),
@@ -32,6 +35,9 @@
 //! `SaveToDevice(request)` (Lightloom extension, [`crate::save`]): a preview with
 //! every write recorded and never sent, or a save with the SMBus
 //! `SmbusDeniedRegisters()` writable for that one call.
+//!
+//! A LampArray of the OS backend ([`SessionDevice::lamparray`]) runs the
+//! built-in session of [`crate::lamparray`] instead of a plugin.
 //!
 //! An SMBus device ([`SessionDevice::smbus`]) has no HID collections: steps 3
 //! and 4 are skipped, `bus` is the fixed-address bus of its address (through a
@@ -55,6 +61,7 @@ use crate::device::{
 };
 use crate::meta::PluginMeta;
 use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
+use crate::plugin_ui::PluginUi;
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
 use crate::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode, ShutdownPlan};
 use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
@@ -93,6 +100,9 @@ pub struct SessionDevice {
     pub endpoints: Vec<HidEndpointInfo>,
     /// An SMBus device: its bus and address.
     pub smbus: Option<SmbusTarget>,
+    /// A LampArray of the OS backend, driven by the built-in session
+    /// ([`crate::lamparray`]) instead of a plugin.
+    pub lamparray: Option<crate::lamparray::LampArrayTarget>,
     /// A network device: the controller a network service announced.
     pub network: Option<NetworkTarget>,
 }
@@ -146,6 +156,7 @@ impl SessionDevice {
             pid,
             endpoints,
             smbus: None,
+            lamparray: None,
             network: None,
         }
     }
@@ -160,6 +171,7 @@ impl SessionDevice {
             pid: d.pci.device,
             endpoints: Vec::new(),
             smbus: Some(SmbusTarget { bus, addr }),
+            lamparray: None,
             network: None,
         }
     }
@@ -173,6 +185,7 @@ impl SessionDevice {
             pid: 0,
             endpoints: Vec::new(),
             smbus: None,
+            lamparray: None,
             network: Some(target),
         }
     }
@@ -495,7 +508,7 @@ pub struct SessionReport {
 }
 
 impl SessionReport {
-    fn new(device: &SessionDevice, plugin: &CatalogEntry) -> Self {
+    pub(crate) fn new(device: &SessionDevice, plugin: &CatalogEntry) -> Self {
         Self {
             device: device.key.clone(),
             plugin: plugin.meta.source_path.clone(),
@@ -536,7 +549,7 @@ impl SessionReport {
         }
     }
 
-    fn fail(&mut self, phase: impl Into<String>, error: JsFailure) {
+    pub(crate) fn fail(&mut self, phase: impl Into<String>, error: JsFailure) {
         self.failures.push(PhaseFailure {
             phase: phase.into(),
             error,
@@ -579,21 +592,39 @@ pub enum SessionState {
 }
 
 #[derive(Debug)]
-struct LiveStats {
+pub(crate) struct LiveStats {
     state: AtomicU8,
-    frames: AtomicU64,
+    pub(crate) frames: AtomicU64,
     render_errors: AtomicU64,
-    io_errors: AtomicU64,
-    hid_disconnects: AtomicU64,
-    hid_disconnected: AtomicBool,
+    pub(crate) io_errors: AtomicU64,
+    pub(crate) hid_disconnects: AtomicU64,
+    pub(crate) hid_disconnected: AtomicBool,
+    /// The device does not take writes now (a LampArray Windows gives to another app).
+    pub(crate) paused: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
-    first_write_us: AtomicU64,
+    pub(crate) first_write_us: AtomicU64,
     /// The device and its children as canvas endpoints (empty until `Initialize()` ran).
     endpoints: std::sync::Mutex<Arc<Vec<EndpointView>>>,
     /// The device's channels (empty until `Initialize()` ran).
     channels: std::sync::Mutex<Arc<Vec<ChannelInfo>>>,
     /// The plugin's last battery report.
     battery: std::sync::Mutex<Option<BatteryStatus>>,
+    /// The plugin's parameters and messages (`None` until `Initialize()` ran).
+    ui: std::sync::Mutex<Option<Arc<PluginUi>>>,
+    /// Announces changes to the session's owner.
+    events: Sender<SessionEvent>,
+}
+
+/// Something a running session announces on its events channel
+/// ([`SessionHandle::events`]); the new state is read from the handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionEvent {
+    /// The parameter list changed ([`SessionHandle::plugin_ui`]): exports
+    /// bound after `Initialize()`, or `device.addProperty` / `removeProperty`.
+    Properties,
+    /// The message list changed: `device.addMessage` / `removeMessage` /
+    /// `notify` / `denotify`.
+    Messages,
 }
 
 /// Counters readable while the session runs.
@@ -616,10 +647,13 @@ pub struct LiveSnapshot {
     pub first_write_ms: Option<f64>,
     /// What the plugin reports through the `battery` feature (`None`: no battery).
     pub battery: Option<BatteryStatus>,
+    /// The device does not take writes now: a LampArray that Windows gives
+    /// to another app ([`crate::lamparray`]).
+    pub paused: bool,
 }
 
 impl LiveStats {
-    fn set_state(&self, s: SessionState) {
+    pub(crate) fn set_state(&self, s: SessionState) {
         self.state.store(s as u8, Ordering::Release);
     }
 
@@ -628,7 +662,7 @@ impl LiveStats {
     }
 
     /// Replace the endpoint views and channel list when they changed.
-    fn publish_endpoints(&self, (views, channels): (Vec<EndpointView>, Vec<ChannelInfo>)) {
+    pub(crate) fn publish_endpoints(&self, (views, channels): (Vec<EndpointView>, Vec<ChannelInfo>)) {
         let mut slot = self.endpoints.lock().unwrap_or_else(|e| e.into_inner());
         if **slot != views {
             *slot = Arc::new(views);
@@ -637,6 +671,28 @@ impl LiveStats {
         let mut slot = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         if **slot != channels {
             *slot = Arc::new(channels);
+        }
+    }
+
+    /// Publish the plugin's parameters and messages when they changed, and
+    /// announce what changed.
+    fn publish_ui(&self, ui: &PluginUi) {
+        let mut slot = self.ui.lock().unwrap_or_else(|e| e.into_inner());
+        let (properties, messages) = match slot.as_deref() {
+            Some(old) if old.revision() == ui.revision() => return,
+            Some(old) => (
+                old.properties() != ui.properties(),
+                old.messages() != ui.messages(),
+            ),
+            None => (true, true),
+        };
+        *slot = Some(Arc::new(ui.clone()));
+        drop(slot);
+        if properties {
+            let _ = self.events.send(SessionEvent::Properties);
+        }
+        if messages {
+            let _ = self.events.send(SessionEvent::Messages);
         }
     }
 
@@ -667,6 +723,7 @@ impl LiveStats {
                 us => Some(us as f64 / 1000.0),
             },
             battery: *self.battery.lock().unwrap_or_else(|e| e.into_inner()),
+            paused: self.paused.load(Ordering::Relaxed),
         }
     }
 }
@@ -719,6 +776,7 @@ pub struct SessionHandle {
     key: String,
     started: Instant,
     control: Sender<Control>,
+    events: std::sync::Mutex<Receiver<SessionEvent>>,
     stop: Arc<AtomicBool>,
     live: Arc<LiveStats>,
     thread: JoinHandle<SessionReport>,
@@ -750,6 +808,18 @@ impl SessionHandle {
     /// The device's channels, updated with [`SessionHandle::endpoints`].
     pub fn channels(&self) -> Arc<Vec<ChannelInfo>> {
         Arc::clone(&self.live.channels.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// The plugin's parameters and messages as of the last change (`None`
+    /// until `Initialize()` ran: the exports' lists then).
+    pub fn plugin_ui(&self) -> Option<Arc<PluginUi>> {
+        self.live.ui.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The events announced since the last call, oldest first.
+    pub fn events(&self) -> Vec<SessionEvent> {
+        let rx = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        rx.try_iter().collect()
     }
 
     /// Ask the session to finish its current frame, shut down and return.
@@ -787,6 +857,7 @@ pub fn spawn(
     opts: SessionOptions,
 ) -> std::io::Result<SessionHandle> {
     let stop = Arc::new(AtomicBool::new(false));
+    let (events_tx, events) = channel();
     let live = Arc::new(LiveStats {
         state: AtomicU8::new(SessionState::Starting as u8),
         frames: AtomicU64::new(0),
@@ -794,10 +865,13 @@ pub fn spawn(
         io_errors: AtomicU64::new(0),
         hid_disconnects: AtomicU64::new(0),
         hid_disconnected: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
         endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
         channels: std::sync::Mutex::new(Arc::new(Vec::new())),
         battery: std::sync::Mutex::new(None),
+        ui: std::sync::Mutex::new(None),
+        events: events_tx,
     });
     let key = device.key.clone();
     let started = Instant::now();
@@ -807,7 +881,11 @@ pub fn spawn(
         .name(format!("lightloom-plugin {key}"))
         .stack_size(PLUGIN_THREAD_STACK)
         .spawn(move || {
-            let report = run(device, plugin, backend, frames, opts, &stop2, &live2, &controls);
+            let report = if device.lamparray.is_some() {
+                crate::lamparray::run(device, plugin, frames, opts, &stop2, &live2, &controls)
+            } else {
+                run(device, plugin, backend, frames, opts, &stop2, &live2, &controls)
+            };
             drop(stop2);
             live2.set_state(SessionState::Done);
             report
@@ -816,6 +894,7 @@ pub fn spawn(
         key,
         started,
         control,
+        events: std::sync::Mutex::new(events),
         stop,
         live,
         thread,
@@ -873,6 +952,10 @@ fn run(
         ]);
     }
     ctx.set_battery_warning_level(opts.battery_warning_level);
+    ctx.set_plugin_ui(PluginUi::new(
+        &meta.controllable_parameters,
+        &meta.device_messages,
+    ));
     if let Some(t) = &device.smbus {
         ctx.set_device_info([
             t.bus.descriptor().name.clone(),
@@ -1202,6 +1285,7 @@ fn drive(
         let dev = lock_device(shared);
         live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
         live.publish_battery(dev.battery());
+        live.publish_ui(dev.plugin_ui());
     }
     let mut last_seq = 0;
     let mut consecutive_timeouts = 0u32;
@@ -1351,6 +1435,7 @@ fn drive(
         live.hid_disconnected
             .store(dev.stats().disconnected, Ordering::Relaxed);
         live.publish_battery(dev.battery());
+        live.publish_ui(dev.plugin_ui());
         if let Some(d) = dev.first_write() {
             live.first_write_us
                 .store((d.as_micros() as u64).max(1), Ordering::Relaxed);

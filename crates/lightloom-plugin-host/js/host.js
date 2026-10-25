@@ -781,11 +781,36 @@ if (deviceMode) {
     },
     setControllableLeds: (_names, positions) => native.setLeds(flatPositions(positions)),
     log: deviceLog,
-    notify: (title, text) => {
-      hostLog(`notify: ${String(title ?? "")}: ${String(text ?? "")}`);
-      state.notifyId += 1;
-      return String(state.notifyId);
+    // Properties and messages (components-channels.md §2, hid-usb.md "notify"):
+    // the natives keep the device's lists for the dashboard; the JS objects stay
+    // the plugin's (`getProperty(name)`, mutate, `addProperty(obj)` updates).
+    addProperty: (obj) => {
+      if (obj === null || typeof obj !== "object") {
+        native.propAdd("null");
+        return;
+      }
+      if (typeof obj.property === "string" && obj.property !== "") {
+        state.properties.set(obj.property, obj);
+        if (!(obj.property in globalThis)) {
+          globalThis[obj.property] = coerceDefault(obj);
+        }
+      }
+      native.propAdd(stringify(plain(obj)));
     },
+    removeProperty: (name) => {
+      state.properties.delete(strArg(name));
+      native.propRemove(strArg(name));
+    },
+    addMessage: (id, message, tooltip) => native.msgAdd(strArg(id), strArg(message), strArg(tooltip)),
+    removeMessage: (id) => native.msgRemove(strArg(id)),
+    notify: (title, text, priority) => {
+      hostLog(`notify: ${strArg(title)}: ${strArg(text)}`);
+      state.notifyId += 1;
+      const id = `lightloom-alert-${state.notifyId}`;
+      native.msgNotify(id, strArg(title), strArg(text), toInt(priority));
+      return id;
+    },
+    denotify: (id) => native.msgRemove(strArg(id)),
   });
 }
 
@@ -1891,6 +1916,8 @@ function applyParameters(params) {
   for (const p of params) {
     if (p && typeof p.property === "string" && p.property.length > 0) {
       g[p.property] = coerceDefault(p);
+      // `getProperty` / `removeProperty` / `getPropertyNames` see the exports too.
+      state.properties.set(p.property, p);
       n += 1;
     }
   }

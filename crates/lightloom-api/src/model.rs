@@ -486,6 +486,9 @@ pub struct Settings {
     pub battery_notifications: bool,
     /// This OS has system notifications Lightloom can show.
     pub notifications_available: bool,
+    /// Black canvas while the PC is locked or the display is off (off by default).
+    #[serde(default)]
+    pub lights_off_when_idle: bool,
 }
 
 /// A state change asked of the daemon.
@@ -663,6 +666,9 @@ pub enum Request {
         /// Network lights (starts or stops the discovery services).
         #[serde(default)]
         network: Option<bool>,
+        /// Black canvas while the PC is locked or the display is off.
+        #[serde(default)]
+        lights_off_when_idle: Option<bool>,
     },
     /// *Add by IP*: ask a network plugin to look at `ip`.
     NetworkAdd {

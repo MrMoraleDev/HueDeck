@@ -94,6 +94,7 @@ export const api = {
     batteryNotifications?: boolean;
     shutdownMode?: ShutdownMode;
     openrgbSdk?: boolean;
+    lightsOffWhenIdle?: boolean;
   }) =>
     request("PATCH", "/v1/settings", patch),
   /** Move the dashboard and the API to `port`; answers with the new address. */

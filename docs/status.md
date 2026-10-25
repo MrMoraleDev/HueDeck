@@ -271,6 +271,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
    - Touches: `lightloom-hal-windows` (`PowerRegisterSuspendResumeNotification` or a hidden window), `lightloom-daemon/src/{lifecycle,engine}.rs`.
    - `Shutdown(true)` before sleep, re-`Initialize` on resume.
    - Run it after `feature/bake` merges: same exit path.
+   - Status: implemented on `feature/suspend` (`docs/power.md`): a hidden window for sleep/resume, lock/unlock and display off/on; `Shutdown(true, mode)` for every session; SMBus and broker released; re-enumerated and re-`Initialize`d on resume. Optional "lights off when locked / screen off" setting. Linux logind still to do. Real sleep on the user's PC not tried yet.
 6. **WP-EVISION-V1: Sonix `320F:5064`, stored-settings-only mode. Size M.**
    - Blocked on the user's USB capture: see the procedure in `docs/research/evision-v1.md`.
    - Touches: `plugins/evision-keyboard/` only (new `evision-v1.js`), plus the host's "stored settings only" capability from `feature/bake`.

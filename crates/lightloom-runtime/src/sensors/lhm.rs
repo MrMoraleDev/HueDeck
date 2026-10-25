@@ -60,9 +60,7 @@ pub fn parse_url(url: &str) -> Result<(String, u16, String), String> {
         port.parse().map_err(|_| "bad port")?
     };
     let loopback = host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback());
+        || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
     if !loopback {
         return Err("only loopback addresses (127.0.0.1, localhost, ::1) are allowed".into());
     }
@@ -275,7 +273,10 @@ mod tests {
                 "Nuvoton NCT6798D Fan #1"
             ]
         );
-        assert_eq!((r[0].value, r[0].kind, r[0].units.as_str()), (45.3, SensorKind::Temperature, "°C"));
+        assert_eq!(
+            (r[0].value, r[0].kind, r[0].units.as_str()),
+            (45.3, SensorKind::Temperature, "°C")
+        );
         assert_eq!((r[1].kind, r[1].max), (SensorKind::Load, 100.0));
         assert_eq!((r[2].kind, r[2].max), (SensorKind::Fan, 5000.0));
         let alias = crate::sensors::cpu_temperature(&r).unwrap();
@@ -285,7 +286,10 @@ mod tests {
     #[test]
     fn chunked_and_errors() {
         assert_eq!(
-            http_body(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n").unwrap(),
+            http_body(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"
+            )
+            .unwrap(),
             b"abcde"
         );
         assert!(http_body(b"HTTP/1.1 404 Not Found\r\n\r\n").is_err());
@@ -301,7 +305,11 @@ mod tests {
             let mut req = [0u8; 512];
             let n = s.read(&mut req).unwrap();
             assert!(String::from_utf8_lossy(&req[..n]).starts_with("GET /data.json HTTP/1.0"));
-            write!(s, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{SAMPLE}").unwrap();
+            write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{SAMPLE}"
+            )
+            .unwrap();
         });
         let mut b = LhmJson::new(&format!("http://127.0.0.1:{port}/data.json")).unwrap();
         assert_eq!(b.poll().unwrap().len(), 3);

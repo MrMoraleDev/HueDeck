@@ -297,7 +297,8 @@ mod tests {
             (true, 1000, None)
         );
         let c: Config =
-            toml::from_str("[sensors]\ninterval_ms = 2000\nlhm_url = 'http://127.0.0.1:8085/data.json'\n").unwrap();
+            toml::from_str("[sensors]\ninterval_ms = 2000\nlhm_url = 'http://127.0.0.1:8085/data.json'\n")
+                .unwrap();
         assert_eq!(c.sensors.interval_ms, 2000);
         assert!(c.sensors.lhm_url.is_some());
         let c: Config = toml::from_str("[screen]\nfps = 60\ndisplay = 'DISPLAY2'\n").unwrap();

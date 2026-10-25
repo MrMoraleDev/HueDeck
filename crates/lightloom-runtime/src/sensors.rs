@@ -92,7 +92,10 @@ pub struct SensorRegistry {
 impl std::fmt::Debug for SensorRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SensorRegistry")
-            .field("backends", &self.backends.iter().map(|b| b.name()).collect::<Vec<_>>())
+            .field(
+                "backends",
+                &self.backends.iter().map(|b| b.name()).collect::<Vec<_>>(),
+            )
             .field("sources", &self.sources)
             .finish()
     }
@@ -192,7 +195,6 @@ pub fn cpu_temperature(readings: &[SensorReading]) -> Option<SensorReading> {
 mod tests {
     use super::*;
     use lightloom_hal::{HalError, HalResult};
-
 
     /// A backend that answers what it is told.
     struct Fake(&'static str, Result<Vec<SensorReading>, &'static str>);

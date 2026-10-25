@@ -188,7 +188,11 @@ impl GpuSensors {
         } else {
             100.0
         };
-        Some((f64::from(s.current_temp), f64::from(s.default_min_temp.max(0)), max))
+        Some((
+            f64::from(s.current_temp),
+            f64::from(s.default_min_temp.max(0)),
+            max,
+        ))
     }
 
     /// Utilisation of `domain`, when present.
@@ -273,7 +277,9 @@ impl NvapiSensors {
             Ok(Ok(Reply::Sensors(s))) => Ok(s),
             Ok(Ok(Reply::Bytes(_))) => Err(HalError::Backend("unexpected NvAPI reply".into())),
             Ok(Err(e)) => Err(e.into()),
-            Err(RecvTimeoutError::Timeout) => Err(NvapiError::Timeout(REPLY_TIMEOUT.as_millis() as u32).into()),
+            Err(RecvTimeoutError::Timeout) => {
+                Err(NvapiError::Timeout(REPLY_TIMEOUT.as_millis() as u32).into())
+            }
             Err(RecvTimeoutError::Disconnected) => Err(NvapiError::WorkerGone.into()),
         }
     }
@@ -329,8 +335,10 @@ mod tests {
 
     #[test]
     fn replies_decode() {
-        let mut t = NvThermalSettingsV2::default();
-        t.count = 2;
+        let mut t = NvThermalSettingsV2 {
+            count: 2,
+            ..Default::default()
+        };
         t.sensor[0] = NvThermalSensor {
             target: 2,
             current_temp: 30,

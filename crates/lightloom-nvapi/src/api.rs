@@ -9,12 +9,12 @@ use crate::ffi::{
     GetPciIdentifiersFn, GetTachReadingFn, GetThermalSettingsFn, I2cExFn, InitializeFn, Library,
     NvPhysicalGpuHandle, NVAPI_MAX_PHYSICAL_GPUS, NVAPI_SHORT_STRING_MAX,
 };
+use crate::hub::{decode_pci, locate, GpuInfo, I2cTransport};
+use crate::info::{fill_info, I2cPlan};
 use crate::sensors::{
     GpuSensors, NvClockFrequenciesV2, NvDynamicPstatesInfoEx, NvThermalSettingsV2, CLOCK_GRAPHICS,
     CLOCK_MEMORY, THERMAL_TARGET_ALL, UTILIZATION_FB, UTILIZATION_GPU,
 };
-use crate::hub::{decode_pci, locate, GpuInfo, I2cTransport};
-use crate::info::{fill_info, I2cPlan};
 use crate::{ids, status, NvapiError};
 
 /// One enumerated GPU.

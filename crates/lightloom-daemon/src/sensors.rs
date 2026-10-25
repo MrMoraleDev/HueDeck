@@ -190,7 +190,11 @@ fn run(inner: &Inner, interval: Duration, open: Open) {
             };
         }
         drop(st);
-        let reg = registry.get_or_insert_with(|| open.take().map(|f| f()).unwrap_or_else(|| SensorRegistry::new(Vec::new())));
+        let reg = registry.get_or_insert_with(|| {
+            open.take()
+                .map(|f| f())
+                .unwrap_or_else(|| SensorRegistry::new(Vec::new()))
+        });
         let readings = reg.poll();
         let mut st = lock(&inner.state);
         st.sources = reg.sources().to_vec();
@@ -286,7 +290,11 @@ mod tests {
     fn idle_until_somebody_reads() {
         let (p, polls, opened) = poller(&SensorsConfig::default());
         std::thread::sleep(Duration::from_millis(100));
-        assert_eq!(opened.load(Ordering::SeqCst), 0, "no source opened while nobody reads");
+        assert_eq!(
+            opened.load(Ordering::SeqCst),
+            0,
+            "no source opened while nobody reads"
+        );
         let v = p.view();
         assert!(v.enabled && v.polling);
         assert_eq!(v.interval_ms, 1000);
@@ -335,7 +343,10 @@ mod tests {
         assert!(!v.enabled && !v.polling && v.sensors.is_empty());
         p.set_effect(Some(Box::new(|_| panic!("disabled sensors never push"))));
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!((polls.load(Ordering::SeqCst), opened.load(Ordering::SeqCst)), (0, 0));
+        assert_eq!(
+            (polls.load(Ordering::SeqCst), opened.load(Ordering::SeqCst)),
+            (0, 0)
+        );
     }
 
     #[test]

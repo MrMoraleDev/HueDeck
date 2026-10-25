@@ -9,7 +9,11 @@ use std::path::Path;
 /// (idle includes iowait).
 pub fn parse_stat(text: &str) -> Option<(u64, u64)> {
     let line = text.lines().find(|l| l.starts_with("cpu "))?;
-    let v: Vec<u64> = line.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
+    let v: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|x| x.parse().ok())
+        .collect();
     if v.len() < 4 {
         return None;
     }

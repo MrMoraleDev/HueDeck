@@ -1,0 +1,70 @@
+# Field ids are stable: the dashboard's Devices tab opens this form with them prefilled
+# (/issues/new?template=device-report.yml&device=...&diagnostics=...). Keep them in sync.
+name: Device report
+description: Tell us how a device works with Lightloom, whether it lights up fine or not.
+title: "[device] "
+labels: ["device-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! The fastest way to fill this in is the **Report** button next to the
+        device in the dashboard's Devices tab: it fills in everything below for you.
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works
+        - Works partly (some LEDs, zones or modes are wrong)
+        - Does not work
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Product name as sold, and the name Lightloom shows.
+      placeholder: MSI MAG B550 TOMAHAWK (Mystic Light 1462:7C91)
+    validations:
+      required: true
+  - type: input
+    id: vidpid
+    attributes:
+      label: USB VID:PID, SMBus address or network model
+      placeholder: "1462:7C91"
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin
+      description: Plugin name and version from the Devices tab.
+  - type: input
+    id: version
+    attributes:
+      label: Lightloom version
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 24H2 (26100) / Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What happens
+      description: For a problem, what you expected and what you see instead (wrong colours, flicker, only some LEDs, nothing).
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Endpoints, driver state and recent errors. The dashboard collects these; nothing is sent anywhere until you submit this form.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: SignalRGB, OpenRGB and vendor RGB software were closed while testing.

@@ -92,6 +92,14 @@ CREATE TABLE playlists (
     updated_at TEXT NOT NULL
 );
 "#,
+    // Per-LED custom colours, mode and zones of each endpoint (store/leds.rs).
+    r#"
+CREATE TABLE custom_leds (
+    uid    TEXT PRIMARY KEY NOT NULL,
+    device TEXT NOT NULL,
+    state  TEXT NOT NULL
+);
+"#,
     r#"
 CREATE TABLE profiles (
     name       TEXT PRIMARY KEY NOT NULL,
@@ -101,6 +109,9 @@ CREATE TABLE profiles (
 );
 "#,
 ];
+
+mod leds;
+pub use leds::CustomLedsRow;
 
 /// `format` of an export document.
 pub const EXPORT_FORMAT: &str = "lightloom-state";
@@ -171,6 +182,9 @@ pub struct StateExport {
     /// Profiles, by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub profiles: Vec<Profile>,
+    /// Per-LED custom colours, mode and zones, by endpoint uid.
+    #[serde(default, rename = "customLeds", skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_leds: BTreeMap<String, CustomLedsRow>,
 }
 
 /// The database.
@@ -764,6 +778,7 @@ impl Store {
                 all
             },
             profiles: self.profiles()?,
+            custom_leds: self.custom_leds()?,
         })
     }
 
@@ -824,6 +839,7 @@ impl Store {
             "kv",
             "plugin_settings",
             "profiles",
+            "custom_leds",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
@@ -918,6 +934,9 @@ impl Store {
             }
             Self::insert_profile(&tx, p)?;
         }
+        for (uid, row) in &state.custom_leds {
+            Self::insert_custom_leds(&tx, uid, &row.device, &row.state)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -955,6 +974,15 @@ mod tests {
             )
             .unwrap();
         store.set_device_enabled("1532:007c:00", false).unwrap();
+        let mut leds = lightloom_engine::CustomLeds {
+            enabled: true,
+            colors: vec![lightloom_engine::Rgb::new(255, 0, 0); 3],
+            ..Default::default()
+        };
+        leds.save_zone("Logo", &[2]).unwrap();
+        store
+            .set_custom_leds("1532:007c:00", "1532:007c:00", &leds)
+            .unwrap();
         let mut layout = Layout {
             name: "Desk".into(),
             brightness: 70,
@@ -1020,7 +1048,7 @@ mod tests {
             "name": name,
             "lighting": {"effect": "lightloom:plasma", "values": {"speed": 3}, "brightness": 40},
             "layout": {"name": "Desk", "brightness": 70, "endpoints": {}},
-            "devices": {"1462:7c91:A0": {"enabled": true, "ledColors": {"0": "#ff0000"}}}
+            "devices": {"1462:7c91:A0": {"enabled": true, "laterSetting": {"0": "#ff0000"}}}
         }))
         .unwrap()
     }
@@ -1041,7 +1069,7 @@ mod tests {
         let night = s.profile("Night").unwrap().unwrap();
         assert_eq!(night.lighting.brightness, 40);
         assert_eq!(
-            night.devices["1462:7c91:A0"].extra["ledColors"]["0"], "#ff0000",
+            night.devices["1462:7c91:A0"].extra["laterSetting"]["0"], "#ff0000",
             "unknown device keys are kept"
         );
         assert!(s.rename_profile("Night", "Evening").unwrap());

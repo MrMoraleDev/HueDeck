@@ -6,7 +6,7 @@
 //! a hardware mode chosen, kept in a profile and dropped again, without a single
 //! write of the save register.
 
-use lightloom_api::model::DeviceHardwareMode;
+use lightloom_api::model::{DeviceHardwareMode, LedEdit};
 use lightloom_api::{ApiError, Backend, Request, Snapshot};
 use lightloom_daemon::config::Config;
 use lightloom_daemon::engine::{self, EngineHandle, EngineOptions, HardwareMode};
@@ -151,6 +151,37 @@ fn place(b: &dyn Backend, x: f32) {
     .unwrap();
 }
 
+fn leds(b: &dyn Backend, fill: Option<&str>, mode: &str) {
+    // A restarted session publishes its endpoints after Initialize().
+    wait_for(b, "the endpoints", |s| {
+        s.devices
+            .iter()
+            .any(|d| d.key == KEY && d.state == "running" && !d.endpoints.is_empty())
+    });
+    call(
+        b,
+        Request::SetLeds {
+            key: KEY.into(),
+            uid: KEY.into(),
+            edit: LedEdit {
+                fill: fill.map(String::from),
+                mode: Some(mode.into()),
+                ..LedEdit::default()
+            },
+        },
+    )
+    .unwrap();
+}
+
+fn custom_flag(b: &dyn Backend) -> bool {
+    b.snapshot()
+        .devices
+        .iter()
+        .find(|d| d.key == KEY)
+        .and_then(|d| d.endpoints.first())
+        .is_some_and(|e| e.custom_leds)
+}
+
 fn placement_x(b: &dyn Backend) -> f64 {
     let layout = b.snapshot().lighting.layout.clone();
     let l = call(b, Request::GetLayout { name: layout }).unwrap();
@@ -199,6 +230,7 @@ fn profiles_save_apply_and_manage_the_whole_setup() {
         },
     )
     .unwrap();
+    leds(b, Some("#00ff00"), "custom");
     assert_eq!(
         call(
             b,
@@ -231,6 +263,8 @@ fn profiles_save_apply_and_manage_the_whole_setup() {
         "Default Strip - 5"
     );
     assert_eq!(doc["layout"]["endpoints"][KEY]["position"]["x"], 33.0);
+    assert_eq!(doc["devices"][KEY]["customLeds"][KEY]["enabled"], true);
+    assert_eq!(doc["devices"][KEY]["customLeds"][KEY]["colors"][0], "#00ff00");
 
     // Change everything, then apply the profile back.
     call(
@@ -244,6 +278,8 @@ fn profiles_save_apply_and_manage_the_whole_setup() {
     set_brightness(b, 90);
     set_mode(b, "Canvas");
     place(b, 77.0);
+    leds(b, Some("#000000"), "effect");
+    assert!(!custom_flag(b));
     call(
         b,
         Request::SetDevice {
@@ -270,6 +306,7 @@ fn profiles_save_apply_and_manage_the_whole_setup() {
     let d = s.devices.iter().find(|d| d.key == KEY).unwrap();
     assert_eq!(d.shutdown_mode.as_deref(), Some("off"));
     assert_eq!(placement_x(b), 33.0);
+    assert!(custom_flag(b), "the custom LEDs are back");
     assert!(s
         .effects
         .iter()
@@ -280,7 +317,7 @@ fn profiles_save_apply_and_manage_the_whole_setup() {
     // unknown per-device keys travel through import and export unchanged.
     let mut imported = doc.clone();
     imported["devices"]["dead:beef:00"] = json!({"enabled": true});
-    imported["devices"][KEY]["ledColors"] = json!({"0": "#ff0000"});
+    imported["devices"][KEY]["laterSetting"] = json!({"0": "#ff0000"});
     let r = call(
         b,
         Request::ImportProfile {
@@ -297,7 +334,7 @@ fn profiles_save_apply_and_manage_the_whole_setup() {
         },
     )
     .unwrap();
-    assert_eq!(copy["devices"][KEY]["ledColors"]["0"], "#ff0000");
+    assert_eq!(copy["devices"][KEY]["laterSetting"]["0"], "#ff0000");
     let r = call(
         b,
         Request::ApplyProfile {

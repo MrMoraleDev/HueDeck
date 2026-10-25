@@ -265,6 +265,8 @@ pub struct DeviceContext {
     frame: Arc<Frame>,
     size: [u32; 2],
     led_positions: Vec<[u32; 2]>,
+    /// `LedNames()` or the names of `device.setControllableLeds` (the LED painter's tooltips).
+    led_names: Vec<String>,
     placement: Placement,
     sampler: SamplerConfig,
     grid: OffsetTable,
@@ -405,6 +407,7 @@ impl DeviceContext {
             frame,
             size: [1, 1],
             led_positions: vec![[0, 0]],
+            led_names: Vec::new(),
             placement,
             sampler,
             grid,
@@ -732,6 +735,8 @@ impl DeviceContext {
             size: self.size(),
             leds: self.led_positions().len(),
             placement: self.placement.clone(),
+            led_positions: self.led_positions.clone(),
+            led_names: self.led_names.clone(),
         }];
         out.extend(self.children.views());
         out
@@ -757,6 +762,15 @@ impl DeviceContext {
             self.led_positions = leds;
             self.log(&format!("device.setSize ignored: {e}"));
         }
+    }
+
+    /// LED names in `LedPositions()` order (`LedNames()`, `device.setControllableLeds`).
+    pub fn set_led_names(&mut self, names: Vec<String>) {
+        self.led_names = names
+            .into_iter()
+            .take(lightloom_engine::direct::MAX_DIRECT_LEDS)
+            .map(|n| capped(n, crate::children::MAX_LED_NAME_CHARS))
+            .collect();
     }
 
     fn set_leds(&mut self, flat: &[i32]) {
@@ -1809,6 +1823,7 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
     native!("brightness", |d| d.device_brightness() as i32);
     native!("setSize", |d, w: i32, h: i32| d.set_size(w, h));
     native!("setLeds", |d, flat: Vec<i32>| d.set_leds(&flat));
+    native!("setLedNames", |d, names: Vec<String>| d.set_led_names(names));
     native!("setName", |d, name: String| d
         .set_name(capped(name, MAX_ID_CHARS)));
     native!("log", |d, text: String| d.log(&text));
@@ -2130,6 +2145,34 @@ mod tests {
         direct.release(owner);
         ctx.apply_direct(&direct, "dev");
         assert_eq!(ctx.color(2, 0), [255, 128, 0], "back to the forced colour");
+    }
+
+    #[test]
+    fn custom_led_colours_answer_device_color_with_brightness() {
+        let (mock, info) = msi_like();
+        let mut ctx = DeviceContext::new(mock, vec![info], WriteMode::Live);
+        ctx.set_geometry([2, 1], vec![[1, 0], [0, 0]]).unwrap();
+        ctx.set_led_names(vec!["Esc".into(), "F1".into()]);
+        ctx.set_frame(Arc::new(Frame::solid(320, 200, Rgb::new(1, 2, 3))));
+        ctx.set_placement(Placement {
+            brightness: 50,
+            ..Placement::default()
+        });
+        let direct = DirectLeds::new();
+        direct.set_static("kbd", &[Rgb::new(200, 100, 0), Rgb::new(0, 0, 255)]);
+        ctx.apply_direct(&direct, "kbd");
+        assert_eq!(
+            ctx.color(1, 0),
+            [100, 50, 0],
+            "LED 0 at cell (1, 0), device brightness 50"
+        );
+        assert_eq!(ctx.color(0, 0), [0, 0, 128]);
+        let views = ctx.endpoint_views("kbd");
+        assert_eq!(views[0].led_positions, vec![[1, 0], [0, 0]]);
+        assert_eq!(views[0].led_names, vec!["Esc".to_string(), "F1".to_string()]);
+        direct.clear_static("kbd");
+        ctx.apply_direct(&direct, "kbd");
+        assert_eq!(ctx.color(1, 0), [1, 1, 2], "the canvas again");
     }
 
     #[test]

@@ -857,7 +857,10 @@ if (deviceMode) {
         native.setSize(toInt(size[0]), toInt(size[1]));
       }
     },
-    setControllableLeds: (_names, positions) => native.setLeds(flatPositions(positions)),
+    setControllableLeds: (names, positions) => {
+      native.setLeds(flatPositions(positions));
+      native.setLedNames(isArray(names) ? names.map(strArg) : []);
+    },
     log: deviceLog,
     // Properties and messages (components-channels.md §2, hid-usb.md "notify"):
     // the natives keep the device's lists for the dashboard; the JS objects stay

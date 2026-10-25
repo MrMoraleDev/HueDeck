@@ -1100,6 +1100,7 @@ fn run(
             .unwrap_or_else(|| Placement::from_defaults(meta.default_position, meta.default_scale)),
     );
     let geometry = ctx.set_geometry(meta.size, meta.led_positions.clone());
+    ctx.set_led_names(meta.led_names.clone());
     ctx.set_child_setup(ChildSetup {
         device_key: device.key.clone(),
         channel_components: opts.channel_components.clone(),

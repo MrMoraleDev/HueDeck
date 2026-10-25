@@ -124,9 +124,8 @@ fn yes() -> bool {
 }
 
 /// One device's settings in a profile: a generic, open blob. The keys below are
-/// the ones this build reads and writes; any other key (a later build's, such as
-/// per-LED colours) is kept as is through saving, exporting and importing, and
-/// ignored when applied.
+/// the ones this build reads and writes; any other key (a later build's) is kept
+/// as is through saving, exporting and importing, and ignored when applied.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileDevice {
@@ -145,6 +144,11 @@ pub struct ProfileDevice {
     /// A live hardware mode (`None`: the device follows the effect).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hardware_mode: Option<DeviceHardwareMode>,
+    /// Per-LED custom colours by endpoint uid (`{enabled, colors, zones}`, as in the
+    /// state export's `customLeds`); endpoints left out follow the effect. `None`
+    /// (a document without the key): the device's custom LEDs are left as they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_leds: Option<std::collections::BTreeMap<String, Value>>,
     /// Keys this build does not know, kept as they are.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -781,6 +785,70 @@ pub struct Endpoint {
     pub leds: usize,
     /// Where it sits.
     pub placement: Placement,
+    /// Shows its custom per-LED colours instead of the effect
+    /// (`PATCH /v1/devices/{key}/leds/{uid}`).
+    #[serde(default)]
+    pub custom_leds: bool,
+}
+
+/// The LED painter's view of a device (`GET /v1/devices/{key}/leds`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedMapView {
+    /// Device key.
+    pub key: String,
+    /// The plugin's `DeviceType()` (`keyboard` gets key caps).
+    pub device_type: String,
+    /// The device and its children, as the session has them now.
+    pub endpoints: Vec<LedEndpointView>,
+}
+
+/// One endpoint of [`LedMapView`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedEndpointView {
+    /// Endpoint uid.
+    pub uid: String,
+    /// `device`, `subdevice` or `component`.
+    pub kind: String,
+    /// Display name.
+    pub name: String,
+    /// The channel of a component.
+    pub channel: Option<String>,
+    /// LED grid in cells (`Size()`).
+    pub size: [u32; 2],
+    /// Length of [`LedEndpointView::colors`].
+    pub slots: usize,
+    /// The LEDs at their cells, with names.
+    pub leds: Vec<lightloom_engine::LedSpot>,
+    /// Custom LEDs mode on (else the endpoint follows the effect).
+    pub custom: bool,
+    /// The custom colour of every slot (`#rrggbb`).
+    pub colors: Vec<String>,
+    /// Named sets of slots.
+    pub zones: std::collections::BTreeMap<String, Vec<u32>>,
+}
+
+/// A change of an endpoint's custom LEDs. Applied in field order: `colors`,
+/// `fill`, `set`, `zones`, then `mode`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedEdit {
+    /// `custom` (show the custom colours) or `effect` (follow the canvas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Every slot's colour (`#rrggbb`), replacing all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colors: Option<Vec<String>>,
+    /// One colour for every slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    /// Colours of single slots.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub set: std::collections::BTreeMap<u32, String>,
+    /// One colour for every slot of a zone, by zone name.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub zones: std::collections::BTreeMap<String, String>,
 }
 
 /// A channel and the component instances assigned to it.
@@ -1005,6 +1073,40 @@ pub enum Request {
         face: Option<String>,
         /// Frames per second, 1-60.
         framerate: Option<u32>,
+    },
+    /// The LED painter's view of a device's endpoints ([`LedMapView`]).
+    LedMap {
+        /// Device key.
+        key: String,
+    },
+    /// Change an endpoint's custom LEDs (colours, mode, zone colours).
+    SetLeds {
+        /// Device key.
+        key: String,
+        /// Endpoint uid (the device key, a subdevice's or a component's uid).
+        uid: String,
+        /// The change.
+        edit: LedEdit,
+    },
+    /// Create or replace a zone of an endpoint (a named set of LED slots).
+    SaveLedZone {
+        /// Device key.
+        key: String,
+        /// Endpoint uid.
+        uid: String,
+        /// Zone name.
+        name: String,
+        /// Its slots.
+        leds: Vec<u32>,
+    },
+    /// Delete a zone of an endpoint.
+    DeleteLedZone {
+        /// Device key.
+        key: String,
+        /// Endpoint uid.
+        uid: String,
+        /// Zone name.
+        name: String,
     },
     /// Move an endpoint in the current layout.
     SetPlacement {
@@ -1321,6 +1423,10 @@ impl Request {
             Request::SaveToDevices { .. } => "saveToDevices",
             Request::SetChannel { .. } => "setChannel",
             Request::SetLcd { .. } => "setLcd",
+            Request::LedMap { .. } => "ledMap",
+            Request::SetLeds { .. } => "setLeds",
+            Request::SaveLedZone { .. } => "saveLedZone",
+            Request::DeleteLedZone { .. } => "deleteLedZone",
             Request::SetPlacement { .. } => "setPlacement",
             Request::ApplyLayout { .. } => "applyLayout",
             Request::SaveLayoutAs { .. } => "saveLayoutAs",
@@ -1476,11 +1582,11 @@ mod tests {
 
     #[test]
     fn profile_device_settings_keep_keys_this_build_does_not_know() {
-        let text = r##"{"enabled":false,"parameters":{"mode":"Forced"},"ledColors":{"0":"#ff0000"},"hardwareMode":{"id":"rainbow","colors":[],"speed":10}}"##;
+        let text = r##"{"enabled":false,"parameters":{"mode":"Forced"},"laterSetting":{"0":"#ff0000"},"hardwareMode":{"id":"rainbow","colors":[],"speed":10}}"##;
         let d: ProfileDevice = serde_json::from_str(text).unwrap();
         assert_eq!(d.enabled, Some(false));
         assert_eq!(d.hardware_mode.as_ref().unwrap().speed, Some(10));
-        assert_eq!(d.extra["ledColors"]["0"], "#ff0000");
+        assert_eq!(d.extra["laterSetting"]["0"], "#ff0000");
         let back = serde_json::to_value(&d).unwrap();
         assert_eq!(back, serde_json::from_str::<Value>(text).unwrap());
     }

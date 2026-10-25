@@ -6,6 +6,8 @@ import type {
   DeviceHardwareMode,
   EffectTimer,
   InputsView,
+  LedEdit,
+  LedMapView,
   LogQuery,
   LogsView,
   LibraryComponent,
@@ -119,6 +121,22 @@ export const api = {
   importProfile: (profile: unknown, name?: string) => request<{ profile: string }>("POST", "/v1/profiles", { profile, name }),
   /** The profile applied at start (null: none). */
   setDefaultProfile: (name: string | null) => request("PATCH", "/v1/profiles", { default: name }),
+  /** The LED painter's view of a running device: its endpoints' LEDs, custom colours and zones. */
+  ledMap: (key: string) => request<LedMapView>("GET", `/v1/devices/${enc(key)}/leds`),
+  /** Paint an endpoint's LEDs and/or switch it between "custom" and following the effect. */
+  setLeds: (key: string, uid: string, edit: LedEdit) =>
+    request<{ uid: string; custom: boolean; changed: boolean }>("PATCH", `/v1/devices/${enc(key)}/leds/${enc(uid)}`, edit),
+  saveLedZone: (key: string, uid: string, name: string, leds: number[]) =>
+    request<{ uid: string; zones: Record<string, number[]> }>(
+      "PUT",
+      `/v1/devices/${enc(key)}/leds/${enc(uid)}/zones/${enc(name)}`,
+      { leds },
+    ),
+  deleteLedZone: (key: string, uid: string, name: string) =>
+    request<{ uid: string; zones: Record<string, number[]> }>(
+      "DELETE",
+      `/v1/devices/${enc(key)}/leds/${enc(uid)}/zones/${enc(name)}`,
+    ),
   setPlacement: (uid: string, placement: Placement) => request("PUT", `/v1/placements/${enc(uid)}`, placement),
   applyLayout: (name: string) => request("POST", `/v1/layouts/${enc(name)}/apply`),
   saveLayoutAs: (name: string) => request("PUT", `/v1/layouts/${enc(name)}`),

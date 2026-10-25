@@ -6,9 +6,10 @@
 //!   global brightness and canvas pause, the current layout (placements with
 //!   their scale, rotation, per-device brightness and enable, and the layout
 //!   brightness), and one open settings object per known device (enable, plugin
-//!   parameters, channel components, exit mode, hardware mode). The per-device
-//!   object keeps keys this build does not know, so later per-device settings
-//!   (per-LED colours) travel in the same document without a schema change.
+//!   parameters, channel components, exit mode, hardware mode, per-LED custom
+//!   colours with their mode and zones). The per-device object keeps keys this
+//!   build does not know, so later per-device settings travel in the same
+//!   document without a schema change.
 //!   Saving captures the setup now; applying sets it back (the layout is saved
 //!   under its name and switched to; devices Lightloom has never seen are
 //!   skipped and reported). The default profile (`settings.defaultProfile`) is
@@ -303,6 +304,13 @@ impl Engine {
                         .get(&row.key)
                         .map(|m| m.as_str().to_string()),
                     hardware_mode: defaults.hardware_modes.get(&row.key).map(from_choice),
+                    custom_leds: Some(
+                        self.custom_leds
+                            .of_device(&row.key)
+                            .into_iter()
+                            .filter_map(|(uid, state)| Some((uid, serde_json::to_value(state).ok()?)))
+                            .collect(),
+                    ),
                     extra: Map::new(),
                 },
             );
@@ -432,6 +440,18 @@ impl Engine {
             let wait = live && !restart.contains(key);
             if let Err(e) = self.set_hardware_mode(key, d.hardware_mode.clone(), wait) {
                 notes.push(format!("{key}: hardware mode: {}", e.message));
+            }
+            if let Some(leds) = &d.custom_leds {
+                let mut wanted = std::collections::BTreeMap::new();
+                for (uid, v) in leds {
+                    match serde_json::from_value::<lightloom_engine::CustomLeds>(v.clone()) {
+                        Ok(state) => {
+                            wanted.insert(uid.clone(), state);
+                        }
+                        Err(e) => notes.push(format!("{key}: custom LEDs of {uid}: {e}")),
+                    }
+                }
+                self.restore_custom_leds(key, wanted);
             }
         }
         if !restart.is_empty() {

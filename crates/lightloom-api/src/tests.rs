@@ -1089,3 +1089,86 @@ async fn update_routes_reach_the_checker() {
         ["check", "options Some(true) None", "install"]
     );
 }
+
+#[tokio::test]
+async fn led_painter_requests_reach_the_backend() {
+    let b = backend();
+    let r = native_router(ctx(&b, false), NATIVE_PORT);
+    let (s, v) = send(&r, "GET", "/v1/devices/1:2:K/leds", HOST, false, None).await;
+    assert_eq!((s, v["done"].as_str()), (StatusCode::OK, Some("ledMap")));
+    let (s, _) = send(
+        &r,
+        "PATCH",
+        "/v1/devices/1:2:K/leds/1:2:K:Logo",
+        HOST,
+        true,
+        Some(json!({"mode": "custom", "fill": "#102030", "set": {"2": "#ff0000"}, "zones": {"WASD": "#00ff00"}})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = send(
+        &r,
+        "PUT",
+        "/v1/devices/1:2:K/leds/1:2:K/zones/Arrow%20keys",
+        HOST,
+        true,
+        Some(json!({"leds": [4, 5]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = send(
+        &r,
+        "DELETE",
+        "/v1/devices/1:2:K/leds/1:2:K/zones/WASD",
+        HOST,
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    // Painting changes state: the token is required.
+    let (s, _) = send(
+        &r,
+        "PATCH",
+        "/v1/devices/1:2:K/leds/1:2:K",
+        HOST,
+        false,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let calls = b.calls.lock().unwrap();
+    assert_eq!(calls[0], Request::LedMap { key: "1:2:K".into() });
+    assert_eq!(
+        calls[1],
+        Request::SetLeds {
+            key: "1:2:K".into(),
+            uid: "1:2:K:Logo".into(),
+            edit: crate::model::LedEdit {
+                mode: Some("custom".into()),
+                colors: None,
+                fill: Some("#102030".into()),
+                set: [(2, "#ff0000".to_string())].into(),
+                zones: [("WASD".to_string(), "#00ff00".to_string())].into(),
+            },
+        }
+    );
+    assert_eq!(
+        calls[2],
+        Request::SaveLedZone {
+            key: "1:2:K".into(),
+            uid: "1:2:K".into(),
+            name: "Arrow keys".into(),
+            leds: vec![4, 5],
+        }
+    );
+    assert_eq!(
+        calls[3],
+        Request::DeleteLedZone {
+            key: "1:2:K".into(),
+            uid: "1:2:K".into(),
+            name: "WASD".into(),
+        }
+    );
+    assert_eq!(calls.len(), 4);
+}

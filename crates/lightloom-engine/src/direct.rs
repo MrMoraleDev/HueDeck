@@ -12,6 +12,12 @@
 //! connected and drops its entries when it goes away
 //! ([`DirectLeds::release`]); a writer that hangs simply lets them expire,
 //! and the endpoint returns to the canvas.
+//!
+//! Below those live entries sits a static layer ([`DirectLeds::set_static`]):
+//! the user's own per-LED colours ("custom LEDs" mode), which have no owner
+//! and never expire. A live entry for the same endpoint wins over them while
+//! it lasts (an OpenRGB SDK client overrides the custom colours while it is
+//! connected); when it goes away the endpoint shows its static colours again.
 
 use crate::color::Rgb;
 use std::collections::HashMap;
@@ -33,6 +39,8 @@ struct Entry {
 #[derive(Debug, Default)]
 pub struct DirectLeds {
     entries: Mutex<HashMap<String, Entry>>,
+    /// The static layer: colours without an owner or a deadline.
+    statics: Mutex<HashMap<String, Arc<[Rgb]>>>,
     /// Bumped on every change, so readers can tell nothing changed.
     generation: AtomicU64,
     next_owner: AtomicU64,
@@ -109,27 +117,58 @@ impl DirectLeds {
         }
     }
 
-    /// The direct colours of `uid`, unless absent or expired (an expired
-    /// entry is removed).
+    fn lock_statics(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<[Rgb]>>> {
+        self.statics.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The direct colours of `uid`: its live entry unless absent or expired
+    /// (an expired entry is removed), else its static colours.
     pub fn get(&self, uid: &str) -> Option<Arc<[Rgb]>> {
         let mut entries = self.lock();
-        let e = entries.get(uid)?;
-        if e.deadline > Instant::now() {
-            return Some(Arc::clone(&e.colors));
+        if let Some(e) = entries.get(uid) {
+            if e.deadline > Instant::now() {
+                return Some(Arc::clone(&e.colors));
+            }
+            entries.remove(uid);
+            drop(entries);
+            self.bump();
+        } else {
+            drop(entries);
         }
-        entries.remove(uid);
-        drop(entries);
+        self.lock_statics().get(uid).cloned()
+    }
+
+    /// Give `uid` static colours (one per LED in the endpoint's LED order,
+    /// as for [`DirectLeds::write`]; at most [`MAX_DIRECT_LEDS`]). They stay
+    /// until [`DirectLeds::clear_static`].
+    pub fn set_static(&self, uid: &str, colors: &[Rgb]) {
+        let colors: Arc<[Rgb]> = colors[..colors.len().min(MAX_DIRECT_LEDS)].into();
+        self.lock_statics().insert(uid.to_string(), colors);
         self.bump();
-        None
     }
 
-    /// Whether any endpoint is driven directly now (expired entries count
-    /// until a reader looks them up).
+    /// Drop the static colours of `uid`: it samples the canvas again (unless
+    /// a live writer drives it).
+    pub fn clear_static(&self, uid: &str) {
+        if self.lock_statics().remove(uid).is_some() {
+            self.bump();
+        }
+    }
+
+    /// Uids with static colours.
+    pub fn static_uids(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.lock_statics().keys().cloned().collect();
+        v.sort();
+        v
+    }
+
+    /// Whether no endpoint is driven directly now, live or static (expired
+    /// entries count until a reader looks them up).
     pub fn is_empty(&self) -> bool {
-        self.lock().is_empty()
+        self.lock().is_empty() && self.lock_statics().is_empty()
     }
 
-    /// Uids driven directly now.
+    /// Uids driven by a live writer now (static colours: [`DirectLeds::static_uids`]).
     pub fn uids(&self) -> Vec<String> {
         let now = Instant::now();
         let mut v: Vec<String> = self
@@ -183,5 +222,31 @@ mod tests {
         d.touch(a, LONG);
         assert_eq!(&*d.get("dev").unwrap(), &[RED]);
         assert_eq!(d.uids(), vec!["dev".to_string()]);
+    }
+
+    #[test]
+    fn static_colours_sit_below_live_writers() {
+        let d = DirectLeds::new();
+        let g = d.generation();
+        d.set_static("kbd", &[RED, GREEN]);
+        assert!(d.generation() > g);
+        assert_eq!(&*d.get("kbd").unwrap(), &[RED, GREEN]);
+        assert!(!d.is_empty());
+        assert!(d.uids().is_empty(), "no live writer");
+        assert_eq!(d.static_uids(), vec!["kbd".to_string()]);
+        // A live writer (an SDK client) wins while it lasts...
+        let a = d.new_owner();
+        d.write(a, "kbd", 2, 0, &[GREEN, GREEN], LONG);
+        assert_eq!(&*d.get("kbd").unwrap(), &[GREEN, GREEN]);
+        // ...and the static colours come back when it goes away or expires.
+        d.release(a);
+        assert_eq!(&*d.get("kbd").unwrap(), &[RED, GREEN]);
+        d.write(a, "kbd", 2, 0, &[GREEN], Duration::ZERO);
+        assert_eq!(&*d.get("kbd").unwrap(), &[RED, GREEN]);
+        d.clear_static("kbd");
+        assert!(d.get("kbd").is_none() && d.is_empty());
+        let g = d.generation();
+        d.clear_static("kbd");
+        assert_eq!(d.generation(), g, "nothing to clear");
     }
 }

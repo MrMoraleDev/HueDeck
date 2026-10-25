@@ -229,6 +229,12 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/devices/{key}/channels/{channel}", put(put_channel))
         .route("/v1/devices/{key}/lcd", put(put_lcd))
         .route("/v1/devices/{key}/mode", put(put_hardware_mode))
+        .route("/v1/devices/{key}/leds", get(led_map))
+        .route("/v1/devices/{key}/leds/{uid}", axum::routing::patch(patch_leds))
+        .route(
+            "/v1/devices/{key}/leds/{uid}/zones/{name}",
+            put(put_led_zone).delete(delete_led_zone),
+        )
         .route("/v1/lcd/faces", get(lcd_faces))
         .route("/v1/save/preview", post(save_preview))
         .route("/v1/save", post(save_to_devices))
@@ -427,6 +433,50 @@ async fn put_lcd(State(ctx): State<ApiContext>, Path(key): Path<String>, Json(b)
         })
         .await,
     )
+}
+
+/// The LED painter's view of a device: its endpoints' LEDs, custom colours and zones.
+async fn led_map(State(ctx): State<ApiContext>, Path(key): Path<String>) -> Response {
+    reply(ctx.call(Request::LedMap { key }).await)
+}
+
+/// Change an endpoint's custom LEDs (colours, mode, zone colours).
+async fn patch_leds(
+    State(ctx): State<ApiContext>,
+    Path((key, uid)): Path<(String, String)>,
+    Json(edit): Json<crate::model::LedEdit>,
+) -> Response {
+    reply(ctx.call(Request::SetLeds { key, uid, edit }).await)
+}
+
+#[derive(Deserialize)]
+struct LedZoneBody {
+    #[serde(default)]
+    leds: Vec<u32>,
+}
+
+/// Create or replace a zone (a named set of LED slots) of an endpoint.
+async fn put_led_zone(
+    State(ctx): State<ApiContext>,
+    Path((key, uid, name)): Path<(String, String, String)>,
+    Json(b): Json<LedZoneBody>,
+) -> Response {
+    reply(
+        ctx.call(Request::SaveLedZone {
+            key,
+            uid,
+            name,
+            leds: b.leds,
+        })
+        .await,
+    )
+}
+
+async fn delete_led_zone(
+    State(ctx): State<ApiContext>,
+    Path((key, uid, name)): Path<(String, String, String)>,
+) -> Response {
+    reply(ctx.call(Request::DeleteLedZone { key, uid, name }).await)
 }
 
 async fn lcd_faces(State(ctx): State<ApiContext>) -> Response {

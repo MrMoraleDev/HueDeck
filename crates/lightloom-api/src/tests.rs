@@ -75,6 +75,41 @@ impl Backend for Scripted {
             }],
         }
     }
+
+    fn logs(&self, from: Option<&str>) -> crate::logs::LogBatch {
+        let line = |level: &str, source: Option<&str>, message: String| crate::logs::LogEntry {
+            level: Some(level.into()),
+            source: source.map(str::to_string),
+            message,
+            ..crate::logs::LogEntry::default()
+        };
+        crate::logs::LogBatch {
+            from: from.unwrap_or("file").into(),
+            available: vec!["file".into(), "memory".into()],
+            files: vec!["lightloomd.old.log".into(), "lightloomd.log".into()],
+            entries: vec![
+                line("INFO", None, "starting".into()),
+                line("DEBUG", Some("hid:1532:007c"), "Initialize".into()),
+                line("WARN", None, format!("client sent Bearer {TOKEN}")),
+            ],
+        }
+    }
+
+    fn inputs(&self) -> crate::model::InputsView {
+        crate::model::InputsView {
+            supported: true,
+            audio_devices: vec!["Speakers".into(), "Headphones".into()],
+            audio_device: None,
+            displays: vec![crate::model::DisplayView {
+                name: r"\\.\DISPLAY1".into(),
+                width: 2560,
+                height: 1440,
+                primary: true,
+                adapter: "GPU".into(),
+            }],
+            display: None,
+        }
+    }
 }
 
 const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 13, 10, 26, 10, b'f', b'a', b'k', b'e'];
@@ -238,6 +273,79 @@ async fn sensors_need_no_token() {
         json!({ "name": "CPU Load", "value": 12.5, "units": "%", "min": 0.0, "max": 100.0, "type": "Load" })
     );
     assert_eq!(v["sources"][0]["name"], "system");
+}
+
+#[tokio::test]
+async fn logs_are_filtered_and_never_carry_the_token() {
+    let b = backend();
+    let r = native_router(ctx(&b, false), NATIVE_PORT);
+    let (s, v) = send(&r, "GET", "/v1/logs", HOST, false, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["from"], "file");
+    assert_eq!(v["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(v["sources"], json!(["hid:1532:007c"]));
+    assert!(!v.to_string().contains(TOKEN), "{v}");
+    let (_, v) = send(&r, "GET", "/v1/logs?from=memory&level=info", HOST, false, None).await;
+    assert_eq!(v["from"], "memory");
+    assert_eq!(v["entries"].as_array().unwrap().len(), 2);
+    let (_, v) = send(&r, "GET", "/v1/logs?source=1532&q=init", HOST, false, None).await;
+    assert_eq!(v["entries"][0]["message"], "Initialize");
+    assert_eq!(v["entries"].as_array().unwrap().len(), 1);
+    let (_, v) = send(&r, "GET", "/v1/logs?limit=1", HOST, false, None).await;
+    assert_eq!(v["truncated"], true);
+    assert_eq!(v["entries"][0]["level"], "WARN");
+    let (s, v) = send(&r, "GET", "/v1/logs?level=loud", HOST, false, None).await;
+    assert_eq!(
+        (s, v["error"]["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("bad_request"))
+    );
+}
+
+#[tokio::test]
+async fn inputs_list_devices_and_take_a_choice() {
+    let b = backend();
+    let r = native_router(ctx(&b, false), NATIVE_PORT);
+    let (s, v) = send(&r, "GET", "/v1/inputs", HOST, false, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["audioDevices"], json!(["Speakers", "Headphones"]));
+    assert_eq!(v["displays"][0]["width"], 2560);
+    let (s, _) = send(
+        &r,
+        "PATCH",
+        "/v1/inputs",
+        HOST,
+        false,
+        Some(json!({"display": null})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, _) = send(
+        &r,
+        "PATCH",
+        "/v1/inputs",
+        HOST,
+        true,
+        Some(json!({"audioDevice": " Headphones ", "display": null})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = send(&r, "PATCH", "/v1/inputs", HOST, true, Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let calls = b.calls.lock().unwrap();
+    assert_eq!(
+        calls[0],
+        Request::SetInputs {
+            audio_device: Some("Headphones".into()),
+            display: Some(String::new()),
+        }
+    );
+    assert_eq!(
+        calls[1],
+        Request::SetInputs {
+            audio_device: None,
+            display: None,
+        }
+    );
 }
 
 #[tokio::test]

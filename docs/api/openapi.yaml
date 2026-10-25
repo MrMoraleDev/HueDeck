@@ -3,8 +3,8 @@
 # The native Lightloom API of lightloomd (crates/lightloom-api src/server.rs `native_router`, the
 # shapes in src/model.rs, the answers in crates/lightloom-daemon src/engine.rs). Every route of
 # `lightloom_api::NATIVE_ROUTES` and of the router appears here: crates/lightloom-api/tests/openapi.rs
-# checks it. The SignalRGB-compatible API (ports 16038 / 16034, `/api/v1/*`) is not described
-# here; see docs/host-api/effects-engine.md §5 and `lightloom_api::COMPAT_ROUTES`.
+# checks it. The SignalRGB-compatible API (ports 16038 / 16034, `/api/v1/*`) is described in
+# docs/api/compat-openapi.yaml.
 openapi: 3.1.0
 info:
   title: Lightloom native API
@@ -893,6 +893,78 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SensorsView" }
+  /v1/inputs:
+    get:
+      tags: [settings]
+      operationId: getInputs
+      summary: Audio output devices and displays the inputs can capture, and the choice
+      description: |
+        `engine.audio` captures an output device through WASAPI loopback (microphones and other
+        capture endpoints are never opened, so they are not listed); `engine.zone` and the meters
+        capture one display through DXGI duplication. Windows only today: elsewhere `supported` is
+        `false` and both lists are empty. The choice made here wins over `[audio] device` and
+        `[screen] display` in config.toml (docs/audio.md, docs/screen.md).
+      responses:
+        "200":
+          description: The devices and the choice.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InputsView" }
+    patch:
+      tags: [settings]
+      operationId: setInputs
+      summary: Choose the audio output device and the display
+      description: |
+        A field left out is not changed; `null` or `""` goes back to the system default output
+        device / the primary display. The choice is saved in the settings database and the
+        running effect's capture restarts on the new device.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                audioDevice: { type: [string, "null"], maxLength: 256, description: "An `audioDevices` name." }
+                display: { type: [string, "null"], maxLength: 256, description: "A `displays[].name`." }
+      responses:
+        "200":
+          description: The choice now.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  audioDevice: { type: [string, "null"] }
+                  display: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/logs:
+    get:
+      tags: [daemon]
+      operationId: getLogs
+      summary: The daemon's log history, filtered
+      description: |
+        `from=file`: `lightloomd.old.log` (the previous run) and `lightloomd.log` (this run) from
+        the `logs` folder of the data directory, which `lightloomw` writes (the installed
+        Lightloom). `from=memory`: this run's in-memory buffer (the last 5000 lines, including
+        the plugins' own `device.log` lines). The default is the files when the daemon runs under
+        `lightloomw`, else memory. The API token and any bearer credential are replaced by
+        `[redacted]` in every line.
+      parameters:
+        - { name: from, in: query, schema: { enum: [file, memory] } }
+        - { name: level, in: query, schema: { enum: [error, warn, info, debug, trace] }, description: Lowest level shown. }
+        - { name: q, in: query, schema: { type: string }, description: Text the line contains (case-insensitive). }
+        - { name: source, in: query, schema: { type: string }, description: "Device or plugin: part of its key or name (case-insensitive)." }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1000 }, description: Newest lines answered. }
+      responses:
+        "200":
+          description: The matching lines, oldest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogsView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /v1/network:
     get:
       tags: [network]
@@ -1548,6 +1620,45 @@ components:
         urlScheme: { type: boolean, description: "`lightloom://` links are registered for this user (opt-in)." }
         urlSchemeAvailable: { type: boolean, description: This OS and install can register the URL scheme. }
         urlSchemeNotice: { type: [string, "null"], description: Why the registration is not what the setting says. }
+        audioDevice: { type: [string, "null"], description: "The output device `engine.audio` captures (`null`: the system default); see `/v1/inputs`." }
+        display: { type: [string, "null"], description: "The display screen capture uses (`null`: the primary one); see `/v1/inputs`." }
+    InputsView:
+      type: object
+      properties:
+        supported: { type: boolean, description: This OS has the capture backends (Windows). }
+        audioDevices: { type: array, items: { type: string }, description: Output devices loopback capture can open. }
+        audioDevice: { type: [string, "null"], description: "The chosen output device; `null`: the system default." }
+        displays:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string, examples: ['\\.\DISPLAY1'] }
+              width: { type: integer }
+              height: { type: integer }
+              primary: { type: boolean }
+              adapter: { type: string }
+        display: { type: [string, "null"], description: "The chosen display; `null`: the primary display." }
+    LogsView:
+      type: object
+      properties:
+        from: { enum: [file, memory] }
+        available: { type: array, items: { enum: [file, memory] } }
+        files: { type: array, items: { type: string }, description: The files read, oldest first. }
+        truncated: { type: boolean, description: More lines matched than `limit`; the oldest were left out. }
+        sources: { type: array, items: { type: string }, description: Every device and plugin the lines name. }
+        entries:
+          type: array
+          items:
+            type: object
+            required: [message]
+            properties:
+              time: { type: string, format: date-time }
+              level: { enum: [ERROR, WARN, INFO, DEBUG, TRACE] }
+              target: { type: string, description: The module that logged it. }
+              source: { type: string, description: The device or plugin the line is about. }
+              message: { type: string }
+              file: { type: string }
     SensorsView:
       type: object
       properties:

@@ -23,7 +23,7 @@ scale = "log"           # "log" (20 Hz-20 kHz) or "linear" (0-fs/2)
 - **Default device.** With no `device`, the stream follows the Windows default output. If the default changes and cpal reports the stream invalidated, Lightloom reopens it after 300 ms.
 - **Named device.** The device name is the one Windows shows in Sound settings.
 - **Failures.** A name that does not match, or a device that cannot open, is logged once. Lightloom then retries every 2 s, and effects see silence meanwhile.
-- **No dashboard picker yet.** The setting is in `config.toml` only. `lightloom_inputs::audio::output_devices()` lists the names, for a future dashboard select.
+- **Dashboard picker.** Settings → Inputs lists the output devices (`GET /v1/inputs`, from `lightloom_inputs::audio::output_devices()`). A device chosen there is saved in the settings database, wins over `device` in `config.toml`, and moves the running capture at once; *Default output device* goes back to `config.toml`'s choice.
 
 ## Capture
 

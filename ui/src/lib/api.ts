@@ -4,6 +4,9 @@
 
 import type {
   EffectTimer,
+  InputsView,
+  LogQuery,
+  LogsView,
   LibraryComponent,
   PawnIoView,
   Placement,
@@ -59,6 +62,17 @@ const enc = encodeURIComponent;
 export const api = {
   state: () => request<Snapshot>("GET", "/v1/state"),
   sensors: () => request<SensorsView>("GET", "/v1/sensors"),
+  /** The log history (the log files under lightloomw, else this run's memory), filtered. */
+  logs: (q: LogQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") params.set(k, String(v));
+    const qs = params.toString();
+    return request<LogsView>("GET", `/v1/logs${qs ? `?${qs}` : ""}`);
+  },
+  inputs: () => request<InputsView>("GET", "/v1/inputs"),
+  /** null goes back to the system default output / the primary display. */
+  setInputs: (patch: { audioDevice?: string | null; display?: string | null }) =>
+    request<{ audioDevice: string | null; display: string | null }>("PATCH", "/v1/inputs", patch),
   applyEffect: (id: string) => request("POST", `/v1/effects/${enc(id)}/apply`),
   setEffectValues: (id: string, values: Record<string, unknown>) =>
     request("PATCH", `/v1/effects/${enc(id)}/values`, values),

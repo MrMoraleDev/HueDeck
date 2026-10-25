@@ -130,6 +130,10 @@ mod keys {
     pub const URL_SCHEME: &str = "settings.urlScheme";
     /// Black canvas while the PC is locked or the display is off.
     pub const LIGHTS_OFF_WHEN_IDLE: &str = "settings.lightsOffWhenIdle";
+    /// The output device `engine.audio` captures (wins over `[audio] device`).
+    pub const AUDIO_DEVICE: &str = "settings.audioDevice";
+    /// The display screen capture uses (wins over `[screen] display`).
+    pub const DISPLAY: &str = "settings.display";
 }
 
 /// Longest a sleep notification waits for the engine (Windows gives sleep
@@ -271,6 +275,8 @@ pub struct Shared {
     sensors: crate::sensors::SensorPoller,
     shutdown: tokio::sync::Notify,
     power: Sender<PowerSignal>,
+    /// `lightloomw`'s log files, for `GET /v1/logs`.
+    log_files: crate::logs::LogFiles,
 }
 
 impl Shared {
@@ -321,6 +327,30 @@ impl Backend for Shared {
 
     fn sensors(&self) -> lightloom_api::model::SensorsView {
         self.sensors.view()
+    }
+
+    fn logs(&self, from: Option<&str>) -> lightloom_api::logs::LogBatch {
+        self.log_files.batch(from, crate::logs::ring())
+    }
+
+    fn inputs(&self) -> lightloom_api::model::InputsView {
+        let settings = &self.snapshot.load().settings;
+        lightloom_api::model::InputsView {
+            supported: cfg!(windows),
+            audio_devices: lightloom_inputs::audio::output_devices(),
+            audio_device: settings.audio_device.clone(),
+            displays: lightloom_inputs::screen::displays()
+                .into_iter()
+                .map(|d| lightloom_api::model::DisplayView {
+                    name: d.name,
+                    width: d.width,
+                    height: d.height,
+                    primary: d.primary,
+                    adapter: d.adapter,
+                })
+                .collect(),
+            display: settings.display.clone(),
+        }
     }
 }
 
@@ -387,6 +417,7 @@ pub fn start_with(opts: EngineOptions, url_scheme: crate::scheme::UrlScheme) -> 
         sensors: sensor_poller(&opts),
         shutdown: tokio::sync::Notify::new(),
         power,
+        log_files: crate::logs::LogFiles::from_env(),
     });
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
@@ -587,6 +618,9 @@ struct Engine {
     display_off: bool,
     /// The canvas is black for that now.
     idle: bool,
+    /// `[audio] device` and `[screen] display` of config.toml: what the inputs
+    /// use when the dashboard chose nothing (`opts.config` holds the choice).
+    config_inputs: (Option<String>, Option<String>),
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -706,6 +740,7 @@ impl Engine {
             locked: false,
             display_off: false,
             idle: false,
+            config_inputs: (None, None),
         };
         e.enter(LifecycleState::LoadingConfig);
         e.load_state();
@@ -757,6 +792,14 @@ impl Engine {
         self.lights_off_when_idle = get(keys::LIGHTS_OFF_WHEN_IDLE)
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let blank = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
+        self.config_inputs = (
+            blank(self.opts.config.audio.device.clone()),
+            blank(self.opts.config.screen.display.clone()),
+        );
+        let saved = |k: &str| blank(get(k).and_then(|v| v.as_str().map(String::from)));
+        self.opts.config.audio.device = saved(keys::AUDIO_DEVICE).or_else(|| self.config_inputs.0.clone());
+        self.opts.config.screen.display = saved(keys::DISPLAY).or_else(|| self.config_inputs.1.clone());
         self.smbus = get(keys::SMBUS)
             .and_then(|v| v.as_bool())
             .unwrap_or(self.opts.config.smbus.enabled);
@@ -1537,12 +1580,23 @@ impl Engine {
             canvas = Canvas::Null(NullRenderer::new(Pattern::Rainbow, f64::from(fps)));
             let _ = canvas.client().start(Arc::clone(&self.shared.frames));
         }
+        self.canvas = canvas;
+        self.start_inputs();
+        self.dirty = true;
+    }
+
+    /// Start audio, screen and sensor input for the effect on the canvas (the
+    /// ones it reads), stopping what ran before.
+    fn start_inputs(&mut self) {
+        self.audio = None;
+        self.screen = None;
+        let fps = self.fps();
         let uses_audio = self
             .effect
             .as_deref()
             .and_then(|id| self.effects.get(id))
             .is_some_and(|e| e.meta.uses.audio);
-        let sink = match &canvas {
+        let sink = match &self.canvas {
             Canvas::Cef(c) => Some(c.engine_sink()),
             Canvas::Null(_) => None,
         };
@@ -1563,8 +1617,6 @@ impl Engine {
         self.shared.sensors.set_effect(sensor_push);
         self.screen = crate::screen::feed(&self.opts.config.screen, meta, sink.clone());
         self.audio = crate::audio::feed(&self.opts.config.audio, fps, uses_audio, sink);
-        self.canvas = canvas;
-        self.dirty = true;
     }
 
     // ---------------------------------------------------------------- the loop
@@ -1833,6 +1885,8 @@ impl Engine {
                 url_scheme_available: self.actions.url_scheme.available(),
                 url_scheme_notice: self.actions.url_scheme_notice.clone(),
                 lights_off_when_idle: self.lights_off_when_idle,
+                audio_device: self.opts.config.audio.device.clone(),
+                display: self.opts.config.screen.display.clone(),
             },
             conflicts: {
                 let mut all = self.conflicts.clone();
@@ -2677,6 +2731,61 @@ impl Engine {
                     "port": self.opts.api_port,
                     "openrgbSdk": self.openrgb_sdk,
                     "lightsOffWhenIdle": self.lights_off_when_idle,
+                }))
+            }
+            Request::SetInputs {
+                audio_device,
+                display,
+            } => {
+                let mut changed = false;
+                let (config_audio, config_display) = self.config_inputs.clone();
+                for (name, key, current, fallback) in [
+                    (
+                        audio_device,
+                        keys::AUDIO_DEVICE,
+                        &mut self.opts.config.audio.device,
+                        config_audio,
+                    ),
+                    (
+                        display,
+                        keys::DISPLAY,
+                        &mut self.opts.config.screen.display,
+                        config_display,
+                    ),
+                ] {
+                    let Some(name) = name else { continue };
+                    let name = name.trim().to_string();
+                    self.store.set(key, &name).map_err(internal)?;
+                    let now = if name.is_empty() { fallback } else { Some(name) };
+                    if *current != now {
+                        *current = now;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.log(format!(
+                        "inputs: audio from {}, screen from {}",
+                        self.opts
+                            .config
+                            .audio
+                            .device
+                            .as_deref()
+                            .unwrap_or("the default output device"),
+                        self.opts
+                            .config
+                            .screen
+                            .display
+                            .as_deref()
+                            .unwrap_or("the primary display"),
+                    ));
+                    if !self.suspended() {
+                        self.start_inputs();
+                    }
+                    self.dirty = true;
+                }
+                Ok(json!({
+                    "audioDevice": self.opts.config.audio.device,
+                    "display": self.opts.config.screen.display,
                 }))
             }
             Request::NetworkAdd { plugin, ip } => {

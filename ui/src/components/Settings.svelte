@@ -4,6 +4,8 @@
   import { api } from "../lib/api";
   import { daemon } from "../lib/store.svelte";
   import type { SignalRgbImport, Snapshot } from "../lib/types";
+  import InputDevices from "./InputDevices.svelte";
+  import Logs from "./Logs.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let message = $state<string | null>(null);
@@ -405,6 +407,8 @@
     </p>
   </section>
 
+  <InputDevices {snapshot} />
+
   <section class="panel">
     <h2>Daemon</h2>
     <p class="muted">Lightloom {snapshot.version} · {snapshot.state}{snapshot.settings.dryRun ? " · dry run (nothing is written to devices)" : ""}</p>
@@ -419,10 +423,7 @@
   <p class="message">{message}</p>
 {/if}
 
-<section class="panel logs">
-  <h2>Log</h2>
-  <pre>{daemon.logs.join("\n") || "Nothing logged since this page opened."}</pre>
-</section>
+<Logs />
 
 <style>
   .cols {
@@ -457,19 +458,9 @@
   input[type="number"] {
     width: 9em;
   }
-  .logs {
-    margin-top: 16px;
-  }
   .preview {
     margin: 8px 0 0;
     padding-left: 1.2em;
     font-size: 13px;
-  }
-  pre {
-    max-height: 320px;
-    overflow: auto;
-    font-size: 12px;
-    white-space: pre-wrap;
-    margin: 0;
   }
 </style>

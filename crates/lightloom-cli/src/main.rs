@@ -7,7 +7,8 @@
 //! daemon serves (`--addr`, else the `api-port` file lightloomd writes, else
 //! 127.0.0.1:53000). `action <url>` hands a `lightloom://` action URL to the
 //! running daemon (`POST /v1/actions`). `udev generate` writes the Linux udev rules for the
-//! devices the plugins claim.
+//! devices the plugins claim. `shm-dump` writes the renderer's newest frame to a PNG
+//! (debugging).
 //!
 //! Exit codes: `0` success; `1` a device session failed, faulted or saw I/O
 //! errors (HID or SMBus); `2` a setup error (no plugin or device, conflicting software, bad
@@ -22,6 +23,7 @@ mod action;
 mod compat;
 mod devices;
 mod run;
+mod shm;
 mod udev;
 
 #[derive(Debug, Parser)]
@@ -136,6 +138,18 @@ enum Command {
         #[command(subcommand)]
         command: compat::CompatCommand,
     },
+    /// Write the newest frame of the renderer's shared-memory ring to a PNG and print the ring
+    /// header (debugging; read-only).
+    ShmDump {
+        /// The ring file. Default: the newest frames-*.shm in the daemon's renderer directory.
+        ring: Option<std::path::PathBuf>,
+        /// The PNG to write. Default: frame-<seq>.png here.
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+        /// Print the header and frame metrics as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Linux udev rules for the devices the plugins claim.
     Udev {
         #[command(subcommand)]
@@ -239,6 +253,11 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
                     run::Outcome::Failed
                 }
             })
+        }
+        Command::ShmDump { ring, out, json } => {
+            let (data, _) = lightloom_runtime::dirs::from_env();
+            shm::dump(ring.as_deref(), &data.join("renderer"), out.as_deref(), json)
+                .map(|_| run::Outcome::Clean)
         }
         Command::Compat { command } => compat::run(command).map(|clean| {
             if clean {

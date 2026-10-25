@@ -52,11 +52,22 @@ struct Args {
     port: Option<u16>,
 }
 
+/// The console (or `lightloomw`'s log file) at `default_filter`, and the
+/// dashboard's in-memory log history (`GET /v1/logs`) at its own level.
 fn init_tracing(default_filter: &str) {
+    use std::io::IsTerminal;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::Layer;
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .or_else(|_| tracing_subscriber::EnvFilter::try_new(default_filter))
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // No colour codes in a file.
+    let console = tracing_subscriber::fmt::layer()
+        .with_ansi(std::io::stdout().is_terminal())
+        .with_filter(filter);
+    let ring = lightloom_daemon::logs::RingLayer.with_filter(lightloom_daemon::logs::ring_filter());
+    tracing_subscriber::registry().with(console).with(ring).init();
 }
 
 fn main() -> anyhow::Result<()> {

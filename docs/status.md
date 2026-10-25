@@ -28,11 +28,11 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 
 | Milestone | Status | The main gaps |
 |---|---|---|
-| M0 Bootstrap + spikes | **Done** | `crates/README.md` still describes the early crates (hal-linux "stub", inputs "shapes only") |
+| M0 Bootstrap + spikes | **Done** | none |
 | M1 First light | **Done** | the "within 100 ms" first light is met on the native backend only (56-58 ms) |
 | M2 Compatible plugin host | **Partial** | rawusb/hybrid and serial sessions are mock-tested only (no WinUSB or serial device on the bench); `addFeature("dtls")`, `keyboard`/`mouse` and the fan API are stubs; no replayable `HidTrace` in `plugins/*/fixtures`; the Sonix 320F keyboard is not driven (EVision V1, needs a USB capture); the physical hot-unplug test has not been run |
 | M3 Effects pipeline | **Done** | the Chromium sandbox is off until releases are signed |
-| M4 Dashboard, persistence, API, packaging | **Partial** | Authenticode signing (SignPath account); the MSI never installed on a clean machine (fresh-machine acceptance); the plugin sources manager; the log panel shows only lines since the page opened; save-to-device, exit modes, suspend/resume, tray and import wizard not yet run live |
+| M4 Dashboard, persistence, API, packaging | **Partial** | Authenticode signing (SignPath account); the MSI never installed on a clean machine (fresh-machine acceptance); the plugin sources manager; save-to-device, exit modes, suspend/resume, tray and import wizard not yet run live |
 | M5 Privileged bus | **Partial** | I801, AMD GPU (ADL) and the sensors not run on hardware; no LpcIO, no fan control; no CPU temperature on Windows without LibreHardwareMonitor; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not bind WinUSB |
 | M6 Inputs, network, extras | **Partial** | audio, screen zones, meters, OpenRGB SDK server, network plugins, LampArray backend and runtime parameters are in; latency acceptance and real clients/devices untested; LCD faces and the macro runtime (Inputs/Actions, `keys`, hooks) missing; no DTLS |
 | M7 Linux + 1.0 | **Partial** | hidraw, udev hotplug, i2c-dev, hwmon, serial, CEF and packaging are in and unit-tested on Ubuntu CI, but nothing has run on a Linux machine; nusb, PipeWire audio/screen, logind sleep, hwmon `pwm`, Linux tray and notifications missing; the CEF renderer is not staged into the Linux packages; cargo-dist deferred |
@@ -120,7 +120,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | Action URLs (`lightloom://`) | Done | `crates/lightloom-api/src/actions.rs`, `crates/lightloom-daemon/src/engine/actions.rs`, `scheme.rs`: `POST /v1/actions`, `lightloom action <url>`, SignalRGB `system.action` paths (app, view, layout, effect, device, playlist, brightness, canvas), dashboard `action` events, opt-in per-user URL-scheme registration; `crates/lightloom-daemon/tests/actions.rs`; `docs/integrations/actions.md` |
 | Compat canvas events 16034 | Done | `server.rs` `compat_canvas_event`; listeners wait while SignalRGB owns the ports |
 | Dashboard: devices, layout editor (drag, scale, rotate, flip), effects + controls + presets, channels/components, network, sensors, settings | Done | `ui/src/components/{Devices,Layout,Effects,Preview,Network,Sensors,Settings,ControlInput}.svelte` |
-| Dashboard: logs page | Partial | Settings "Log" panel (`Settings.svelte`) shows the daemon's `log` events (`ui/src/lib/store.svelte.ts`, last 500 lines) since the page opened; no history from the log files, no filter |
+| Dashboard: logs page | Done | `GET /v1/logs` (`crates/lightloom-api/src/logs.rs`: level, text and device/plugin filters, newest `limit` lines, API token and bearer credentials redacted); history from `lightloomd.log` + `lightloomd.old.log` when started by `lightloomw` (`LIGHTLOOM_LOG_FILE`), else an in-memory ring of 5000 lines with the plugins' `device.log` lines (`crates/lightloom-daemon/src/logs.rs`); `ui/src/components/Logs.svelte` (Settings → Log: filters, follow, Copy, Save as file) |
 | Import wizard | Done, untested on a real SignalRGB install | `crates/lightloom-runtime/src/signalrgb.rs` (`SettingsSource`: registry read-only, `Fixture` in tests): layout, channel arrays, effect parameters and presets, selected effect, global brightness, per-device enable; `GET /v1/import/signalrgb` previews, `POST` merges (`Store::merge_effects`); `thirdParty` badges; `crates/lightloom-daemon/tests/import.rs`; `docs/signalrgb-import.md`. Read on the reference machine with `reg query` only; where SignalRGB keeps saved presets and `globalBrightness` is unconfirmed |
 | Own export/import of the whole setup | Done | `/v1/export`, `/v1/import`, `store.rs` test `export_import_round_trips_byte_for_byte` |
 | Plugin sources manager (pre-listed community repos, licence acknowledgement, hash pinning) | Missing | `schemas/plugin-source.schema.json` exists; no code. Lower priority under the standalone direction |
@@ -160,8 +160,8 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| Audio FFT (`engine.audio`) | Done (Windows) | `crates/lightloom-inputs/src/audio/{wasapi,analyzer}.rs` (cpal WASAPI loopback, realfft, 200 bins, level, density, width), `crates/lightloom-daemon/src/audio.rs`; `docs/audio.md`. Output device only in `config.toml` (no dashboard picker) |
-| Screen zones (`engine.zone`) | Done (Windows) | `crates/lightloom-inputs/src/screen/{dxgi,sample}.rs` (DXGI duplication, checked on the dev PC), `crates/lightloom-daemon/src/screen.rs`; `docs/screen.md`. Display only in `config.toml` (no dashboard picker) |
+| Audio FFT (`engine.audio`) | Done (Windows) | `crates/lightloom-inputs/src/audio/{wasapi,analyzer}.rs` (cpal WASAPI loopback, realfft, 200 bins, level, density, width), `crates/lightloom-daemon/src/audio.rs`; `docs/audio.md`. Output device picker: `GET/PATCH /v1/inputs`, `ui/src/components/InputDevices.svelte` (saved in the database, wins over `config.toml`); `crates/lightloom-daemon/tests/inputs.rs`. Loopback of output devices only (never microphones), by design |
+| Screen zones (`engine.zone`) | Done (Windows) | `crates/lightloom-inputs/src/screen/{dxgi,sample}.rs` (DXGI duplication, checked on the dev PC), `crates/lightloom-daemon/src/screen.rs`; `docs/screen.md`. Display picker: `GET/PATCH /v1/inputs`, Settings → Inputs |
 | Area/linear meters (`engine.vision`) | Done | `crates/lightloom-inputs/src/screen/meters.rs` (area, linear, colormean from `<meta meter>`); OCR out of scope |
 | Network plugins (udp/tcp, DiscoveryService, mDNS, `service`/`controller`/`discovery`, XHR, settings, dashboard section) | Done, untested on hardware; DTLS missing | first-party `wled`, `ddp`, `e131`, `philips-hue` (CLIP v1), `nanoleaf`, `govee`, `lifx`, `yeelight`; `Network.svelte`; `docs/hardware/{wled,…}.md` |
 | LCD faces (`@SignalRGB/lcd`, second browser per device) | Missing | dry-run recording stub only (`host.js` `lcd`); `getImageBuffer` throws |
@@ -205,20 +205,20 @@ fake sysfs and fake devices, 39 tests); none of it has run against hardware on a
 
 | Component | Status | Evidence / gap |
 |---|---|---|
-| Crates (17 planned) | Done (21) | all planned crates are real; added: `lightloom-runtime` (shared CLI/daemon plumbing), `lightloom-adl`, `lightloom-tray`, `lightloom-winres`. `crates/README.md` is stale (calls `lightloom-hal-linux` a stub and `lightloom-inputs` shapes only, lacks the four new crates) |
+| Crates (17 planned) | Done (21) | all planned crates are real; added: `lightloom-runtime` (shared CLI/daemon plumbing), `lightloom-adl`, `lightloom-tray`, `lightloom-winres`. `crates/README.md` describes all 21 |
 | First-party plugins | Done for the plan's list, except Sonix | 64 plugin directories: the plan's list (`msi-mystic-light-7c91`, `razer`, `nzxt-hue2`, `steelseries-arctis-5`, `crucial-ballistix`, `hid-lamparray`), `msi-gpu`, `sony-gamepad`, `sapphire-nitro-glow`, OpenRGB batch 1 (`razer*`, `steelseries-*`, `msi-mystic-light*`, `evision-keyboard` V2) and batch 2 (`asus-aura-*`, `coolermaster-*`, `corsair-*`, `hyperx-*`, `lenovo-legion-*`, `logitech-*`, `roccat-*`, `thermaltake-riing`, `wooting*`), the network plugins. Hardware-tested: MSI 7C91 board, DeathAdder V2 Pro, Kraken X3, Arctis 5, Ballistix, RTX 3060, DualSense; every batch 2 and network plugin is untested on hardware (empty `tested` lists) |
 | Starter effects (solid, rainbow-wave, audio-bars, screen-ambience, test-pattern) | Done | `effects/` has 13 CC0 effects |
 | `components/` own component library | Done | `components/*.json`: 50 CC0 descriptors generated by `tools/components/generate.mjs`, checked by `plugins/_testkit/components.test.mjs` and `crates/lightloom-daemon/tests/components.rs`; shipped by `stage-windows.ps1`. Ring geometry and wire order approximate (`components/README.md`) |
 | `schemas/` (manifest, ControllableParameters, component, layout, effect meta) | Done | `schemas/*.schema.json`, `tests/schemas/validate_corpus.py`, `ci.yml` job `schemas` |
-| OpenAPI for the native API | Done | `docs/api/openapi.yaml` (OpenAPI 3.1); `crates/lightloom-api/tests/openapi.rs` checks it against the router and `NATIVE_ROUTES`. The compat API is not described |
+| OpenAPI for the native and compatible APIs | Done | `docs/api/openapi.yaml` (native, OpenAPI 3.1) and `docs/api/compat-openapi.yaml` (SignalRGB-compatible REST 16038 and canvas events 16034); `crates/lightloom-api/tests/{openapi,compat_openapi}.rs` check them against the routers, `NATIVE_ROUTES` and `COMPAT_ROUTES` |
 | `sdk/lightloom.d.ts` | Done | `sdk/lightloom.d.ts`, members tagged `@signalrgb` / `@lightloom` / `@unimplemented` / `@stub`; `tsc -p sdk` in CI |
 | `sdk/` Node simulator (mock HAL recorder) | Done | `sdk/simulator` (over `plugins/_testkit`); `lightloom bench --mock` runs the real host against a scripted device |
 | `sdk/` plugin lint | Done | `sdk/lint`; `plugins/_testkit/manifests.test.mjs` runs it over the first-party plugins |
 | `tests/conformance/` (corpus runner, HID fixtures, PSNR harness) | Partial | `tests/conformance/run.py` (+ `test_run.py`, in `ci.yml`), `tools/effects-bench/psnr.py` hook; no recorded `HidTrace` fixtures yet (see M2) |
 | `tests/integration/` | Partial | crate integration tests (`crates/*/tests/`); no top-level directory |
 | `tools/gen-udev` | Done | `lightloom udev generate` (`tools/gen-udev/README.md` points there) |
-| `tools/pawnio-hash-pin` | Missing (covered) | pins are compiled into `crates/lightloom-iobroker/src/pins.rs` and fetched/verified by `tools/package/fetch-pawnio-modules.ps1`; no tool to recompute them |
-| `tools/shm-dump` | Missing | planned in `tools/README.md` |
+| `tools/pawnio-hash-pin` | Done | `tools/pawnio-hash-pin/pawnio-hash-pin.ps1` (recompute from the release or a folder, check against `pins.rs` and `fetch-pawnio-modules.ps1`, `-Emit` for a release bump; run against 0.2.11: all match); drift test `crates/lightloom-iobroker/tests/pawnio_pins.rs` |
+| `tools/shm-dump` | Done | `lightloom shm-dump [RING] [--out] [--json]` (`crates/lightloom-cli/src/shm.rs`, `tools/shm-dump/README.md`) |
 | `tools/effects-bench`, `tools/device-probe`, `tools/package` | Done | `tools/README.md`; `tools/package/{stage-windows.ps1,stage-linux.sh,check-imports.ps1,fetch-pawnio-modules.ps1}` |
 | `prelude/` | Done | `prelude/*.js`, `prelude/modules/*.js`, 7 test files |
 | `docs/security.md`, `docs/linux-porting.md` | Done | both present |
@@ -290,20 +290,18 @@ the WiX installer and issue forms.
    - A TLS stack for the network host (Hue Entertainment needs DTLS-PSK). Touches `lightloom-plugin-host/src/net/`, `host.js`.
 9. **WP-SOURCES: plugin sources manager. Size M. Optional under the standalone direction.**
    - Git or HTTPS sources per `schemas/plugin-source.schema.json`, licence acknowledgement, hash pinning, update only on user action.
-10. **WP-LOGS: dashboard log page. Size S.**
-    - History from the log files in `%LOCALAPPDATA%\Lightloom\logs`, level filter, per-plugin view. Touches `lightloom-api/src/server.rs`, `ui/src/components/`.
-11. **WP-PICKERS: audio output and display pickers in Settings. Size S.**
-    - `lightloom_inputs::audio::output_devices()` and `screen::displays()` exist; only `config.toml` sets them today.
+10. **WP-LOGS: dashboard log page.** Done (`feature/housekeeping`).
+11. **WP-PICKERS: audio output and display pickers in Settings.** Done (`feature/housekeeping`).
 12. **WP-L3: nusb on Linux. Size S.** `lightloom-hal-linux/src/usb.rs` behind the `UsbBackend` trait.
 13. **WP-L6: PipeWire audio and screen capture. Size M.**
     - `lightloom-inputs` Linux backends: cpal ALSA/PipeWire monitor; portal ScreenCast + PipeWire for zones.
 14. **WP-L8: Linux desktop integration. Size S.** logind `PrepareForSleep` power source, freedesktop notifications, StatusNotifierItem tray.
 15. **WP-L7 remainder: release. Size M.**
     - Stage the CEF renderer into the Linux tarball/AppImage (`release.yml` `linux`, `stage-linux.sh --require-renderer`); build the Flatpak in a workflow; `cargo dist init` replacing the hand-written `release.yml` (keep cargo-auditable and SBOM).
-16. **Docs and tools. Size S.** Refresh `crates/README.md`; describe the compat API in OpenAPI; `tools/shm-dump`; `tools/pawnio-hash-pin`.
+16. **Docs and tools.** Done (`feature/housekeeping`): `crates/README.md`, `docs/api/compat-openapi.yaml`, `tools/shm-dump`, `tools/pawnio-hash-pin`.
 
 ### Suggested order
 
-- **Now (no user needed):** WP-LOGS, WP-PICKERS, the docs/tools package, WP-L3, WP-L8 in parallel; then WP-MACROS (b), WP-L7 remainder.
+- **Now (no user needed):** WP-L3, WP-L8 in parallel; then WP-MACROS (b), WP-L7 remainder.
 - **Then:** WP-LCD, WP-SENSORS-FANS (fan half), WP-L6, WP-DTLS.
 - **With the user:** WP-SOAK, WP-EVISION-V1, WP-SIGN, WP-LINUX-RUN whenever the hardware, capture, account or machine is available.

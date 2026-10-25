@@ -7,7 +7,8 @@
 //! it starts `lightloomd.exe` from its own directory with a hidden console
 //! (`CREATE_NO_WINDOW`: the daemon still gets the log-off and shut-down
 //! events and restores the devices), its output in `<data dir>\logs\
-//! lightloomd.log` (the previous run's in `lightloomd.old.log`), and exits.
+//! lightloomd.log` (the previous run's in `lightloomd.old.log`; the path goes
+//! to the daemon in `LIGHTLOOM_LOG_FILE` for the dashboard's log page), and exits.
 //! Other arguments go to `lightloomd` as they are.
 //!
 //! `lightloomw --stop` asks a running daemon to stop (`POST /v1/shutdown` with
@@ -204,8 +205,10 @@ fn main() {
         cmd.current_dir(dir);
     }
     if let Ok((out, err)) = log_files(&paths.data.join("logs")) {
-        if let (Ok(o), Ok(e)) = (std::fs::File::create(out), std::fs::File::create(err)) {
+        if let (Ok(o), Ok(e)) = (std::fs::File::create(&out), std::fs::File::create(err)) {
             cmd.stdout(o).stderr(e);
+            // The dashboard's log page reads it (and the previous run's).
+            cmd.env(lightloom_daemon::logs::LOG_FILE_ENV, &out);
         }
     }
     #[cfg(windows)]

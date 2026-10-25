@@ -30,7 +30,7 @@ here.)
    button in Settings are planned). Without it `lightloom` and the daemon say that RAM
    lighting is off (from PawnIO's uninstall entry) and GPU lighting keeps working.
 2. Once, from an elevated prompt: `lightloom-setup --smbus --pawnio-modules <dir>`, with
-   `<dir>` the PawnIO.Modules 0.2.11 release as downloaded (`SmbusPIIX4.bin`, `Echo.bin`,
+   `<dir>` the PawnIO.Modules 0.2.11 release as downloaded (`SmbusPIIX4.bin`, `SmbusI801.bin`, `Echo.bin`,
    `COPYING`; SHA-256 pinned). It registers the `LightloomIoBroker` service. A broker of an
    older protocol (before v3) is reported as such and not used: run it again to update.
 3. SignalRGB and OpenRGB closed: Lightloom never touches the SMBus alongside them.

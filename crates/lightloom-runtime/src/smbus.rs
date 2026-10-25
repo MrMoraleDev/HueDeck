@@ -12,6 +12,10 @@
 //! [`SmbusHardware::notes`] says what is missing (PawnIO not installed, too
 //! old, or the broker not registered), from PawnIO's uninstall entry.
 //!
+//! On Linux every bus (chipset SMBus and the GPUs' I2C ports alike) is a
+//! `/dev/i2c-*` adapter opened by this process (`lightloom_hal_linux::i2c`:
+//! udev rules and group `i2c`, no helper, no NvAPI or ADL), with the same policy.
+//!
 //! Discovery runs plugins' `Scan(bus)`, which may write; it is refused while
 //! SignalRGB, OpenRGB or a vendor lighting service runs
 //! ([`crate::conflicts::smbus_blockers`]), with no bypass. The callers hold
@@ -49,31 +53,42 @@ impl std::fmt::Debug for SmbusHardware {
 
 impl SmbusHardware {
     /// Open the buses: one per NVIDIA GPU (NvAPI), one per AMD GPU (ADL),
-    /// then the chipset buses of the I/O broker. Nothing is written; NvAPI and
-    /// ADL are initialised and the GPUs enumerated, the broker asked for its
-    /// bus list.
+    /// then the chipset buses of the I/O broker (Linux: the `/dev/i2c-*`
+    /// adapters, GPUs included). Nothing is written; NvAPI and ADL are
+    /// initialised and the GPUs enumerated, the broker asked for its bus list
+    /// (Linux: the nodes opened, `I2C_FUNCS`).
     pub fn open() -> Self {
         let mut notes = Vec::new();
-        let (mut buses, nvapi) = match lightloom_nvapi::NvapiHub::start() {
-            Ok(hub) => {
-                let buses: Vec<BusHandle> = hub
-                    .buses()
-                    .into_iter()
-                    .map(|b| BusHandle::new(Box::new(b)))
-                    .collect();
-                if buses.is_empty() {
-                    notes.push("NvAPI found no NVIDIA GPU".to_string());
+        let (mut buses, nvapi) = if cfg!(target_os = "linux") {
+            // GPU I2C comes from /dev/i2c-* there (chipset_buses).
+            (Vec::new(), None)
+        } else {
+            match lightloom_nvapi::NvapiHub::start() {
+                Ok(hub) => {
+                    let buses: Vec<BusHandle> = hub
+                        .buses()
+                        .into_iter()
+                        .map(|b| BusHandle::new(Box::new(b)))
+                        .collect();
+                    if buses.is_empty() {
+                        notes.push("NvAPI found no NVIDIA GPU".to_string());
+                    }
+                    (buses, Some(hub))
                 }
-                (buses, Some(hub))
-            }
-            Err(e) => {
-                notes.push(format!(
-                    "No NVIDIA driver / NvAPI unavailable ({e}): no NVIDIA GPU lighting"
-                ));
-                (Vec::new(), None)
+                Err(e) => {
+                    notes.push(format!(
+                        "No NVIDIA driver / NvAPI unavailable ({e}): no NVIDIA GPU lighting"
+                    ));
+                    (Vec::new(), None)
+                }
             }
         };
-        let (amd, adl) = amd_gpu_buses(lightloom_adl::AdlHub::start(), &mut notes);
+        let (amd, adl) = if cfg!(target_os = "linux") {
+            // AMD GPU I2C comes from /dev/i2c-* there too.
+            (Vec::new(), None)
+        } else {
+            amd_gpu_buses(lightloom_adl::AdlHub::start(), &mut notes)
+        };
         buses.extend(amd);
         buses.extend(chipset_buses(&mut notes));
         Self {
@@ -206,8 +221,21 @@ fn chipset_buses(notes: &mut Vec<String>) -> Vec<BusHandle> {
     }
 }
 
-/// No chipset SMBus outside Windows yet (Linux: `/dev/i2c-*` later).
-#[cfg(not(windows))]
+/// Linux: every `/dev/i2c-*` adapter Lightloom uses, chipset and GPU
+/// (`lightloom_hal_linux::i2c::open_buses`); notes say which could not be
+/// opened (udev rules, group `i2c`, the i2c-dev module).
+#[cfg(target_os = "linux")]
+fn chipset_buses(notes: &mut Vec<String>) -> Vec<BusHandle> {
+    let (buses, missing) = lightloom_hal_linux::i2c::open_buses();
+    notes.extend(missing);
+    if buses.is_empty() {
+        notes.push("no SMBus / GPU I2C adapter available: no RAM or GPU I2C lighting".into());
+    }
+    buses.into_iter().map(|b| BusHandle::new(Box::new(b))).collect()
+}
+
+/// No SMBus on other systems.
+#[cfg(not(any(windows, target_os = "linux")))]
 fn chipset_buses(_notes: &mut Vec<String>) -> Vec<BusHandle> {
     Vec::new()
 }

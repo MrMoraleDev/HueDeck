@@ -1315,6 +1315,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightloom-tray"
+version = "0.0.1"
+dependencies = [
+ "lightloom-api",
+ "lightloom-runtime",
+ "serde_json",
+ "windows",
+]
+
+[[package]]
 name = "humantime"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

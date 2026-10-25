@@ -2062,8 +2062,9 @@ const METADATA = [
   "SmbusBatchWrites",
   "SaveCapabilities",
   "ShutdownModes",
+  "HardwareModes",
 ];
-const LIFECYCLE = ["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService", "SaveToDevice"];
+const LIFECYCLE = ["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService", "SaveToDevice", "SetHardwareMode"];
 
 function describeError(e) {
   if (e && typeof e === "object") {

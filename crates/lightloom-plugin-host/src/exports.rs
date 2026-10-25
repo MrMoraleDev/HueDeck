@@ -282,6 +282,9 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
     if let Some(v) = get("ShutdownModes") {
         meta.shutdown_modes = crate::save::shutdown_modes_from_json(v, &mut warnings);
     }
+    if let Some(v) = get("HardwareModes") {
+        meta.hardware_modes = crate::hwmode::modes_from_json(v, &mut warnings);
+    }
     if let Some(a) = get("SmbusBuses").and_then(J::as_array) {
         for v in a {
             let name = as_string(v).unwrap_or_default();
@@ -312,10 +315,17 @@ pub fn read_exports(source_path: &Path, ns: &J) -> ExportsReading {
             .map(|a| a.iter().filter_map(as_string).collect())
             .unwrap_or_default(),
         save_to_device: flag("SaveToDevice"),
+        set_hardware_mode: flag("SetHardwareMode"),
     };
     if meta.save_caps.is_some() && !meta.lifecycle.save_to_device {
         warnings.push("SaveCapabilities() without a SaveToDevice(request) export: nothing is saved".into());
         meta.save_caps = None;
+    }
+    if !meta.hardware_modes.is_empty() && !meta.lifecycle.set_hardware_mode {
+        warnings.push(
+            "HardwareModes() without a SetHardwareMode(request) export: no hardware mode is offered".into(),
+        );
+        meta.hardware_modes.clear();
     }
 
     let errors = ns

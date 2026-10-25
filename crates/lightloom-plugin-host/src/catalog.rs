@@ -43,7 +43,7 @@ use std::time::{Duration, UNIX_EPOCH};
 const SKIP_DIRS: &[&str] = &["tests", "test", "fixtures", "_testkit", "node_modules", ".git"];
 
 /// Bumped whenever what the cache stores (or how metadata is read) changes.
-const INDEX_VERSION: u32 = 6;
+const INDEX_VERSION: u32 = 7;
 
 /// One discovered plugin.
 #[derive(Clone, Debug)]

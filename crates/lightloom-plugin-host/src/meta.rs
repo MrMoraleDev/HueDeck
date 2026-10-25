@@ -72,6 +72,7 @@ pub const METADATA_EXPORTS: &[&str] = &[
     "SmbusBatchWrites",
     "SaveCapabilities",
     "ShutdownModes",
+    "HardwareModes",
 ];
 
 /// Exports the host calls during the device lifecycle (never at scan time).
@@ -325,6 +326,9 @@ pub struct LifecycleExports {
     /// `SaveToDevice(request)` (Lightloom extension, [`crate::save`]).
     #[serde(default)]
     pub save_to_device: bool,
+    /// `SetHardwareMode(request)` (Lightloom extension, [`crate::hwmode`]).
+    #[serde(default)]
+    pub set_hardware_mode: bool,
 }
 
 impl LifecycleExports {
@@ -558,6 +562,10 @@ pub struct PluginMeta {
     /// the plugin's `Shutdown(SystemSuspending, mode)` carries out itself.
     #[serde(default)]
     pub shutdown_modes: Vec<crate::save::ShutdownMode>,
+    /// `HardwareModes()` (Lightloom extension): the device's built-in effects
+    /// `SetHardwareMode(request)` puts it in, live ([`crate::hwmode`]).
+    #[serde(default)]
+    pub hardware_modes: Vec<crate::hwmode::HardwareModeInfo>,
     /// Lifecycle exports the module declares.
     #[serde(default)]
     pub lifecycle: LifecycleExports,
@@ -608,6 +616,7 @@ impl PluginMeta {
             smbus_batch_writes: false,
             save_caps: None,
             shutdown_modes: Vec::new(),
+            hardware_modes: Vec::new(),
             lifecycle: LifecycleExports::default(),
         }
     }

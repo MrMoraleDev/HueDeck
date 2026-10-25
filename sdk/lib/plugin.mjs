@@ -50,10 +50,11 @@ export const METADATA = Object.freeze([
   "SmbusBatchWrites",
   "SaveCapabilities",
   "ShutdownModes",
+  "HardwareModes",
 ]);
 
 /** Lifecycle exports (host.js `LIFECYCLE`). */
-export const LIFECYCLE = Object.freeze(["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService", "SaveToDevice"]);
+export const LIFECYCLE = Object.freeze(["Validate", "Initialize", "Render", "Shutdown", "Scan", "DiscoveryService", "SaveToDevice", "SetHardwareMode"]);
 
 /**
  * Read the metadata exports of a plugin namespace: each one called when it is a function,

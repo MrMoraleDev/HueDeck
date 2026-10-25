@@ -462,3 +462,51 @@ test("the save byte is set only by SaveToDevice({action: 'save'})", async () => 
     restoreGlobals();
   }
 });
+
+// --- Lightloom extension: the hardware mode (static zones, live) ----------------------------------
+
+test("hardware mode: the board's static mode per zone, brightness level, save byte 0; null goes back to per-LED", async () => {
+  const { device, plugin, restoreGlobals } = await boot({ color: [0x40, 0x50, 0x60], headers: HEADERS });
+  try {
+    const modes = plugin.HardwareModes();
+    assert.deepEqual(modes, [{ id: "static", name: "Static (per zone)", colors: 5, colorNames: ["Onboard LEDs", "JRGB1", "JRGB2", "JRAINBOW1", "JRAINBOW2"], speed: false, brightness: true }]);
+    plugin.Initialize();
+    plugin.Render();
+    device.sent.length = 0;
+    const zones = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12], [13, 14, 15]];
+    plugin.SetHardwareMode({ id: "static", colors: zones, speed: null, brightness: 50 });
+    assert.deepEqual(device.sent.map((s) => s.reportId), [STREAM_ID, CONFIG_ID]);
+    assertBytes(device.sent[0].bytes, expectedStream([]), "black stream");
+    assertBytes(device.sent[1].bytes, staticPacket(zones, { options: 5 << 2 }), "static zones at level 5");
+    // No frames reach the board while it runs its own mode.
+    device.sent.length = 0;
+    plugin.Render();
+    assert.equal(device.sent.length, 0);
+    // "keep" leaves the mode as it is; Follow effect: reset and per-LED configuration, then frames again.
+    plugin.Shutdown(false, "keep");
+    assert.equal(device.sent.length, 0);
+    plugin.SetHardwareMode(null);
+    assert.deepEqual(device.sent.map((s) => s.reportId), [STREAM_ID, CONFIG_ID]);
+    assertBytes(device.sent[0].bytes, hexToBytes(fixture.reset), "reset");
+    assertBytes(device.sent[1].bytes, configWithCounts(60, 60), "per-LED mode again");
+    device.sent.length = 0;
+    plugin.Render();
+    assert.deepEqual(device.sent.map((s) => s.reportId), [STREAM_ID]);
+    assert.throws(() => plugin.SetHardwareMode({ id: "rainbow" }), /rainbow/);
+    // Missing colours are white, the brightness at least level 1.
+    device.sent.length = 0;
+    plugin.SetHardwareMode({ id: "static", colors: [[9, 9, 9]], brightness: 0 });
+    assertBytes(device.sent[1].bytes, staticPacket([[9, 9, 9], ...new Array(4).fill([255, 255, 255])], { options: 1 << 2 }), "defaults");
+    assert.ok(sentWith(device, CONFIG_ID).every((s) => s.bytes[0xB8] === 0x00), "never the save byte");
+  } finally {
+    restoreGlobals();
+  }
+  const { device: d2, plugin: p2, restoreGlobals: r2 } = await boot({ image: RESTORE.slice(0, 64) });
+  try {
+    p2.Initialize();
+    assert.throws(() => p2.SetHardwareMode({ id: "static", colors: [] }), /could not be read/);
+    assert.equal(d2.sent.length, 0, "no restore image: nothing at all");
+  } finally {
+    r2();
+  }
+});

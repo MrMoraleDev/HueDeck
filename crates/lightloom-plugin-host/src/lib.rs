@@ -57,6 +57,7 @@ pub mod device;
 pub mod discover;
 pub mod dryrun;
 pub mod exports;
+pub mod hwmode;
 pub mod input;
 pub mod lamparray;
 pub mod lcd;

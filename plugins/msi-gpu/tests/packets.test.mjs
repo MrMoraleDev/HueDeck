@@ -277,3 +277,81 @@ test("exit modes: keep shows the last colour, off static black, neither stored",
     restore();
   }
 });
+
+// Hardware modes (Lightloom extension): OpenRGB's mode switch, live, never the save register.
+test("hardware modes are the card's own effects, without Direct and Off", async () => {
+  const { plugin, restore } = await setup();
+  try {
+    const modes = plugin.HardwareModes();
+    assert.equal(modes.length, 19);
+    assert.ok(!modes.some((m) => m.id === "direct" || m.id === "off"));
+    assert.deepEqual(modes.find((m) => m.id === "rainbow"), { id: "rainbow", name: "Rainbow", colors: 0, speed: true, brightness: true });
+    assert.deepEqual(modes.find((m) => m.id === "static"), { id: "static", name: "Static", colors: 1, speed: false, brightness: true });
+    assert.equal(modes.find((m) => m.id === "fadein").colors, 2);
+  } finally {
+    restore();
+  }
+});
+
+test("SetHardwareMode: brightness, speed, mode, then the colours (DeviceUpdateMode + DeviceUpdateLEDs)", async () => {
+  const { mock, plugin, restore } = await setup();
+  try {
+    plugin.Initialize();
+    mock.ops.length = 0;
+    plugin.SetHardwareMode({ id: "breathing", colors: [[0x12, 0x34, 0x56]], speed: 100, brightness: 60 });
+    // Brightness 60 % = level 3 of 5 (x20); speed 100 % = MSI_GPU_SPEED_MAX = 0x01; MSI_GPU_MODE_BREATHING.
+    assert.deepEqual(writes(mock), [[0x36, 60], [0x38, 0x01], [0x22, 0x04], [0x26, 0], [0x30, 0x12], [0x31, 0x34], [0x32, 0x56]]);
+    mock.ops.length = 0;
+    plugin.SetHardwareMode({ id: "rainbow", colors: [], speed: 0, brightness: 100 });
+    assert.deepEqual(writes(mock), [[0x36, 100], [0x38, 0x04], [0x22, 0x08]], "no colour for Rainbow");
+    mock.ops.length = 0;
+    plugin.SetHardwareMode({ id: "fadein", colors: [[1, 2, 3], [4, 5, 6]], speed: 50, brightness: 100 });
+    assert.deepEqual(writes(mock), [[0x36, 100], [0x38, 0x02], [0x22, 0x14], [0x26, 0], [0x27, 1], [0x28, 2], [0x29, 3], [0x2A, 4], [0x2B, 5], [0x2C, 6]]);
+    mock.ops.length = 0;
+    plugin.SetHardwareMode({ id: "static", colors: [[9, 9, 9]], brightness: 0 });
+    assert.deepEqual(writes(mock), [[0x36, 0], [0x22, 0x13], [0x26, 0], [0x30, 9], [0x31, 9], [0x32, 9]], "Static has no speed");
+    assert.throws(() => plugin.SetHardwareMode({ id: "disco" }), /disco/);
+  } finally {
+    restore();
+  }
+});
+
+test("in a hardware mode Render sends nothing; null goes back to Direct and the next frame goes out", async () => {
+  const { mock, plugin, restore } = await setup({ color: [0x12, 0x34, 0x56] });
+  try {
+    plugin.Initialize();
+    plugin.SetHardwareMode({ id: "rainbow", colors: [], speed: 50, brightness: 100 });
+    mock.ops.length = 0;
+    plugin.Render();
+    assert.deepEqual(mock.ops, []);
+    plugin.SetHardwareMode(null);
+    assert.deepEqual(writes(mock), pairs(expected.save_resume), "Direct: full brightness, static");
+    mock.ops.length = 0;
+    plugin.Render();
+    assert.deepEqual(writes(mock), pairs(expected.frame_123456));
+  } finally {
+    restore();
+  }
+});
+
+test("keep leaves the hardware mode; restore and off still work; 0x3F never written", async () => {
+  const { mock, plugin, restore } = await setup();
+  try {
+    plugin.Initialize();
+    for (const m of plugin.HardwareModes()) {
+      plugin.SetHardwareMode({ id: m.id, colors: [[1, 2, 3], [4, 5, 6]].slice(0, m.colors), speed: 30, brightness: 80 });
+    }
+    mock.ops.length = 0;
+    plugin.Shutdown(false, "keep");
+    assert.deepEqual(mock.ops, [], "keep: the hardware mode stays");
+    plugin.Shutdown(false, "off");
+    assert.deepEqual(writes(mock), pairs(expected.shutdown_off));
+    plugin.SetHardwareMode({ id: "wave", colors: [[7, 7, 7]], speed: 10, brightness: 10 });
+    mock.ops.length = 0;
+    plugin.Shutdown(false, "restore");
+    assert.deepEqual(writes(mock), pairs(expected.shutdown_restore));
+    assert.ok(mock.writes().every((w) => w.reg !== 0x3F), "never the save register");
+  } finally {
+    restore();
+  }
+});

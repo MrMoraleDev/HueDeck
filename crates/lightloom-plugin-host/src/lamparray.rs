@@ -165,6 +165,11 @@ fn apply_control(
         Control::BatteryWarningLevel(level) => dev.set_battery_warning_level(level),
         Control::ChildPlacement { uid, .. } => report.notes.push(format!("no endpoint {uid} to place")),
         Control::Placement(p) => dev.set_placement(p),
+        Control::HardwareMode(call) => {
+            if let Some(reply) = call.reply {
+                let _ = reply.send(Err("the built-in LampArray driver has no hardware modes".into()));
+            }
+        }
     }
 }
 

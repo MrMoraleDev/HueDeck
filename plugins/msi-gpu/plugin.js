@@ -16,6 +16,11 @@
 // SaveToDevice(request), the "Save to devices" button after the user confirmed it: write() skips
 // it everywhere else, and the host refuses it (SmbusDeniedRegisters()) outside that one call.
 // The host renders SMBus devices at most every 33 ms, OpenRGB's TimeToSend for this controller.
+//
+// Hardware modes (Lightloom extension, docs/host-api/hardware-modes.md): the card's own effects of
+// RGBController_MSIGPU (every mode but "Direct", which is the canvas, and "Off", which OpenRGB
+// never writes), set live with DeviceUpdateMode() and DeviceUpdateLEDs(): never register 0x3F, so
+// the card forgets the mode at the next power cycle.
 
 /* global device, bus, shutdownColor */
 
@@ -66,6 +71,10 @@ export function SmbusDeniedRegisters() { return [REG_SAVE]; }
 // Shutdown(SystemSuspending, mode) carries out.
 export function SaveCapabilities() { return { static: true, effects: ["spectrum", "breathing"] }; }
 export function ShutdownModes() { return ["restore", "keep", "off"]; }
+// The card's built-in effects (see HW_MODES), set live by SetHardwareMode(request).
+export function HardwareModes() {
+  return HW_MODES.map((m) => ({ id: m.id, name: m.name, colors: m.colors, speed: m.speed, brightness: true }));
+}
 
 // Registers (MSIGPUController.h).
 const REG_BRIGHTNESS = 0x36;
@@ -100,6 +109,36 @@ const SAVE_MODES = {
 };
 // OpenRGB "Direct" brightness: MSI_GPU_BRIGHTNESS_MAX (5) * MSI_GPU_BRIGHTNESS_MULTI (20).
 const BRIGHTNESS_FULL = 5 * 20;
+const BRIGHTNESS_MULTI = 20;
+const BRIGHTNESS_MAX = 5;
+// speed_values (RGBController_MSIGPU.cpp), indexed by MSI_GPU_SPEED_MIN / _MID / _MAX.
+const SPEED_VALUES = [0x04, 0x02, 0x01];
+
+// The modes of RGBController_MSIGPU with their MSI_GPU_MODE_* values, minus "Direct" (the canvas)
+// and "Off" (DeviceUpdateMode() writes nothing for it). colors: 1 = colour 1 (R1/G1/B1, the modes
+// with MODE_FLAG_HAS_PER_LED_COLOR); "Fadein" takes colours 2 and 3 instead, as DeviceUpdateLEDs()
+// sends them. Every mode has a brightness; all but "Static" a speed.
+const HW_MODES = [
+  { id: "static", name: "Static", value: MODE_STATIC, colors: 1, speed: false },
+  { id: "rainbow", name: "Rainbow", value: MODE_RAINBOW, colors: 0, speed: true },
+  { id: "raindrop", name: "Raindrop", value: 0x1A, colors: 1, speed: true },
+  { id: "magic", name: "Magic", value: 0x07, colors: 0, speed: true },
+  { id: "patrolling", name: "Patrolling", value: 0x05, colors: 1, speed: true },
+  { id: "streaming", name: "Streaming", value: 0x06, colors: 0, speed: true },
+  { id: "lightning", name: "Lightning", value: 0x15, colors: 0, speed: true },
+  { id: "wave", name: "Wave", value: 0x1F, colors: 1, speed: true },
+  { id: "meteor", name: "Meteor", value: 0x16, colors: 1, speed: true },
+  { id: "stack", name: "Stack", value: 0x0D, colors: 1, speed: true },
+  { id: "rhythm", name: "Rhythm", value: 0x0B, colors: 1, speed: true },
+  { id: "flowing", name: "Flowing", value: 0x09, colors: 1, speed: true },
+  { id: "whirling", name: "Whirling", value: 0x0F, colors: 1, speed: true },
+  { id: "twisting", name: "Twisting", value: 0x11, colors: 1, speed: true },
+  { id: "laminating", name: "Laminating", value: 0x1D, colors: 1, speed: true },
+  { id: "fadein", name: "Fade in", value: 0x14, colors: 2, speed: true },
+  { id: "breathing", name: "Breathing", value: MODE_BREATHING, colors: 1, speed: true },
+  { id: "flashing", name: "Flashing", value: 0x02, colors: 1, speed: true },
+  { id: "doubleflashing", name: "Double flashing", value: 0x03, colors: 1, speed: true },
+];
 
 // What the RGBController constructor reads, in its order: SetupZones() reads the three colours,
 // then GetDeviceMode(), GetSpeed() and the brightness. Kept to restore the card on Shutdown().
@@ -124,6 +163,8 @@ let saved = null;
 let lastColor = null;
 let framesSinceSend = 0;
 let failureLogged = false;
+// The hardware mode the card runs (null: Direct, the canvas).
+let hwMode = null;
 
 // The colour is sent again after this many unchanged frames (about 2 s at 30 fps), so a register
 // the card dropped, or another program changed, does not stay wrong until the colour changes.
@@ -178,6 +219,7 @@ export function Initialize() {
   write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
   write(REG_MODE, MODE_STATIC);
   lastColor = null;
+  hwMode = null;
 }
 
 // RGBController_MSIGPU::DeviceUpdateLEDs(): register 0x26 cleared, then SetRGB1. True when every
@@ -190,7 +232,59 @@ function setColor(r, g, b) {
   return ok;
 }
 
+// MSIGPUController::SetRGB2() / SetRGB3().
+function setColorAt(regs, [r, g, b]) {
+  write(regs[0], r & 0xFF);
+  write(regs[1], g & 0xFF);
+  write(regs[2], b & 0xFF);
+}
+
+const percent = (v, fallback) => (Number.isFinite(Number(v)) ? Math.min(100, Math.max(0, Number(v))) : fallback);
+
+// Hardware modes (Lightloom extension): put the card in one of its own effects, live, the way
+// OpenRGB switches modes: DeviceUpdateMode() (brightness, the speed for modes that have one, the
+// mode), then DeviceUpdateLEDs() for modes with colours (0x26, colour 1, or colours 2 and 3 for
+// Fade in). request = null goes back to Direct for the canvas. Never touches register 0x3F.
+//   request = { id, colors: [[r, g, b], ...], speed: 0-100, brightness: 0-100 }
+export function SetHardwareMode(request) {
+  if (!request) {
+    write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
+    write(REG_MODE, MODE_STATIC);
+    lastColor = null;
+    hwMode = null;
+    return true;
+  }
+  const mode = HW_MODES.find((m) => m.id === request.id);
+  if (!mode) {
+    throw new Error(`MSI GPU: no hardware mode "${request.id}"`);
+  }
+  const colors = Array.isArray(request.colors) ? request.colors : [];
+  const color = (i) => (Array.isArray(colors[i]) ? colors[i] : [255, 255, 255]);
+  // modes[].brightness 0-5 times MSI_GPU_BRIGHTNESS_MULTI; speed index MIN / MID / MAX.
+  const level = Math.round((percent(request.brightness, 100) / 100) * BRIGHTNESS_MAX);
+  write(REG_BRIGHTNESS, level * BRIGHTNESS_MULTI);
+  if (mode.speed) {
+    write(REG_SPEED, SPEED_VALUES[Math.round(percent(request.speed, 50) / 50)]);
+  }
+  write(REG_MODE, mode.value);
+  if (mode.colors === 2) {
+    write(REG_UNKNOWN, 0x00);
+    setColorAt([REG_R2, REG_G2, REG_B2], color(0));
+    setColorAt([REG_R3, REG_G3, REG_B3], color(1));
+  } else if (mode.colors === 1) {
+    const [r, g, b] = color(0);
+    setColor(r & 0xFF, g & 0xFF, b & 0xFF);
+  }
+  lastColor = null;
+  hwMode = mode.id;
+  return true;
+}
+
 export function Render() {
+  // The host stops calling Render() in a hardware mode; nothing to send then anyway.
+  if (hwMode !== null) {
+    return;
+  }
   const [r, g, b] = device.color(0, 0);
   const same = lastColor && lastColor[0] === r && lastColor[1] === g && lastColor[2] === b;
   if (same && ++framesSinceSend < RESEND_FRAMES) {
@@ -254,6 +348,8 @@ export function SaveToDevice(request) {
   write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
   write(REG_MODE, MODE_STATIC);
   lastColor = null;
+  // (A hardware mode the card ran is set again by the host after the save.)
+  hwMode = null;
   return result;
 }
 
@@ -273,9 +369,13 @@ function hex(r, g, b) {
 //   "restore" (and SignalRGB, which passes no mode): the card as it was at start (or as last
 //     stored by SaveToDevice): colours, speed and brightness back, the mode last (it applies
 //     them). When the startup state could not be read, the shutdown colour in static mode.
-//   "keep": the last colour Lightloom showed, in static mode (not stored: gone at the next boot).
+//   "keep": the last colour Lightloom showed, in static mode (not stored: gone at the next boot);
+//     in a hardware mode, that mode stays (it is not stored either).
 //   "off": static black (not stored).
 export function Shutdown(SystemSuspending, mode) {
+  if (mode === "keep" && hwMode !== null) {
+    return;
+  }
   if (mode === "keep") {
     const [r, g, b] = lastColor ?? device.color(0, 0);
     setColor(r & 0xFF, g & 0xFF, b & 0xFF);

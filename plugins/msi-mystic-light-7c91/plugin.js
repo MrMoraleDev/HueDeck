@@ -30,6 +30,9 @@
 //     per-LED mode; Shutdown(false, "keep" | "off") (Lightloom exit modes) writes a static
 //     configuration with the last colours or black instead, save byte 0; Shutdown(true)
 //     (system suspend) paints the shutdown colour.
+//   * Hardware mode (Lightloom extension, docs/host-api/hardware-modes.md): SetHardwareMode puts
+//     the board in its own static mode, one colour per zone, with the save byte 0 (live only, gone
+//     at the next power cycle); SetHardwareMode(null) goes back to per-LED mode for the canvas.
 
 // ---------------------------------------------------------------------------------------------
 // Metadata (call-if-function exports, SignalRGB-compatible)
@@ -57,6 +60,11 @@ export function ConflictingProcesses() {
 // Lightloom extensions (docs/host-api/save-shutdown.md).
 export function SaveCapabilities() { return { static: true, effects: ["breathing"] }; }
 export function ShutdownModes() { return ["restore", "keep", "off"]; }
+// The board's own static mode, one colour per zone (SetHardwareMode). Static zones only: the
+// board's animated modes are left out until they are checked on the bench.
+export function HardwareModes() {
+  return [{ id: "static", name: "Static (per zone)", colors: SAVE_ZONE_NAMES.length, colorNames: SAVE_ZONE_NAMES.slice(), speed: false, brightness: true }];
+}
 
 /* global device, LightingMode, forcedColor, shutdownColor */
 export function ControllableParameters() {
@@ -150,6 +158,7 @@ let configuredCounts = null;             // strip LED counts the controller is c
 let lastStream = null;                   // last 0x53 packet written
 let lastStreamAt = -Infinity;            // Date.now() of that write
 let wrote = false;                       // whether this session changed the controller at all
+let hwMode = null;                       // the hardware mode the board runs (null: per-LED, the canvas)
 
 // Render() resends an unchanged stream only once this much time has passed, so a static colour is
 // not pushed to the controller 30 times per second. A changed stream is sent immediately.
@@ -169,6 +178,7 @@ export function Initialize() {
   writesEnabled = false;
   configuredCounts = null;               // (re-)configure before the first frame
   lastStreamAt = -Infinity;
+  hwMode = null;
 
   // GET_REPORT(Feature, 0x52). The host returns the report-id-prefixed byte array; the number of
   // bytes the device actually returned is getLastReadSize() when the host provides it. Both the
@@ -212,10 +222,39 @@ export function Initialize() {
 }
 
 export function Render() {
-  if (!writesEnabled) {
+  // In a hardware mode the host calls no Render(); nothing to stream then anyway.
+  if (!writesEnabled || hwMode !== null) {
     return;
   }
   paint(colourSource());
+}
+
+// Hardware mode (Lightloom extension): the board's own static mode, request.colors one per zone
+// (onboard, JRGB1, JRGB2, JRAINBOW1, JRAINBOW2), brightness 0-100 as MSI_BRIGHTNESS_LEVEL_10..100
+// in the options byte. The same static configuration as the "keep" exit mode, save byte 0: the
+// board shows it until the next power cycle. request = null puts the board back in per-LED mode.
+export function SetHardwareMode(request) {
+  if (!writesEnabled) {
+    throw new Error("MSI 185: the board's configuration could not be read at start, so Lightloom writes nothing to it");
+  }
+  if (!request) {
+    if (hwMode !== null) {
+      configure(stripCounts());
+    }
+    hwMode = null;
+    return true;
+  }
+  if (request.id !== "static") {
+    throw new Error(`MSI 185: no hardware mode "${request.id}"`);
+  }
+  const colours = Array.isArray(request.colors) ? request.colors : [];
+  const zones = SAVE_ZONE_NAMES.map((_, i) => (isByteArray(colours[i], 3) ? colours[i] : [255, 255, 255]));
+  const percent = Number.isFinite(Number(request.brightness)) ? Number(request.brightness) : 100;
+  const level = Math.min(10, Math.max(1, Math.round(percent / 10)));
+  sendStream(blankStream());
+  sendConfig(staticConfig(zones, MODE_STATIC, false, level));
+  hwMode = "static";
+  return true;
 }
 
 export function Shutdown(SystemSuspending, mode) {
@@ -225,6 +264,10 @@ export function Shutdown(SystemSuspending, mode) {
   if (SystemSuspending) {
     const rgb = hexToRgb(param("shutdownColor", "#000000"));
     paint(() => rgb);
+    return;
+  }
+  if (mode === "keep" && hwMode !== null) {
+    // The board's own static zones stay (volatile as well).
     return;
   }
   if (mode === "keep" || mode === "off") {
@@ -285,6 +328,8 @@ export function SaveToDevice(request) {
   const stored = readConfig();
   restoreImage = stored ?? packet.map((b, i) => (i === SAVE_FLAG_OFFSET ? 0 : i === CORSAIR_FLAGS_OFFSET ? (b + READBACK_BIAS) & 0xFF : b));
   configure(stripCounts());
+  // (A hardware mode the board ran is set again by the host after the save.)
+  hwMode = null;
   return result;
 }
 
@@ -324,10 +369,11 @@ const FLAG_SYNC_ONBOARD = 0x01;           // MSI_COLOR_FLAG_SYNC_SETTING_ONBOARD
 // zones get the effect, one colour (colour 1 = colour 2), full brightness and the custom-colour
 // flag; the onboard master also the onboard sync flag, so the nine onboard slots follow it (they
 // get the same record anyway); the JRAINBOW records keep the strips' LED counts. Every other byte
-// stays as the board had it. `save` sets the save byte.
-function staticConfig(zones, effect, save) {
+// stays as the board had it. `save` sets the save byte; `level` (1-10) replaces the full
+// brightness of a static configuration (the hardware mode's brightness).
+function staticConfig(zones, effect, save, level = null) {
   const packet = writableFrom(restoreImage);
-  const options = effect === MODE_BREATHING ? OPTIONS_BREATHING : OPTIONS_STATIC;
+  const options = effect === MODE_BREATHING ? OPTIONS_BREATHING : level === null ? OPTIONS_STATIC : level << 2;
   const record = (offset, rgb, flags) => {
     packet[offset] = effect;
     packet[offset + 1] = rgb[0] & 0xFF;

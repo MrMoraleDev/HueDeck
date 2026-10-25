@@ -36,6 +36,13 @@
 //! every write recorded and never sent, or a save with the SMBus
 //! `SmbusDeniedRegisters()` writable for that one call.
 //!
+//! A [`Control::HardwareMode`] (or [`SessionOptions::hardware_mode`], right after
+//! `Initialize()`) runs the plugin's `SetHardwareMode(request)` (Lightloom
+//! extension, [`crate::hwmode`]): live commands only, the SMBus denied registers
+//! stay refused. While the device is in a hardware mode the session calls no
+//! `Render()` (controls are still applied); `SetHardwareMode(null)` ("Follow
+//! effect") hands it back to the canvas.
+//!
 //! A raw USB device ([`SessionDevice::usb`], WinUSB through [`UsbTarget`]):
 //! a `rawusb` plugin skips steps 3 and 4 and opens the USB device instead (a
 //! device Windows bound no WinUSB driver to faults with "needs WinUSB driver");
@@ -72,6 +79,7 @@ use crate::catalog::CatalogEntry;
 use crate::children::ChildSetup;
 pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
 use crate::device::Protocol;
+use crate::hwmode::HardwareModeChoice;
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
@@ -410,6 +418,9 @@ pub struct SessionOptions {
     pub input_sink: Option<crate::input::InputSink>,
     /// Renders the LCD faces of `@SignalRGB/lcd` plugins; `None`: their LCDs show black.
     pub lcd: Option<Arc<dyn lightloom_lcd::LcdProvider>>,
+    /// A hardware mode to put the device in right after `Initialize()` (the
+    /// user's choice survives restarts and sleep); `None`: follow the canvas.
+    pub hardware_mode: Option<HardwareModeChoice>,
 }
 
 impl Default for SessionOptions {
@@ -432,6 +443,7 @@ impl Default for SessionOptions {
             battery_warning_level: DEFAULT_WARNING_LEVEL,
             input_sink: None,
             lcd: None,
+            hardware_mode: None,
         }
     }
 }
@@ -720,6 +732,8 @@ pub(crate) struct LiveStats {
     pub(crate) paused: AtomicBool,
     /// The stop is for system sleep: `Shutdown(true)`.
     pub(crate) suspending: AtomicBool,
+    /// The device runs one of its hardware modes (no `Render()`).
+    pub(crate) hardware_mode: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
     pub(crate) first_write_us: AtomicU64,
     /// The device and its children as canvas endpoints (empty until `Initialize()` ran).
@@ -769,6 +783,8 @@ pub struct LiveSnapshot {
     /// The device does not take writes now: a LampArray that Windows gives
     /// to another app ([`crate::lamparray`]).
     pub paused: bool,
+    /// The device runs one of its hardware modes: the canvas does not reach it.
+    pub hardware_mode: bool,
 }
 
 impl LiveStats {
@@ -843,6 +859,7 @@ impl LiveStats {
             },
             battery: *self.battery.lock().unwrap_or_else(|e| e.into_inner()),
             paused: self.paused.load(Ordering::Relaxed),
+            hardware_mode: self.hardware_mode.load(Ordering::Relaxed),
         }
     }
 }
@@ -876,6 +893,18 @@ pub enum Control {
     Alert(Option<Rgb>),
     /// `battery.lowBatteryWarningLevel` (percent).
     BatteryWarningLevel(u8),
+    /// Put the device in a hardware mode (`Some`) or back on the canvas (`None`).
+    HardwareMode(HardwareModeCall),
+}
+
+/// One `SetHardwareMode(request)` asked of a session.
+#[derive(Clone, Debug)]
+pub struct HardwareModeCall {
+    /// The mode (checked against the plugin's `HardwareModes()` by the session);
+    /// `None`: follow the canvas again.
+    pub choice: Option<HardwareModeChoice>,
+    /// Receives the outcome (also when the session stops first); `None`: nobody waits.
+    pub reply: Option<Sender<Result<(), String>>>,
 }
 
 /// One `SaveToDevice(request)` call asked of a session.
@@ -994,6 +1023,7 @@ pub fn spawn(
         hid_disconnected: AtomicBool::new(false),
         paused: AtomicBool::new(false),
         suspending: AtomicBool::new(false),
+        hardware_mode: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
         endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
         channels: std::sync::Mutex::new(Arc::new(Vec::new())),
@@ -1203,6 +1233,11 @@ fn run(
                     call.action,
                     "the device session is stopping",
                 ));
+            }
+            Control::HardwareMode(call) => {
+                if let Some(reply) = call.reply {
+                    let _ = reply.send(Err("the device session is stopping".into()));
+                }
             }
             _ => {}
         }
@@ -1506,6 +1541,15 @@ fn drive(
         live.publish_battery(dev.battery());
         live.publish_ui(dev.plugin_ui());
     }
+    // The hardware mode the device runs now (no Render() while there is one).
+    let mut hardware: Option<HardwareModeChoice> = None;
+    if let Some(choice) = &opts.hardware_mode {
+        match set_hardware_mode(rt, meta, Some(choice), &budgets, stop) {
+            Ok(applied) => hardware = applied,
+            Err(e) => report.notes.push(format!("SetHardwareMode at start: {e}")),
+        }
+        live.hardware_mode.store(hardware.is_some(), Ordering::Relaxed);
+    }
     let mut last_seq = 0;
     let mut consecutive_timeouts = 0u32;
     let mut lock_warned = false;
@@ -1565,10 +1609,41 @@ fn drive(
                             .push(format!("SaveToDevice ({}): {e}", action.as_str()));
                     }
                     let _ = reply.send(outcome);
+                    // A save ends in the plugin's streaming mode: back to the hardware mode.
+                    if let Some(choice) = hardware.clone() {
+                        if let Err(e) = set_hardware_mode(rt, meta, Some(&choice), &budgets, stop) {
+                            report.notes.push(format!("SetHardwareMode after the save: {e}"));
+                        }
+                    }
+                }
+                Control::HardwareMode(HardwareModeCall { choice, reply }) => {
+                    let result = match (&choice, &hardware) {
+                        // Already on the canvas: nothing to undo.
+                        (None, None) => Ok(None),
+                        _ => set_hardware_mode(rt, meta, choice.as_ref(), &budgets, stop),
+                    };
+                    let result = result.map(|applied| {
+                        hardware = applied;
+                        live.hardware_mode.store(hardware.is_some(), Ordering::Relaxed);
+                    });
+                    if let Err(e) = &result {
+                        report.notes.push(format!("SetHardwareMode: {e}"));
+                    }
+                    if let Some(reply) = reply {
+                        let _ = reply.send(result);
+                    }
                 }
                 other => apply_control(rt, shared, other, &budgets, stop, report),
             }
             controlled = true;
+        }
+        if hardware.is_some() {
+            // The device runs its own effect: the canvas does not reach it.
+            if controlled {
+                let dev = lock_device(shared);
+                live.publish_endpoints((dev.endpoint_views(&device.key), dev.children().channel_infos()));
+            }
+            continue;
         }
         if controlled || report.frames.is_multiple_of(30) {
             let dev = lock_device(shared);
@@ -1713,7 +1788,7 @@ fn apply_control(
             }
         }
         // Handled by the render loop.
-        Control::ShutdownMode(_) | Control::Save(_) => {}
+        Control::ShutdownMode(_) | Control::Save(_) | Control::HardwareMode(_) => {}
         Control::Placement(p) => {
             let changed = {
                 let mut dev = lock_device(shared);
@@ -1725,6 +1800,43 @@ fn apply_control(
                 hook("onBrightnessChanged", report);
             }
         }
+    }
+}
+
+/// One `SetHardwareMode(request)` call: `Some` checks the choice against the plugin's
+/// `HardwareModes()` and answers with the mode the device now runs; `None`
+/// (`SetHardwareMode(null)`) puts it back on the canvas. The SMBus denied
+/// registers stay refused (no save window is opened here).
+fn set_hardware_mode(
+    rt: &PluginRuntime,
+    meta: &PluginMeta,
+    choice: Option<&HardwareModeChoice>,
+    budgets: &Budgets,
+    stop: &Arc<AtomicBool>,
+) -> Result<Option<HardwareModeChoice>, String> {
+    if meta.hardware_modes.is_empty() || !meta.lifecycle.set_hardware_mode {
+        return Err("this device's plugin has no hardware modes".into());
+    }
+    let (request, applied) = match choice {
+        Some(c) => {
+            let c = c.normalized(&meta.hardware_modes)?;
+            (c.request_json(), Some(c))
+        }
+        None => (serde_json::Value::Null, None),
+    };
+    let called = catch_unwind(AssertUnwindSafe(|| {
+        rt.call_export_json(
+            "SetHardwareMode",
+            &request,
+            budgets.call(budgets.shutdown),
+            stop,
+        )
+    }));
+    match called {
+        Ok(Ok(Some(_))) => Ok(applied),
+        Ok(Ok(None)) => Err("the plugin has no SetHardwareMode(request) export".into()),
+        Ok(Err(e)) => Err(format!("SetHardwareMode failed: {e}")),
+        Err(panic) => Err(format!("SetHardwareMode panicked: {}", panic_text(panic.as_ref()))),
     }
 }
 

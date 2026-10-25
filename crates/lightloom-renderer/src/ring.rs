@@ -3,7 +3,9 @@
 //! [`lightloom_protocol::shm`] (64-byte header + 3 BGRA slots, per-slot seqlock).
 //!
 //! The region is a memory-mapped file ([`memmap2`]); `lightloom-renderer` maps it
-//! read-write and the daemon maps the same file read-only. Every word that can
+//! read-write and the daemon maps the same file read-only. On Linux the file sits on a tmpfs
+//! (`$XDG_RUNTIME_DIR` or `/dev/shm`, see [`crate::ipc`]), which makes it the same kind of object
+//! `shm_open` returns; on Windows it is a file in the daemon's work dir. Every word that can
 //! be touched by the other side while it reads is accessed atomically: header
 //! words as `AtomicU64`, pixels as `AtomicU32` (one BGRA pixel per word). The
 //! writer follows the protocol from the header docs:
@@ -171,12 +173,13 @@ impl RingWriter {
     /// Create (or truncate) `path`, size it for a `width`x`height` ring and map it read-write.
     pub fn create_file(path: &Path, width: u32, height: u32) -> Result<Self, RingError> {
         let header = FrameHeader::new(width, height);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(true);
+        // Owner-only, like `shm_open(name, O_CREAT, 0600)`: on Linux the ring lives on a tmpfs
+        // (`ipc::shm_base_dir`), inside a 0700 per-run dir; this covers a caller-chosen `--out`.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(path)?;
         file.set_len(header.total_bytes() as u64)?;
         // SAFETY: the file was just created/truncated and sized by us. Other processes are
         // expected to map it read-only and follow the seqlock protocol; if one truncated it

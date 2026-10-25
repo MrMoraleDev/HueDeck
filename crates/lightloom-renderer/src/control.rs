@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Control commands for a serving renderer (`--serve`): one JSON object per line on stdin,
-//! turned into JavaScript for the effect page. End of input means the daemon is gone.
+//! Control commands for a serving renderer (`--serve`): one JSON object per line on the control
+//! channel (stdin, or a unix socket on Linux: [`crate::ipc::ControlAddr`]), turned into
+//! JavaScript for the effect page. End of input means the daemon is gone.
 //!
 //! ```text
 //! {"cmd":"set","values":{"speed":5,"color":"#ff0000"}}   assign, then on<name>Changed()
@@ -78,6 +79,28 @@ pub fn parse_line(line: &str) -> Result<Option<Command>, String> {
         }
     }
     Ok(Some(cmd))
+}
+
+/// Next command from a control channel (stdin or a unix socket, see [`crate::ipc`]): blank
+/// lines are skipped, end of input or a read error is [`Command::Quit`] (the daemon is gone), and
+/// a line that does not parse (or is longer than [`MAX_LINE`]) is `Err` with the reason; the
+/// caller logs it and reads on.
+pub fn read_command<R: std::io::BufRead + ?Sized>(r: &mut R, buf: &mut Vec<u8>) -> Result<Command, String> {
+    use crate::ipc::{read_bounded_line, BoundedLine};
+    loop {
+        match read_bounded_line(r, buf, MAX_LINE) {
+            Ok(BoundedLine::Eof) | Err(_) => return Ok(Command::Quit),
+            Ok(BoundedLine::TooLong(n)) => {
+                return Err(format!("control line of {n} bytes is longer than {MAX_LINE}"))
+            }
+            Ok(BoundedLine::Line) => {
+                let line = std::str::from_utf8(buf).map_err(|e| format!("bad control line: {e}"))?;
+                if let Some(cmd) = parse_line(line)? {
+                    return Ok(cmd);
+                }
+            }
+        }
+    }
 }
 
 /// JS assigning `values` to the effect's controls, then calling their change hooks.
@@ -202,6 +225,29 @@ mod tests {
             parse_line(r#"{"cmd":"set","values":{"speed":3}}"#).unwrap(),
             Some(Command::Set { .. })
         ));
+    }
+
+    #[test]
+    fn commands_are_read_from_a_stream() {
+        let input = format!(
+            "\n{{\"cmd\":\"fps\",\"value\":15}}\nnot json\n{{\"cmd\":\"x\":\"{}\"}}\n{{\"cmd\":\"tap\",\"x\":1,\"y\":2}}",
+            "a".repeat(MAX_LINE)
+        );
+        let mut r = std::io::Cursor::new(input.into_bytes());
+        let mut buf = Vec::new();
+        assert_eq!(read_command(&mut r, &mut buf), Ok(Command::Fps { value: 15 }));
+        assert!(read_command(&mut r, &mut buf)
+            .unwrap_err()
+            .contains("bad control line"));
+        assert!(read_command(&mut r, &mut buf)
+            .unwrap_err()
+            .contains("longer than"));
+        assert_eq!(
+            read_command(&mut r, &mut buf),
+            Ok(Command::Tap { x: 1.0, y: 2.0 })
+        );
+        // end of input: the daemon is gone
+        assert_eq!(read_command(&mut r, &mut buf), Ok(Command::Quit));
     }
 
     #[test]

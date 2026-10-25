@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The CEF client against a stand-in renderer (`lightloom-renderer-fake`): frames
 //! flow into the store, a static page is kept alive, a crashed renderer is
-//! restarted, control values reach the renderer.
+//! restarted, control values reach the renderer (over stdin on Windows, over a
+//! unix socket elsewhere).
 
 use lightloom_engine::{FrameStore, CANVAS_HEIGHT, CANVAS_WIDTH};
 use lightloom_render::{CefRenderer, CefRendererConfig, RendererClient};
@@ -59,8 +60,29 @@ fn frames_flow_and_controls_reach_the_renderer() {
             .join()
             .unwrap();
     assert!(pushed);
+    let st = r.status();
     r.stop();
-    let log = std::fs::read_to_string(dir.join("frames-1.shm.control.log")).unwrap_or_default();
+    let ring = std::path::PathBuf::from(st.ring.clone().unwrap());
+    let control = st.control.clone().unwrap();
+    if cfg!(unix) {
+        // A private per-run dir (tmpfs on Linux) holds the ring and the control socket; it is
+        // gone once the run ended.
+        assert!(control.starts_with("unix:"), "{control}");
+        let run_dir = ring.parent().unwrap().to_path_buf();
+        assert!(!run_dir.exists(), "{} survived the run", run_dir.display());
+        if cfg!(target_os = "linux") && std::path::Path::new("/dev/shm").is_dir() {
+            assert!(
+                !ring.starts_with(&dir),
+                "ring {} is not on a tmpfs",
+                ring.display()
+            );
+        }
+    } else {
+        assert_eq!(control, "stdin");
+        assert_eq!(ring, dir.join("frames-1.shm"));
+        assert!(!ring.exists(), "the ring file is removed after the run");
+    }
+    let log = std::fs::read_to_string(dir.join("renderer-report.json.control.log")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(log.contains("\"set\"") && log.contains("\"speed\":3"), "{log}");
     assert!(

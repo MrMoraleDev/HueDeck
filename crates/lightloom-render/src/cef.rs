@@ -15,20 +15,34 @@
 //! * asks the renderer to paint at 15 fps once it delivers fewer than 20 fps
 //!   over 60 frames at a target of 30 or more (VMs, RDP, a busy GPU);
 //! * forwards control values ([`CefRenderer::set_properties`]) over the
-//!   renderer's stdin; a restarted renderer gets the latest values on its
-//!   command line;
+//!   renderer's control channel; a restarted renderer gets the latest values
+//!   on its command line;
 //! * forwards input data for the page's `window.engine`
 //!   ([`CefRenderer::push_engine_data`]: audio, screen zones, meters, sensors).
+//!
+//! Transport per platform (`lightloom_renderer::ipc`; the ring layout and the
+//! JSON control lines are the same everywhere):
+//!
+//! * Windows: the ring is `frames-<n>.shm` in the work dir, the control
+//!   channel is the renderer's stdin.
+//! * Unix (Linux): every run gets a private 0700 directory on a tmpfs
+//!   (`$XDG_RUNTIME_DIR`, else `/dev/shm`, else the work dir) holding the
+//!   ring and a unix socket the client listens on; the renderer gets
+//!   `--control unix:PATH` and connects. Lines sent before it connects are
+//!   buffered (up to [`PENDING_MAX`] bytes) and flushed on accept. If the
+//!   socket cannot be bound (path too long for `sun_path`), stdin is used.
+//!   The directory is removed when the run ends.
 
 use crate::{RenderError, RendererClient};
 use lightloom_engine::{Frame, FrameStore};
+use lightloom_renderer::ipc::{ControlAddr, PrivateDir};
 use lightloom_renderer::ring::RingReader;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::VecDeque;
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -44,6 +58,11 @@ const MAX_RESTART_DELAY: Duration = Duration::from_secs(30);
 const HEALTHY_AFTER: Duration = Duration::from_secs(60);
 /// Frames the downshift guard averages over.
 const DOWNSHIFT_WINDOW: usize = 60;
+/// Control bytes kept for a renderer that has not connected yet; beyond it `send` fails.
+pub const PENDING_MAX: usize = 4 * 1024 * 1024;
+/// A socket write blocked this long (renderer not reading) fails instead of stalling the caller.
+#[cfg(unix)]
+const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How to run the renderer.
 #[derive(Clone, Debug)]
@@ -80,12 +99,26 @@ pub struct CefStatus {
     /// Longest gap between the last frame of a renderer and the first frame of
     /// the one that replaced it, in milliseconds (devices held the last frame).
     pub max_recovery_ms: Option<f64>,
+    /// The current (or last) renderer's frame ring file.
+    pub ring: Option<String>,
+    /// Its control channel: `stdin` or `unix:PATH`.
+    pub control: Option<String>,
+}
+
+/// Where control lines go.
+enum Link {
+    /// No renderer is running.
+    Closed,
+    /// A renderer was started but has not connected to its socket yet: lines wait here.
+    Pending(Vec<u8>),
+    /// The renderer's stdin, or the accepted unix socket.
+    Open(Box<dyn Write + Send>),
 }
 
 struct Shared {
     stop: AtomicBool,
     status: Mutex<CefStatus>,
-    stdin: Mutex<Option<ChildStdin>>,
+    control: Mutex<Link>,
     properties: Mutex<Map<String, Value>>,
 }
 
@@ -94,12 +127,32 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Shared {
-    /// Send one control line; `false` when no renderer is listening.
+    /// Send one control line; `false` when no renderer is listening (or one that is still
+    /// connecting has [`PENDING_MAX`] bytes waiting already).
     fn send(&self, line: &str) -> bool {
-        let mut stdin = lock(&self.stdin);
-        match stdin.as_mut() {
-            Some(s) => s.write_all(line.as_bytes()).and_then(|()| s.flush()).is_ok(),
-            None => false,
+        match &mut *lock(&self.control) {
+            Link::Closed => false,
+            Link::Pending(buf) if buf.len() + line.len() > PENDING_MAX => false,
+            Link::Pending(buf) => {
+                buf.extend_from_slice(line.as_bytes());
+                true
+            }
+            Link::Open(w) => w.write_all(line.as_bytes()).and_then(|()| w.flush()).is_ok(),
+        }
+    }
+
+    /// The renderer connected: flush what waited, then write straight through.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    fn connect(&self, mut w: Box<dyn Write + Send>) {
+        let mut link = lock(&self.control);
+        let pending = match std::mem::replace(&mut *link, Link::Closed) {
+            Link::Pending(buf) => buf,
+            // The run ended meanwhile: leave the link closed.
+            Link::Closed => return,
+            Link::Open(_) => Vec::new(),
+        };
+        if w.write_all(&pending).and_then(|()| w.flush()).is_ok() {
+            *link = Link::Open(w);
         }
     }
 
@@ -141,7 +194,7 @@ impl CefRenderer {
             shared: Arc::new(Shared {
                 stop: AtomicBool::new(false),
                 status: Mutex::new(CefStatus::default()),
-                stdin: Mutex::new(None),
+                control: Mutex::new(Link::Closed),
                 properties: Mutex::new(properties),
             }),
             thread: None,
@@ -303,13 +356,89 @@ fn supervise(cfg: &CefRendererConfig, shared: &Shared, store: &FrameStore) {
     }
 }
 
-fn spawn(cfg: &CefRendererConfig, shared: &Shared, ring: &Path) -> std::io::Result<Child> {
+/// One run's transport (see the module docs).
+struct RunChannel {
+    ring: PathBuf,
+    control: ControlAddr,
+    /// Unix: the socket the renderer connects to, until it has.
+    #[cfg(unix)]
+    listener: Option<lightloom_renderer::ipc::ControlListener>,
+    /// Unix: the run's private tmpfs directory (removed on drop, after the listener).
+    dir: Option<PrivateDir>,
+}
+
+impl RunChannel {
+    #[cfg(unix)]
+    fn new(cfg: &CefRendererConfig, _starts: u32) -> std::io::Result<Self> {
+        use lightloom_renderer::ipc;
+        let dir = PrivateDir::create(&ipc::shm_base_dir(&cfg.work_dir), "lightloom-render")?;
+        let listener = match ipc::ControlListener::bind(&dir.join(ipc::CONTROL_SOCKET)) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                tracing::warn!(target: "lightloom::render", dir = %dir.path().display(), error = %e,
+                    "no control socket; using the renderer's stdin");
+                None
+            }
+        };
+        Ok(Self {
+            ring: dir.join(ipc::RING_FILE),
+            control: listener
+                .as_ref()
+                .map_or(ControlAddr::Stdin, ipc::ControlListener::addr),
+            listener,
+            dir: Some(dir),
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn new(cfg: &CefRendererConfig, starts: u32) -> std::io::Result<Self> {
+        let ring = cfg.work_dir.join(format!("frames-{starts}.shm"));
+        let _ = std::fs::remove_file(&ring);
+        Ok(Self {
+            ring,
+            control: ControlAddr::Stdin,
+            dir: None,
+        })
+    }
+
+    /// Accept the renderer's connection once it is there (no-op with stdin).
+    fn poll_accept(&mut self, shared: &Shared) {
+        #[cfg(unix)]
+        if let Some(listener) = &self.listener {
+            match listener.try_accept() {
+                Ok(None) => {}
+                Ok(Some(stream)) => {
+                    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+                    shared.connect(Box::new(stream));
+                    self.listener = None;
+                }
+                Err(e) => {
+                    tracing::warn!(target: "lightloom::render", error = %e, "control socket accept failed");
+                    self.listener = None;
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = shared;
+    }
+}
+
+impl Drop for RunChannel {
+    fn drop(&mut self) {
+        // Windows: the ring is a plain file in the work dir. Unix: the private dir goes with it.
+        if self.dir.is_none() {
+            let _ = std::fs::remove_file(&self.ring);
+        }
+    }
+}
+
+fn spawn(cfg: &CefRendererConfig, shared: &Shared, channel: &RunChannel) -> std::io::Result<Child> {
     let log = std::fs::File::create(cfg.work_dir.join("renderer.log"))?;
     let mut cmd = Command::new(&cfg.renderer);
     cmd.arg("--effect")
         .arg(&cfg.effect)
         .arg("--out")
-        .arg(ring)
+        .arg(&channel.ring)
         .arg("--serve")
         .arg("--fps")
         .arg(cfg.fps.clamp(1, 240).to_string())
@@ -329,9 +458,14 @@ fn spawn(cfg: &CefRendererConfig, shared: &Shared, ring: &Path) -> std::io::Resu
         };
         cmd.arg("--prop").arg(format!("{name}={v}"));
     }
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(log));
+    if channel.control == ControlAddr::Stdin {
+        cmd.stdin(Stdio::piped());
+    } else {
+        cmd.arg("--control")
+            .arg(channel.control.to_string())
+            .stdin(Stdio::null());
+    }
+    cmd.stdout(Stdio::null()).stderr(Stdio::from(log));
     cmd.spawn()
 }
 
@@ -347,20 +481,30 @@ fn run_once(
         st.starts += 1;
         st.starts
     };
-    let ring = cfg.work_dir.join(format!("frames-{starts}.shm"));
-    let _ = std::fs::remove_file(&ring);
-    let mut child = match spawn(cfg, shared, &ring) {
+    let mut channel = match RunChannel::new(cfg, starts) {
+        Ok(c) => c,
+        Err(e) => return format!("cannot create the frame ring directory: {e}"),
+    };
+    {
+        let mut st = lock(&shared.status);
+        st.ring = Some(channel.ring.display().to_string());
+        st.control = Some(channel.control.to_string());
+    }
+    let mut child = match spawn(cfg, shared, &channel) {
         Ok(c) => c,
         Err(e) => return format!("cannot start {}: {e}", cfg.renderer.display()),
     };
-    *lock(&shared.stdin) = child.stdin.take();
+    *lock(&shared.control) = match child.stdin.take() {
+        Some(stdin) => Link::Open(Box::new(stdin)),
+        None => Link::Pending(Vec::new()),
+    };
     lock(&shared.status).running = true;
 
-    let outcome = pump(cfg, shared, store, &mut child, &ring, held);
+    let outcome = pump(cfg, shared, store, &mut child, &mut channel, held);
 
-    // Stop the process: `quit`, then closing stdin, then kill.
+    // Stop the process: `quit`, then closing the control channel, then kill.
     shared.send("{\"cmd\":\"quit\"}\n");
-    *lock(&shared.stdin) = None;
+    *lock(&shared.control) = Link::Closed;
     let deadline = Instant::now() + Duration::from_secs(5);
     let exit = loop {
         match child.try_wait() {
@@ -375,7 +519,7 @@ fn run_once(
             }
         }
     };
-    let _ = std::fs::remove_file(&ring);
+    drop(channel);
     format!("{outcome}; exit {exit}")
 }
 
@@ -385,18 +529,19 @@ fn pump(
     shared: &Shared,
     store: &FrameStore,
     child: &mut Child,
-    ring: &Path,
+    channel: &mut RunChannel,
     held: &mut Option<(Arc<Frame>, Instant)>,
 ) -> String {
     let since = Instant::now();
     let reader = loop {
+        channel.poll_accept(shared);
         if shared.stop.load(Ordering::Acquire) {
             return "stopped".into();
         }
         if let Ok(Some(status)) = child.try_wait() {
             return format!("renderer exited before its frame ring was ready ({status})");
         }
-        if let Ok(r) = RingReader::open_file(ring) {
+        if let Ok(r) = RingReader::open_file(&channel.ring) {
             break r;
         }
         if since.elapsed() > RING_TIMEOUT {
@@ -419,6 +564,7 @@ fn pump(
         if let Ok(Some(status)) = child.try_wait() {
             return format!("renderer exited ({status})");
         }
+        channel.poll_accept(shared);
         match reader.read_latest(&mut buf) {
             Ok(Some(seq)) if seq != last_seq => {
                 last_seq = seq;

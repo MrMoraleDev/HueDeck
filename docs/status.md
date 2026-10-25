@@ -42,7 +42,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | M4 Dashboard, persistence, API, packaging | **Partial** | the MSI, winget and Authenticode signing; autostart and tray; the plugin sources manager; the logs page; compat API parts; the fresh-machine acceptance run |
 | M5 Privileged bus | **Partial** | PIIX4 and I801 (I801 mock-tested only, no Intel board run); no LpcIO; no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
 | M6 Inputs, network, extras | **Missing** (network in progress) | audio, screen, meters, LCD faces, macros, actions, LampArray HAL backend, OpenRGB SDK server, runtime parameters UI |
-| M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; nusb/serial/i2c/hwmon, CEF, packaging and cargo-dist missing |
+| M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; CEF on Linux (WP-L5) compile-checked, verified only by CI; nusb/serial/i2c/hwmon, packaging and cargo-dist missing |
 
 ## M0 Bootstrap and risk retirement: Done
 
@@ -375,6 +375,7 @@ These can start in parallel with Windows work: they touch `lightloom-hal-linux` 
 31. **WP-L5: CEF on Linux. Size L.**
     - `lightloom-renderer` builds and runs on Linux (OSR needs no X11 window; headless CI with `--ozone-platform=headless` or Xvfb); shm via `memfd`/`/dev/shm`; the control pipe as a unix socket (`lightloom-protocol`, `lightloom-render`).
     - Add a `renderer-cef` Ubuntu CI job.
+    - **Done** on `feature/linux-cef`, compile-checked for Linux (including the `cef` host, via `cef/dox`), not yet run on Linux: `lightloom-renderer/src/ipc.rs` puts the ring file on a tmpfs (`$XDG_RUNTIME_DIR`, else `/dev/shm`: the object `shm_open` would give, opened by path; no memfd, see the crate README) in a private 0700 per-run dir, and carries the control lines over a unix socket (`--control unix:PATH`, same JSON-line framing; stdin stays the Windows channel and the fallback). Linux defaults to `--ozone-platform=headless` (`LIGHTLOOM_OZONE_PLATFORM` or `--chromium-flag` override), `build.rs` sets an `$ORIGIN` rpath for `libcef.so`, sandbox off as on Windows. CI: `renderer-cef-linux` (Ubuntu 24.04, cached linux64 CEF, rpath check, 60-frame smoke run, client test `lightloom-render/tests/cef_real.rs` against the real renderer, each with an Xvfb fallback); the Windows `renderer-cef` job runs the same client test.
 32. **WP-L6: PipeWire audio and screen capture. Size M, after WP-AUDIO and WP-SCREEN.**
     - `lightloom-inputs` Linux backends: cpal ALSA/PipeWire monitor; portal ScreenCast + PipeWire for zones.
 33. **WP-L7: Linux packaging and release. Size M.**

@@ -1729,7 +1729,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-adl"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "lightloom-hal",
  "thiserror 2.0.21",
@@ -1739,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-api"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "axum",
  "http-body-util",
@@ -1753,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-cli"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-daemon"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-effects"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "scraper",
  "serde",
@@ -1822,7 +1822,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-engine"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-hal"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1842,7 +1842,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-hal-linux"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "libc",
  "lightloom-hal",
@@ -1857,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-hal-windows"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "hidapi",
  "lightloom-hal",
@@ -1871,14 +1871,14 @@ dependencies = [
 
 [[package]]
 name = "lightloom-hid-desc"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "lightloom-inputs"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "ashpd",
  "cpal",
@@ -1896,7 +1896,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-iobroker"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "lightloom-protocol",
  "lightloom-winres",
@@ -1910,7 +1910,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-lcd"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "image",
  "lightloom-engine",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-macros"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "lightloom-hal",
  "lightloom-plugin-host",
@@ -1932,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-nvapi"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "lightloom-hal",
  "thiserror 2.0.21",
@@ -1942,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-plugin-host"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "lightloom-engine",
  "lightloom-hal",
@@ -1960,7 +1960,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-protocol"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "postcard",
  "serde",
@@ -1969,7 +1969,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-render"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "lightloom-engine",
  "lightloom-protocol",
@@ -1982,7 +1982,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-renderer"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "cef",
  "clap",
@@ -2000,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-runtime"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "lightloom-adl",
@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-setup"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "lightloom-hal-windows",
  "lightloom-iobroker",
@@ -2030,7 +2030,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-tray"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "image",
  "lightloom-api",
@@ -2046,7 +2046,7 @@ dependencies = [
 
 [[package]]
 name = "lightloom-winres"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "winresource",
 ]

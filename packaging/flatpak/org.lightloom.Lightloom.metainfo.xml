@@ -58,9 +58,9 @@
     <binary>lightloom</binary>
   </provides>
   <releases>
-    <release version="0.0.1" date="2026-10-25" type="development">
+    <release version="0.1.0" date="2026-10-25" type="development">
       <description>
-        <p>Development snapshot; not yet released.</p>
+        <p>First public pre-release: plugin host, effects, dashboard, profiles, per-LED colours, macros. Not yet tested on Linux hardware.</p>
       </description>
     </release>
   </releases>

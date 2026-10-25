@@ -177,6 +177,11 @@ second argument; list the ones you implement in `ShutdownModes()` and `shutdownM
 "off" must never store anything. Contract and host guarantees:
 [docs/host-api/save-shutdown.md](../docs/host-api/save-shutdown.md).
 
+Built-in effects the device can run live (a GPU's rainbow, a board's static zones) are offered with
+`HardwareModes()` and `SetHardwareMode(request)`; repeat the mode ids, in order, as `hardwareModes`
+in `manifest.json` (the lint checks them). Contract:
+[docs/host-api/hardware-modes.md](../docs/host-api/hardware-modes.md).
+
 ## Adapting a device from OpenRGB
 
 OpenRGB's controllers are GPL-2.0-or-later, so their protocol code can be adapted

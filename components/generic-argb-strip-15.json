@@ -1,0 +1,12 @@
+{
+  "ProductName": "HueDeck Generic ARGB Strip 15",
+  "DisplayName": "ARGB Strip 15 - 15 LED",
+  "Brand": "Generic",
+  "Type": "Strip",
+  "LedCount": 15,
+  "Width": 15,
+  "Height": 1,
+  "LedMapping": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],
+  "LedCoordinates": [[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[8,0],[9,0],[10,0],[11,0],[12,0],[13,0],[14,0]],
+  "LedNames": ["Led 1","Led 2","Led 3","Led 4","Led 5","Led 6","Led 7","Led 8","Led 9","Led 10","Led 11","Led 12","Led 13","Led 14","Led 15"]
+}

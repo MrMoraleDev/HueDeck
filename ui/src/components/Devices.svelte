@@ -64,6 +64,9 @@
           <span class="muted key">{d.bus ? (d.bus.startsWith("network") ? d.bus : `SMBus · ${d.bus}`) : d.key}</span>
         </div>
         <span class={`badge ${stateBadge(d)}`}>{d.state}</span>
+        {#if d.thirdParty}<span class="badge" title="Driven by a plugin read from your SignalRGB installation"
+            >third-party plugin</span
+          >{/if}
         {#if d.battery}<BatteryBadge battery={d.battery} />{/if}
         {#if d.connected}
           <span class="muted stats"

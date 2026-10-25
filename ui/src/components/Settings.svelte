@@ -3,7 +3,7 @@
   import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { daemon } from "../lib/store.svelte";
-  import type { Snapshot } from "../lib/types";
+  import type { SignalRgbImport, Snapshot } from "../lib/types";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let message = $state<string | null>(null);
@@ -65,6 +65,24 @@
     URL.revokeObjectURL(a.href);
   }
 
+  let preview = $state<SignalRgbImport | null>(null);
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+  async function previewSignalRgb() {
+    preview = (await daemon.run(() => api.previewSignalRgb())) ?? null;
+  }
+
+  async function importSignalRgb() {
+    const r = await daemon.run(() => api.importSignalRgb());
+    if (!r) return;
+    preview = null;
+    message =
+      `Imported ${plural(r.placements, "placement")} as layout "${r.layout ?? "-"}", ` +
+      `${plural(r.channels, "channel setup")}, ${plural(r.valuesImported ?? 0, "effect value")} and ` +
+      `${plural(r.presetsImported ?? 0, "preset")}.` +
+      (r.notes.length ? ` ${plural(r.notes.length, "note")}: ${r.notes.slice(0, 3).join("; ")}` : "");
+  }
+
   async function importState() {
     const f = file.files?.[0];
     if (!f) return;
@@ -95,15 +113,59 @@
         /> Use my SignalRGB plugins, effects and components</label
       >
       <p class="muted">
-        Import copies SignalRGB's device placements into a new layout and its component setup of each channel into
-        HueDeck's settings.
+        Import copies SignalRGB's setup into HueDeck's settings: device placements as a new layout (with the layout
+        and device brightness), the component setup of each channel, effect settings and presets, the selected
+        effect, the global brightness and which devices are on. SignalRGB's settings are only read. Its effects and
+        plugins stay third-party files in its folders.
       </p>
-      <button
-        onclick={async () => {
-          const r = await daemon.run(() => api.importSignalRgb());
-          if (r) message = `Imported ${r.placements} placements as layout "${r.layout}" and ${r.channels} channel setups.`;
-        }}>Import SignalRGB layout and channels</button
-      >
+      <div class="row">
+        <button onclick={previewSignalRgb}>Preview import…</button>
+        {#if preview}
+          <button onclick={importSignalRgb} disabled={!preview.available}>Import</button>
+          <button onclick={() => (preview = null)}>Cancel</button>
+        {/if}
+      </div>
+      {#if preview}
+        {#if !preview.available}
+          <p class="muted">SignalRGB has no settings to import.</p>
+        {:else}
+          <ul class="preview">
+            <li>
+              Layout "{preview.layout ?? "-"}": {plural(preview.placements, "placement")}{preview.layoutBrightness !==
+              null
+                ? `, brightness ${preview.layoutBrightness}%`
+                : ""}
+            </li>
+            {#if preview.globalBrightness !== null}<li>Global brightness {preview.globalBrightness}%</li>{/if}
+            <li>{plural(preview.channels, "channel setup")}</li>
+            <li>
+              {plural(preview.effects.length, "effect")} with settings ({plural(
+                preview.effects.reduce((n, e) => n + e.presets.length, 0),
+                "preset",
+              )}), third-party
+            </li>
+            {#if preview.selectedEffect}
+              <li>
+                Selected effect: {preview.selectedEffect.title ?? preview.selectedEffect.id}
+                {#if !preview.selectedEffect.available}<span class="warn">
+                    (not in the library: turn on the SignalRGB option above to play it)</span
+                  >{/if}
+              </li>
+            {/if}
+            {#if preview.devices.length}
+              <li>
+                Devices:
+                {#each preview.devices as d, i (d.key)}{i ? ", " : ""}{d.name ?? d.key}{d.enabled === false
+                    ? " off"
+                    : ""}{d.brightness !== null ? ` ${d.brightness}%` : ""}{/each}
+              </li>
+            {/if}
+            {#if preview.notes.length}<li class="muted">{plural(preview.notes.length, "note")}: {preview.notes
+                  .slice(0, 3)
+                  .join("; ")}</li>{/if}
+          </ul>
+        {/if}
+      {/if}
     {:else}
       <p class="muted">No SignalRGB installation was found on this computer.</p>
     {/if}
@@ -360,6 +422,11 @@
   }
   .logs {
     margin-top: 16px;
+  }
+  .preview {
+    margin: 8px 0 0;
+    padding-left: 1.2em;
+    font-size: 13px;
   }
   pre {
     max-height: 320px;

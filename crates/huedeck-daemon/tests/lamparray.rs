@@ -76,6 +76,7 @@ fn lamparrays_no_plugin_owns_are_driven_and_the_others_left_to_plugins() {
         plugins_dir: Some(plugins),
         effects_dir: paths::resource_dir("effects", "effects"),
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: Arc::new(MockNotifier::default()),

@@ -51,6 +51,7 @@ fn start(home: &Path) -> EngineHandle {
         plugins_dir: None,
         effects_dir: Some(home.join("effects")),
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: Arc::new(MockNotifier::default()),

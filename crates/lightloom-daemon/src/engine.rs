@@ -37,6 +37,16 @@
 //! announces become devices (`net:<plugin>:<id>`) driven like the others, and
 //! a controller it suppresses (or a service that stops) ends its session.
 //! Plugin settings (`service.saveSetting`) live in the database.
+//!
+//! System sleep ([`lightloom_hal::power`], fed through [`Shared::power_sink`]):
+//! before the system sleeps every session gets `Shutdown(true, mode)`
+//! (SignalRGB's `SystemSuspending`: plugins usually leave devices dark), the
+//! network services stop, the SMBus buses and the broker connection are
+//! released, the renderer and the audio/screen captures stop, and nothing is
+//! scanned or started until resume. On resume the devices are enumerated
+//! again and every session starts over (`Initialize()`) on the effect shown
+//! before. Repeated events are no-ops. Locking the PC or the display turning
+//! off blacks the canvas only when the user asked for it (`lightsOffWhenIdle`).
 
 use crate::battery::{self, BatteryMonitor, Severity, Thresholds};
 use crate::config::Config;
@@ -55,6 +65,7 @@ use lightloom_engine::{
 };
 use lightloom_hal::lamparray::LampArrayBackend;
 use lightloom_hal::notify::{Notification, Notifier};
+use lightloom_hal::power::{PowerEvent, PowerSink};
 use lightloom_hal::HidBackend;
 use lightloom_plugin_host::battery::BatteryStatus;
 use lightloom_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
@@ -111,6 +122,20 @@ mod keys {
     /// The auto-next timer.
     pub const EFFECT_TIMER: &str = "lighting.effectTimer";
     pub const NETWORK: &str = "settings.network";
+    /// Black canvas while the PC is locked or the display is off.
+    pub const LIGHTS_OFF_WHEN_IDLE: &str = "settings.lightsOffWhenIdle";
+}
+
+/// Longest a sleep notification waits for the engine (Windows gives sleep
+/// handlers about two seconds, then sleeps anyway).
+const SUSPEND_WAIT: Duration = Duration::from_millis(2500);
+/// Longest the engine waits for the sessions' `Shutdown(true)` before sleep.
+const SESSION_SUSPEND_WAIT: Duration = Duration::from_millis(1500);
+
+/// A power event for the engine thread; `done` is dropped once it was handled.
+struct PowerSignal {
+    event: PowerEvent,
+    _done: mpsc::Sender<()>,
 }
 
 /// How long a stopping network service may take.
@@ -232,12 +257,28 @@ pub struct Shared {
     /// OpenRGB SDK clients' colours, read by every session.
     direct: Arc<DirectLeds>,
     shutdown: tokio::sync::Notify,
+    power: Sender<PowerSignal>,
 }
 
 impl Shared {
     /// Resolves once a client asked the daemon to stop (`POST /v1/shutdown`).
     pub async fn shutdown_requested(&self) {
         self.shutdown.notified().await;
+    }
+
+    /// Where a [`lightloom_hal::PowerSource`] delivers its events (the engine
+    /// subscribes the platform's own source with real hardware). The call for
+    /// [`PowerEvent::Suspend`] returns once the devices are put away (at most
+    /// [`SUSPEND_WAIT`]); the others return at once.
+    pub fn power_sink(&self) -> PowerSink {
+        let tx = self.power.clone();
+        Arc::new(move |event| {
+            let (done, handled) = mpsc::channel::<()>();
+            if tx.send(PowerSignal { event, _done: done }).is_ok() && event == PowerEvent::Suspend {
+                // Disconnected once the engine dropped the signal.
+                let _ = handled.recv_timeout(SUSPEND_WAIT);
+            }
+        })
     }
 }
 
@@ -307,6 +348,7 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
     };
     let frames = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     let (tx, rx) = mpsc::channel();
+    let (power, power_rx) = mpsc::channel();
     let (events, _) = broadcast::channel(256);
     let shared = Arc::new(Shared {
         snapshot: ArcSwap::from_pointee(Snapshot {
@@ -319,6 +361,7 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
         frames,
         direct: Arc::new(DirectLeds::new()),
         shutdown: tokio::sync::Notify::new(),
+        power,
     });
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
@@ -326,7 +369,7 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
         std::thread::Builder::new()
             .name("lightloom-engine".into())
             .spawn(move || {
-                let mut engine = Engine::boot(opts, store, shared, rx);
+                let mut engine = Engine::boot(opts, store, shared, rx, power_rx);
                 engine.run(&stop);
                 engine.shut_down();
             })?
@@ -480,6 +523,18 @@ struct Engine {
     lamp_present: Vec<Present>,
     /// LampArrays left to a plugin, already logged.
     lamp_owned: BTreeSet<String>,
+    /// Power events ([`Shared::power_sink`]).
+    power_rx: Receiver<PowerSignal>,
+    /// This OS's power events (real hardware only).
+    _power_source: lightloom_runtime::power::Power,
+    /// Black canvas while the PC is locked or the display is off (the setting).
+    lights_off_when_idle: bool,
+    /// The session is locked.
+    locked: bool,
+    /// The display is off.
+    display_off: bool,
+    /// The canvas is black for that now.
+    idle: bool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -500,7 +555,13 @@ fn state_name(s: SessionState) -> &'static str {
 }
 
 impl Engine {
-    fn boot(opts: EngineOptions, store: Store, shared: Arc<Shared>, requests: Receiver<Envelope>) -> Self {
+    fn boot(
+        opts: EngineOptions,
+        store: Store,
+        shared: Arc<Shared>,
+        requests: Receiver<Envelope>,
+        power_rx: Receiver<PowerSignal>,
+    ) -> Self {
         let defaults = Arc::new(Mutex::new(SessionDefaults {
             write_mode: if opts.dry_run {
                 WriteMode::DryRun
@@ -563,6 +624,12 @@ impl Engine {
             lamp_generation: 0,
             lamp_present: Vec::new(),
             lamp_owned: BTreeSet::new(),
+            power_rx,
+            _power_source: lightloom_runtime::power::Power::inactive(),
+            lights_off_when_idle: false,
+            locked: false,
+            display_off: false,
+            idle: false,
         };
         e.enter(LifecycleState::LoadingConfig);
         e.load_state();
@@ -610,6 +677,9 @@ impl Engine {
         self.signalrgb = get(keys::SIGNALRGB).and_then(|v| v.as_bool()).unwrap_or(false);
         self.gpu = get(keys::GPU).and_then(|v| v.as_bool()).unwrap_or(false);
         self.openrgb_sdk = get(keys::OPENRGB_SDK).and_then(|v| v.as_bool()).unwrap_or(false);
+        self.lights_off_when_idle = get(keys::LIGHTS_OFF_WHEN_IDLE)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         self.smbus = get(keys::SMBUS)
             .and_then(|v| v.as_bool())
             .unwrap_or(self.opts.config.smbus.enabled);
@@ -782,6 +852,9 @@ impl Engine {
         };
         let hid = !matches!(mode, HardwareMode::None)
             && (self.hardware.is_some() || !matches!(mode, HardwareMode::Real));
+        if matches!(mode, HardwareMode::Real) {
+            self._power_source = lightloom_runtime::power::Power::start(self.shared.power_sink());
+        }
         self.opts.hardware = mode;
         if hid {
             self.backend = Some(Arc::clone(&backend));
@@ -834,6 +907,9 @@ impl Engine {
     /// Enumerate (or take the fixed list), look for conflicts, and make the
     /// sessions match the enabled devices present.
     fn rescan(&mut self) {
+        if self.suspended() {
+            return;
+        }
         self.settle = None;
         self.present = match &self.opts.hardware {
             HardwareMode::Fixed { devices, .. } => devices
@@ -952,7 +1028,7 @@ impl Engine {
 
     /// Start a discovery service per network plugin (network lights on, none running).
     fn start_services(&mut self) {
-        if !self.network || !self.services.is_empty() {
+        if !self.network || !self.services.is_empty() || self.suspended() {
             return;
         }
         let plugins: Vec<CatalogEntry> = self.catalog.network_plugins().into_iter().cloned().collect();
@@ -1272,6 +1348,9 @@ impl Engine {
     }
 
     fn reconcile_with(&mut self, wanted: Vec<Present>) {
+        if self.suspended() {
+            return;
+        }
         let Some(manager) = &mut self.manager else {
             return;
         };
@@ -1325,6 +1404,11 @@ impl Engine {
     }
 
     fn start_canvas(&mut self) {
+        if self.suspended() {
+            // Resume starts the effect chosen meanwhile.
+            self.dirty = true;
+            return;
+        }
         self.audio = None;
         self.screen = None;
         self.canvas.client().stop();
@@ -1340,7 +1424,7 @@ impl Engine {
                 .map(|e| e.id.clone());
         }
         let fps = self.fps();
-        let mut canvas = if !self.enabled {
+        let mut canvas = if !self.enabled || self.idle {
             Canvas::Null(NullRenderer::new(
                 Pattern::Solid(Rgb::new(0, 0, 0)),
                 f64::from(fps),
@@ -1404,6 +1488,18 @@ impl Engine {
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
+            while let Ok(signal) = self.power_rx.try_recv() {
+                self.power(signal.event);
+                // The snapshot shows it before the sink returns (dropping the signal).
+                self.publish();
+                drop(signal);
+            }
+            if self.suspended() {
+                if self.dirty {
+                    self.publish();
+                }
+                continue;
+            }
             // A plug produces a burst of events: (re)start the settle timer. A
             // session that lost its device asks for an enumeration too.
             let lamps = self.lamp_backend.as_ref().map(|b| b.generation());
@@ -1446,6 +1542,98 @@ impl Engine {
                 self.publish();
             }
         }
+    }
+
+    // ------------------------------------------------------------------ power
+
+    fn suspended(&self) -> bool {
+        self.state == LifecycleState::Suspending
+    }
+
+    fn power(&mut self, event: PowerEvent) {
+        tracing::debug!(?event, "power event");
+        match event {
+            PowerEvent::Suspend => self.suspend(),
+            PowerEvent::Resume => self.resume(),
+            PowerEvent::Lock => self.locked = true,
+            PowerEvent::Unlock => self.locked = false,
+            PowerEvent::DisplayOff => self.display_off = true,
+            PowerEvent::DisplayOn => self.display_off = false,
+        }
+        self.follow_idle();
+    }
+
+    /// Black the canvas while locked or the display is off, if the user asked for it.
+    fn follow_idle(&mut self) {
+        let idle = self.lights_off_when_idle && (self.locked || self.display_off);
+        if idle != self.idle {
+            self.idle = idle;
+            self.log(if idle {
+                "PC locked or display off: lights off"
+            } else {
+                "PC unlocked and display on: lights back on"
+            });
+            self.start_canvas();
+        }
+    }
+
+    /// System sleep: every session gets `Shutdown(true, mode)`, the network
+    /// services stop, the SMBus buses (and the broker connection) and the
+    /// renderer are released; nothing starts again until [`Engine::resume`].
+    fn suspend(&mut self) {
+        if self.suspended() || self.state != LifecycleState::Running {
+            return;
+        }
+        self.enter(LifecycleState::Suspending);
+        let stopped = self
+            .manager
+            .as_mut()
+            .map(|m| m.suspend(SESSION_SUSPEND_WAIT))
+            .unwrap_or_default();
+        if let Some(m) = &mut self.manager {
+            let (_, failed) = m.drain_reports();
+            for f in failed {
+                tracing::warn!("session {f}");
+            }
+        }
+        for h in self.services.drain(..) {
+            h.stop();
+        }
+        self.service_generations.clear();
+        self.net_present.clear();
+        self.present.retain(|p| p.device.network.is_none());
+        // Buses, the NvAPI hub and the broker pipe; rescanned on resume.
+        self.smbus_present.clear();
+        self.smbus_hw = None;
+        self.smbus_claim = None;
+        self.smbus_scan_due = true;
+        self.alerting.clear();
+        self.settle = None;
+        self.audio = None;
+        self.screen = None;
+        self.canvas.client().stop();
+        self.log(format!(
+            "system sleep: {} device session(s) shut down (Shutdown(true))",
+            stopped.len()
+        ));
+        self.dirty = true;
+    }
+
+    /// Back from sleep: enumerate again, start every session over
+    /// (`Initialize()`) and the effect shown before.
+    fn resume(&mut self) {
+        if !self.suspended() {
+            return;
+        }
+        self.enter(LifecycleState::Resuming);
+        self.start_canvas();
+        self.rescan();
+        self.start_services();
+        // Devices that come back late (USB re-enumeration) arrive through hotplug;
+        // one more look shortly after catches the rest.
+        self.settle = Some(Instant::now());
+        self.enter(LifecycleState::Running);
+        self.log("system resumed: devices initialised again");
     }
 
     fn shut_down(&mut self) {
@@ -1540,6 +1728,7 @@ impl Engine {
                 battery_critical: self.thresholds.critical,
                 battery_notifications: self.battery_notify,
                 notifications_available: cfg!(windows),
+                lights_off_when_idle: self.lights_off_when_idle,
             },
             conflicts: {
                 let mut all = self.conflicts.clone();
@@ -2148,7 +2337,18 @@ impl Engine {
                 port,
                 openrgb_sdk,
                 network,
+                lights_off_when_idle,
             } => {
+                if let Some(on) = lights_off_when_idle {
+                    if on != self.lights_off_when_idle {
+                        self.lights_off_when_idle = on;
+                        self.store
+                            .set(keys::LIGHTS_OFF_WHEN_IDLE, &on)
+                            .map_err(internal)?;
+                        self.follow_idle();
+                        self.dirty = true;
+                    }
+                }
                 if let Some(on) = openrgb_sdk {
                     if on != self.openrgb_sdk {
                         self.openrgb_sdk = on;
@@ -2259,6 +2459,7 @@ impl Engine {
                     "batteryNotifications": self.battery_notify,
                     "port": self.opts.api_port,
                     "openrgbSdk": self.openrgb_sdk,
+                    "lightsOffWhenIdle": self.lights_off_when_idle,
                 }))
             }
             Request::NetworkAdd { plugin, ip } => {

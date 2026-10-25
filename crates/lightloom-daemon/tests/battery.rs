@@ -96,6 +96,7 @@ fn settings(
             port: None,
             network: None,
             openrgb_sdk: None,
+            lights_off_when_idle: None,
         },
     )
 }

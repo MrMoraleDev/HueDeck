@@ -478,8 +478,11 @@ pub struct SessionReport {
     pub restore_notes: Vec<String>,
     /// Worth knowing, not failures: calls a stop request cut short.
     pub notes: Vec<String>,
-    /// `Shutdown(false)` ran.
+    /// `Shutdown(systemSuspending)` ran.
     pub shutdown_called: bool,
+    /// It was `Shutdown(true)`: the session stopped for system sleep
+    /// ([`SessionHandle::stop_for_suspend`]).
+    pub suspended: bool,
     /// The mode it was given.
     pub shutdown_mode: ShutdownMode,
     /// `SaveToDevice(request)` calls that stored (not previews), successful or not.
@@ -534,6 +537,7 @@ impl SessionReport {
             restore_notes: Vec::new(),
             notes: Vec::new(),
             shutdown_called: false,
+            suspended: false,
             shutdown_mode: ShutdownMode::Restore,
             saves: 0,
             subdevices: Vec::new(),
@@ -601,6 +605,8 @@ pub(crate) struct LiveStats {
     pub(crate) hid_disconnected: AtomicBool,
     /// The device does not take writes now (a LampArray Windows gives to another app).
     pub(crate) paused: AtomicBool,
+    /// The stop is for system sleep: `Shutdown(true)`.
+    pub(crate) suspending: AtomicBool,
     /// Microseconds from session start to the first write; 0 = none yet.
     pub(crate) first_write_us: AtomicU64,
     /// The device and its children as canvas endpoints (empty until `Initialize()` ran).
@@ -827,6 +833,14 @@ impl SessionHandle {
         self.stop.store(true, Ordering::Release);
     }
 
+    /// [`SessionHandle::stop`] for system sleep: the plugin gets
+    /// `Shutdown(true, mode)` (SignalRGB's `SystemSuspending`; plugins usually
+    /// leave the device dark) instead of `Shutdown(false, mode)`.
+    pub fn stop_for_suspend(&self) {
+        self.live.suspending.store(true, Ordering::Release);
+        self.stop();
+    }
+
     /// Counters so far.
     pub fn live(&self) -> LiveSnapshot {
         self.live.snapshot()
@@ -866,6 +880,7 @@ pub fn spawn(
         hid_disconnects: AtomicU64::new(0),
         hid_disconnected: AtomicBool::new(false),
         paused: AtomicBool::new(false),
+        suspending: AtomicBool::new(false),
         first_write_us: AtomicU64::new(0),
         endpoints: std::sync::Mutex::new(Arc::new(Vec::new())),
         channels: std::sync::Mutex::new(Arc::new(Vec::new())),
@@ -1053,6 +1068,8 @@ fn run(
     if lifecycle.initialize_called && !opts.skip_shutdown {
         if healthy {
             let mode = lifecycle.shutdown_mode;
+            let suspending = live.suspending.load(Ordering::Acquire);
+            report.suspended = suspending;
             let last = save::average(&lock_device(&shared).led_colors());
             match save::shutdown_fallback(meta, mode, last) {
                 ShutdownPlan::Native => {}
@@ -1075,10 +1092,7 @@ fn run(
             let shutdown = catch_unwind(AssertUnwindSafe(|| {
                 rt.call_export(
                     "Shutdown",
-                    CallArgs::Shutdown {
-                        suspending: false,
-                        mode,
-                    },
+                    CallArgs::Shutdown { suspending, mode },
                     budgets.call(budgets.shutdown),
                 )
             }));

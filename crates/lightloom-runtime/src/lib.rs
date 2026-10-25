@@ -6,6 +6,7 @@
 //!   and the devices SMBus plugins find on them;
 //! * [`sensors`]: the sensor backends (Linux hwmon);
 //! * [`hotplug`]: arrival/removal notifications and how long to let them settle;
+//! * [`power`]: sleep/resume, lock/unlock and display off/on notifications;
 //! * [`lamparray`]: the OS LampArray backend (Windows Dynamic Lighting) and which of
 //!   its devices Lightloom drives itself (those no plugin owns);
 //! * [`conflicts`]: other RGB software holding the same devices (reported, never killed);
@@ -24,6 +25,7 @@ pub mod hardware;
 pub mod hotplug;
 pub mod lamparray;
 pub mod notify;
+pub mod power;
 pub mod sensors;
 pub mod signalrgb;
 pub mod smbus;

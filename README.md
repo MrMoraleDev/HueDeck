@@ -22,7 +22,7 @@ and gives you a modern dashboard in your browser.
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 
 [Why Lightloom](#why-lightloom) · [Features](#features) · [Devices](#supported-devices) ·
-[Quick start](#quick-start) · [Add your device](#add-your-device) · [Roadmap](#roadmap)
+[Install](#install) · [Build from source](#build-from-source) · [Add your device](#add-your-device) · [Roadmap](#roadmap)
 
 </div>
 
@@ -31,9 +31,8 @@ and gives you a modern dashboard in your browser.
 </p>
 
 > **Pre-alpha.** Lightloom already drives real hardware with its own plugins, renders
-> effects and has a working dashboard. A per-user Windows installer (MSI, no administrator
-> rights) is built by the release workflow; until the first release, build it from source.
-> Watch the repository to catch the first release.
+> effects and has a working dashboard. There is no release yet: until the first one,
+> [build it from source](#build-from-source). Watch the repository to catch the first release.
 
 ## Why Lightloom
 
@@ -138,9 +137,50 @@ Coming next: network lights (**WLED, Philips Hue, Govee, Nanoleaf, LIFX, Yeeligh
 then many more families adapted from OpenRGB. Missing your device?
 [Add it](#add-your-device) or open an issue with its USB id.
 
-## Quick start
+## Install
 
-There is no release yet. From source (stable Rust toolchain, Windows for now):
+These steps apply from the first release on.
+
+### Windows: winget (recommended)
+
+winget comes with Windows 11 and with up-to-date Windows 10 (it is part of "App Installer"
+from the Microsoft Store). In a terminal:
+
+```text
+winget install Lightloom.Lightloom
+```
+
+`winget upgrade Lightloom.Lightloom` updates it later; the dashboard's Settings → "Check for
+updates" works too.
+
+### Windows: installer
+
+Download `Lightloom-<version>-x64.msi` from the
+[releases page](https://github.com/MrMoraleDev/Lightloom/releases) and run it. It installs for
+your user only, without administrator rights. `SHA256SUMS` on the same page lets you check the
+download.
+
+### "Windows protected your PC"
+
+Lightloom's releases are not code-signed yet, so Windows SmartScreen may stop the installer
+the first time a new version is downloaded. That warning means "unknown publisher", not "a
+virus was found". To go on:
+
+1. Click **More info**.
+2. Click **Run anyway**.
+
+If you'd rather check first: the source is all here, every release is built by the public
+[release workflow](.github/workflows/release.yml), and `SHA256SUMS` lists the hash of each file.
+
+### Linux
+
+From the releases page: the AppImage (one file, no install) or the `.tar.xz` tarball. Device
+access needs udev rules once; [docs/linux-porting.md](docs/linux-porting.md) has the steps.
+Linux support is new and has not been tried on real hardware yet.
+
+## Build from source
+
+Stable Rust toolchain, Windows for now:
 
 ```text
 cargo build --release                          # lightloomd and lightloom

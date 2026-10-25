@@ -61,9 +61,13 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-`conduct@lightloom.invalid` (placeholder; a real contact will be published before
-the first release).
+reported to the community leaders responsible for enforcement:
+
+- in an issue, pull request or comment, with GitHub's **Report content** (the `…` menu
+  next to it), which reaches GitHub privately; and/or
+- by contacting the maintainer through their GitHub profile,
+  [github.com/MrMoraleDev](https://github.com/MrMoraleDev).
+
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

@@ -5,7 +5,7 @@ Name=Lightloom
 GenericName=RGB Lighting Manager
 Comment=Control the RGB lighting of your PC components and peripherals
 # AppImage: AppRun opens the dashboard and starts lightloomd when it is not running.
-# Flatpak rewrites Exec to its own command (packaging/flatpak/org.lightloom.Lightloom.yml).
+# Flatpak rewrites Exec to its own command (packaging/flatpak/io.github.MrMoraleDev.Lightloom.yml).
 Exec=lightloomd --open
 Icon=lightloom
 Terminal=false

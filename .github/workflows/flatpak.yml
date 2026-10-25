@@ -8,7 +8,11 @@
 #            itself has no network, so it proves the manifest builds from those lists alone.
 #            The bundle is left on the run as `lightloom-flatpak`; nothing is published.
 #
-# Not part of the release yet (no renderer inside, not on Flathub): packaging/flatpak/README.md.
+#            Then Flathub's linter checks the metainfo, the Flathub manifest
+#            (packaging/flathub/prepare.sh), the build directory and the repository.
+#
+# Not part of the release yet (no renderer inside, not on Flathub): packaging/flatpak/README.md;
+# Flathub submission: packaging/flathub/README.md.
 
 name: Flatpak
 
@@ -64,10 +68,13 @@ jobs:
       # then builds offline; the .flatpak-builder cache is keyed on the inputs.
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          manifest-path: packaging/flatpak/org.lightloom.Lightloom.yml
+          manifest-path: packaging/flatpak/io.github.MrMoraleDev.Lightloom.yml
           bundle: lightloom.flatpak
           artifact-name: lightloom-flatpak
-          cache-key: flatpak-builder-${{ hashFiles('Cargo.lock', 'ui/package-lock.json', 'packaging/flatpak/org.lightloom.Lightloom.yml') }}
+          cache-key: flatpak-builder-${{ hashFiles('Cargo.lock', 'ui/package-lock.json', 'packaging/flatpak/io.github.MrMoraleDev.Lightloom.yml') }}
+          # As Flathub's own builds do: the metainfo screenshots are mirrored into the build,
+          # which the linter's builddir and repo checks require.
+          mirror-screenshots-url: https://dl.flathub.org/media
 
       - name: Check the installed tree
         run: |
@@ -75,8 +82,35 @@ jobs:
           app=flatpak_app/files
           for f in bin/lightloom-launch bin/lightloomd bin/lightloom lib/lightloom/lightloomd \
             lib/lightloom/ui/index.html lib/lightloom/packaging/udev/70-lightloom.rules \
-            share/applications/org.lightloom.Lightloom.desktop \
-            share/metainfo/org.lightloom.Lightloom.metainfo.xml; do
+            share/applications/io.github.MrMoraleDev.Lightloom.desktop \
+            share/metainfo/io.github.MrMoraleDev.Lightloom.metainfo.xml; do
             test -e "$app/$f" || { echo "::error::missing /app/$f"; exit 1; }
           done
           find "$app/lib/lightloom/plugins" -mindepth 1 -maxdepth 1 -type d | wc -l
+
+      # Flathub's linter (flatpak-builder-lint from org.flatpak.Builder, as Flathub documents
+      # it) on the metainfo, on the Flathub manifest that packaging/flathub/prepare.sh writes
+      # for this commit, on the build directory and on the exported repository. Any error fails
+      # the job: Flathub would reject the submission for it (packaging/flathub/README.md).
+      - name: Flathub linter
+        run: |
+          set -u
+          if command -v flatpak-builder-lint >/dev/null 2>&1; then
+            lint() { flatpak-builder-lint "$@"; }
+          else
+            flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+            flatpak install --user -y --noninteractive flathub org.flatpak.Builder
+            lint() { flatpak run --command=flatpak-builder-lint org.flatpak.Builder "$@"; }
+          fi
+          packaging/flathub/prepare.sh --commit "$GITHUB_SHA" --out "$RUNNER_TEMP/flathub"             --sources-from packaging/flatpak || exit 1
+          status=0
+          for check in             "appstream packaging/flatpak/io.github.MrMoraleDev.Lightloom.metainfo.xml"             "manifest $RUNNER_TEMP/flathub/io.github.MrMoraleDev.Lightloom.yml"             "builddir flatpak_app"             "repo repo"; do
+            echo "::group::flatpak-builder-lint $check"
+            # shellcheck disable=SC2086 # "<kind> <path>", split on purpose
+            if ! lint $check; then
+              echo "::error::flatpak-builder-lint $check failed"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"

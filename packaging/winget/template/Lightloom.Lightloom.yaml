@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Template: packaging/winget/render.ps1 fills ${...} and writes manifests/h/Lightloom/Lightloom/<version>/.
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+# Template: packaging/winget/render.ps1 fills ${...} and writes manifests/l/Lightloom/Lightloom/<version>/.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json
 PackageIdentifier: Lightloom.Lightloom
 PackageVersion: ${VERSION}
 DefaultLocale: en-US
 ManifestType: version
-ManifestVersion: 1.6.0
+ManifestVersion: 1.10.0

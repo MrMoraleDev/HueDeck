@@ -14,11 +14,26 @@
 # FLATPAK_BUILDER_TOOLS: an existing flatpak-builder-tools checkout (skips the clone).
 # FLATPAK_BUILDER_TOOLS_REV: the commit to clone (default below: pinned, so the same lock
 # files always give the same lists).
+#
+# Usage: packaging/flatpak/generate-sources.sh [--cargo-lock FILE] [--npm-lock FILE] [--out DIR]
+#   Defaults: this tree's Cargo.lock and ui/package-lock.json, written to packaging/flatpak/.
+#   packaging/flathub/prepare.sh passes the lock files of a release tag instead.
 
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 here="$repo/packaging/flatpak"
+cargo_lock="$repo/Cargo.lock"
+npm_lock="$repo/ui/package-lock.json"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --cargo-lock) cargo_lock="$2"; shift 2 ;;
+    --npm-lock) npm_lock="$2"; shift 2 ;;
+    --out) here="$2"; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+mkdir -p "$here"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -33,7 +48,7 @@ fi
 python3 -m venv "$work/venv"
 "$work/venv/bin/pip" install --quiet --disable-pip-version-check aiohttp tomlkit "$tools/node"
 
-"$work/venv/bin/python" "$tools/cargo/flatpak-cargo-generator.py" "$repo/Cargo.lock"   -o "$here/cargo-sources.json"
-"$work/venv/bin/flatpak-node-generator" npm "$repo/ui/package-lock.json"   -o "$here/node-sources.json"
+"$work/venv/bin/python" "$tools/cargo/flatpak-cargo-generator.py" "$cargo_lock" -o "$here/cargo-sources.json"
+"$work/venv/bin/flatpak-node-generator" npm "$npm_lock" -o "$here/node-sources.json"
 
 echo "wrote $here/cargo-sources.json and $here/node-sources.json"

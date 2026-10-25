@@ -1,12 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: CC0-1.0 -->
+<!--
+  AppStream metadata, installed by the Flatpak (packaging/flatpak, packaging/flathub) and by the
+  .deb / .rpm (packaging/nfpm) as share/metainfo/io.github.MrMoraleDev.Lightloom.metainfo.xml.
+  The id is the Flathub app id: io.github.<GitHub user>.<repository>.
+  Checked by appstreamcli (release-build.yml `linux`) and by Flathub's linter
+  (flatpak-builder-lint's `appstream` check, run from org.flatpak.Builder in flatpak.yml; an XML
+  comment cannot hold the double-dash command line, see packaging/flathub/README.md).
+  Add a <release> for every tag, newest first.
+-->
 <component type="desktop-application">
-  <id>org.lightloom.Lightloom</id>
+  <id>io.github.MrMoraleDev.Lightloom</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>Lightloom</name>
   <summary>Control the RGB lighting of your PC</summary>
-  <developer id="org.lightloom">
+  <developer id="io.github.mrmoraledev">
     <name>Lightloom contributors</name>
   </developer>
   <description>
@@ -18,21 +27,28 @@
     </p>
     <ul>
       <li>Device support comes from plugins: plain JavaScript files you can read and edit</li>
-      <li>Canvas effects written as web pages, plus audio- and screen-reactive effects</li>
+      <li>Canvas effects, plus audio- and screen-reactive effects</li>
       <li>A local API and CLI for scripting; nothing leaves your computer</li>
       <li>Runs as your user, never as root</li>
     </ul>
     <p>
       One-time host setup is required for device access: udev rules, and for RAM and
       graphics card lighting the i2c group and the i2c-dev module. Run
-      "flatpak run org.lightloom.Lightloom --setup-help" for the commands.
+      "flatpak run io.github.MrMoraleDev.Lightloom --setup-help" for the commands.
     </p>
   </description>
-  <launchable type="desktop-id">org.lightloom.Lightloom.desktop</launchable>
-  <icon type="stock">org.lightloom.Lightloom</icon>
+  <launchable type="desktop-id">io.github.MrMoraleDev.Lightloom.desktop</launchable>
+  <icon type="stock">io.github.MrMoraleDev.Lightloom</icon>
   <url type="homepage">https://github.com/MrMoraleDev/Lightloom</url>
   <url type="bugtracker">https://github.com/MrMoraleDev/Lightloom/issues</url>
   <url type="vcs-browser">https://github.com/MrMoraleDev/Lightloom</url>
+  <url type="contribute">https://github.com/MrMoraleDev/Lightloom#add-your-device</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The dashboard: every device on one canvas, playing an effect</caption>
+      <image type="source" width="1440" height="900">https://raw.githubusercontent.com/MrMoraleDev/Lightloom/main/docs/images/dashboard-effects.png</image>
+    </screenshot>
+  </screenshots>
   <categories>
     <category>Settings</category>
     <category>HardwareSettings</category>
@@ -48,6 +64,12 @@
     <color type="primary" scheme_preference="light">#d9c9fd</color>
     <color type="primary" scheme_preference="dark">#1b1c21</color>
   </branding>
+  <!--
+    OARS 1.1: no violence, drugs, gambling, user-to-user chat, in-app purchases, ads,
+    advertising ids or location sharing. Network use stays local (the 127.0.0.1 dashboard,
+    LAN device plugins) and nothing about the user is collected, so every attribute is
+    "none", which an empty element states.
+  -->
   <content_rating type="oars-1.1"/>
   <supports>
     <control>pointing</control>
@@ -58,9 +80,10 @@
     <binary>lightloom</binary>
   </provides>
   <releases>
-    <release version="0.1.0" date="2026-10-25" type="development">
+    <release version="0.1.0" date="2026-10-25">
+      <url type="details">https://github.com/MrMoraleDev/Lightloom/releases/tag/v0.1.0</url>
       <description>
-        <p>First public pre-release: plugin host, effects, dashboard, profiles, per-LED colours, macros. Not yet tested on Linux hardware.</p>
+        <p>First public release: plugin host, effects, dashboard, profiles, per-LED colours, macros. Not yet tested on Linux hardware.</p>
       </description>
     </release>
   </releases>

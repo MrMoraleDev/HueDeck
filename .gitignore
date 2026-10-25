@@ -26,3 +26,6 @@ __pycache__/
 /build-flatpak/
 /flatpak_app/
 /.flatpak-builder/
+
+# winget: manifests written by packaging/winget/render.ps1 (they go to microsoft/winget-pkgs).
+/packaging/winget/manifests/

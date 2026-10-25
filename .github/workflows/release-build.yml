@@ -14,8 +14,9 @@
 #                      portable zip (tools/package/stage-windows.ps1), CycloneDX SBOMs
 #   msi                the per-user WiX MSI from the same staged tree (packaging/wix/build.ps1)
 #   linux              daemon, CLI, renderer + CEF runtime, dashboard on ubuntu-24.04 (glibc 2.39
-#                      baseline): the tarball and the AppImage (tools/package/stage-linux.sh,
-#                      packaging/appimage), CycloneDX SBOMs
+#                      baseline): the tarball, the AppImage, the .deb and the .rpm
+#                      (tools/package/stage-linux.sh, packaging/appimage, packaging/nfpm),
+#                      CycloneDX SBOMs
 #   linux-reproducible two clean builds of the Linux daemon and CLI must be bit-identical
 #   assemble           checks the file names the in-app updater depends on, writes SHA256SUMS
 #
@@ -235,7 +236,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    name: linux (tarball + AppImage)
+    name: linux (tarball, AppImage, deb, rpm)
     needs: meta
     # glibc 2.39 baseline (Ubuntu 24.04, Debian 13, Fedora 40 and later). 22.04's libpipewire
     # (0.3.48) is too old for the pipewire crate the Wayland screen capture uses.
@@ -361,7 +362,7 @@ jobs:
           desktop-file-validate packaging/appimage/lightloom.desktop
           # Errors only: the runner's appstream may warn about current tags (`vcs-browser`,
           # `developer`) that Flathub expects; flatpak.yml validates with a current appstream.
-          appstream="$(appstreamcli validate --no-net packaging/flatpak/org.lightloom.Lightloom.metainfo.xml 2>&1 || true)"
+          appstream="$(appstreamcli validate --no-net packaging/flatpak/io.github.MrMoraleDev.Lightloom.metainfo.xml 2>&1 || true)"
           echo "$appstream"
           if echo "$appstream" | grep -q '^E:'; then exit 1; fi
           sh -n packaging/appimage/AppRun
@@ -405,6 +406,67 @@ jobs:
           packaging/appimage/build-appimage.sh --stage "dist/lightloom-$VERSION-linux-x86_64" \
             --version "$VERSION" --out dist
 
+      # lightloom_<version>_amd64.deb and lightloom-<version>-1.x86_64.rpm from the same stage,
+      # with nFPM (pinned release, archive checked against its SHA-256 in build-packages.sh).
+      - name: Debian and RPM packages
+        run: |
+          packaging/nfpm/build-packages.sh --stage "dist/lightloom-$VERSION-linux-x86_64" \
+            --version "$VERSION" --out dist
+          df -h .
+
+      # Errors fail the job, warnings are only printed. lintian and rpmlint skip a few tags on
+      # the prebuilt CEF runtime (packaging/nfpm/lintian-suppress, packaging/nfpm/rpmlintrc).
+      # Then the .deb is installed on this runner: the symlinks, the user unit (installed,
+      # never enabled), the udev rules, the group, and `lightloomd --version` through
+      # /usr/bin; removed again afterwards.
+      - name: Check the packages
+        run: |
+          set -eu
+          deb="dist/lightloom_${VERSION}_amd64.deb"
+          rpm="dist/lightloom-${VERSION}-1.x86_64.rpm"
+          sudo apt-get install -y --no-install-recommends lintian rpm rpmlint
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb" > "$RUNNER_TEMP/deb-contents.txt"
+          grep -v -E '/usr/lib/lightloom/(plugins|effects|faces|components|ui|locales)/' \
+            "$RUNNER_TEMP/deb-contents.txt"
+          for f in ./usr/bin/lightloomd ./usr/bin/lightloom ./usr/lib/lightloom/lightloomd \
+            ./usr/lib/lightloom/lightloom-renderer ./usr/lib/lightloom/libcef.so \
+            ./usr/lib/lightloom/ui/index.html ./usr/lib/systemd/user/lightloomd.service \
+            ./usr/lib/udev/rules.d/70-lightloom.rules ./usr/lib/sysusers.d/lightloom.conf \
+            ./usr/lib/modules-load.d/lightloom.conf \
+            ./usr/share/applications/io.github.MrMoraleDev.Lightloom.desktop \
+            ./usr/share/metainfo/io.github.MrMoraleDev.Lightloom.metainfo.xml \
+            ./usr/share/doc/lightloom/copyright; do
+            grep -qF " $f" "$RUNNER_TEMP/deb-contents.txt" || { echo "::error::$deb lacks $f"; exit 1; }
+          done
+          lintian --fail-on error --no-tag-display-limit \
+            --suppress-tags-from-file packaging/nfpm/lintian-suppress "$deb"
+          rpm -qip "$rpm"
+          rpm -qp --requires --recommends "$rpm"
+          rpm -qp --scripts "$rpm"
+          rpm -qlp "$rpm" | grep -v -E '^/usr/lib/lightloom/(plugins|effects|faces|components|ui|locales)/'
+          # rpmlint exits non-zero on errors only.
+          rpmlint -r packaging/nfpm/rpmlintrc "$rpm"
+
+          sudo apt-get install -y "./$deb"
+          lightloomd --version
+          lightloom --version
+          test "$(readlink -f /usr/bin/lightloomd)" = /usr/lib/lightloom/lightloomd
+          grep -qx 'ExecStart=/usr/bin/lightloomd' /usr/lib/systemd/user/lightloomd.service
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg}"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          systemd-analyze --user verify /usr/lib/systemd/user/lightloomd.service
+          getent group i2c
+          # Never enabled by the package.
+          if ls /etc/systemd/user/*.wants/lightloomd.service 2>/dev/null; then
+            echo "::error::the package enabled the user service"; exit 1
+          fi
+          desktop-file-validate /usr/share/applications/io.github.MrMoraleDev.Lightloom.desktop
+          appstreamcli validate --no-net /usr/share/metainfo/io.github.MrMoraleDev.Lightloom.metainfo.xml
+          ldd /usr/lib/lightloom/lightloom-renderer | grep -E 'libcef[.]so => /usr/lib/lightloom/'
+          sudo apt-get remove -y lightloom
+          test ! -e /usr/bin/lightloomd
+
       - uses: actions/upload-artifact@v7
         with:
           name: lightloom-linux
@@ -413,6 +475,8 @@ jobs:
           path: |
             dist/*.tar.xz
             dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
             dist/*.cdx.json
           if-no-files-found: error
 
@@ -514,7 +578,9 @@ jobs:
             "Lightloom-$MSI_VERSION-x64.msi" \
             "lightloom-x86_64-pc-windows-msvc.zip" \
             "lightloom-$VERSION-linux-x86_64.tar.xz" \
-            "Lightloom-$VERSION-x86_64.AppImage"; do
+            "Lightloom-$VERSION-x86_64.AppImage" \
+            "lightloom_${VERSION}_amd64.deb" \
+            "lightloom-$VERSION-1.x86_64.rpm"; do
             if [ ! -s "$f" ]; then echo "::error::missing release file $f"; exit 1; fi
           done
           ls ./*-x86_64-pc-windows-msvc.cdx.json ./*-x86_64-unknown-linux-gnu.cdx.json > /dev/null

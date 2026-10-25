@@ -91,8 +91,9 @@ checked by default.
   register) and keeps PawnIO when it is current.
 - **In-app updates** (Settings → Updates, `crates/lightloom-daemon/src/update.rs`) rely on
   exactly this: the daemon downloads `Lightloom-<x.y.z>-x64.msi`, checks it against the
-  release's `SHA256SUMS` (written by the `release` job of `release.yml` from the `*.sha256`
-  files, the MSI's included) and starts `msiexec /i` detached from itself. The package's
+  release's `SHA256SUMS` (written over every release file by the `assemble` job of
+  `release-build.yml`, which also fails when the MSI is not named that way) and starts
+  `msiexec /i` detached from itself. The package's
   `StopLightloom` action then stops the daemon and the tray before `InstallValidate`, so no file
   is in use, and Finish starts the new version. Cancelling the wizard leaves the running version
   alone. Keep the MSI name, the per-user scope and `StopLightloom` as they are, or update the
@@ -140,10 +141,21 @@ staged by `tools/package/stage-linux.sh` (the counterpart of `stage-windows.ps1`
 
 ## AppImage / Flatpak
 
-- `appimage/`: built with linuxdeploy by the release workflow's `linux` job; the staged
-  tree sits in `usr/lib/lightloom`. It will bundle CEF and the renderer once they build on
-  Linux (WP-L5). AppImages cannot install udev rules: `--setup-help` prints the commands.
-  See `appimage/README.md`.
-- `flatpak/`: `org.freedesktop.Platform` 24.08; device access through `--device=all` plus
+- `appimage/`: built with linuxdeploy by the `linux` job of `release-build.yml`; the staged
+  tree, CEF effect renderer and runtime included, sits in `usr/lib/lightloom`. AppImages
+  cannot install udev rules: `--setup-help` prints the commands. See `appimage/README.md`.
+- `flatpak/`: `org.freedesktop.Platform` 25.08; device access through `--device=all` plus
   the host-installed udev rules above (a Flatpak cannot install them), `--share=network`
-  for the 127.0.0.1 dashboard. See `flatpak/README.md`.
+  for the 127.0.0.1 dashboard. No CEF renderer yet. Built weekly by
+  `.github/workflows/flatpak.yml`. See `flatpak/README.md`.
+
+## Release workflows
+
+- `.github/workflows/release-build.yml` (reusable) builds everything a release ships: the
+  Windows zip and MSI, the Linux tarball (`.tar.xz`) and AppImage, CycloneDX SBOMs for both
+  targets, all with cargo-auditable; checks that two Linux builds are bit-identical; writes
+  `SHA256SUMS`; uploads the `lightloom-release` artifact. It publishes nothing.
+- `.github/workflows/release.yml` calls it on a `v*` tag and makes a draft release from the
+  artifact. The tag must match `[workspace.package] version` in Cargo.toml.
+- `ci.yml`'s `release-dry-run` calls it weekly and on manual dispatch, so the release steps
+  run before any tag does. Details: `docs/linux-porting.md`, "Release".

@@ -11,16 +11,42 @@ repository.workspace = true
 authors.workspace = true
 homepage.workspace = true
 
+[features]
+# Linux capture backends (no effect on Windows builds). `screencast` needs
+# libpipewire-0.3 and libclang at build time; the others are pure Rust.
+default = ["pulseaudio", "screencast", "x11"]
+# Audio: monitor of an output sink over the PulseAudio protocol (PulseAudio or pipewire-pulse).
+pulseaudio = ["dep:pulseaudio"]
+# Screen on Wayland: xdg-desktop-portal ScreenCast + a PipeWire stream.
+screencast = ["dep:ashpd", "dep:pipewire", "dep:tokio"]
+# Screen on X11: RandR outputs + MIT-SHM grabs.
+x11 = ["dep:x11rb", "dep:libc"]
+
 [dependencies]
 serde = { workspace = true }
 tracing = { workspace = true }
 # Windowed FFT for engine.audio (pure Rust, MIT/Apache-2.0).
 realfft = "3.5"
 
-[target.'cfg(windows)'.dependencies]
-# WASAPI loopback of the default output device (Apache-2.0). Linux capture is WP-L6.
-cpal = "0.18"
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 # Lock-free single-producer ring from the audio callback (MIT/Apache-2.0).
 rtrb = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+# WASAPI loopback of the default output device (Apache-2.0).
+cpal = "0.18"
 # DXGI Desktop Duplication for engine.zone / engine.vision (MIT/Apache-2.0).
 windows = { workspace = true, features = ["Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native PulseAudio protocol client, pure Rust (MIT).
+pulseaudio = { version = "0.3.2", optional = true }
+# ScreenCast portal over D-Bus (MIT). Never its `pipewire` feature: it pulls pipewire 0.9,
+# which cannot share a graph with 0.10 (docs/research/m7-linux-backend.md §11).
+ashpd = { version = "0.13.13", optional = true, default-features = false, features = ["tokio", "screencast"] }
+# PipeWire stream of the portal's node (MIT; links libpipewire-0.3, bindgen at build time).
+pipewire = { version = "0.10.1", optional = true }
+tokio = { workspace = true, optional = true }
+# X11 protocol in pure Rust (MIT/Apache-2.0): RandR and MIT-SHM.
+x11rb = { version = "0.14", optional = true, features = ["randr", "shm"] }
+libc = { workspace = true, optional = true }

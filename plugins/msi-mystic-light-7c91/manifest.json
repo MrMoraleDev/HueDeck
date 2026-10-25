@@ -15,6 +15,7 @@
   "permissions": ["hid"],
   "save": { "static": true, "effects": ["breathing"] },
   "shutdownModes": ["restore", "keep", "off"],
+  "hardwareModes": ["static"],
   "conflictingProcesses": ["LEDKeeper.exe", "LEDKeeper2.exe", "LightKeeperService.exe", "LightKeeperService2.exe"],
   "keywords": ["msi", "mystic-light", "motherboard", "b550", "ms-7c91", "argb", "jrainbow", "jrgb"]
 }

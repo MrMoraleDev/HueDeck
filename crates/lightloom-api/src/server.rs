@@ -75,6 +75,13 @@ pub trait Backend: Send + Sync + 'static {
     fn updates(&self) -> Option<Arc<dyn Updates>> {
         None
     }
+    /// Device `key`'s latest LCD face frame as a PNG (`GET /v1/devices/{key}/lcd/preview`);
+    /// `None` while its plugin drives no LCD. Encoding takes a moment, so the router
+    /// calls it off the async runtime. Default: no LCDs.
+    fn lcd_preview(&self, key: &str) -> Option<Vec<u8>> {
+        let _ = key;
+        None
+    }
 }
 
 /// The update check of Settings → Updates (docs/privacy.md). Calls may block
@@ -228,6 +235,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/devices/{key}", get(device).patch(patch_device))
         .route("/v1/devices/{key}/channels/{channel}", put(put_channel))
         .route("/v1/devices/{key}/lcd", put(put_lcd))
+        .route("/v1/devices/{key}/lcd/preview", get(lcd_preview))
         .route("/v1/devices/{key}/mode", put(put_hardware_mode))
         .route("/v1/devices/{key}/leds", get(led_map))
         .route("/v1/devices/{key}/leds/{uid}", axum::routing::patch(patch_leds))
@@ -421,18 +429,38 @@ async fn put_channel(
 struct LcdBody {
     face: Option<String>,
     framerate: Option<u32>,
+    values: Option<Map<String, Value>>,
 }
 
-/// Choose a device's LCD face / frame rate.
+/// Choose a device's LCD face / frame rate / face control values.
 async fn put_lcd(State(ctx): State<ApiContext>, Path(key): Path<String>, Json(b): Json<LcdBody>) -> Response {
     reply(
         ctx.call(Request::SetLcd {
             key,
             face: b.face,
             framerate: b.framerate,
+            values: b.values,
         })
         .await,
     )
+}
+
+/// A device's latest LCD face frame as a PNG (the dashboard preview); 404 while its
+/// plugin drives no LCD.
+async fn lcd_preview(State(ctx): State<ApiContext>, Path(key): Path<String>) -> Response {
+    let backend = Arc::clone(&ctx.backend);
+    match tokio::task::spawn_blocking(move || backend.lcd_preview(&key)).await {
+        Ok(Some(png)) => (
+            [
+                (header::CONTENT_TYPE, "image/png"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            png,
+        )
+            .into_response(),
+        Ok(None) => error_response(&ApiError::not_found("this device has no LCD face running")),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
 }
 
 /// The LED painter's view of a device: its endpoints' LEDs, custom colours and zones.

@@ -24,8 +24,9 @@
 //!
 //! This module holds the logic, with the API, the registry and the desktop
 //! behind traits so the tests run without a daemon or a registry; the
-//! Windows shell glue is `win.rs` in the binary. Linux has no tray yet
-//! (StatusNotifierItem is planned): the binary says so and exits.
+//! Windows shell glue is `win.rs` in the binary. On Linux the same menu is a
+//! StatusNotifierItem with a dbusmenu ([`sni`]); without a StatusNotifier
+//! host on the desktop the binary says so and exits.
 
 #![deny(unsafe_code)]
 
@@ -41,6 +42,8 @@ pub use runkey::WinRunKey;
 mod instance;
 #[cfg(windows)]
 pub use instance::{close_tray, WINDOW_CLASS};
+/// The Linux tray: StatusNotifierItem and dbusmenu (the menu tree builds everywhere).
+pub mod sni;
 
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};

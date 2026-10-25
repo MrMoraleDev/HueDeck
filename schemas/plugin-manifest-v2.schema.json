@@ -88,6 +88,12 @@
       "items": { "type": "string", "enum": ["restore", "keep", "off"] },
       "description": "Lightloom extension: the exit modes the plugin's Shutdown(SystemSuspending, mode) carries out itself (restore: the device's own lighting; keep: the last colours, volatile; off). Must equal the ShutdownModes() export. Other modes fall back to the shutdownColor parameter."
     },
+    "hardwareModes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+      "description": "Lightloom extension (docs/host-api/hardware-modes.md): the ids of the built-in effects the plugin's SetHardwareMode(request) can put the device in, in the order of the HardwareModes() export, which they must equal. Omit when the plugin offers none."
+    },
     "icon": { "type": "string", "description": "Relative path or URL of a PNG/JPG/SVG image." },
     "keywords": { "type": "array", "items": { "type": "string" } }
   },

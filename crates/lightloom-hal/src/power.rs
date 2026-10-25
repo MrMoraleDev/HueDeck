@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! System power and session events: sleep and resume, lock and unlock, the
-//! display turning off and on.
+//! display turning off and on, log-off.
 //!
 //! A [`PowerSource`] delivers them to a [`PowerSink`] on its own thread. The
 //! sink of [`PowerEvent::Suspend`] may block until the devices are put away:
@@ -10,8 +10,9 @@
 //! `PBT_APMRESUMESUSPEND`): consumers treat every event as idempotent.
 //!
 //! Backends: `lightloom_hal_windows::power` (a hidden window for
-//! `WM_POWERBROADCAST` and `WM_WTSSESSION_CHANGE`). Linux (logind
-//! `PrepareForSleep` over D-Bus) is not implemented yet: there is no source.
+//! `WM_POWERBROADCAST` and `WM_WTSSESSION_CHANGE`) and
+//! `lightloom_hal_linux::logind` (systemd-logind `PrepareForSleep` and
+//! session lock/unlock over D-Bus).
 
 use crate::error::HalResult;
 use std::sync::Arc;
@@ -31,6 +32,9 @@ pub enum PowerEvent {
     DisplayOff,
     /// The display turned on (or dimmed).
     DisplayOn,
+    /// The user is logging off (the session ends; the process may be ended
+    /// soon after the sink returns).
+    Logoff,
 }
 
 /// Receives [`PowerEvent`]s (see the module docs: `Suspend` may block).

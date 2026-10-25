@@ -53,4 +53,5 @@ Changed channel components restart the device's session, as editing them does.
 * SignalRGB macros switch "layouts" (`Activate Layout`: `system.action("layout/apply/<name>")`), and a
   SignalRGB layout holds more than placements. So `layout/apply/<name>` applies the profile `<name>` when
   there is no layout of that name but such a profile.
-* The macro option type `profilename` (a profile name, entered as text) exists for Lightloom-written macros.
+* The macro option type `profilename` (a profile name, picked from the saved profiles in the Macros page)
+  exists for Lightloom-written macros.

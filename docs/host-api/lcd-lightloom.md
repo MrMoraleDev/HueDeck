@@ -14,7 +14,8 @@ module, the face renderer and the face format.
 | One face renderer per LCD device, face choice, sensors | `crates/lightloom-daemon/src/lcd.rs` |
 | The face browser | `lightloom-renderer --face --width W --height H` (`crates/lightloom-renderer`) |
 | Face selection API | `PUT /v1/devices/{key}/lcd`, `GET /v1/lcd/faces`, `DeviceView.lcd` (`docs/api/openapi.yaml`) |
-| Dashboard | `ui/src/components/LcdFacePicker.svelte` (on a device card while its LCD runs) |
+| Preview API | `GET /v1/devices/{key}/lcd/preview` (PNG of the latest face frame) |
+| Dashboard | `ui/src/components/LcdFacePicker.svelte` (on a device card while its LCD runs: face, controls, frame rate), `LcdPreview.svelte` |
 | Starter faces (CC0) | `faces/clock.html`, `faces/sensor.html` |
 
 ## Flow
@@ -121,14 +122,27 @@ show.
 with `{face, framerate}`, where `face: ""` means the default). The choice is kept in the
 database (`lcd.faces`) and restarts a running face. The default face is `lightloom:clock`.
 
+**Face controls.** A face's `<meta property>` controls work like an effect's: `GET /v1/lcd/faces`
+lists them (`controls`, the effect-meta shape), and `PUT /v1/devices/{key}/lcd` with
+`{values: {property: value}}` sets them for the face the device shows (after the request's `face`).
+Values are checked against the control's type (an unknown control or a value that does not fit is
+a 400) and kept per device and per face in the same `lcd.faces` record (`values: {faceId: {...}}`),
+so switching faces and back finds them again. A new value reaches the running page at once (the
+control global, then `on<prop>Changed()`), without a restart; a face that starts gets its stored
+values instead of the defaults. `DeviceView.lcd.values` holds the values of the face shown. The
+dashboard shows the controls under the face picker.
+
+**Preview.** `GET /v1/devices/{key}/lcd/preview` encodes the device's latest face frame as a PNG at
+the LCD's size (404 while no LCD runs; `Cache-Control: no-store`). The device card shows it as a
+small picture (at most 96 px, round for a round screen), fetched about twice a second, one request
+at a time, and only while the picture is on screen and the browser tab is visible.
+
 **Not implemented yet:**
-- per-face control values (faces run with their defaults);
 - SignalRGB's background layer (`media` / `thumbnail`, `<meta background>` compositing);
 - rotation;
 - brightness;
 - idle blanking and the RAF re-kick shim;
-- remote AIO themes;
-- the dashboard preview of a face.
+- remote AIO themes.
 
 ## Hardware status
 

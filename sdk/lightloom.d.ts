@@ -806,7 +806,8 @@ declare namespace Lightloom {
     ShutdownModes?: Exported<ShutdownMode[]>;
     /**
      * The device's built-in effects `SetHardwareMode(request)` puts it in, live
-     * (docs/host-api/hardware-modes.md).
+     * (docs/host-api/hardware-modes.md). Their ids are repeated, in order, as
+     * `hardwareModes` in manifest.json.
      * @lightloom
      */
     HardwareModes?: Exported<HardwareMode[]>;

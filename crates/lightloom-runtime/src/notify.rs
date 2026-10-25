@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! This OS's system notifications: Windows toasts
-//! (`lightloom_hal_windows::toast`); elsewhere none yet ([`NoNotifier`]; Linux
-//! gets libnotify / the freedesktop D-Bus service behind the same trait).
+//! (`lightloom_hal_windows::toast`), the freedesktop
+//! `org.freedesktop.Notifications` D-Bus service on Linux
+//! (`lightloom_hal_linux::notifications`); elsewhere none ([`NoNotifier`]).
 
 use lightloom_hal::notify::{NoNotifier, Notifier};
 use std::sync::Arc;
@@ -12,7 +13,11 @@ pub fn system_notifier() -> Arc<dyn Notifier> {
     {
         Arc::new(lightloom_hal_windows::toast::ToastNotifier::lightloom())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        Arc::new(lightloom_hal_linux::FreedesktopNotifier::new())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Arc::new(NoNotifier)
     }

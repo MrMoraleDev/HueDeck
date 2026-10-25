@@ -8,7 +8,10 @@
 //!   `PBT_APMRESUMESUSPEND` (both arrive on a user wake: the consumer treats a
 //!   second resume as a no-op), and `PBT_POWERSETTINGCHANGE` for
 //!   `GUID_CONSOLE_DISPLAY_STATE` (off, on, dimmed: dimmed counts as on);
-//! * `WM_WTSSESSION_CHANGE`: `WTS_SESSION_LOCK` / `WTS_SESSION_UNLOCK`.
+//! * `WM_WTSSESSION_CHANGE`: `WTS_SESSION_LOCK` / `WTS_SESSION_UNLOCK`, and
+//!   `WTS_SESSION_LOGOFF`;
+//! * `WM_ENDSESSION` with `ENDSESSION_LOGOFF` (the session's own log-off; the
+//!   consumer treats a second log-off as a no-op).
 //!
 //! Message-only windows (`HWND_MESSAGE`) get no broadcasts, hence the plain
 //! hidden window. Windows sends `WM_POWERBROADCAST` and waits for the window
@@ -35,9 +38,10 @@ use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, PostThreadMessageW,
-    RegisterClassW, TranslateMessage, DEVICE_NOTIFY_WINDOW_HANDLE, MSG, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, PBT_POWERSETTINGCHANGE, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_POWERBROADCAST, WM_QUIT, WM_WTSSESSION_CHANGE, WNDCLASSW, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    RegisterClassW, TranslateMessage, DEVICE_NOTIFY_WINDOW_HANDLE, ENDSESSION_LOGOFF, MSG,
+    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, PBT_POWERSETTINGCHANGE, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_ENDSESSION, WM_POWERBROADCAST, WM_QUIT, WM_WTSSESSION_CHANGE, WNDCLASSW,
+    WTS_SESSION_LOCK, WTS_SESSION_LOGOFF, WTS_SESSION_UNLOCK,
 };
 
 const CLASS: PCWSTR = w!("LightloomPowerEvents");
@@ -75,8 +79,14 @@ unsafe fn event_of(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<PowerEven
         WM_WTSSESSION_CHANGE => match wparam.0 as u32 {
             WTS_SESSION_LOCK => Some(PowerEvent::Lock),
             WTS_SESSION_UNLOCK => Some(PowerEvent::Unlock),
+            WTS_SESSION_LOGOFF => Some(PowerEvent::Logoff),
             _ => None,
         },
+        // wParam TRUE: the session really ends; lParam ENDSESSION_LOGOFF: by a log-off
+        // (0 is a shutdown, which the daemon's console handler already covers).
+        WM_ENDSESSION if wparam.0 != 0 && (lparam.0 as u32) & ENDSESSION_LOGOFF != 0 => {
+            Some(PowerEvent::Logoff)
+        }
         _ => None,
     }
 }
@@ -269,6 +279,14 @@ mod tests {
             Some(PowerEvent::Unlock)
         );
         assert_eq!(ev(WM_WTSSESSION_CHANGE, 1), None);
+        assert_eq!(
+            ev(WM_WTSSESSION_CHANGE, WTS_SESSION_LOGOFF),
+            Some(PowerEvent::Logoff)
+        );
+        let end = |w: usize, l: u32| unsafe { event_of(WM_ENDSESSION, WPARAM(w), LPARAM(l as isize)) };
+        assert_eq!(end(1, ENDSESSION_LOGOFF), Some(PowerEvent::Logoff));
+        assert_eq!(end(0, ENDSESSION_LOGOFF), None, "log-off cancelled");
+        assert_eq!(end(1, 0), None, "shutdown");
 
         let mut s = POWERBROADCAST_SETTING {
             PowerSetting: GUID_CONSOLE_DISPLAY_STATE,

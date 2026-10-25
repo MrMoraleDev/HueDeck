@@ -1,22 +1,34 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Macros (docs/macros.md): the runtime's switches, the user's Inputs (enable, options, chain of Actions)
-     and Actions (options, Run). Polls GET /v1/macros every 3 s while shown and the page is visible. -->
+     and Actions (options, Run). Loads GET /v1/macros once, then follows the daemon's `macros` events
+     (refetching on reconnect and when the page becomes visible); every update is reconciled into the
+     view, so only what changed re-renders. -->
 <script lang="ts">
   import { onMount } from "svelte";
   import { macrosApi, type MacroOption, type MacroScript, type MacrosView } from "../lib/macros.svelte";
+  import { nameChoices } from "../lib/macro-options";
+  import { reconcile } from "../lib/reconcile";
+  import { daemon } from "../lib/store.svelte";
 
-  const EVERY = 3000;
   let view = $state<MacrosView | null>(null);
   let failed = $state<string | null>(null);
   let notice = $state<string | null>(null);
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+  const isView = (v: unknown): v is MacrosView => !!v && typeof v === "object" && "scripts" in v;
+
+  /** Take a new view: reconciled into the one shown (only changed values fire). */
+  function apply(next: MacrosView) {
+    if (view) reconcile(view, next);
+    else view = next;
+    if (failed !== null) failed = null;
+  }
+
   async function refresh() {
     if (document.visibilityState !== "visible") return;
     try {
-      view = await macrosApi.get();
-      failed = null;
+      apply(await macrosApi.get());
     } catch (e) {
       failed = message(e);
     }
@@ -26,8 +38,7 @@
     try {
       const r = await call();
       notice = null;
-      if (r && typeof r === "object" && "scripts" in r) view = r as MacrosView;
-      else await refresh();
+      if (isView(r)) apply(r);
     } catch (e) {
       notice = message(e);
       await refresh();
@@ -36,11 +47,16 @@
 
   onMount(() => {
     void refresh();
-    const timer = setInterval(refresh, EVERY);
+    const offMacros = daemon.events.on("macros", (data) => {
+      if (isView(data)) apply(data);
+    });
+    // Events missed while disconnected or hidden: refetch.
+    const offOpen = daemon.events.on("open", () => void refresh());
     const onVisible = () => void refresh();
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      clearInterval(timer);
+      offMacros();
+      offOpen();
       document.removeEventListener("visibilitychange", onVisible);
     };
   });
@@ -88,6 +104,14 @@
       />
     {:else if o.type === "color"}
       <input type="color" value={String(o.value ?? "#ff0000").slice(0, 7)} onchange={(e) => setOption(s, o, text(e))} />
+    {:else if o.type === "layoutname" || o.type === "profilename"}
+      {@const names = nameChoices(o.type, o.value, daemon.snapshot) ?? []}
+      <select value={String(o.value ?? "")} onchange={(e) => setOption(s, o, text(e))}>
+        <option value="">{o.type === "layoutname" ? "Choose a layout…" : "Choose a profile…"}</option>
+        {#each names as c (c.name)}
+          <option value={c.name}>{c.name}{c.missing ? " (missing)" : ""}</option>
+        {/each}
+      </select>
     {:else if o.type === "effectpreset" || o.type === "list"}
       <code class="muted">{JSON.stringify(o.value)}</code>
     {:else}

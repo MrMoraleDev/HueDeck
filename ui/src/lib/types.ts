@@ -161,6 +161,8 @@ export interface LcdView {
   renderer: "cef" | "mock" | string;
   running: boolean;
   status?: string | null;
+  /** The device's control values for the face shown (the others keep their defaults). */
+  values?: Record<string, unknown>;
 }
 
 /** An LCD face: an HTML page with onReady(). */
@@ -170,6 +172,8 @@ export interface LcdFace {
   description: string;
   publisher: string;
   usesSensors: boolean;
+  /** `<meta property>` controls, set per device. */
+  controls?: EffectControl[];
 }
 
 export type ShutdownMode = "restore" | "keep" | "off";

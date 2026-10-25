@@ -2,8 +2,9 @@
 //! System notifications (the desktop's own pop-ups, outside the dashboard).
 //!
 //! Each OS backend implements [`Notifier`]: Windows toasts in
-//! `lightloom-hal-windows` (`toast`), libnotify / the freedesktop
-//! `org.freedesktop.Notifications` D-Bus service on Linux later.
+//! `lightloom-hal-windows` (`toast`), the freedesktop
+//! `org.freedesktop.Notifications` D-Bus service in `lightloom-hal-linux`
+//! (`notifications`).
 //! [`NoNotifier`] stands in where there is none.
 
 use crate::error::{HalError, HalResult};

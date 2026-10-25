@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { formatResult, lintPlugin, pluginDirs, scanForbiddenGlobals, stripCode } from "../lint.mjs";
+import { formatResult, hardwareModeIds, lintPlugin, pluginDirs, scanForbiddenGlobals, stripCode } from "../lint.mjs";
 import { validate } from "../schema.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -170,6 +170,43 @@ test("save and exit modes: the first-party MSI GPU plugin is clean, mismatches a
     const source = readFileSync(join(dir, "plugin.js"), "utf8").replace("export function SaveToDevice(", "function SaveToDevice(");
     writeFileSync(join(dir, "plugin.js"), source);
     assert.ok(has(await lintPlugin(dir), "save-without-export"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hardware modes: manifest ids must match HardwareModes(), read like the host reads them", async () => {
+  const { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const warnings = [];
+  assert.deepEqual(
+    hardwareModeIds([{ id: " a " }, { id: "a" }, { id: "" }, { id: "x".repeat(65) }, { id: "b", colors: 9 }, 3, { id: "c", colors: 2 }], warnings),
+    ["a", "c"],
+  );
+  assert.equal(warnings.length, 5, warnings.join("\n"));
+  assert.deepEqual(hardwareModeIds("nope"), []);
+
+  const board = join(sdk, "..", "plugins", "msi-mystic-light-7c91");
+  const clean = await lintPlugin(board);
+  assert.deepEqual(clean.findings.filter((f) => f.code.startsWith("hardware-mode")), [], formatResult(clean));
+  const dir = mkdtempSync(join(tmpdir(), "lightloom-lint-hwmode-"));
+  try {
+    cpSync(board, dir, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+    manifest.hardwareModes = ["static", "rainbow"];
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+    assert.ok(has(await lintPlugin(dir), "hardware-modes-mismatch", /rainbow/));
+    delete manifest.hardwareModes;
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+    assert.ok(has(await lintPlugin(dir), "hardware-modes-mismatch"), "modes the manifest does not declare");
+    manifest.hardwareModes = ["static"];
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+    const source = readFileSync(join(dir, "plugin.js"), "utf8").replace("export function SetHardwareMode(", "function SetHardwareMode(");
+    writeFileSync(join(dir, "plugin.js"), source);
+    assert.ok(has(await lintPlugin(dir), "hardware-modes-without-export"));
+    manifest.hardwareModes = ["static", "static"];
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+    assert.ok(has(await lintPlugin(dir), "schema"), "ids are unique");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -62,23 +62,53 @@ fi
 # and icon. linuxdeploy adds the shared libraries the ELF files need (libudev and glibc
 # stay host libraries, per the AppImage excludelist) and the top-level .desktop/.DirIcon.
 appdir="$work/Lightloom.AppDir"
+lib="$appdir/usr/lib/lightloom"
 mkdir -p "$appdir/usr/lib" "$appdir/usr/bin"
-cp -a "$stage" "$appdir/usr/lib/lightloom"
+cp -a "$stage" "$lib"
 for b in lightloomd lightloom; do
   ln -s "../lib/lightloom/$b" "$appdir/usr/bin/$b"
 done
+
+# The CEF effect renderer and its runtime (stage-linux.sh) stay out of linuxdeploy's reach:
+# linuxdeploy rewrites the rpath of every ELF file it finds under usr/lib (patchelf on libcef.so
+# and replacing the renderer's $ORIGIN rpath) and would bundle Chromium's system libraries
+# (NSS, which dlopens its own modules, Mesa's libgbm, X11), which must come from the host.
+# They are set aside here and put back before the AppImage is written.
+cef="$work/cef-runtime"
+mkdir -p "$cef"
+shopt -s nullglob
+for f in "$lib/lightloom-renderer" "$lib"/*.so "$lib"/*.so.* "$lib"/*.pak "$lib"/*.bin "$lib"/*.dat \
+  "$lib/vk_swiftshader_icd.json" "$lib/locales"; do
+  if [ -e "$f" ]; then mv "$f" "$cef/"; fi
+done
+shopt -u nullglob
 
 mkdir -p "$out"
 out_abs="$(cd "$out" && pwd)"
 (
   cd "$work"
-  OUTPUT="Lightloom-$version-x86_64.AppImage" "$LINUXDEPLOY" \
+  # Deploy only: no --output, so the CEF files can go back in before packaging.
+  "$LINUXDEPLOY" \
     --appdir "$appdir" \
     --custom-apprun "$here/AppRun" \
     --desktop-file "$here/lightloom.desktop" \
     --icon-file "$here/lightloom.svg" \
-    --deploy-deps-only "$appdir/usr/lib/lightloom" \
-    --output appimage
+    --deploy-deps-only "$lib"
+
+  if [ -n "$(ls -A "$cef")" ]; then
+    mv "$cef"/* "$lib/"
+    # The renderer must find libcef.so next to itself (build.rs `$ORIGIN` rpath).
+    if ! ldd "$lib/lightloom-renderer" | grep -E 'libcef\.so => /' >/dev/null; then
+      echo "lightloom-renderer: libcef.so does not resolve inside the AppDir" >&2
+      exit 1
+    fi
+  fi
+
+  # The AppImage output plugin bundled in linuxdeploy's own AppImage (usr/bin), run on the
+  # finished AppDir without a second linuxdeploy pass.
+  "$LINUXDEPLOY" --appimage-extract >/dev/null
+  OUTPUT="Lightloom-$version-x86_64.AppImage" \
+    squashfs-root/usr/bin/linuxdeploy-plugin-appimage --appdir "$appdir"
   mv "Lightloom-$version-x86_64.AppImage" "$out_abs/"
 )
 

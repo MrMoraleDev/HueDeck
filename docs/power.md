@@ -6,7 +6,15 @@ hidden window (`lightloom_hal_windows::power`). The window gets:
   `PBT_POWERSETTINGCHANGE` for `GUID_CONSOLE_DISPLAY_STATE`;
 - `WM_WTSSESSION_CHANGE`: lock and unlock.
 
-Linux has no source yet: logind's `PrepareForSleep` over D-Bus is still to do. Mock runs (`--no-hardware`, fixed device
+On Linux they come from systemd-logind on the system D-Bus (`lightloom_hal_linux::logind`):
+- `Manager.PrepareForSleep(true)` / `(false)`: sleep and resume. A `delay` inhibitor lock is held while awake, so
+  logind waits for the engine (up to `InhibitDelayMaxSec`, 5 s by default) and the lock is released once the devices
+  are put away, then taken again on resume;
+- the user's session (the daemon's own, else the user's display session for a `systemd --user` service): `Lock`,
+  `Unlock` and changes of `LockedHint`.
+
+logind has no display off/on event, so on Linux the display rules never fire. Without a system bus or logind the daemon
+runs without power events and says so in its log. Mock runs (`--no-hardware`, fixed device
 lists) subscribe no source. Tests drive the engine through `ManualPower` and `Shared::power_sink`.
 
 ## Sleep

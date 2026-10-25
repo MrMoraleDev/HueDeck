@@ -36,6 +36,9 @@ arc-swap = "1"
 clap = { version = "4", features = ["derive", "env"] }
 hidapi = { version = "2.6", default-features = false }
 nusb = "0.2"
+# D-Bus on Linux (logind sleep/lock, desktop notifications, the StatusNotifierItem tray):
+# pure Rust, MIT; its own runtime, driven through `lightloom_hal_linux::dbus` (blocking calls).
+zbus = { version = "6", default-features = false, features = ["default-rt", "service"] }
 # No libudev (a C build): Linux enumerates ttys from sysfs itself (lightloom-hal-linux).
 serialport = { version = "4.10", default-features = false, features = ["usbportinfo-interface"] }
 rquickjs = { version = "0.14", features = ["loader", "array-buffer", "futures", "parallel"] }

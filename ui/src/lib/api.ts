@@ -99,8 +99,19 @@ export const api = {
   setChannel: (key: string, channel: string, components: unknown[]) =>
     request("PUT", `/v1/devices/${enc(key)}/channels/${enc(channel)}`, components),
   /** Choose a device's LCD face (`""`: the default) and/or frame rate (1-60). */
-  setLcd: (key: string, patch: { face?: string; framerate?: number }) =>
-    request<{ key: string; face: string | null; framerate: number }>("PUT", `/v1/devices/${enc(key)}/lcd`, patch),
+  setLcd: (key: string, patch: { face?: string; framerate?: number; values?: Record<string, unknown> }) =>
+    request<{ key: string; face: string | null; framerate: number; values: Record<string, unknown> }>(
+      "PUT",
+      `/v1/devices/${enc(key)}/lcd`,
+      patch,
+    ),
+  /** The device's latest LCD face frame (PNG); null while no LCD runs. */
+  lcdPreview: async (key: string): Promise<Blob | null> => {
+    const res = await fetch(`/v1/devices/${enc(key)}/lcd/preview`, { cache: "no-store" });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`preview: ${res.status}`);
+    return res.blob();
+  },
   /** Put a device in one of its hardware modes; null: back to the effect. */
   setHardwareMode: (key: string, mode: DeviceHardwareMode | null) =>
     request<{ device: string; hardwareMode: DeviceHardwareMode | null; applied: boolean }>(

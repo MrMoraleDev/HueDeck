@@ -15,13 +15,19 @@
 //!   opened); `LinuxSerialBackend` (Linux only) opens them over `serialport`;
 //! * [`procfs`]: system-wide CPU time and memory (`/proc/stat`, `/proc/meminfo`);
 //! * `hidraw` (Linux only): [`LinuxHidBackend`], report I/O on `/dev/hidrawN`;
-//! * `hotplug` (Linux only): [`HidrawHotplug`], the udev netlink monitor.
+//! * `hotplug` (Linux only): [`HidrawHotplug`], the udev netlink monitor
+//!   (hidraw nodes and raw USB devices);
+//! * [`usb`]: USB devices and interfaces from sysfs; `LinuxUsbBackend`
+//!   (Linux only), raw USB over usbfs through `nusb`;
+//! * `logind` (Linux only): [`LogindPower`], sleep/resume and lock/unlock
+//!   from systemd-logind over D-Bus;
+//! * `notifications` (Linux only): [`FreedesktopNotifier`],
+//!   `org.freedesktop.Notifications` over D-Bus;
+//! * `dbus` (Linux only): blocking calls on zbus, shared with the tray.
 //!
 //! The pure modules compile on every OS so their tests (and the tuple-parity
 //! fixtures shared with the Windows path logic) run in Windows CI too.
 //! `unsafe` is confined to the Linux-only `sys` module (ioctls, poll, socket).
-//!
-//! Planned: `nusb` raw USB.
 
 #![deny(unsafe_code)]
 
@@ -32,14 +38,21 @@ pub mod sysfs;
 pub mod tlc;
 pub mod tty;
 pub mod uevent;
+pub mod usb;
 
 #[cfg(test)]
 mod fixtures;
 
 #[cfg(target_os = "linux")]
+pub mod dbus;
+#[cfg(target_os = "linux")]
 pub mod hidraw;
 #[cfg(target_os = "linux")]
 pub mod hotplug;
+#[cfg(target_os = "linux")]
+pub mod logind;
+#[cfg(target_os = "linux")]
+pub mod notifications;
 #[cfg(target_os = "linux")]
 mod sys;
 
@@ -48,4 +61,10 @@ pub use hidraw::LinuxHidBackend;
 #[cfg(target_os = "linux")]
 pub use hotplug::HidrawHotplug;
 #[cfg(target_os = "linux")]
+pub use logind::LogindPower;
+#[cfg(target_os = "linux")]
+pub use notifications::FreedesktopNotifier;
+#[cfg(target_os = "linux")]
 pub use tty::LinuxSerialBackend;
+#[cfg(target_os = "linux")]
+pub use usb::LinuxUsbBackend;

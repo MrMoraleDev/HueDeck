@@ -1,12 +1,13 @@
 # Audio input (`engine.audio`)
 
 Lightloom feeds `engine.audio` to effects from a loopback capture of what the PC plays.
-Code: `crates/lightloom-inputs/src/audio/` (capture and DSP) and `crates/lightloom-daemon/src/audio.rs` (wiring).
+Code: `crates/lightloom-inputs/src/audio/` (capture and DSP; `wasapi.rs` on Windows, `pulse.rs` on Linux) and `crates/lightloom-daemon/src/audio.rs` (wiring).
 Research and design notes: `docs/research/m6-inputs-network.md` §1.
 
 ## Privacy: loopback only
 
 - Lightloom captures **only output (render) devices** in WASAPI loopback mode: the mix the PC sends to the speakers or headphones.
+- On Linux it records the **monitor of an output sink**, which is the same mix. It lists only sinks, and before recording it checks that the source is that sink's own monitor (see [Capture (Linux)](#capture-linux)).
 - It never enumerates or opens a microphone or any other capture endpoint. There is no setting to turn one on.
 - Samples stay in memory inside `lightloomd`. Only the 200 bands and four numbers per tick go to the renderer. Nothing is stored or sent anywhere else.
 - Capture runs **only while the active effect reads `engine.audio`**. The effect parser sets `uses.audio` when the HTML mentions `engine.audio`. When you switch to another effect, the stream closes. `[audio] enabled = false` turns capture off for every effect.
@@ -17,11 +18,12 @@ Research and design notes: `docs/research/m6-inputs-network.md` §1.
 [audio]
 enabled = true          # capture while the active effect reads engine.audio
 # device = "Speakers (Realtek(R) Audio)"   # an output device by name; default: the default output
+                                           # (Linux: the sink's description or its name, e.g. alsa_output.pci-0000_0b_00.4.analog-stereo)
 scale = "log"           # "log" (20 Hz-20 kHz) or "linear" (0-fs/2)
 ```
 
-- **Default device.** With no `device`, the stream follows the Windows default output. If the default changes and cpal reports the stream invalidated, Lightloom reopens it after 300 ms.
-- **Named device.** The device name is the one Windows shows in Sound settings.
+- **Default device.** With no `device`, the stream follows the Windows default output. If the default changes and cpal reports the stream invalidated, Lightloom reopens it after 300 ms. On Linux the stream follows the default sink the same way (below).
+- **Named device.** The device name is the one Windows shows in Sound settings. On Linux it is the sink's description, as `pactl list sinks` and the desktop's sound settings show it, or its name.
 - **Failures.** A name that does not match, or a device that cannot open, is logged once. Lightloom then retries every 2 s, and effects see silence meanwhile.
 - **Dashboard picker.** Settings → Inputs lists the output devices (`GET /v1/inputs`, from `lightloom_inputs::audio::output_devices()`). A device chosen there is saved in the settings database, wins over `device` in `config.toml`, and moves the running capture at once; *Default output device* goes back to `config.toml`'s choice.
 
@@ -33,6 +35,25 @@ scale = "log"           # "log" (20 Hz-20 kHz) or "linear" (0-fs/2)
 - **Silence.** Loopback delivers no packets while nothing plays. After two empty ticks, the thread reads the gap as digital silence, so bars fall to 0 and `level` goes to -100.
 - **Errors.** Xruns (discontinuities) are counted and logged at debug level; they do not rebuild the stream. Any other stream error rebuilds it.
 - **Not handled yet.** Endpoint mute is not tracked, because cpal has no endpoint-volume API. If Windows keeps delivering audio while the device is muted, the bars keep moving.
+
+## Capture (Linux)
+
+`audio/pulse.rs`, cargo feature `pulseaudio` (on by default). It speaks the native PulseAudio protocol through the pure-Rust `pulseaudio` crate (MIT), so it needs no system library at build or run time. It works with:
+
+- PipeWire through `pipewire-pulse`, which current desktops (Ubuntu 22.10+, Fedora 34+) run by default;
+- PulseAudio itself;
+- a Flatpak with `--socket=pulseaudio` (the manifest has it; there is no audio portal).
+
+How it works:
+
+1. **Connect.** The socket is `PULSE_SERVER` (`unix:` paths only), else `$PULSE_RUNTIME_PATH/native`, else `$XDG_RUNTIME_DIR/pulse/native`. Authentication sends the cookie from `PULSE_COOKIE` or `~/.config/pulse/cookie`, or 256 zero bytes when there is none, as libpulse does. Every request has a 2 s timeout, so a hung server cannot hang the analysis thread.
+2. **Pick the sink.** `GetSinkInfoList`, then the sink named in `device` (by description, then by name), else the server's default sink, else the first sink. `output_devices()` (the dashboard picker) lists the same sinks by description.
+3. **Never a microphone.** The source recorded is the sink's own `monitor_source_index`. Before the stream is created, `GetSourceInfo` must report that source's `monitor_of_sink_index` as this sink, or the open fails.
+4. **Stream.** A record stream on the monitor: f32 little-endian at the sink's rate and channel map, 10 ms fragments, `adjust_latency`. The server converts from the sink's format. A named sink sets `no_move`, so the stream is never moved to another device.
+5. **Reader thread.** `lightloom-pulse` reads packets, keeps a partial frame for the next packet so channels stay aligned, and pushes whole frames into the same 0.5 s `rtrb` ring as on Windows. A packet that does not fit is dropped whole.
+6. **Following the default.** With no `device`, the connection subscribes to server events. A server change, which is how a new default sink shows up, ends the stream, and the capture thread reopens it on the new default 300 ms later. A killed stream, a closed socket or a protocol error also ends it.
+
+A monitor delivers silence while nothing plays, so bars fall to 0 as on Windows. Checked against WSLg's PulseAudio server (the `RDP Sink` monitor, 44.1 kHz stereo, a steady stream of samples); not yet on a desktop Linux machine with PipeWire.
 
 ## Analysis
 
@@ -100,5 +121,6 @@ No audio device is used in tests.
   - density: white noise against a tone, and the white-noise calibration constant;
   - `freq` never wrapping.
 - **`audio/mod.rs`:** the capture thread with fake sources: a real-time sine, a source that fails and is reopened, a source that cannot open, and a quiet source.
+- **`audio/pulse.rs`** (Linux): sink choice by description, name and default; frame alignment across packets; the socket lookup. Manual, against a running server: `cargo test -p lightloom-inputs pulse -- --ignored --nocapture` lists the sinks and records the default monitor for 1 s, printing only the sample count and RMS.
 - **`daemon/src/audio.rs`:** the engine-data shape and the conditions under which capture starts.
 - **`lightloom-render/tests/cef_client.rs`:** a push through `engine_sink()` from another thread reaches the (fake) renderer.

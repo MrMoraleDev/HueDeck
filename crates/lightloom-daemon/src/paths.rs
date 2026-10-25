@@ -52,6 +52,11 @@ impl Paths {
         self.data.join(lightloom_runtime::dirs::API_PORT_FILE)
     }
 
+    /// The Wayland ScreenCast portal's restore token (docs/screen.md).
+    pub fn screencast_token(&self) -> PathBuf {
+        self.data.join("screencast-token")
+    }
+
     /// The single-instance lock.
     pub fn lock_file(&self) -> PathBuf {
         self.data.join("lightloomd.lock")

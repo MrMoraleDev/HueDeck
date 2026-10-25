@@ -179,11 +179,14 @@ paths:
     put:
       tags: [devices]
       operationId: putLcd
-      summary: Choose a device's LCD face and frame rate (kept per device; a running face restarts)
+      summary: Choose a device's LCD face, frame rate and face control values (kept per device)
       description: |
         The face is an HTML page from `GET /v1/lcd/faces`, rendered at the size the device's
-        plugin gave `LCD.initialize` (docs/host-api/lcd-lightloom.md). Either field may be
-        left out; `face: ""` goes back to the default face.
+        plugin gave `LCD.initialize` (docs/host-api/lcd-lightloom.md). Every field may be
+        left out; `face: ""` goes back to the default face. A running face restarts on a new
+        `face` or `framerate`; `values` (the face's `<meta property>` controls, `LcdFaceView.controls`)
+        are kept per device and face, for the face the device shows after `face`, and reach the
+        running page without a restart. An unknown control or a value that does not fit is a 400.
       security: [{ bearer: [] }]
       requestBody:
         required: true
@@ -194,6 +197,7 @@ paths:
               properties:
                 face: { type: string, description: "Face id, e.g. `lightloom:clock`" }
                 framerate: { type: integer, minimum: 1, maximum: 60 }
+                values: { type: object, additionalProperties: true, description: "Control values by property" }
       responses:
         "200":
           description: The device's LCD choice.
@@ -205,8 +209,26 @@ paths:
                   key: { type: string }
                   face: { type: [string, "null"] }
                   framerate: { type: integer }
+                  values: { type: object, additionalProperties: true, description: "The control values of the face shown (empty while no LCD runs)" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/lcd/preview:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    get:
+      tags: [devices]
+      operationId: getLcdPreview
+      summary: The device's latest LCD face frame as a PNG (the dashboard's preview)
+      description: |
+        Encoded on request from the face renderer's newest frame, at the LCD's own size; the dashboard
+        asks about twice a second while the preview is on screen. `Cache-Control: no-store`.
+      responses:
+        "200":
+          description: A PNG image.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/devices/{key}/mode:
     parameters:
@@ -1677,7 +1699,8 @@ paths:
         or critical battery alert (`data`: `{key, name, level, severity}`), `action` an action URL
         for the dashboard (`data`: `{action: "view", page, tab, uid}`, `{action: "raiseWindow"}` or
         `{action: "toast", title, message}`; a macro prompt: `{action: "prompt", id, script, title,
-        message, placeholder, confirmText, cancelText}`). A client too slow
+        message, placeholder, confirmText, cancelText}`), `macros` the macro runtime's new view
+        (`data`: what `GET /v1/macros` answers; sent when it changed, while a client listens). A client too slow
         to keep up gets `state` again instead of the events it missed. Client frames are ignored.
       responses:
         "101":
@@ -2043,6 +2066,7 @@ components:
         description: { type: string }
         publisher: { type: string }
         usesSensors: { type: boolean }
+        controls: { type: array, items: { type: object }, description: "`<meta property>` controls (effect-meta schema shape)" }
     LcdView:
       type: object
       description: A device's LCD while its plugin drives one (`LCD.initialize` was called).
@@ -2055,6 +2079,7 @@ components:
         renderer: { enum: [cef, mock] }
         running: { type: boolean }
         status: { type: string }
+        values: { type: object, additionalProperties: true, description: "The device's control values for the face shown (the others keep their defaults)" }
     DeviceView:
       type: object
       properties:
@@ -2494,5 +2519,5 @@ components:
       type: object
       required: [kind]
       properties:
-        kind: { enum: [state, stats, log, battery, action] }
-        data: { description: "`log`: the line; `battery`: `{key, name, level, severity}`; `action`: `{action, ...}` (see `/v1/events`)." }
+        kind: { enum: [state, stats, log, battery, action, macros] }
+        data: { description: "`log`: the line; `battery`: `{key, name, level, severity}`; `action`: `{action, ...}` (see `/v1/events`); `macros`: the `MacrosView`." }

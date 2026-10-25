@@ -7,18 +7,22 @@
 use crate::config::ScreenConfig;
 use lightloom_effects::{EffectMeta, HslRanges, MeterMeta, MeterType, Region};
 use lightloom_inputs::screen::{
-    desktop, displays, HslWindow, Meter, MeterKind, Rect, RectOverride, ScreenInput, ScreenSettings,
+    desktop_with, displays, HslWindow, Meter, MeterKind, Rect, RectOverride, ScreenInput, ScreenSettings,
     ScreenSnapshot, VisionValue,
 };
 use lightloom_render::EngineDataSink;
 use serde_json::{json, Map, Value};
+use std::path::PathBuf;
 
 /// Start capture for `effect` when it reads the screen, pushing into `sink`;
 /// `None` when it does not, capture is off, or there is no renderer to feed.
+/// `restore_token`: where the Wayland ScreenCast portal's grant is kept
+/// (`None`: not kept).
 pub fn feed(
     cfg: &ScreenConfig,
     effect: Option<&EffectMeta>,
     sink: Option<EngineDataSink>,
+    restore_token: Option<PathBuf>,
 ) -> Option<ScreenInput> {
     let settings = settings(cfg, effect?)?;
     let sink = sink?;
@@ -29,7 +33,7 @@ pub fn feed(
     let push = Box::new(move |s: &ScreenSnapshot| {
         sink.push(engine_data(s));
     });
-    match ScreenInput::start(settings, desktop(cfg.display.clone()), push) {
+    match ScreenInput::start(settings, desktop_with(cfg.display.clone(), restore_token), push) {
         Ok(input) => Some(input),
         Err(e) => {
             tracing::warn!("screen: the capture thread did not start: {e}");
@@ -228,8 +232,8 @@ mod tests {
         };
         assert!(settings(&off, &parse("<script>engine.zone</script>")).is_none());
         // No renderer: nothing to feed.
-        assert!(feed(&cfg, Some(&parse("<script>engine.zone</script>")), None).is_none());
-        assert!(feed(&cfg, None, None).is_none());
+        assert!(feed(&cfg, Some(&parse("<script>engine.zone</script>")), None, None).is_none());
+        assert!(feed(&cfg, None, None, None).is_none());
     }
 
     #[test]

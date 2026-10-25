@@ -10,9 +10,12 @@
 //! Without the renderer executable, or with no face at all, a rainbow test pattern of the
 //! right size stands in (the mock path; tests use it).
 //!
-//! The face and frame rate are chosen per device ([`LcdFaces::select`], `PUT
-//! /v1/devices/{key}/lcd`) and kept in the database by the engine. Faces that read
-//! sensors get the poller's values like a lightscript does (`engine.getSensorValue`).
+//! The face, its control values (`<meta property>` controls, as effects have; kept per
+//! device and face) and the frame rate are chosen per device ([`LcdFaces::select`], `PUT
+//! /v1/devices/{key}/lcd`) and kept in the database by the engine. New control values reach
+//! the running page without a restart. Faces that read sensors get the poller's values like
+//! a lightscript does (`engine.getSensorValue`). [`LcdFaces::preview_png`] encodes a
+//! device's latest face frame for the dashboard's preview.
 
 use lightloom_api::model::{LcdFaceView, LcdView};
 use lightloom_engine::FrameStore;
@@ -43,6 +46,40 @@ pub struct LcdChoice {
     /// Frames per second; `None`: [`DEFAULT_FRAMERATE`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framerate: Option<u32>,
+    /// Control values by face id (controls left out keep their defaults).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, Map<String, Value>>,
+}
+
+/// The face a device shows with `choice`: the chosen one, else [`DEFAULT_FACE`], else
+/// the first face of the library.
+fn face_for<'a>(library: &'a EffectLibrary, choice: &LcdChoice) -> Option<&'a EffectFile> {
+    choice
+        .face
+        .as_deref()
+        .and_then(|id| library.get(id))
+        .or_else(|| library.get(DEFAULT_FACE))
+        .or_else(|| library.iter().next())
+}
+
+/// `values` as `face`'s control types; an unknown control or a value that does not fit
+/// is refused.
+fn coerce_values(face: &EffectFile, values: &Map<String, Value>) -> Result<Map<String, Value>, String> {
+    let mut out = Map::new();
+    for (name, value) in values {
+        let control = face
+            .meta
+            .properties
+            .iter()
+            .find(|c| c.property == *name)
+            .ok_or_else(|| format!("the face {} has no control {name}", face.id))?;
+        let v = control
+            .coerce(value)
+            .and_then(|v| serde_json::to_value(v).ok())
+            .ok_or_else(|| format!("{name} = {value} does not fit the control"))?;
+        out.insert(name.clone(), v);
+    }
+    Ok(out)
 }
 
 /// What renders one device's face.
@@ -165,6 +202,12 @@ impl LcdFaces {
                 description: f.meta.description.clone(),
                 publisher: f.meta.publisher.clone(),
                 uses_sensors: f.meta.uses.sensors,
+                controls: f
+                    .meta
+                    .properties
+                    .iter()
+                    .filter_map(|c| serde_json::to_value(c).ok())
+                    .collect(),
             })
             .collect()
     }
@@ -172,7 +215,13 @@ impl LcdFaces {
     /// Device `key`'s LCD, while its plugin drives one.
     pub fn view(&self, key: &str) -> Option<LcdView> {
         let mut inner = self.lock();
-        let a = inner.devices.get_mut(key)?;
+        let Inner { choices, devices, .. } = &mut *inner;
+        let a = devices.get_mut(key)?;
+        let values = a
+            .face
+            .as_deref()
+            .and_then(|f| choices.get(key)?.values.get(f).cloned())
+            .unwrap_or_default();
         let (renderer, running, status) = match &mut a.renderer {
             FaceRenderer::Cef(c) => ("cef", c.status().running, c.status_line()),
             FaceRenderer::Mock(n) => ("mock", n.is_running(), None),
@@ -186,7 +235,16 @@ impl LcdFaces {
             renderer: renderer.into(),
             running,
             status,
+            values,
         })
+    }
+
+    /// Device `key`'s latest face frame as a PNG (the dashboard preview), while its
+    /// plugin drives an LCD.
+    pub fn preview_png(&self, key: &str) -> Option<Vec<u8>> {
+        let frames = self.lock().devices.get(key).map(|a| Arc::clone(&a.frames))?;
+        let (_, frame) = frames.latest();
+        lightloom_lcd::encode(&frame, lightloom_lcd::LcdFormat::Png, None).ok()
     }
 
     /// Devices with a face renderer now.
@@ -227,13 +285,16 @@ impl LcdFaces {
         *sensors = Some(data);
     }
 
-    /// Choose device `key`'s face (`Some("")`: the default) and/or frame rate. A face
-    /// showing now restarts on the new choice. Returns the device's choice.
+    /// Choose device `key`'s face (`Some("")`: the default), frame rate and/or control
+    /// values (for the face the device shows with the new choice). A face showing now
+    /// restarts when a face or rate is given; values alone go to the running page.
+    /// Returns the device's choice.
     pub fn select(
         &self,
         key: &str,
         face: Option<String>,
         framerate: Option<u32>,
+        values: Option<Map<String, Value>>,
     ) -> Result<LcdChoice, String> {
         let mut inner = self.lock();
         if let Some(id) = face.as_deref().filter(|id| !id.is_empty()) {
@@ -248,18 +309,36 @@ impl LcdFaces {
                 ));
             }
         }
-        let choice = {
-            let c = inner.choices.entry(key.to_string()).or_default();
-            if let Some(id) = face {
-                c.face = (!id.is_empty()).then_some(id);
+        let restart = face.is_some() || framerate.is_some();
+        let mut choice = inner.choices.get(key).cloned().unwrap_or_default();
+        if let Some(id) = face {
+            choice.face = (!id.is_empty()).then_some(id);
+        }
+        if framerate.is_some() {
+            choice.framerate = framerate;
+        }
+        let mut live = Map::new();
+        if let Some(values) = values.filter(|v| !v.is_empty()) {
+            let f = face_for(&inner.library, &choice).ok_or("no LCD face is installed")?;
+            let values = coerce_values(f, &values)?;
+            let stored = choice.values.entry(f.id.clone()).or_default();
+            for (k, v) in values {
+                stored.insert(k.clone(), v.clone());
+                live.insert(k, v);
             }
-            if framerate.is_some() {
-                c.framerate = framerate;
-            }
-            c.clone()
-        };
+        }
         if choice == LcdChoice::default() {
             inner.choices.remove(key);
+        } else {
+            inner.choices.insert(key.to_string(), choice.clone());
+        }
+        if !restart {
+            if let Some(FaceRenderer::Cef(c)) = inner.devices.get(key).map(|a| &a.renderer) {
+                if !live.is_empty() {
+                    c.set_properties(live);
+                }
+            }
+            return Ok(choice);
         }
         // Restart the face on the new choice (the old renderer stops outside the lock).
         let Inner {
@@ -309,12 +388,7 @@ impl LcdFaces {
             .framerate
             .unwrap_or(DEFAULT_FRAMERATE)
             .clamp(1, MAX_FRAMERATE);
-        let face: Option<&EffectFile> = choice
-            .face
-            .as_deref()
-            .and_then(|id| ctx.library.get(id))
-            .or_else(|| ctx.library.get(DEFAULT_FACE))
-            .or_else(|| ctx.library.iter().next());
+        let face: Option<&EffectFile> = face_for(ctx.library, choice);
         let mock = |why: &str| {
             tracing::info!(target: "lightloom::lcd", device = key, "{why}: LCD shows a test pattern");
             let mut n =
@@ -330,7 +404,7 @@ impl LcdFaces {
                     renderer: exe.clone(),
                     effect: f.path.clone(),
                     fps: framerate,
-                    properties: Map::new(),
+                    properties: choice.values.get(&f.id).cloned().unwrap_or_default(),
                     software_compositing: ctx.software_compositing,
                     work_dir: self.work_dir.join(dir_name(key)),
                     face: Some((spec.width, spec.height)),
@@ -454,11 +528,13 @@ mod tests {
         );
         assert!(!faces.uses_sensors());
 
-        assert!(faces.select("k", Some("lightloom:nope".into()), None).is_err());
-        assert!(faces.select("k", None, Some(0)).is_err());
-        assert!(faces.select("k", None, Some(61)).is_err());
+        assert!(faces
+            .select("k", Some("lightloom:nope".into()), None, None)
+            .is_err());
+        assert!(faces.select("k", None, Some(0), None).is_err());
+        assert!(faces.select("k", None, Some(61), None).is_err());
         let c = faces
-            .select("k", Some("lightloom:sensor".into()), Some(10))
+            .select("k", Some("lightloom:sensor".into()), Some(10), None)
             .unwrap();
         assert_eq!(c.face.as_deref(), Some("lightloom:sensor"));
         let v = faces.view("k").unwrap();
@@ -467,12 +543,13 @@ mod tests {
         faces.push_sensors(Map::new());
 
         // Back to the default face; the rate stays.
-        let c = faces.select("k", Some(String::new()), None).unwrap();
+        let c = faces.select("k", Some(String::new()), None, None).unwrap();
         assert_eq!(
             c,
             LcdChoice {
                 face: None,
-                framerate: Some(10)
+                framerate: Some(10),
+                values: BTreeMap::new(),
             }
         );
         assert_eq!(faces.view("k").unwrap().face.as_deref(), Some(DEFAULT_FACE));
@@ -488,6 +565,57 @@ mod tests {
             Some(10),
             "choices outlive the session"
         );
+    }
+
+    #[test]
+    fn face_values_are_checked_and_kept_per_face() {
+        let faces = LcdFaces::new(None, std::env::temp_dir().join("lightloom-lcd-unused"));
+        faces.set_library(library());
+        let clock = faces
+            .faces_view()
+            .into_iter()
+            .find(|f| f.id == DEFAULT_FACE)
+            .unwrap();
+        assert!(
+            clock.controls.iter().any(|c| c["property"] == "textColor"),
+            "the clock face lists its controls: {:?}",
+            clock.controls
+        );
+        let one = |k: &str, v: Value| Some(Map::from_iter([(k.to_string(), v)]));
+        let teal = Value::from("#123456");
+
+        // Values for the face a device shows, before and after its LCD starts.
+        let c = faces
+            .select("k", None, None, one("textColor", teal.clone()))
+            .unwrap();
+        assert_eq!(c.values[DEFAULT_FACE]["textColor"], teal);
+        assert!(faces
+            .select("k", None, None, one("noSuchControl", teal.clone()))
+            .is_err());
+        assert!(
+            faces
+                .select("k", None, None, one("showSeconds", Value::from("maybe")))
+                .is_err(),
+            "not a boolean"
+        );
+        let a = faces.attach("k", "K", LcdSpec::new(16.0, 16.0, false).unwrap());
+        assert_eq!(faces.view("k").unwrap().values["textColor"], teal);
+        // Another face has values of its own; back on the clock, its values are there.
+        faces
+            .select("k", Some("lightloom:sensor".into()), None, None)
+            .unwrap();
+        assert!(faces.view("k").unwrap().values.is_empty());
+        faces.select("k", Some(String::new()), None, None).unwrap();
+        assert_eq!(faces.view("k").unwrap().values["textColor"], teal);
+        // The preview is the latest face frame as a PNG.
+        assert!(a.frames.wait_for_newer(0, Duration::from_secs(5)).is_some());
+        let png = faces.preview_png("k").unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        assert!(faces.preview_png("other").is_none());
+        // The stored form round-trips.
+        let stored = faces.choices()["k"].clone();
+        let back: LcdChoice = serde_json::from_value(serde_json::to_value(&stored).unwrap()).unwrap();
+        assert_eq!(back, stored);
     }
 
     #[test]

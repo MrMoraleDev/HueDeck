@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! hidraw arrival and removal through the udev netlink monitor, the Linux
-//! [`HotplugSource`]. Pure Rust (no libudev): a `NETLINK_KOBJECT_UEVENT`
+//! hidraw and raw USB device arrival and removal through the udev netlink
+//! monitor, the Linux [`HotplugSource`]. Pure Rust (no libudev): a `NETLINK_KOBJECT_UEVENT`
 //! socket bound to the udev multicast group, so events arrive after
 //! systemd-udevd has applied the rules (including `uaccess`).
 //!

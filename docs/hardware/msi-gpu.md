@@ -120,6 +120,25 @@ static mode (`shutdown_keep_123456`); `off` static black (`shutdown_off`). Neith
 - NvAPI statuses reach the plugin unchanged as negative values (e.g. `-105`
   `NVAPI_PORTID_NOT_FOUND`); NvAPI has no NACK status.
 
+## Hardware modes (Lightloom extension, untested on the card)
+
+`HardwareModes()` offers the modes of OpenRGB's `RGBController_MSIGPU` except "Direct" (that is the
+canvas) and "Off" (OpenRGB's `DeviceUpdateMode()` writes nothing for a mode without a brightness):
+Static, Rainbow, Raindrop, Magic, Patrolling, Streaming, Lightning, Wave, Meteor, Stack, Rhythm,
+Flowing, Whirling, Twisting, Laminating, Fade in, Breathing, Flashing and Double flashing, with the
+`MSI_GPU_MODE_*` values of S1. `SetHardwareMode(request)` writes, as OpenRGB switches modes:
+
+1. `0x36` brightness: `round(brightness% / 20)` (0-5) × 20;
+2. `0x38` speed, for every mode but Static: `speed_values[round(speed% / 50)]` = `0x04` / `0x02` / `0x01`;
+3. `0x22` the mode;
+4. for modes with a colour: `0x26 ← 0`, then R1/G1/B1 (`0x30-0x32`); Fade in: R2/G2/B2 (`0x27-0x29`) and
+   R3/G3/B3 (`0x2A-0x2C`), as `DeviceUpdateLEDs()` does.
+
+Never `0x3F`: the mode is gone at the next power cycle. `SetHardwareMode(null)` writes Direct again
+(`0x36 ← 100`, `0x22 ← 0x13`) and the next frame is sent whole. `Shutdown(false, "keep")` leaves the
+mode running. Tests: `plugins/msi-gpu/tests/packets.test.mjs`, `crates/lightloom-plugin-host/tests/session_hwmode.rs`.
+The card takes one colour in Direct mode; its moving effects come only from these modes.
+
 ## Trying it (with the card)
 
 SMBus devices are on by default (`--no-smbus` leaves them out):

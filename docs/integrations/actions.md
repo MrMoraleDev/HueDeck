@@ -31,6 +31,7 @@ everywhere a URL does.
 | `view/<page>[?uid=<device key>]` | Switches the dashboard to the page's tab; with `uid`, scrolls to that device | event |
 | `layout/apply/<name>` | Switches to a saved layout | `ApplyLayout` |
 | `layout/applyprevious` | Goes back to the layout shown before the current one (in this run; `409` before any switch) | `ApplyLayout` |
+| `profile/apply/<name>` | Applies a saved profile (docs/profiles.md; `404` when there is none). `layout/apply/<name>` applies the profile `<name>` too when there is no layout of that name but such a profile (SignalRGB macros switch "layouts") | `ApplyProfile` |
 | `effect/apply/<name>?<property>=<value>&...` | Shows an effect. Each property is set (and stored) on the matching effect control. | `ApplyEffect` |
 | `effect/install/<x>`, `effect/update/<x>` | Refused with `409 action_refused`: Lightloom has no effect marketplace | none |
 | `device/<uid>/enable`, `device/<uid>/disable` | Drives the device or leaves it alone (its key is matched case-insensitively) | `SetDevice` |

@@ -269,6 +269,16 @@ re-enters per-LED mode (reset report, configuration with save byte 0).
 Exit modes: `Shutdown(false, "keep")` sends a black stream and the same static configuration with
 the last colours, `"off"` with black, both with the save byte 0 (volatile).
 
+## Hardware mode (Lightloom extension, 2026-10-25, untested on the board)
+
+`HardwareModes()` offers one mode, "Static (per zone)": five colours (onboard LEDs, JRGB1, JRGB2,
+JRAINBOW1, JRAINBOW2) and a brightness. `SetHardwareMode` sends the black 0x53 stream and the static
+0x52 configuration of the "keep" exit mode with those colours and the options byte `level << 2`
+(`MSI_BRIGHTNESS_LEVEL_10..100` = 1-10, from `round(brightness% / 10)`, at least 1), save byte 0.
+`SetHardwareMode(null)` sends the reset and per-LED configuration again (as `Initialize()` does). The
+board's animated modes are not offered until they are checked on the bench. Test:
+`plugins/msi-mystic-light-7c91/tests/packet.test.mjs` (never the save byte).
+
 ## Safety rules (carry into the host and the CLI)
 
 - Nothing is sent before a successful GET of 0x52 (the restore image). The restore packet is

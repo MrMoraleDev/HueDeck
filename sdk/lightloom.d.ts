@@ -796,6 +796,12 @@ declare namespace Lightloom {
      * @lightloom
      */
     ShutdownModes?: Exported<ShutdownMode[]>;
+    /**
+     * The device's built-in effects `SetHardwareMode(request)` puts it in, live
+     * (docs/host-api/hardware-modes.md).
+     * @lightloom
+     */
+    HardwareModes?: Exported<HardwareMode[]>;
 
     // --- lifecycle (@signalrgb) ----------------------------------------------------------
     /** Accept one HID collection of the matched device; `device` is already bound. @signalrgb */
@@ -818,6 +824,13 @@ declare namespace Lightloom {
      * @lightloom
      */
     SaveToDevice?(request: SaveRequest): SaveResult;
+    /**
+     * Put the device in one of its `HardwareModes()` with live commands only (never a save to
+     * flash), or back in its streaming mode (`null`, "Follow effect"). No `Render()` is called
+     * while the device runs a hardware mode. Throw when the device refuses it.
+     * @lightloom
+     */
+    SetHardwareMode?(request: HardwareModeRequest | null): unknown;
     /** Network plugins: the discovery service class/object. @signalrgb @unimplemented */
     DiscoveryService?: unknown;
     /** Called when the device brightness changes. @signalrgb */
@@ -826,6 +839,29 @@ declare namespace Lightloom {
 
   /** What happens to the lights when Lightloom closes. @lightloom */
   type ShutdownMode = "restore" | "keep" | "off";
+
+  /** One entry of `HardwareModes()`. @lightloom */
+  interface HardwareMode {
+    id: string;
+    name: string;
+    /** Colours the mode takes (0-8). */
+    colors?: number;
+    /** Names of those colours (as many as `colors`). */
+    colorNames?: string[];
+    speed?: boolean;
+    brightness?: boolean;
+  }
+
+  /** The argument of `SetHardwareMode()`. @lightloom */
+  interface HardwareModeRequest {
+    id: string;
+    /** One [r, g, b] per colour of the mode. */
+    colors: Array<[number, number, number]>;
+    /** 0-100 (null for a mode without a speed). */
+    speed: number | null;
+    /** 0-100 (null for a mode without a brightness). */
+    brightness: number | null;
+  }
 
   /** `SaveCapabilities()`. @lightloom */
   interface SaveCapabilities {

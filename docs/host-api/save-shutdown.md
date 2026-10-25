@@ -124,3 +124,8 @@ says so; the dashboard offers such a device only "its own lighting".
 | `razer` | spectrum cycle / hardware mode (recorded DeathAdder V2 Pro: black frame, hardware mode) | last frame, left in custom-frame mode | black frame |
 | `crucial-ballistix` | `shutdownColor` (default black) | through `shutdownColor` | through `shutdownColor` |
 | `nzxt-hue2`, `sony-gamepad`, `steelseries-*`, `razer-hanbo`, `razer-kraken`, `hid-lamparray`, `evision-keyboard` | their usual exit (black, or the device's hardware effect / autonomous mode) | not supported: as restore | not supported: as restore |
+
+## Hardware modes
+
+The live counterpart of "Save to devices": a device's built-in effects set with live commands only,
+never stored (docs/host-api/hardware-modes.md).

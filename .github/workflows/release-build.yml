@@ -451,20 +451,24 @@ jobs:
       - name: Install cargo-auditable
         run: cargo install --locked "cargo-auditable@$CARGO_AUDITABLE_VERSION"
 
-      # Two clean builds from the same checkout into different target directories (nothing
-      # may be shared between them). The checkout path must stay the same:
-      # env!("CARGO_MANIFEST_DIR") is embedded and --remap-path-prefix does not rewrite it
-      # (docs/linux-porting.md, "Reproducibility limits").
+      # Two clean builds from the same checkout, one after the other in the SAME target
+      # directory (cleaned in between, nothing shared). The paths must stay the same:
+      # env!("CARGO_MANIFEST_DIR") is embedded, and the C code of -sys crates (QuickJS, ring,
+      # the PipeWire bindings) embeds its build paths, which --remap-path-prefix does not
+      # rewrite (docs/linux-porting.md, "Reproducibility limits").
       - name: Build twice
         run: |
           set -eu
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           export SOURCE_DATE_EPOCH
+          dir="$RUNNER_TEMP/target"
           for run in a b; do
-            dir="$RUNNER_TEMP/target-$run"
+            rm -rf "$dir"
             RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/lightloom --remap-path-prefix=$dir=/target" \
               CARGO_TARGET_DIR="$dir" \
               cargo auditable build --release --locked -p lightloom-daemon -p lightloom-cli --target "$TARGET"
+            mkdir -p "$RUNNER_TEMP/target-$run/$TARGET/release"
+            cp "$dir/$TARGET/release/lightloomd" "$dir/$TARGET/release/lightloom" "$RUNNER_TEMP/target-$run/$TARGET/release/"
           done
 
       - name: Compare hashes
@@ -483,11 +487,12 @@ jobs:
           exit "$status"
 
   # Everything the release ships, in one flat directory, with one SHA256SUMS over all of it
-  # (the updater reads SHA256SUMS: crates/lightloom-daemon/src/update.rs). Gated on the
-  # reproducibility check.
+  # (the updater reads SHA256SUMS: crates/lightloom-daemon/src/update.rs).
   assemble:
     name: assemble + SHA256SUMS
-    needs: [meta, windows, msi, linux, linux-reproducible]
+    # Not gated on linux-reproducible yet: it reports, but a difference does not hold the
+    # release back until the check has passed on a real run.
+    needs: [meta, windows, msi, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8

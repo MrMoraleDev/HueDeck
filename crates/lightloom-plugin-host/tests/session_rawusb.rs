@@ -223,7 +223,7 @@ fn interfaces_of_other_drivers_and_standard_requests_are_refused() {
     assert_eq!(r.report.io.usb_read_errors, 1);
     let log = r.report.log_tail.join("\n");
     assert!(
-        log.contains("needs WinUSB driver") && log.contains("HidUsb"),
+        log.contains(lightloom_hal::usb::NEEDS_DRIVER) && log.contains("HidUsb"),
         "{log}"
     );
     assert!(log.contains("standard OUT requests"), "{log}");
@@ -240,7 +240,7 @@ fn a_device_without_winusb_faults_with_a_clear_message() {
         },
     );
     let problem = device.driver_problem().expect("no WinUSB");
-    assert!(problem.starts_with("needs WinUSB driver"), "{problem}");
+    assert!(problem.starts_with(lightloom_hal::usb::NEEDS_DRIVER), "{problem}");
     assert!(problem.contains(lightloom_hal::usb::WINUSB_HELP_URL));
     let r = run(
         plugin(0x7701),
@@ -250,7 +250,7 @@ fn a_device_without_winusb_faults_with_a_clear_message() {
         0,
     );
     let fault = r.report.faulted.expect("faulted");
-    assert!(fault.contains("needs WinUSB driver"), "{fault}");
+    assert!(fault.contains(lightloom_hal::usb::NEEDS_DRIVER), "{fault}");
     assert!(!r.report.initialized);
 }
 
@@ -327,7 +327,10 @@ fn a_hybrid_session_without_winusb_keeps_its_hid_side() {
     assert!(r.report.faulted.is_none(), "{:#?}", r.report);
     assert!(r.report.initialized);
     assert!(
-        r.report.notes.iter().any(|n| n.contains("needs WinUSB driver")),
+        r.report
+            .notes
+            .iter()
+            .any(|n| n.contains(lightloom_hal::usb::NEEDS_DRIVER)),
         "{:?}",
         r.report.notes
     );

@@ -97,8 +97,45 @@ pub fn parse(msg: &[u8]) -> Option<Uevent> {
     from_props(parts)
 }
 
-/// The event for a hidraw uevent, if it is one Lightloom cares about.
+/// The event for a raw USB device (`SUBSYSTEM=usb`, `DEVTYPE=usb_device`):
+/// VID:PID from `PRODUCT` (`1532/7c/200`, hex), the path is the usbfs node.
+fn usb_device_event(ev: &Uevent, fs: &impl sysfs::Files, sys_root: &Path) -> Option<DeviceEvent> {
+    if ev.props.get("DEVTYPE").map(String::as_str) != Some("usb_device") {
+        return None;
+    }
+    let mut ids = ev.props.get("PRODUCT")?.split('/');
+    let vid = u16::from_str_radix(ids.next()?, 16).ok()?;
+    let pid = u16::from_str_radix(ids.next()?, 16).ok()?;
+    let path = ev.devnode()?;
+    let class = DeviceClass::Usb;
+    match ev.action.as_str() {
+        "add" | "change" => {
+            let dir = sys_root.join(ev.devpath.trim_start_matches('/'));
+            let serial = fs
+                .read(&dir.join("serial"))
+                .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+                .unwrap_or_default();
+            Some(DeviceEvent::Arrived {
+                key: DeviceKey::new(vid, pid, serial),
+                class,
+                path,
+            })
+        }
+        "remove" => Some(DeviceEvent::Removed {
+            key: DeviceKey::new(vid, pid, String::new()),
+            class,
+            path,
+        }),
+        _ => None,
+    }
+}
+
+/// The event for a hidraw or raw USB device uevent, if it is one Lightloom
+/// cares about.
 pub fn device_event(ev: &Uevent, fs: &impl sysfs::Files, sys_root: &Path) -> Option<DeviceEvent> {
+    if ev.subsystem == "usb" {
+        return usb_device_event(ev, fs, sys_root);
+    }
     if ev.subsystem != "hidraw" {
         return None;
     }
@@ -233,5 +270,44 @@ pub(crate) mod tests {
         let mut input = ev("add");
         input.subsystem = "input".into();
         assert!(device_event(&input, &fs, root).is_none());
+    }
+
+    #[test]
+    fn usb_device_events_become_device_events() {
+        let mut fs = crate::sysfs::MemFs::default();
+        fs.file(
+            "/sys/devices/pci0000:00/0000:00:14.0/usb3/3-2/serial",
+            "S9
+",
+        );
+        let ev = |action: &str, devtype: &str| {
+            parse(&udev_msg(&[
+                &format!("ACTION={action}"),
+                "DEVPATH=/devices/pci0000:00/0000:00:14.0/usb3/3-2",
+                "SUBSYSTEM=usb",
+                &format!("DEVTYPE={devtype}"),
+                "PRODUCT=1234/7701/100",
+                "DEVNAME=bus/usb/003/009",
+            ]))
+            .unwrap()
+        };
+        let root = Path::new("/sys");
+        match device_event(&ev("add", "usb_device"), &fs, root).unwrap() {
+            DeviceEvent::Arrived { key, class, path } => {
+                assert_eq!(key.to_string(), "1234:7701:S9");
+                assert_eq!(class, DeviceClass::Usb);
+                assert_eq!(path, "/dev/bus/usb/003/009");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            device_event(&ev("remove", "usb_device"), &fs, root),
+            Some(DeviceEvent::Removed {
+                class: DeviceClass::Usb,
+                ..
+            })
+        ));
+        assert!(device_event(&ev("add", "usb_interface"), &fs, root).is_none());
+        assert!(device_event(&ev("bind", "usb_device"), &fs, root).is_none());
     }
 }

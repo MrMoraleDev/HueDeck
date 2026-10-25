@@ -10,8 +10,9 @@
 //! `PBT_APMRESUMESUSPEND`): consumers treat every event as idempotent.
 //!
 //! Backends: `lightloom_hal_windows::power` (a hidden window for
-//! `WM_POWERBROADCAST` and `WM_WTSSESSION_CHANGE`). Linux (logind
-//! `PrepareForSleep` over D-Bus) is not implemented yet: there is no source.
+//! `WM_POWERBROADCAST` and `WM_WTSSESSION_CHANGE`) and
+//! `lightloom_hal_linux::logind` (systemd-logind `PrepareForSleep` and
+//! session lock/unlock over D-Bus).
 
 use crate::error::HalResult;
 use std::sync::Arc;

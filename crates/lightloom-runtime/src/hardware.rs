@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The HID backend of a hardware run and the present devices some plugin claims.
 //!
-//! Raw USB devices (WinUSB on Windows) are enumerated next to the HID
+//! Raw USB devices (WinUSB on Windows, usbfs on Linux) are enumerated next to the HID
 //! collections and joined to them by USB parent: the HID group whose USB
 //! parent instance id is the USB device's own gets it as its raw USB side
 //! (`hybrid` plugins, `device.setProtocol("hybrid")`). A USB device no HID
@@ -116,14 +116,12 @@ pub fn present_with_usb(
         else {
             continue;
         };
+        // Linux: a backend that may take non-HID interfaces from their kernel driver.
+        let (backend, info) = backend
+            .for_rawusb(&info)
+            .unwrap_or_else(|| (Arc::clone(&backend), info));
         targets.push(Present {
-            device: SessionDevice::usb(
-                key,
-                UsbTarget {
-                    backend: Arc::clone(&backend),
-                    info,
-                },
-            ),
+            device: SessionDevice::usb(key, UsbTarget { backend, info }),
             plugin: plugin.clone(),
         });
     }
@@ -181,11 +179,14 @@ pub fn serial_backend() -> Option<Arc<dyn SerialBackend>> {
     None
 }
 
-/// The raw USB backend of this OS (WinUSB on Windows); `None` where there is none yet.
+/// The raw USB backend of this OS (WinUSB on Windows, usbfs through nusb on
+/// Linux); `None` where there is none.
 pub fn usb_backend() -> Option<Arc<dyn UsbBackend>> {
     #[cfg(windows)]
     return Some(Arc::new(lightloom_hal_windows::WinUsbBackend::new()));
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return Some(Arc::new(lightloom_hal_linux::LinuxUsbBackend::new()));
+    #[cfg(not(any(windows, target_os = "linux")))]
     None
 }
 

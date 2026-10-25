@@ -193,6 +193,8 @@ export function Scan(freeBus) {
 }
 
 let saved = null;
+// What the last "Save to devices" stored, for a restore when the startup state could not be read.
+let baked = null;
 let lastColor = null;
 let framesSinceSend = 0;
 let failureLogged = false;
@@ -225,10 +227,14 @@ function write(reg, value) {
   return status >= 0;
 }
 
+// Each register is read up to three times: single NvAPI reads fail now and then.
 function readStartupState() {
   const values = {};
   for (const reg of STARTUP_REGS) {
-    const v = bus.ReadByte(reg);
+    let v = bus.ReadByte(reg);
+    for (let attempt = 1; v < 0 && attempt < 3; attempt++) {
+      v = bus.ReadByte(reg);
+    }
     if (v < 0) {
       device.log(`MSI GPU: ReadByte(0x${reg.toString(16)}) failed with ${v}; Shutdown() will set the shutdown colour`);
       return null;
@@ -506,6 +512,7 @@ export function SaveToDevice(request) {
     setColor(r, g, b);
   }
   commitToFlash();
+  baked = { mode: plan.mode, speed: plan.speed, color: plan.color ? [r, g, b] : null };
   if (saved) {
     saved[REG_BRIGHTNESS] = BRIGHTNESS_FULL;
     saved[REG_MODE] = plan.mode;
@@ -577,6 +584,16 @@ export function Shutdown(SystemSuspending, mode) {
     restore(REG_SPEED);
     restore(REG_BRIGHTNESS);
     restore(REG_MODE);
+  } else if (baked) {
+    // The startup state is unknown, but the user stored this in the card: show it again.
+    write(REG_BRIGHTNESS, BRIGHTNESS_FULL);
+    if (baked.speed) {
+      write(REG_SPEED, SPEED_MID);
+    }
+    if (baked.color) {
+      setColor(baked.color[0], baked.color[1], baked.color[2]);
+    }
+    write(REG_MODE, baked.mode);
   } else {
     const [r, g, b] = hexColor(typeof shutdownColor === "string" ? shutdownColor : "#000000");
     setColor(r, g, b);

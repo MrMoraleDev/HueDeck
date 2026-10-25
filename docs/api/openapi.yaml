@@ -1240,7 +1240,7 @@ components:
         name: { type: string }
         plugin: { type: string }
         pluginPath: { type: string }
-        state: { enum: [running, starting, stopping, done, disabled, absent] }
+        state: { enum: [running, starting, stopping, stopped, done, disabled, blocked, absent, needs-driver] }
         enabled: { type: boolean }
         connected: { type: boolean }
         frames: { type: integer }
@@ -1275,6 +1275,12 @@ components:
           description: The last battery report (plugins with the `battery` feature), kept after the device goes away.
         blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low (user setting). }
         thirdParty: { type: boolean, description: Driven by a third-party plugin read in place (a local SignalRGB installation's). }
+        driverProblem:
+          type: string
+          description: >-
+            Why the device cannot be driven as plugged in, e.g. "needs WinUSB driver: ..." for a raw USB
+            device Windows bound no WinUSB driver to (HueDeck never installs one). Absent when there is none.
+        helpUrl: { type: string, description: Where to read about `driverProblem`. }
         save:
           oneOf:
             - $ref: "#/components/schemas/SaveSupport"

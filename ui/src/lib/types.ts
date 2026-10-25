@@ -95,6 +95,10 @@ export interface DeviceView {
   blinkLowBattery: boolean;
   /** Driven by a third-party plugin read in place (a local SignalRGB installation's). */
   thirdParty?: boolean;
+  /** Why the device cannot be driven as plugged in ("needs WinUSB driver: ..."). */
+  driverProblem?: string;
+  /** Where to read about driverProblem. */
+  helpUrl?: string;
 }
 
 export type ShutdownMode = "restore" | "keep" | "off";

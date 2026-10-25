@@ -36,6 +36,13 @@
 //! every write recorded and never sent, or a save with the SMBus
 //! `SmbusDeniedRegisters()` writable for that one call.
 //!
+//! A raw USB device ([`SessionDevice::usb`], WinUSB through [`UsbTarget`]):
+//! a `rawusb` plugin skips steps 3 and 4 and opens the USB device instead (a
+//! device Windows bound no WinUSB driver to faults with "needs WinUSB driver");
+//! a `hybrid` plugin opens its HID collection as usual, then the USB device
+//! (without it, transfers fail but HID I/O goes on). Any plugin may switch
+//! with `device.setProtocol("hid" | "hybrid")`.
+//!
 //! A LampArray of the OS backend ([`SessionDevice::lamparray`]) runs the
 //! built-in session of [`crate::lamparray`] instead of a plugin.
 //!
@@ -56,10 +63,11 @@ use crate::bus::{lock_guard, SharedGuard};
 use crate::catalog::CatalogEntry;
 use crate::children::ChildSetup;
 pub use crate::children::{ChannelInfo, EndpointKind, EndpointView};
+use crate::device::Protocol;
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
-use crate::meta::PluginMeta;
+use crate::meta::{PluginMeta, PluginType};
 use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
 use crate::plugin_ui::PluginUi;
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
@@ -68,6 +76,7 @@ use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
 use crate::stats::LatencyHistogram;
 use huedeck_engine::{ComponentInstance, FrameStore, Placement, Rgb, SamplerConfig};
 use huedeck_hal::hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, NoHid};
+use huedeck_hal::usb::{UsbBackend, UsbDeviceInfo};
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -100,6 +109,10 @@ pub struct SessionDevice {
     pub endpoints: Vec<HidEndpointInfo>,
     /// An SMBus device: its bus and address.
     pub smbus: Option<SmbusTarget>,
+    /// The device's raw USB side (the USB device the HID collections belong
+    /// to, or a USB device without HID): `rawusb` / `hybrid` plugins and
+    /// `device.setProtocol("hybrid")` use it.
+    pub usb: Option<UsbTarget>,
     /// A LampArray of the OS backend, driven by the built-in session
     /// ([`crate::lamparray`]) instead of a plugin.
     pub lamparray: Option<crate::lamparray::LampArrayTarget>,
@@ -138,6 +151,23 @@ pub fn key_slug(text: &str) -> String {
     out.trim_matches('-').chars().take(64).collect()
 }
 
+/// A raw USB device and the backend that opens it.
+#[derive(Clone)]
+pub struct UsbTarget {
+    /// The backend (WinUSB on Windows, [`huedeck_hal::mock::MockUsb`] in tests).
+    pub backend: Arc<dyn UsbBackend>,
+    /// The device as enumeration saw it.
+    pub info: UsbDeviceInfo,
+}
+
+impl std::fmt::Debug for UsbTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UsbTarget")
+            .field("info", &self.info)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Where an SMBus device lives.
 #[derive(Clone, Debug)]
 pub struct SmbusTarget {
@@ -156,9 +186,36 @@ impl SessionDevice {
             pid,
             endpoints,
             smbus: None,
+            usb: None,
             lamparray: None,
             network: None,
         }
+    }
+
+    /// A raw USB device without HID collections (`rawusb` plugins), keyed `key`.
+    pub fn usb(key: impl Into<String>, target: UsbTarget) -> Self {
+        Self {
+            key: key.into(),
+            vid: target.info.vid,
+            pid: target.info.pid,
+            endpoints: Vec::new(),
+            smbus: None,
+            usb: Some(target),
+            network: None,
+            lamparray: None,
+        }
+    }
+
+    /// The same device with its raw USB side.
+    pub fn with_usb(mut self, target: Option<UsbTarget>) -> Self {
+        self.usb = target;
+        self
+    }
+
+    /// Why the device's raw USB side is unreachable ("needs WinUSB driver",
+    /// with a docs link); `None` without a raw USB side or when WinUSB is bound.
+    pub fn driver_problem(&self) -> Option<String> {
+        self.usb.as_ref()?.info.driver_problem()
     }
 
     /// The SMBus device at `addr` on `bus`: key `smbus:<bus key>:<addr>`,
@@ -171,6 +228,7 @@ impl SessionDevice {
             pid: d.pci.device,
             endpoints: Vec::new(),
             smbus: Some(SmbusTarget { bus, addr }),
+            usb: None,
             lamparray: None,
             network: None,
         }
@@ -185,6 +243,7 @@ impl SessionDevice {
             pid: 0,
             endpoints: Vec::new(),
             smbus: None,
+            usb: None,
             lamparray: None,
             network: Some(target),
         }
@@ -963,6 +1022,14 @@ fn run(
             format!("0x{:02x}", t.addr),
         ]);
     }
+    if let Some(t) = &device.usb {
+        ctx.set_usb(Arc::clone(&t.backend), t.info.clone());
+    }
+    ctx.set_protocol_kind(match meta.plugin_type {
+        PluginType::RawUsb => Protocol::RawUsb,
+        PluginType::Hybrid => Protocol::Hybrid,
+        _ => Protocol::Hid,
+    });
     let shared = ctx.shared();
     let net: Option<SharedNet> = device.network.as_ref().map(|_| {
         let mut n = NetContext::new(NetRole::Device, opts.write_mode);
@@ -1189,6 +1256,18 @@ fn drive(
         // An SMBus device has no collections to validate or reports to probe:
         // the scan found it, the guard binds the session to its address.
         report.endpoint_path = Some(format!("{} @0x{:02x}", target.bus.descriptor().name, target.addr));
+    } else if meta.plugin_type == PluginType::RawUsb {
+        // A rawusb plugin has no HID collection: the USB device is its endpoint.
+        let Some(target) = &device.usb else {
+            report.faulted =
+                Some("a rawusb plugin needs a raw USB device; none was found for this device".into());
+            return;
+        };
+        if let Err(e) = lock_device(shared).open_usb() {
+            report.faulted = Some(format!("cannot open {}: {e}", target.info.path));
+            return;
+        }
+        report.endpoint_path = Some(target.info.path.clone());
     } else {
         // Validate every collection; the first accepted one becomes the active endpoint,
         // and set_endpoint may later switch among the accepted ones only.
@@ -1247,6 +1326,19 @@ fn drive(
                     "feature report 0x{:02X} ({} bytes) could not be read before Initialize",
                     p.report_id, p.len
                 )),
+            }
+        }
+
+        if meta.plugin_type == PluginType::Hybrid {
+            // HID I/O works without the raw USB side; its transfers then fail.
+            let opened = match &device.usb {
+                None => Err("no raw USB device was found for it".to_string()),
+                Some(_) => lock_device(shared).open_usb().map_err(|e| e.to_string()),
+            };
+            if let Err(why) = opened {
+                let note = format!("hybrid plugin: bulk/control transfers unavailable: {why}");
+                lock_device(shared).log(&note);
+                report.notes.push(note);
             }
         }
     }

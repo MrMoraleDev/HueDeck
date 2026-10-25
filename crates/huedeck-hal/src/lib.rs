@@ -42,4 +42,4 @@ pub use notify::{Notification, Notifier};
 pub use serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};
 pub use smbios::SystemInfo;
 pub use smbus::{PciIds, SmbusBatch, SmbusBus, SmbusBusDescriptor, SmbusBusKind, SmbusOp, SmbusReply};
-pub use usb::{UsbBackend, UsbDeviceInfo, UsbHandle};
+pub use usb::{UsbBackend, UsbDeviceInfo, UsbHandle, UsbInterfaceInfo};

@@ -358,7 +358,11 @@ jobs:
           grep -qi '<html' "$RUNNER_TEMP/index.html"
           grep -qF "$PWD/$stage/ui" "$log"
           desktop-file-validate packaging/appimage/lightloom.desktop
-          appstreamcli validate --no-net packaging/flatpak/org.lightloom.Lightloom.metainfo.xml
+          # Errors only: 22.04's appstream (0.15) warns about current tags (`vcs-browser`,
+          # `developer`) that Flathub expects; flatpak.yml validates with a current appstream.
+          appstream="$(appstreamcli validate --no-net packaging/flatpak/org.lightloom.Lightloom.metainfo.xml 2>&1 || true)"
+          echo "$appstream"
+          if echo "$appstream" | grep -q '^E:'; then exit 1; fi
           sh -n packaging/appimage/AppRun
 
       # The staged renderer, not the one in target/: proves the CEF runtime staged next to it is

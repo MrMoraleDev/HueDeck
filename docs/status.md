@@ -91,7 +91,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Hotplug via `CM_Register_Notification` | Done | `crates/lightloom-hal-windows/src/hotplug.rs`, `crates/lightloom-runtime/src/hotplug.rs`, `tests/manager.rs` |
 | Plugin index cache | Done | `crates/lightloom-plugin-host/src/catalog.rs` (cache keyed by path, size, mtime) |
 | Watchdog, 64 MiB heap cap | Done | `src/runtime.rs`, `tests/session_robustness.rs`, commit `13514d4` |
-| Conformance with HID record/replay | Partial | record/replay done (`crates/lightloom-hal/src/trace.rs`, `lightloom compat replay`, `imported-plugins-m2.md`); there is no `tests/conformance/` corpus runner, and the self-hosted hardware job `conformance-selfhosted.yml` named in `ci.yml` does not exist |
+| Conformance with HID record/replay | Partial | record/replay done (`crates/lightloom-hal/src/trace.rs`, `lightloom compat replay`, `imported-plugins-m2.md`); corpus runner `tests/conformance/run.py` and the manually dispatched `conformance-selfhosted.yml` exist (`feature/conformance`); no trace in `plugins/*/fixtures` is in the replayable `HidTrace` format yet (the recordings there are packet lists), so the replay stage finds nothing until one is recorded with `lightloom light <colour> --record` |
 | Accept: 100 % of the corpus parses, >= 95 % Initialize | Done | commit `b5efc18`: 100 % parse; 98.5 % (CDN), 98.7 % (bundled), 99.0 % (addons) |
 | Accept: unmodified plugins drive the DeathAdder, Arctis 5 | Done | `docs/hardware/imported-plugins-m2.md` |
 | Accept: Sonix 320F keyboard (multi-collection Validate) | **Missing** | no SignalRGB plugin exists for `320F:5064`; Lightloom's `plugins/evision-keyboard` covers V2 only and excludes V1 for flash wear (see `docs/research/evision-v1.md`) |
@@ -196,7 +196,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Accept: same plugins light the same hardware on Ubuntu LTS | Missing | |
 | Accept: identical `Validate` tuples on both OSes (fixture) | Partial | `crates/lightloom-hal-linux/src/fixtures.rs`: one descriptor through the Windows path logic and the Linux split; descriptors are synthetic, a captured Linux `report_descriptor` per reference device is still to record |
 | Accept: RAM via `/dev/i2c-*` without a helper | Partial | code done (WP-L4); needs a Linux run on the reference machine |
-| Accept: conformance suite on both OSes | Missing | there is no conformance suite yet (see M2) |
+| Accept: conformance suite on both OSes | Partial | `tests/conformance/run.py` runs on Windows (reference machine, `conformance-selfhosted.yml`); no Linux self-hosted runner |
 | Accept: reproducible release via cargo-dist | Missing | `release.yml` is a hand-written placeholder (cargo-auditable + CycloneDX SBOM, unsigned) |
 
 ## Planned components outside the milestones
@@ -212,7 +212,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `sdk/lightloom.d.ts` | Done | `sdk/lightloom.d.ts`, members tagged `@signalrgb` / `@lightloom` / `@unimplemented` / `@stub`; `tsc -p sdk` in CI |
 | `sdk/` Node simulator (mock HAL recorder) | Done | `sdk/simulator` (over `plugins/_testkit`): HID and SMBus lifecycles with a solid colour, prints the traffic; `lightloom bench --mock` runs the real host against a scripted device |
 | `sdk/` plugin lint | Done | `sdk/lint` (manifest schema, exports, exports against the manifest, forbidden globals); `plugins/_testkit/manifests.test.mjs` runs it over the first-party plugins |
-| `tests/conformance/` (corpus runner, HID fixtures, PSNR harness) | Partial | dry-run harness lives in the CLI; HID fixtures live per plugin; PSNR harness is `tools/effects-bench/psnr.py`. No `tests/conformance/` and no self-hosted workflow |
+| `tests/conformance/` (corpus runner, HID fixtures, PSNR harness) | Done | `tests/conformance/run.py` (+ `test_run.py`): dry-run thresholds per corpus, replay of every `HidTrace` under `plugins/*/fixtures` and `--traces`, `tools/effects-bench/psnr.py` hook (>= 40 dB); the runner unit tests run in `ci.yml` (`schemas`) |
 | `tests/integration/` | Partial | crate integration tests (`crates/*/tests/`); no top-level directory |
 | `tools/gen-udev` | Done | `lightloom udev generate` |
 | `tools/pawnio-hash-pin` | Missing (covered) | pins are compiled into `crates/lightloom-iobroker/src/pins.rs`; no tool to recompute them |
@@ -224,7 +224,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Packaging: `systemd/`, `udev/` | Partial | files present, untested |
 | Packaging: `appimage/`, `flatpak/` | Missing | |
 | CI `rust` (win + ubuntu), `renderer-cef`, `deny`, `node`, `schemas` | Done | `ci.yml` |
-| CI `conformance-selfhosted.yml` | Missing | referenced in `ci.yml`'s header only |
+| CI `conformance-selfhosted.yml` | Done (untested on a runner) | manual dispatch only, labels `self-hosted, windows, lightloom-reference`; optional PSNR and hardware bench steps |
 | CI `release.yml` via cargo-dist, signing, SBOM | Partial | SBOM + cargo-auditable done; cargo-dist and signing missing |
 | Dependabot | Done | `.github/dependabot.yml`; three open PRs reviewed in `docs/research/dependabot-2026-10.md` |
 

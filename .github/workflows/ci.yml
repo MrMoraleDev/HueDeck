@@ -7,7 +7,8 @@
 #   renderer-cef - lightloom-renderer with the opt-in `cef` feature (real Chromium host), Windows
 #   deny     - cargo-deny: licenses (copyleft denied in-tree), advisories, bans, sources
 #   node     - prelude JS shims, first-party plugin and SDK tests under Node 24 (node:test), dashboard check + build, SDK typings
-#   schemas  - JSON Schema validation of the user-supplied corpus (skipped when absent)
+#   schemas  - JSON Schema validation of the user-supplied corpus (skipped when absent),
+#              conformance runner unit tests
 #
 # Hardware conformance runs on a self-hosted runner in conformance-selfhosted.yml, not here.
 
@@ -190,3 +191,8 @@ jobs:
           else
             echo "::notice::tests/schemas/validate_corpus.py not present yet - skipping"
           fi
+
+      # The conformance runner's verdict logic (thresholds, trace detection, PSNR); the runner
+      # itself runs on the reference machine (conformance-selfhosted.yml).
+      - name: Conformance runner unit tests
+        run: python -I -m unittest discover -s tests/conformance -p "test_*.py"

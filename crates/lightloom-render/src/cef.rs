@@ -393,11 +393,13 @@ fn pump(
         if shared.stop.load(Ordering::Acquire) {
             return "stopped".into();
         }
-        if let Ok(Some(status)) = child.try_wait() {
-            return format!("renderer exited before its frame ring was ready ({status})");
-        }
+        // The ring first: a renderer that painted and then died at once still
+        // leaves its frames there (read below before reporting the exit).
         if let Ok(r) = RingReader::open_file(ring) {
             break r;
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return format!("renderer exited before its frame ring was ready ({status})");
         }
         if since.elapsed() > RING_TIMEOUT {
             return "the renderer created no frame ring".into();
@@ -412,12 +414,15 @@ fn pump(
     let mut last_publish = Instant::now();
     let mut last_paint: Option<Instant> = None;
     let mut intervals: VecDeque<Duration> = VecDeque::with_capacity(DOWNSHIFT_WINDOW);
+    let mut exited = None;
     loop {
         if shared.stop.load(Ordering::Acquire) {
             return "stopped".into();
         }
-        if let Ok(Some(status)) = child.try_wait() {
-            return format!("renderer exited ({status})");
+        if exited.is_none() {
+            // Once it has exited, the ring is read until nothing new is left,
+            // so the last frame it painted is the one held over the restart.
+            exited = child.try_wait().ok().flatten();
         }
         match reader.read_latest(&mut buf) {
             Ok(Some(seq)) if seq != last_seq => {
@@ -448,6 +453,9 @@ fn pump(
                 }
             }
             _ => {
+                if let Some(status) = exited {
+                    return format!("renderer exited ({status})");
+                }
                 // Nothing new painted: keep plugins rendering with the held frame.
                 if last_publish.elapsed() >= period * 2 {
                     if let Some((frame, at)) = held.as_ref() {

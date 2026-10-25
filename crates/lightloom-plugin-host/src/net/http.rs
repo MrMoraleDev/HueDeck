@@ -463,6 +463,11 @@ mod tests {
     fn talks_to_a_local_server() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
+        // The server keeps the connection open until the client has returned,
+        // so a client that waited for the close instead of the Content-Length
+        // could only end by its timeout (and fail the asserts), however slow
+        // the machine is.
+        let (returned_tx, returned_rx) = std::sync::mpsc::channel::<()>();
         let server = std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
             let mut got = Vec::new();
@@ -474,23 +479,25 @@ mod tests {
             // Keep-alive style answer: complete by Content-Length, connection left open.
             s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ok\":true}")
                 .unwrap();
-            std::thread::sleep(Duration::from_millis(300));
-            String::from_utf8(got).unwrap()
+            let open_until_returned = returned_rx.recv_timeout(Duration::from_secs(60)).is_ok();
+            (String::from_utf8(got).unwrap(), open_until_returned)
         });
-        let t = Instant::now();
         let r = execute(&HttpRequest {
             method: "POST".into(),
             url: format!("http://127.0.0.1:{port}/api"),
             headers: vec![],
             body: Some("hello".into()),
-            timeout: 2000,
+            timeout: MAX_TIMEOUT.as_millis() as u64,
         });
-        assert_eq!((r.status, r.body.as_str()), (200, "{\"ok\":true}"));
+        returned_tx.send(()).unwrap();
         assert!(
-            t.elapsed() < Duration::from_millis(250),
-            "returns once the body is complete"
+            !r.timed_out && r.error.is_none(),
+            "returns once the body is complete: {r:?}"
         );
-        assert!(server.join().unwrap().ends_with("\r\n\r\nhello"));
+        assert_eq!((r.status, r.body.as_str()), (200, "{\"ok\":true}"));
+        let (got, open_until_returned) = server.join().unwrap();
+        assert!(open_until_returned, "the server held the connection open");
+        assert!(got.ends_with("\r\n\r\nhello"));
     }
 
     #[test]

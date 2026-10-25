@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 
 fn plugins() -> Vec<CatalogEntry> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-    let catalog = Catalog::scan(&[dir], Duration::from_secs(10));
+    // A generous per-file budget: on a loaded machine a slow evaluation must
+    // not drop a plugin from the catalog.
+    let catalog = Catalog::scan(&[dir], Duration::from_secs(60));
     catalog.network_plugins().into_iter().cloned().collect()
 }
 
@@ -129,7 +131,9 @@ fn devices_run_in_the_real_host() {
             .unwrap()
         })
         .collect();
-    let end = Instant::now() + Duration::from_secs(40);
+    // Ends as soon as every session rendered its frames; the deadline is only
+    // there for a hung session (a loaded machine needs well over 30 s here).
+    let end = Instant::now() + Duration::from_secs(180);
     let mut shade = 0u8;
     while Instant::now() < end && handles.iter().any(|h| h.live().frames < 10 && !h.is_finished()) {
         shade = shade.wrapping_add(17);

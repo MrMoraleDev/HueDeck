@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Lightloom conformance on the reference machine (tests/conformance/run.py):
+#   dryrun - `lightloom compat dry-run --initialize` over the user's own plugin corpus
+#            (100 % parse, >= 95 % Initialize; API gaps reported)
+#   replay - `lightloom compat replay` of every recorded trace in plugins/*/fixtures
+#            (and the machine's own recordings, `traces` input)
+#   psnr   - tools/effects-bench/psnr.py: lightloom-renderer (CEF) against stock Chrome,
+#            >= 40 dB (opt-in: needs the CEF build, Chrome, numpy and Pillow)
+#   bench  - opt-in: `lightloom bench` on the machine's real devices (lighting only)
+#
+# Manual dispatch only: it never runs on push or on pull requests, so code from a fork
+# never reaches the self-hosted runner. Register the runner with the labels below; the
+# corpus is read in place on that machine and never uploaded (only the report is).
+
+name: Conformance (self-hosted)
+
+on:
+  workflow_dispatch:
+    inputs:
+      corpus:
+        description: "Plugin corpus directories, ';'-separated (empty: the local SignalRGB CDN, bundled and addon plugin dirs)"
+        required: false
+        default: ""
+      traces:
+        description: "More directories of recorded traces, ';'-separated (optional)"
+        required: false
+        default: ""
+      initialize_threshold:
+        description: "Minimum Initialize() success, percent"
+        required: false
+        default: "95"
+      psnr:
+        description: "Run the effects PSNR comparison (CEF build + Chrome)"
+        type: boolean
+        default: false
+      chrome:
+        description: "Chrome / Chromium executable for the PSNR comparison"
+        required: false
+        default: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+      bench:
+        description: "Also run `lightloom bench` on the real devices (close SignalRGB first)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run at a time on the one reference machine; never cancel a hardware run midway.
+  group: conformance-selfhosted
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  conformance:
+    name: conformance (reference machine)
+    # Defence in depth: only a manual dispatch in this repository, never a fork's copy.
+    if: github.event_name == 'workflow_dispatch' && !github.event.repository.fork
+    runs-on: [self-hosted, windows, lightloom-reference]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build the CLI
+        shell: powershell
+        run: cargo build --release -p lightloom-cli --locked
+
+      - name: Build lightloom-renderer (cef)
+        if: inputs.psnr
+        shell: bash
+        run: |
+          . crates/lightloom-renderer/tools/cef-env.sh
+          cargo build --release -p lightloom-renderer --features cef --locked
+
+      - name: Conformance runner
+        shell: powershell
+        env:
+          CORPUS: ${{ inputs.corpus }}
+          TRACES: ${{ inputs.traces }}
+          INIT_THRESHOLD: ${{ inputs.initialize_threshold }}
+          PSNR: ${{ inputs.psnr }}
+          CHROME: ${{ inputs.chrome }}
+          # The CLI's own state stays in the job's temp dir, never the user's profile.
+          LIGHTLOOM_HOME: ${{ runner.temp }}\lightloom-home
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lightloom = Join-Path $PWD 'target\release\lightloom.exe'
+          $out = Join-Path $env:RUNNER_TEMP 'conformance'
+          $argv = @('-I', 'tests/conformance/run.py', '--lightloom', $lightloom, '--out', $out,
+                    '--initialize-threshold', $env:INIT_THRESHOLD)
+          $corpus = @($env:CORPUS -split ';' | Where-Object { $_ })
+          if (-not $corpus) {
+            $local = $env:LOCALAPPDATA
+            $bundled = Get-ChildItem "$local\VortxEngine\app-*\Signal-x64\Plugins" -Directory -ErrorAction SilentlyContinue |
+              Sort-Object FullName | Select-Object -Last 1
+            $corpus = @("$local\WhirlwindFX\SignalRgb\cache\plugin_cdn\main\Plugins",
+                        $(if ($bundled) { $bundled.FullName }),
+                        "$local\WhirlwindFX\SignalRgb\cache\addons") | Where-Object { $_ -and (Test-Path $_) }
+          }
+          if (-not $corpus) { throw 'no plugin corpus on this machine: pass the corpus input' }
+          foreach ($c in $corpus) { $argv += @('--corpus', $c) }
+          foreach ($t in @($env:TRACES -split ';' | Where-Object { $_ })) { $argv += @('--traces', $t) }
+          if ($env:PSNR -eq 'true') {
+            $argv += @('--renderer', (Join-Path $PWD 'target\release\lightloom-renderer.exe'), '--chrome', $env:CHROME)
+          } else {
+            $argv += @('--only', 'dryrun,replay')
+          }
+          python @argv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Lighting only (the plugins' rainbow for 10 s, then Shutdown); the run refuses to
+      # start while SignalRGB, OpenRGB or lightloomd drives the devices.
+      - name: Hardware bench
+        if: inputs.bench
+        shell: powershell
+        env:
+          LIGHTLOOM_HOME: ${{ runner.temp }}\lightloom-home
+        run: |
+          .\target\release\lightloom.exe bench --seconds 10 --stats-every 0 --json "$env:RUNNER_TEMP\conformance\bench.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-report
+          # The summary only: the per-file dry-run reports (file names, error lines of the
+          # user's corpus) stay on the machine.
+          path: |
+            ${{ runner.temp }}/conformance/conformance.md
+            ${{ runner.temp }}/conformance/conformance.json
+            ${{ runner.temp }}/conformance/bench.json
+          if-no-files-found: ignore
+          retention-days: 30

@@ -11,7 +11,7 @@ use lightloom_hal::lamparray::LampArrayBackend;
 use lightloom_hal::mock::{MockHid, MockLampArray};
 use lightloom_hal::HidBackend;
 use lightloom_plugin_host::device::{Brightness, WriteMode};
-use lightloom_plugin_host::lamparray::{builtin_entry, BUILTIN_NAME};
+use lightloom_plugin_host::lamparray::{builtin_entry, BUILTIN_NAME, KEEPALIVE};
 use lightloom_plugin_host::manager::{Change, DeviceManager, Present};
 use lightloom_plugin_host::session::{
     self, Control, SessionDevice, SessionHandle, SessionOptions, SessionState,
@@ -22,7 +22,8 @@ use std::time::{Duration, Instant};
 const RED: Rgb = Rgb::new(200, 0, 0);
 
 fn wait_until(frames: &FrameStore, color: Rgb, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // Generous: under parallel load a session can take seconds to start.
+    let deadline = Instant::now() + Duration::from_secs(60);
     while !done() {
         assert!(Instant::now() < deadline, "timed out");
         frames.publish(Frame::solid(CANVAS_WIDTH, CANVAS_HEIGHT, color));
@@ -91,19 +92,24 @@ fn samples_the_canvas_and_follows_brightness() {
 fn unchanged_colours_are_not_resent_every_frame() {
     let mock = MockLampArray::new();
     mock.add(MockLampArray::row("lamp-a", 1, 2, 3));
+    let began = Instant::now();
     let (h, frames) = start(&mock, options());
     wait_until(&frames, RED, || !mock.writes("lamp-a").is_empty());
-    let t = Instant::now();
-    while t.elapsed() < Duration::from_millis(300) {
-        frames.publish(Frame::solid(CANVAS_WIDTH, CANVAS_HEIGHT, RED));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    // Count rendered frames, not wall time: a loaded machine renders fewer
+    // frames in a fixed window, which proved nothing about resending.
+    let start_frames = h.live().frames;
+    wait_until(&frames, RED, || h.live().frames >= start_frames + 20);
+    let frames_rendered = h.live().frames;
+    let writes = mock.writes("lamp-a").len() as u64;
+    // At most the first frame (the canvas may still be black), the red one,
+    // and one keepalive per KEEPALIVE of the whole run: a loaded machine that
+    // stretches the run gets its keepalives, never a write per frame.
+    let keepalives = (began.elapsed().as_secs_f64() / KEEPALIVE.as_secs_f64()).floor() as u64;
     assert!(
-        mock.writes("lamp-a").len() <= 2,
-        "{} writes",
-        mock.writes("lamp-a").len()
+        writes <= 2 + keepalives,
+        "{writes} writes for {frames_rendered} frames in {:?}",
+        began.elapsed()
     );
-    assert!(h.live().frames > 10);
     h.stop();
     h.join().unwrap();
 }

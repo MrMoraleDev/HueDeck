@@ -42,7 +42,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | M4 Dashboard, persistence, API, packaging | **Partial** | the MSI, winget and Authenticode signing; autostart and tray; the plugin sources manager; the logs page; compat API parts; the fresh-machine acceptance run |
 | M5 Privileged bus | **Partial** | PIIX4 and I801 (I801 mock-tested only, no Intel board run); no LpcIO; no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
 | M6 Inputs, network, extras | **Missing** (network in progress) | audio, screen, meters, LCD faces, macros, actions, LampArray HAL backend, OpenRGB SDK server, runtime parameters UI |
-| M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; nusb/serial/i2c/hwmon, CEF, packaging and cargo-dist missing |
+| M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; nusb/serial/i2c/hwmon, CEF missing; packaging (systemd, AppImage, Flatpak, release jobs, WP-L7) written but not yet run on Linux; cargo-dist deferred |
 
 ## M0 Bootstrap and risk retirement: Done
 
@@ -190,14 +190,14 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `tools/gen-udev` | Done | `lightloom udev generate` (`crates/lightloom-cli/src/udev.rs`); generated `packaging/udev/70-lightloom.rules` with a drift test; `packaging/sysusers.d/lightloom.conf` |
 | CEF on Linux (X11/Wayland, headless CI) | Missing | `lightloom-renderer` builds with `cef` on Windows only (`ci.yml` `renderer-cef`) |
 | PipeWire audio + screen capture | Missing | |
-| `systemd --user` unit | Partial | `packaging/systemd/lightloomd.service` exists, untested |
-| AppImage, Flatpak | Missing | placeholders in `packaging/README.md` |
+| `systemd --user` unit | Partial | `packaging/systemd/lightloomd.service` reviewed (WP-L7): user-instance-safe hardening, restart limits, `default.target`; passes `systemd-analyze --user verify` (systemd 255) and a release-job check; not yet run as a real service on Linux hardware |
+| AppImage, Flatpak | Partial | WP-L7: `packaging/appimage` (linuxdeploy, AppRun launcher with `--setup-help`/`--udev-rules`/`--systemd-unit`) and `packaging/flatpak` (manifest, metainfo, source generation); release `linux` job builds the tarball and AppImage. Neither built nor run yet (no Linux CI run); no CEF renderer inside until WP-L5 |
 | `docs/linux-porting.md` | Missing | design input in `docs/research/m7-linux-backend.md` |
 | Accept: same plugins light the same hardware on Ubuntu LTS | Missing | |
 | Accept: identical `Validate` tuples on both OSes (fixture) | Partial | `crates/lightloom-hal-linux/src/fixtures.rs`: one descriptor through the Windows path logic and the Linux split; descriptors are synthetic, a captured Linux `report_descriptor` per reference device is still to record |
 | Accept: RAM via `/dev/i2c-*` without a helper | Partial | code done (WP-L4); needs a Linux run on the reference machine |
 | Accept: conformance suite on both OSes | Missing | there is no conformance suite yet (see M2) |
-| Accept: reproducible release via cargo-dist | Missing | `release.yml` is a hand-written placeholder (cargo-auditable + CycloneDX SBOM, unsigned) |
+| Accept: reproducible release via cargo-dist | Partial | `linux-reproducible` job (two builds, same hashes, daemon + CLI) added; cargo-dist deferred with a migration plan in `docs/linux-porting.md` |
 
 ## Planned components outside the milestones
 
@@ -378,6 +378,7 @@ These can start in parallel with Windows work: they touch `lightloom-hal-linux` 
 32. **WP-L6: PipeWire audio and screen capture. Size M, after WP-AUDIO and WP-SCREEN.**
     - `lightloom-inputs` Linux backends: cpal ALSA/PipeWire monitor; portal ScreenCast + PipeWire for zones.
 33. **WP-L7: Linux packaging and release. Size M.**
+    - **Done on `feature/linux-packaging` except the cargo-dist switch** (deferred, plan in `docs/linux-porting.md`); nothing run on Linux CI or hardware yet.
     - systemd user unit tested; AppImage (linuxdeploy) and Flatpak manifests in `packaging/`.
     - `cargo dist init` replacing the hand-written `release.yml` (keep cargo-auditable and SBOM).
     - Reproducibility check: two builds, same hashes.

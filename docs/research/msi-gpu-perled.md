@@ -4,7 +4,8 @@
 
 Status: research only, static analysis. Nothing here has been sent to a card. The plugin
 `plugins/msi-gpu/` still drives the card as one colour (registers `0x30..0x32`, see
-`docs/hardware/msi-gpu.md`). This note covers the reference card, the MSI GeForce RTX 3060
+`docs/hardware/msi-gpu.md`) unless its experimental, off-by-default "Per-LED" parameter is on
+(§5.3); `lightloom probe msi-gpu-perled` runs the test of §5.2 (§5.4). This note covers the reference card, the MSI GeForce RTX 3060
 Gaming X Trio LHR (`10DE:2504`, subsystem `1462:3903`), and what it would take to colour its
 LEDs one by one.
 
@@ -245,7 +246,7 @@ whether the card actually changes per LED (question 1).
 Pre-conditions: MSI Center's lighting service not driving the card (Mystic Light and the
 SignalRGB bridge both off), Lightloom's one-colour plugin not running on the card.
 
-Host work needed first **[D]**: on NvAPI buses Lightloom's `WriteBlock` adds an SMBus count
+Host work needed first **[D]** (done, §5.4): on NvAPI buses Lightloom's `WriteBlock` adds an SMBus count
 byte and both block writes stop at 32 bytes (`crates/lightloom-nvapi/src/info.rs`,
 `SMBUS_BLOCK_MAX`). The `0x49` frame needs a **raw I2C write** (register byte then data, no
 count byte) of up to 136 data bytes. `WriteNoReg` with `[0x49, data…]` is the same transfer on
@@ -273,3 +274,36 @@ A per-LED mode in `plugins/msi-gpu/`: identify generation with the reads, enter 
 `0x01` in `Initialize()`, one raw 136-byte write per changed frame in `Render()`, and `0x2E` ←
 `0x00` (read back, retried once, as the current plugin does) in `Shutdown()`. The card stays
 out of `tested` until 5.2 has been done on the reference card.
+
+Implemented, unverified **[D]**: the parameter "Per-LED (experimental)" (`perLed`, default off)
+in `plugins/msi-gpu/plugin.js` does the above with 34 slots as a 34 x 1 strip and `[B, G, R, 0]`
+records; Shutdown leaves with `0x2E` ← `0x00` before the usual restore. Details in
+`docs/hardware/msi-gpu.md`.
+
+### 5.4 The probe
+
+The host now takes register-less writes of up to 140 bytes on NvAPI buses (elsewhere 32): past
+32 bytes NvAPI gets the first byte as the register (`regAddrSize = 1`) and the rest as data,
+the call shape of §1.5; `SmbusDeniedRegisters()` still sees the first byte as the register,
+so `[0x3F, …]` is refused at any length.
+
+`lightloom probe msi-gpu-perled` (`crates/lightloom-cli/src/probe.rs`) is the §5.2 sequence,
+with the user watching:
+
+1. stop lightloomd, SignalRGB and MSI's lighting service (the probe refuses to run beside
+   them); optionally rehearse with `--dry-run --auto 0` (no NvAPI);
+2. run `lightloom probe msi-gpu-perled` (only `10DE:2504 1462:3903` is accepted);
+3. note the printed `0xEC`/`0xED` values (question 7); the probe stops there, writing nothing,
+   for an NV5000 controller or a failed read;
+4. after `0x2E` ← `1`, for each slot 0..33 (red, `--brightness`, default `0x40`, in the
+   `--order` channel order, default `bgr`) note which LED lit and its colour, then press Enter
+   (`--auto <ms>` steps on its own; `q` stops) (questions 1 and 3);
+5. all slots red for 3 s, then blue for 3 s: if red looks blue, the order is `rgb`
+   (question 2);
+6. a short frame of 6 slots (24 bytes, green): its result code is printed; slots 6.. staying
+   blue means short frames are accepted (question 4);
+7. the probe always ends with `0x2E` ← `0` (also on errors, Ctrl-C, console close, a panic);
+   note what the card shows then (question 5); later, power-cycle and check (question 6).
+
+It logs every transfer with its bytes and cannot write anything but `0x2E` ← `0`/`1` and
+`0x49` frames of at most 34 records.

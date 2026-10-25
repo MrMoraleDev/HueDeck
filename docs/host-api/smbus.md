@@ -305,6 +305,12 @@ Lightloom implements the surface above in `crates/lightloom-plugin-host` (`js/ho
 - **`WriteBlock` is an SMBus Block Write**: register, a count byte, then the data
   (`[len, data...]` after the register on NvAPI, protocol 5 on PIIX4). Data longer than
   `len` is clipped (logged once), shorter data zero-padded. Blocks are 1..=32 bytes.
+- **`WriteBlockWithoutRegister` on NVIDIA buses takes up to 140 bytes** (elsewhere 32): one
+  raw I2C write, no count byte, for MSI's per-LED GPU frame (`0x49` and 136 data bytes,
+  [research](../research/msi-gpu-perled.md)). Past 32 bytes NvAPI gets the first byte as the
+  register and the rest as data, the call shape MSI's own code uses; the bytes on the wire are
+  the same. The first byte is the register for `SmbusDeniedRegisters()` at any length. Every
+  other limit is unchanged.
 - **Return values.** Failures never throw: on NVIDIA buses the plugin gets NvAPI's own
   negative status (e.g. -105), elsewhere -1. Argument errors throw `RangeError` /
   `TypeError` with the engine's messages (`WriteByte(): Register must be a number between

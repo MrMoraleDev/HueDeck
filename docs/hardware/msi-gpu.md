@@ -139,6 +139,61 @@ Never `0x3F`: the mode is gone at the next power cycle. `SetHardwareMode(null)` 
 mode running. Tests: `plugins/msi-gpu/tests/packets.test.mjs`, `crates/lightloom-plugin-host/tests/session_hwmode.rs`.
 The card takes one colour in Direct mode; its moving effects come only from these modes.
 
+## Per-LED mode (experimental, UNVERIFIED, off by default)
+
+The "Per-LED (experimental)" parameter (`perLed`, default `false`) switches the plugin to the
+per-LED stream MSI's LEDKeeper2 sends to non-"NV5000" NVIDIA cards, found by static analysis
+of MSI's installed files ([research note](../research/msi-gpu-perled.md)). **Nobody has seen it
+work on a card yet**: whether this card honours it, the colour order and which slot is which
+LED are unknown. Nothing changes for users who leave the parameter off.
+
+When on:
+
+- **Initialize:** the usual startup reads (kept for the restore), then two read-only
+  identification reads, `0xEC` (4 bytes: LED type, module type, firmware) and `0xED` (2 bytes:
+  chip id). An "NV5000" controller (module type `0x5000` or LED type `0x81`) or a failed read
+  keeps the one-colour path. Otherwise the device becomes a 34 x 1 strip ("LED 1".."LED 34",
+  the mapping to physical LEDs is unknown) and the plugin writes `0x2E ← 0x01`. No brightness
+  or mode write.
+- **Render:** one raw I2C write (`WriteBlockWithoutRegister`, 137 bytes): `0x49`, then for
+  each of the 34 slots `[B, G, R, 0x00]` sampled along the strip (MSI reverses the colour
+  bytes; B, G, R is the best guess). Unchanged frames are resent every 60 frames.
+- **Shutdown:** `0x2E ← 0x00` first, then the exit mode as usual (restore, keep or off).
+- Hardware modes and "Save to devices" leave the stream first (`0x2E ← 0`) and enter it again
+  afterwards; switching the parameter off while running leaves it and goes back to Direct.
+- Until Shutdown only `0x2E` and `0x49` are written; `0x3F` stays refused by the host.
+
+The host allows register-less writes of up to 140 bytes on NVIDIA buses for this
+([host API](../host-api/smbus.md)); NvAPI gets `0x49` as the register and 136 data bytes, the
+same call shape MSI's `NDA.dll` uses.
+
+Before turning it on for anyone, run the supervised probe below on the reference card.
+
+### Hardware probe: `lightloom probe msi-gpu-perled`
+
+Stop lightloomd, SignalRGB and MSI Center's lighting service first (the probe refuses to run
+beside them, as `light` does). Then, watching the card:
+
+```
+lightloom probe msi-gpu-perled --dry-run --auto 0   # prints every transfer, no NvAPI
+lightloom probe msi-gpu-perled                      # step through the slots with Enter
+lightloom probe msi-gpu-perled --order rgb          # if the colour check showed R and B swapped
+```
+
+It accepts only `10DE:2504 1462:3903`. It reads and prints `0xEC`/`0xED` and stops (nothing
+written) on a failed read or an NV5000 controller; writes `0x2E ← 1`; lights each of the 34
+slots alone in red (`--brightness`, default `0x40`; `--order bgr|rgb`, default `bgr`), waiting
+for Enter (`q` stops) or `--auto <ms>`; shows all slots red for 3 s, then blue for 3 s; sends a
+short frame (6 slots, 24 bytes, green) and prints its result code; and always ends with
+`0x2E ← 0`: after the last step, on an error, on Ctrl-C or console close, and on a panic.
+Every write is printed with its bytes. It can write nothing but `0x2E ← 0/1` and `0x49`
+frames.
+
+What to note: the identification values; for each slot, which LED lit (or none) and in which
+colour; whether "all red" looked red (else rerun with `--order rgb`); whether the short frame
+left slots 6.. blue (short frames accepted) or did nothing; what the card shows after the
+probe ends.
+
 ## Trying it (with the card)
 
 SMBus devices are on by default (`--no-smbus` leaves them out):

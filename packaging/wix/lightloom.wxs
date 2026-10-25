@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!--
+  Lightloom MSI (WiX Toolset v5; built by build.ps1 from the staged build of
+  tools/package/stage-windows.ps1).
+
+  Per-user package: installs to %LOCALAPPDATA%\Programs\Lightloom without
+  administrator rights. The only privileged part, RAM lighting (the PawnIO
+  driver and the Lightloom I/O service), is set up after the install by
+  lightloom-setup.exe behind one UAC prompt, when the user leaves the option
+  checked (see LightloomUI.wxs and packaging/README.md for why it is not a
+  per-machine package or a Burn bundle). Uninstall removes the I/O service
+  (UAC prompt) and leaves PawnIO, which other programs may use.
+
+  Preprocessor variables (build.ps1 passes them):
+    Version   - product version, x.y.z
+    StageDir  - absolute path of the staged build
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Lightloom"
+           Manufacturer="Lightloom contributors"
+           Version="$(var.Version)"
+           UpgradeCode="1C9B0603-FD78-41A6-BE05-78B638CDAD01"
+           Scope="perUser"
+           Language="!(loc.Language)"
+           Compressed="yes">
+    <SummaryInformation Description="Lightloom: open source RGB lighting manager" />
+
+    <MajorUpgrade DowngradeErrorMessage="!(loc.Downgrade)" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="LightloomIcon" SourceFile="lightloom.ico" />
+    <Property Id="ARPPRODUCTICON" Value="LightloomIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/MrMoraleDev/Lightloom" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/MrMoraleDev/Lightloom/issues" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Options (LightloomOptionsDlg). Both on by default. -->
+    <Property Id="INSTALLPAWNIO" Value="1" Secure="yes" />
+    <Property Id="AUTOSTART" Value="1" Secure="yes" />
+
+    <!-- The user's sign-in entry before this install (an upgrade keeps it as
+         it is, on or off). -->
+    <Property Id="AUTOSTARTPREV" Secure="yes">
+      <RegistrySearch Id="AutostartSearch"
+                      Root="HKCU"
+                      Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                      Name="Lightloom"
+                      Type="raw" />
+    </Property>
+
+    <!-- Is the I/O service registered? (read-only; every user may read it) -->
+    <Property Id="BROKERINSTALLED" Secure="yes">
+      <RegistrySearch Id="BrokerServiceSearch"
+                      Root="HKLM"
+                      Key="SYSTEM\CurrentControlSet\Services\LightloomIoBroker"
+                      Name="ImagePath"
+                      Type="raw"
+                      Bitness="always64" />
+    </Property>
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Lightloom" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Lightloom" Title="Lightloom" Level="1">
+      <ComponentGroupRef Id="StagedFiles" />
+      <ComponentRef Id="Launcher" />
+      <ComponentRef Id="SetupHelper" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <!-- Everything staged (daemon, tray icon, CLI, renderer + CEF, dashboard, plugins,
+         effects, broker, pinned PawnIO modules with their sources, licences),
+         except the two files referenced below by id. -->
+    <ComponentGroup Id="StagedFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.StageDir)\**">
+        <Exclude Files="$(var.StageDir)\lightloomw.exe" />
+        <Exclude Files="$(var.StageDir)\lightloom-setup.exe" />
+      </Files>
+    </ComponentGroup>
+
+    <Component Id="Launcher" Directory="INSTALLFOLDER">
+      <File Id="LightloomW" Source="$(var.StageDir)\lightloomw.exe" KeyPath="yes" />
+    </Component>
+
+    <Component Id="SetupHelper" Directory="INSTALLFOLDER">
+      <File Id="LightloomSetup" Source="$(var.StageDir)\lightloom-setup.exe" KeyPath="yes" />
+    </Component>
+
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="39433945-76BA-48B5-A571-CC4E3DE8E378">
+      <Shortcut Id="StartMenuLightloom"
+                Name="Lightloom"
+                Description="!(loc.ShortcutDescription)"
+                Target="[#LightloomW]"
+                Arguments="--open"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="LightloomIcon" />
+      <RegistryValue Root="HKCU" Key="Software\Lightloom\Installer" Name="StartMenuShortcut"
+                     Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- Start at sign-in, without a window (lightloomw starts lightloomd hidden,
+         and the tray icon). The HKCU Run value Lightloom belongs to the user,
+         not to a component: the tray's "Start at sign-in" turns it on and
+         off, and a repair or an upgrade must not bring back an entry the user
+         removed. lightloomw writes it (option checked on a first install, or
+         it was there before an upgrade: RemoveExistingProducts of an older
+         package that owned it as a component may have just removed it) and
+         removes it on uninstall. -->
+    <CustomAction Id="SetAutostart"
+                  FileRef="LightloomW"
+                  ExeCommand="--autostart on"
+                  Execute="immediate"
+                  Return="ignore" />
+    <CustomAction Id="RemoveAutostart"
+                  FileRef="LightloomW"
+                  ExeCommand="--autostart off"
+                  Execute="immediate"
+                  Return="ignore" />
+
+    <!-- After the install (Finish button, see LightloomUI.wxs): RAM lighting
+         setup through lightloom-setup's own UAC prompt, not waited for, so
+         the installer closes; a declined prompt or a failed download changes
+         nothing and the dashboard offers it again. -->
+    <CustomAction Id="SetUpRamLighting"
+                  FileRef="LightloomSetup"
+                  ExeCommand="--pawnio-install --smbus --elevate --pause"
+                  Execute="immediate"
+                  Return="asyncNoWait" />
+    <CustomAction Id="LaunchLightloom"
+                  FileRef="LightloomW"
+                  ExeCommand="--open"
+                  Execute="immediate"
+                  Return="asyncNoWait" />
+
+    <!-- Before files are replaced or removed: ask a running daemon to stop
+         (its plugins restore the devices). The installed lightloomw.exe is
+         used, so this also works during a major upgrade; nothing to stop on
+         a first install. -->
+    <CustomAction Id="StopLightloom"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]lightloomw.exe&quot; --stop"
+                  Execute="immediate"
+                  Return="ignore" />
+
+    <!-- Uninstall (not an upgrade): remove the I/O service and its files
+         (UAC prompt). PawnIO stays. -->
+    <CustomAction Id="RemoveRamLighting"
+                  FileRef="LightloomSetup"
+                  ExeCommand="--smbus --uninstall --elevate --pause"
+                  Execute="immediate"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetAutostart" After="InstallFinalize"
+              Condition="NOT REMOVE AND ((NOT Installed AND NOT WIX_UPGRADE_DETECTED AND AUTOSTART = 1) OR (WIX_UPGRADE_DETECTED AND AUTOSTARTPREV))" />
+      <Custom Action="RemoveAutostart" Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="StopLightloom" Before="InstallValidate" Condition="Installed OR WIX_UPGRADE_DETECTED" />
+      <Custom Action="RemoveRamLighting" Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND BROKERINSTALLED" />
+    </InstallExecuteSequence>
+
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+    <UIRef Id="LightloomUI" />
+  </Package>
+</Wix>

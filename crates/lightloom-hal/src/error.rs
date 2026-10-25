@@ -17,6 +17,11 @@ pub enum HalError {
     /// The OS refused access (udev rules, driver binding, ACLs).
     #[error("permission denied: {0}")]
     PermissionDenied(String),
+    /// The interface or device is owned by a driver this process may not
+    /// use (raw USB without WinUSB). The text says what to do; Lightloom never
+    /// installs or swaps a driver.
+    #[error("{0}")]
+    NeedsDriver(String),
     /// The device went away while a handle was open.
     #[error("device disconnected")]
     Disconnected,

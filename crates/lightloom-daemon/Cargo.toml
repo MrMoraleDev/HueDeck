@@ -18,6 +18,11 @@ path = "src/lib.rs"
 name = "lightloomd"
 path = "src/main.rs"
 
+# Starts lightloomd without a console window (Start menu, sign-in).
+[[bin]]
+name = "lightloomw"
+path = "src/bin/lightloomw.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -41,6 +46,11 @@ lightloom-inputs = { path = "../lightloom-inputs" }
 lightloom-plugin-host = { path = "../lightloom-plugin-host" }
 lightloom-render = { path = "../lightloom-render" }
 lightloom-runtime = { path = "../lightloom-runtime" }
+# lightloomw --autostart: the tray's Run-key logic.
+lightloom-tray = { path = "../lightloom-tray" }
 
 [dev-dependencies]
 lightloom-hal = { path = "../lightloom-hal", features = ["mock"] }
+
+[build-dependencies]
+lightloom-winres = { path = "../lightloom-winres" }

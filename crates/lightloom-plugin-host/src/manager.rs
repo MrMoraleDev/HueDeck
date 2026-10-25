@@ -335,6 +335,34 @@ impl DeviceManager {
         (self.reports, self.failed)
     }
 
+    /// System sleep: stop every session with `Shutdown(true)`
+    /// ([`SessionHandle::stop_for_suspend`]), all at once, waiting at most
+    /// `wait` (the OS gives sleep handlers only a few seconds). A session still
+    /// shutting down then stays among the stopping ones: no new session for its
+    /// device until it ends. The manager stays usable: the next
+    /// [`DeviceManager::reconcile`] starts fresh sessions (`Initialize()`).
+    /// Returns the keys of the sessions stopped.
+    pub fn suspend(&mut self, wait: Duration) -> Vec<String> {
+        let all: Vec<SessionHandle> = std::mem::take(&mut self.sessions).into_values().collect();
+        self.backoff.clear();
+        let keys = all.iter().map(|h| h.key().to_string()).collect();
+        for h in &all {
+            h.stop_for_suspend();
+        }
+        let deadline = Instant::now() + wait.min(self.stop_timeout);
+        while all.iter().any(|h| !h.is_finished()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for h in all {
+            if h.is_finished() {
+                self.collect(h, false);
+            } else {
+                self.stopping.push((h, false));
+            }
+        }
+        keys
+    }
+
     /// Collect the earlier sessions that have ended since they were asked to stop.
     fn reap_stopping(&mut self) {
         let (done, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.stopping)

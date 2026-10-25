@@ -22,3 +22,6 @@ lightloom-runtime = { path = "../lightloom-runtime" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
+
+[build-dependencies]
+lightloom-winres = { path = "../lightloom-winres" }

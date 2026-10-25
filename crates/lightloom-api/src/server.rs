@@ -14,7 +14,7 @@
 //!   `Authorization: Bearer <token>`, the token from the user's data directory.
 //!   The dashboard page gets it embedded when it is served (same-origin only).
 
-use crate::model::{ApiError, Event, Playlist, Request, Snapshot};
+use crate::model::{ApiError, Event, PawnIoAction, Playlist, Request, Snapshot};
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -214,9 +214,15 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/placements/{uid}", put(put_placement))
         .route("/v1/components", get(components))
         .route("/v1/settings", get(settings).patch(patch_settings))
-        .route("/v1/import/signalrgb", post(import_signalrgb))
+        .route(
+            "/v1/import/signalrgb",
+            get(preview_signalrgb).post(import_signalrgb),
+        )
         .route("/v1/export", get(export))
         .route("/v1/import", post(import))
+        .route("/v1/pawnio", get(pawnio))
+        .route("/v1/pawnio/install", post(pawnio_install))
+        .route("/v1/pawnio/remove", post(pawnio_remove))
         .route("/v1/rescan", post(rescan))
         .route("/v1/network", get(network))
         .route("/v1/network/{plugin}/add", post(network_add))
@@ -556,6 +562,8 @@ struct SettingsPatch {
     /// Wider than `u16` so an out-of-range number gets a clear 400.
     port: Option<u32>,
     openrgb_sdk: Option<bool>,
+    #[serde(default)]
+    lights_off_when_idle: Option<bool>,
 }
 
 /// `PATCH /v1/settings`. A `port` moves the native API and the dashboard:
@@ -612,6 +620,7 @@ async fn patch_settings(State(ctx): State<ApiContext>, Json(p): Json<SettingsPat
             battery_notifications: p.battery_notifications,
             port,
             openrgb_sdk: p.openrgb_sdk,
+            lights_off_when_idle: p.lights_off_when_idle,
         })
         .await;
     let mut value = match result {
@@ -638,6 +647,10 @@ struct ImportLayoutBody {
     name: Option<String>,
 }
 
+async fn preview_signalrgb(State(ctx): State<ApiContext>, Query(q): Query<ImportLayoutBody>) -> Response {
+    reply(ctx.call(Request::PreviewSignalRgb { name: q.name }).await)
+}
+
 async fn import_signalrgb(State(ctx): State<ApiContext>, body: Option<Json<ImportLayoutBody>>) -> Response {
     let name = body.and_then(|Json(b)| b.name);
     reply(ctx.call(Request::ImportSignalRgb { name }).await)
@@ -649,6 +662,28 @@ async fn export(State(ctx): State<ApiContext>) -> Response {
 
 async fn import(State(ctx): State<ApiContext>, Json(state): Json<Value>) -> Response {
     reply(ctx.call(Request::Import { state }).await)
+}
+
+async fn pawnio(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::PawnIoStatus).await)
+}
+
+async fn pawnio_install(State(ctx): State<ApiContext>) -> Response {
+    reply(
+        ctx.call(Request::PawnIoSetup {
+            action: PawnIoAction::Install,
+        })
+        .await,
+    )
+}
+
+async fn pawnio_remove(State(ctx): State<ApiContext>) -> Response {
+    reply(
+        ctx.call(Request::PawnIoSetup {
+            action: PawnIoAction::Remove,
+        })
+        .await,
+    )
 }
 
 async fn network(State(ctx): State<ApiContext>) -> Response {

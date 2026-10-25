@@ -25,7 +25,20 @@
 //! Windows shell glue is `win.rs` in the binary. Linux has no tray yet
 //! (StatusNotifierItem is planned): the binary says so and exits.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+
+/// The registry side of [`RunKey`] (the only unsafe code in the library).
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod runkey;
+#[cfg(windows)]
+pub use runkey::WinRunKey;
+/// The running tray, from another process.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod instance;
+#[cfg(windows)]
+pub use instance::{close_tray, WINDOW_CLASS};
 
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
@@ -130,6 +143,30 @@ impl<K: RunKey> Autostart<K> {
             self.key.set(RUN_VALUE, cmd)?;
             Ok(true)
         }
+    }
+}
+
+/// Turn start at sign-in on (the value runs `launcher`) or off in `key`
+/// (`lightloomw --autostart on|off`, which the installer runs).
+pub fn set_autostart<K: RunKey>(key: &K, on: bool, launcher: &Path) -> io::Result<()> {
+    if on {
+        key.set(RUN_VALUE, &Autostart::<K>::command_for(launcher))
+    } else {
+        key.delete(RUN_VALUE)
+    }
+}
+
+/// [`set_autostart`] on this user's `Run` key.
+pub fn set_user_autostart(on: bool, launcher: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    return set_autostart(&WinRunKey, on, launcher);
+    #[cfg(not(windows))]
+    {
+        let _ = (on, launcher);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "start at sign-in is a Windows setting here (use the systemd user unit)",
+        ))
     }
 }
 
@@ -344,6 +381,18 @@ pub fn perform<A: Api, K: RunKey, D: Desktop>(
             Status::NotRunning => Ok(Outcome::Exit),
             Status::Running { .. } => api.shutdown().map(|_| Outcome::Exit),
         },
+    }
+}
+
+impl<K: RunKey> RunKey for &K {
+    fn get(&self, name: &str) -> io::Result<Option<String>> {
+        (**self).get(name)
+    }
+    fn set(&self, name: &str, value: &str) -> io::Result<()> {
+        (**self).set(name, value)
+    }
+    fn delete(&self, name: &str) -> io::Result<()> {
+        (**self).delete(name)
     }
 }
 
@@ -713,6 +762,21 @@ mod tests {
         perform(Action::ToggleAutostart, &a, &s, &d).unwrap();
         assert!(!s.enabled());
         assert_eq!(s.key.get("Lightloom").unwrap(), None);
+    }
+
+    #[test]
+    fn the_launcher_flag_sets_the_same_value_as_the_menu() {
+        let key = MemRunKey::default();
+        let exe = Path::new(r"C:\Apps\Lightloom\lightloomw.exe");
+        set_autostart(&key, true, exe).unwrap();
+        assert_eq!(
+            key.get(RUN_VALUE).unwrap().as_deref(),
+            Some(r#""C:\Apps\Lightloom\lightloomw.exe""#)
+        );
+        assert!(Autostart::new(&key, None).enabled());
+        set_autostart(&key, false, exe).unwrap();
+        set_autostart(&key, false, exe).unwrap(); // already off: fine
+        assert_eq!(key.get(RUN_VALUE).unwrap(), None);
     }
 
     #[test]

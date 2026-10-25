@@ -3,7 +3,7 @@
 //!
 //! One [`SmbusBus`] per host controller: chipset SMBus (AMD FCH "PIIX4",
 //! Intel i801/"ICH8"), SuperIO-embedded masters (Nuvoton), and per-GPU buses
-//! (NvAPI, AMD ADLX). On Windows the chipset buses are reached through the
+//! (NvAPI, AMD ADL). On Windows the chipset buses are reached through the
 //! privileged `lightloom-iobroker`; on Linux through `/dev/i2c-*`.
 //!
 //! Return convention at this layer is a normal `Result`; the plugin-facing
@@ -69,7 +69,7 @@ pub enum SmbusBusKind {
     System,
     /// Per-GPU NVIDIA I2C bus reached through NvAPI.
     Nvidia,
-    /// Per-GPU AMD I2C bus reached through ADLX.
+    /// Per-GPU AMD I2C bus reached through ADL (`lightloom-adl`).
     AmdGpu,
     /// Nuvoton SuperIO-embedded SMBus master (LPC 0x2E/0x4E).
     Nuvoton,

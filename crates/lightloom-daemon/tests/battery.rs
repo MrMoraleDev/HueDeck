@@ -96,6 +96,7 @@ fn settings(
             port: None,
             network: None,
             openrgb_sdk: None,
+            lights_off_when_idle: None,
         },
     )
 }
@@ -119,6 +120,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
         hardware: HardwareMode::Fixed {
             backend,
             devices: vec![SessionDevice {
+                usb: None,
                 smbus: None,
                 lamparray: None,
                 key: KEY.into(),
@@ -134,6 +136,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
         plugins_dir: Some(plugins),
         effects_dir: None,
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: notifier.clone(),

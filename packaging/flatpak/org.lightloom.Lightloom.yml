@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Lightloom Flatpak manifest (flatpak-builder).
+#
+# Build, from the repository root. cargo-sources.json and node-sources.json (the offline
+# crate and npm sources) are generated, git-ignored files: regenerate them whenever
+# Cargo.lock or ui/package-lock.json changes. Caveats: packaging/flatpak/README.md.
+#
+#   packaging/flatpak/generate-sources.sh
+#   flatpak-builder --user --install --force-clean build-flatpak \
+#     packaging/flatpak/org.lightloom.Lightloom.yml
+#   flatpak run org.lightloom.Lightloom
+#
+# Device access: `--device=all` exposes /dev (hidraw, usb, tty, i2c-*) inside the sandbox,
+# but the kernel still applies the host's permissions. The udev rules, the i2c group and
+# the i2c-dev module must be installed on the host (`flatpak run org.lightloom.Lightloom
+# --setup-help`); a Flatpak cannot install them.
+
+app-id: org.lightloom.Lightloom
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node20
+command: lightloom-launch
+
+finish-args:
+  # The dashboard and API listen on 127.0.0.1; without the host network namespace the
+  # browser outside the sandbox cannot reach them. Also network-device plugins (HTTP,
+  # mDNS) and udev's netlink hotplug broadcasts (netlink is per network namespace).
+  - --share=network
+  # hidraw, usbfs, serial and /dev/i2c-* nodes. There is no narrower device permission
+  # that covers hidraw and i2c.
+  - --device=all
+  # engine.audio (PulseAudio protocol, served by PipeWire on current desktops).
+  - --socket=pulseaudio
+  # The CEF effect renderer renders off-screen and needs no display socket; screen
+  # capture (engine.zone) goes through the ScreenCast portal, which needs no permission.
+  # Data and config stay in ~/.var/app/org.lightloom.Lightloom (XDG dirs inside the sandbox).
+  # Printed commands (`--setup-help`, `--systemd-unit`) must name the Flatpak, not /app.
+  - --env=LIGHTLOOM_SELF=flatpak run org.lightloom.Lightloom
+
+modules:
+  - name: lightloom
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node20/bin
+      env:
+        CARGO_HOME: /run/build/lightloom/cargo
+        CARGO_NET_OFFLINE: "true"
+        npm_config_cache: /run/build/lightloom/flatpak-node/npm-cache
+        npm_config_offline: "true"
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      # The renderer (lightloom-renderer --features cef) joins this list once it builds on
+      # Linux (WP-L5); it will also need zypak (ZYPAK_CEF_LIBRARY_PATH) for the Chromium
+      # sandbox inside Flatpak.
+      - cargo --offline build --release --locked -p lightloom-daemon -p lightloom-cli
+      - cd ui && npm ci --offline --ignore-scripts --no-audit --no-fund && npm run build
+      - tools/package/stage-linux.sh --release target/release --ui ui/dist --out /app/lib/lightloom
+      - install -Dm0755 packaging/appimage/AppRun /app/bin/lightloom-launch
+      - ln -s ../lib/lightloom/lightloomd /app/bin/lightloomd
+      - ln -s ../lib/lightloom/lightloom /app/bin/lightloom
+      - >-
+        sed -e 's/^Exec=.*/Exec=lightloom-launch/' -e 's/^Icon=.*/Icon=org.lightloom.Lightloom/'
+        -e '/^X-AppImage-/d' packaging/appimage/lightloom.desktop
+        > org.lightloom.Lightloom.desktop
+      - install -Dm0644 org.lightloom.Lightloom.desktop /app/share/applications/org.lightloom.Lightloom.desktop
+      - install -Dm0644 packaging/appimage/lightloom.svg /app/share/icons/hicolor/scalable/apps/org.lightloom.Lightloom.svg
+      - install -Dm0644 packaging/flatpak/org.lightloom.Lightloom.metainfo.xml /app/share/metainfo/org.lightloom.Lightloom.metainfo.xml
+    sources:
+      # Local builds use the working tree. Flathub needs a pinned source instead:
+      #   - type: git
+      #     url: https://github.com/MrMoraleDev/Lightloom.git
+      #     tag: v0.1.0
+      #     commit: <full sha>
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - ui/node_modules
+          - ui/dist
+          - build-flatpak
+          - .flatpak-builder
+      - cargo-sources.json
+      - node-sources.json

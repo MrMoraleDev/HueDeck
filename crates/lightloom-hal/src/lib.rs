@@ -24,6 +24,7 @@ pub mod hotplug;
 pub mod key;
 pub mod lamparray;
 pub mod notify;
+pub mod power;
 pub mod sensors;
 pub mod serial;
 pub mod smbios;
@@ -39,7 +40,8 @@ pub use hid::{HidBackend, HidEndpointInfo, HidEndpointTuple, HidHandle, ReportLe
 pub use hotplug::{DeviceClass, DeviceEvent, HotplugSource};
 pub use key::{DeviceKey, EndpointUid};
 pub use notify::{Notification, Notifier};
+pub use power::{PowerEvent, PowerSink, PowerSource};
 pub use serial::{SerialBackend, SerialConfig, SerialHandle, SerialPortInfo};
 pub use smbios::SystemInfo;
 pub use smbus::{PciIds, SmbusBatch, SmbusBus, SmbusBusDescriptor, SmbusBusKind, SmbusOp, SmbusReply};
-pub use usb::{UsbBackend, UsbDeviceInfo, UsbHandle};
+pub use usb::{UsbBackend, UsbDeviceInfo, UsbHandle, UsbInterfaceInfo};

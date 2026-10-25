@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The Windows side: a hidden window that owns one `Shell_NotifyIconW`
-//! icon, the popup menu, a 3 s status poll for the tooltip, the per-user
-//! `Run` value and starting the daemon.
+//! icon, the popup menu, a 3 s status poll for the tooltip and starting
+//! the daemon.
 //!
 //! Everything runs on the one GUI thread. The menu loop (`TrackPopupMenu`)
 //! dispatches messages while it is open, so the window procedure only
@@ -9,23 +9,17 @@
 //! menu is skipped).
 
 use lightloom_tray::{
-    ico_image, menu, perform, tooltip, Action, Api, Autostart, Desktop, Entry, HttpApi, Outcome, RunKey,
-    Status, RUN_SUBKEY,
+    ico_image, menu, perform, tooltip, Action, Api, Autostart, Desktop, Entry, HttpApi, Outcome, Status,
+    WinRunKey, WINDOW_CLASS,
 };
 use std::cell::RefCell;
-use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{
-    GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HINSTANCE, HWND, LPARAM,
-    LRESULT, POINT, WIN32_ERROR, WPARAM,
+    GetLastError, ERROR_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW, HKEY,
-    HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_SZ,
-};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_WARNING, NIM_ADD, NIM_DELETE,
@@ -37,8 +31,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetMenuDefaultItem, SetTimer,
     TrackPopupMenu, TranslateMessage, HICON, HMENU, IDI_APPLICATION, LR_DEFAULTCOLOR, MF_CHECKED, MF_GRAYED,
     MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CONTEXTMENU, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER,
-    WNDCLASSW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP,
+    WM_TIMER, WNDCLASSW,
 };
 
 /// The icon's callback message.
@@ -69,126 +63,6 @@ fn fill(dst: &mut [u16], s: &str) {
         i += 1;
     }
     dst[i..].fill(0);
-}
-
-/// Lightloom's `Run` value under `HKEY_CURRENT_USER`.
-struct WinRunKey;
-
-fn os_error(err: WIN32_ERROR) -> io::Error {
-    io::Error::from_raw_os_error(err.0 as i32)
-}
-
-impl RunKey for WinRunKey {
-    fn get(&self, name: &str) -> io::Result<Option<String>> {
-        let (key, value) = (wide(RUN_SUBKEY), wide(name));
-        let mut len = 0u32;
-        // SAFETY: NUL-terminated names; a size query (no buffer).
-        let err = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                PCWSTR(key.as_ptr()),
-                PCWSTR(value.as_ptr()),
-                RRF_RT_REG_SZ,
-                None,
-                None,
-                Some(&mut len),
-            )
-        };
-        if err == ERROR_FILE_NOT_FOUND {
-            return Ok(None);
-        }
-        if err != ERROR_SUCCESS {
-            return Err(os_error(err));
-        }
-        let mut buf = vec![0u16; (len as usize).div_ceil(2) + 1];
-        let mut len = (buf.len() * 2) as u32;
-        // SAFETY: the buffer holds `len` bytes and outlives the call.
-        let err = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                PCWSTR(key.as_ptr()),
-                PCWSTR(value.as_ptr()),
-                RRF_RT_REG_SZ,
-                None,
-                Some(buf.as_mut_ptr().cast()),
-                Some(&mut len),
-            )
-        };
-        if err == ERROR_FILE_NOT_FOUND {
-            return Ok(None);
-        }
-        if err != ERROR_SUCCESS {
-            return Err(os_error(err));
-        }
-        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        Ok(Some(String::from_utf16_lossy(&buf[..end])))
-    }
-
-    fn set(&self, name: &str, value: &str) -> io::Result<()> {
-        let key = wide(RUN_SUBKEY);
-        let mut hkey = HKEY::default();
-        // SAFETY: NUL-terminated key name; valid out pointer.
-        let err = unsafe {
-            RegCreateKeyExW(
-                HKEY_CURRENT_USER,
-                PCWSTR(key.as_ptr()),
-                None,
-                PCWSTR::null(),
-                REG_OPTION_NON_VOLATILE,
-                KEY_SET_VALUE,
-                None,
-                &mut hkey,
-                None,
-            )
-        };
-        if err != ERROR_SUCCESS {
-            return Err(os_error(err));
-        }
-        let (name, data) = (wide(name), wide(value));
-        let bytes: Vec<u8> = data.iter().flat_map(|u| u.to_le_bytes()).collect();
-        // SAFETY: the key is open; name and data outlive the call; closed once.
-        let err = unsafe {
-            let err = RegSetValueExW(hkey, PCWSTR(name.as_ptr()), None, REG_SZ, Some(&bytes));
-            let _ = RegCloseKey(hkey);
-            err
-        };
-        if err != ERROR_SUCCESS {
-            return Err(os_error(err));
-        }
-        Ok(())
-    }
-
-    fn delete(&self, name: &str) -> io::Result<()> {
-        let key = wide(RUN_SUBKEY);
-        let mut hkey = HKEY::default();
-        // SAFETY: NUL-terminated key name; valid out pointer.
-        let err = unsafe {
-            RegOpenKeyExW(
-                HKEY_CURRENT_USER,
-                PCWSTR(key.as_ptr()),
-                None,
-                KEY_SET_VALUE,
-                &mut hkey,
-            )
-        };
-        if err == ERROR_FILE_NOT_FOUND {
-            return Ok(());
-        }
-        if err != ERROR_SUCCESS {
-            return Err(os_error(err));
-        }
-        let name = wide(name);
-        // SAFETY: the key is open; the name outlives the call; closed once.
-        let err = unsafe {
-            let err = RegDeleteValueW(hkey, PCWSTR(name.as_ptr()));
-            let _ = RegCloseKey(hkey);
-            err
-        };
-        if err != ERROR_SUCCESS && err != ERROR_FILE_NOT_FOUND {
-            return Err(os_error(err));
-        }
-        Ok(())
-    }
 }
 
 /// The browser and the programs next to the tray.
@@ -409,6 +283,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             LRESULT(0)
         }
+        // `lightloomw --stop` (the installer is about to replace the files).
+        WM_CLOSE => {
+            with_app(|a| a.remove_icon());
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
         WM_TIMER if wp.0 == TIMER_POLL => {
             with_app(|a| {
                 a.refresh();
@@ -461,7 +341,7 @@ pub fn run() -> i32 {
             return 1;
         };
         let hinst = HINSTANCE(module.0);
-        let class = w!("LightloomTray");
+        let class = WINDOW_CLASS;
         let wc = WNDCLASSW {
             lpfnWndProc: Some(wndproc),
             hInstance: hinst,

@@ -24,5 +24,6 @@
     }
   ],
   "permissions": ["smbus"],
+  "shutdownModes": ["restore", "keep", "off"],
   "keywords": ["crucial", "ballistix", "micron", "ram", "dram", "ddr4", "smbus"]
 }

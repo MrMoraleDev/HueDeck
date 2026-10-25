@@ -409,3 +409,41 @@ test("dry run: modules already remapped are found on reads alone, a needed remap
   assert.deepEqual(plugin.Scan(live.free), [0x39]);
   assert.ok(live.logs.some((l) => l.includes("moving the module at 0x27")), live.logs.join("\n"));
 });
+
+test("exit modes: keep leaves the last frame per LED, off black, restore the shutdown colour, suspend black", async () => {
+  /** The effect colour each LED got: [r, g, b] from 0x82ED/EE/EF after each 0x82E9 mask. */
+  const effectColours = (writes) => {
+    const out = [];
+    writes.forEach(([reg, v], i) => {
+      if (reg === 0x82E9) out.push([writes[i + 4][1], writes[i + 5][1], writes[i + 6][1], v]);
+    });
+    return out;
+  };
+  const run = async (mode, suspending = false, params = { shutdownColor: "#FF8000" }) => {
+    const { mock, plugin, restore } = await setup({ color: (x) => perLed(x), params });
+    try {
+      assert.deepEqual(plugin.ShutdownModes(), ["restore", "keep", "off"]);
+      plugin.Initialize();
+      plugin.Render();
+      mock.ops.length = 0;
+      plugin.Shutdown(suspending, mode);
+      assert.equal(mock.isLocked(), false);
+      // Only the effect mailbox and the mode register: the controller has no save register.
+      const writes = registerWrites(mock.ops);
+      assert.ok(writes.every(([reg]) => reg === 0x820F || (reg >= 0x82E9 && reg <= 0x82F0)), JSON.stringify(writes));
+      assert.deepEqual(writes.slice(-4), [[0x820F, 0xCF], [0x82EE, 0x00], [0x82EF, 0x10], [0x82F0, 0x84]], "then static mode");
+      return effectColours(writes);
+    } finally {
+      restore();
+    }
+  };
+  const masks = [...Array(8).keys()].map((i) => 1 << i);
+  assert.deepEqual(await run("keep"), FRAME.map(([r, g, b], i) => [r, g, b, masks[i]]));
+  assert.deepEqual(await run("off"), masks.map((m) => [0, 0, 0, m]));
+  assert.deepEqual(await run("restore"), masks.map((m) => [0xFF, 0x80, 0x00, m]));
+  assert.deepEqual(await run(undefined), masks.map((m) => [0xFF, 0x80, 0x00, m]));
+  assert.deepEqual(await run("restore", false, {}), masks.map((m) => [0, 0, 0, m]), "default shutdown colour black");
+  for (const mode of ["keep", "off", "restore"]) {
+    assert.deepEqual(await run(mode, true), masks.map((m) => [0, 0, 0, m]), `suspend ${mode}`);
+  }
+});

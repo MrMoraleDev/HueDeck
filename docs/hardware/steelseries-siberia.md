@@ -42,6 +42,12 @@ only lighting), so they go out as rarely as possible.
 
 **Shutdown.** No exit step and no other mode in OpenRGB: the light is set black.
 
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more with the four commands of a frame, `off` the same black; `restore`
+(and SignalRGB's call without a mode) and suspend are the shutdown above. Nothing is stored.
+OpenRGB sends no keepalive, so the device is expected to hold the colours until it loses power or
+other software takes it over (unverified on hardware).
+
 ## Left out
 
 Nothing lighting-related. No audio setting is touched (OpenRGB sends none).

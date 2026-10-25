@@ -129,11 +129,27 @@ export function Render() {
   }
 }
 
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
+
 // OpenRGB has no exit step. The Apex 3 TKL gets its own rainbow wave back (OpenRGB's "Rainbow
 // Wave" mode, the keyboard's power-on lighting); OpenRGB has no such command for the Apex 3, whose
 // zones are switched off (black, in Direct).
-export function Shutdown(SystemSuspending) {
+// Exit modes (Lightloom extension): "keep" sends the last frame once more in Direct (never
+// DeviceSaveMode()). OpenRGB sends no keepalive, so the keyboard is expected to hold the colours
+// until it loses power (unverified on hardware); nothing is stored. "off" is black in Direct (on
+// the TKL too); "restore" (and SignalRGB's call without a mode) is the exit above; suspend stays as
+// it was.
+export function Shutdown(SystemSuspending, mode) {
   if (!model) {
+    return;
+  }
+  if (!SystemSuspending && (mode === "keep" || mode === "off")) {
+    const keep = mode === "keep";
+    setColor(leds.map((l) => {
+      const [r, g, b] = keep ? device.color(l.cell[0], l.cell[1]) : [0, 0, 0];
+      return [r & 0xFF, g & 0xFF, b & 0xFF];
+    }), MODE_DIRECT, model.brightness);
     return;
   }
   if (product.model === "APEX_8ZONE") {

@@ -14,5 +14,6 @@
     { "vid": "0x3299", "pids": ["0x0012"], "transport": "hid", "interfaces": [1], "tested": [] }
   ],
   "permissions": ["hid"],
+  "shutdownModes": ["restore"],
   "keywords": ["evision", "sonix", "endorfy", "omnis", "keyboard", "openrgb"]
 }

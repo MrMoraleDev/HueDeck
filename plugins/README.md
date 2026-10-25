@@ -174,7 +174,10 @@ export `SaveCapabilities()` and `SaveToDevice(request)`, repeat the capabilities
 `action: "save"`, and test that no other path (frames, previews, every exit mode, suspend) sends
 it. `Shutdown(SystemSuspending, mode)` gets the exit mode (`"restore"`, `"keep"`, `"off"`) as a
 second argument; list the ones you implement in `ShutdownModes()` and `shutdownModes`. "Keep" and
-"off" must never store anything. Contract and host guarantees:
+"off" must never store anything; list "keep" only when the device holds colours with no host
+refreshing them. `plugins/_testkit/exit-modes.mjs` (`checkExitModes`) checks the usual shape
+(keep resends the last frame, off the same reports black, restore and suspend unchanged) against
+the mock HAL. Contract and host guarantees:
 [docs/host-api/save-shutdown.md](../docs/host-api/save-shutdown.md).
 
 Built-in effects the device can run live (a GPU's rainbow, a board's static zones) are offered with

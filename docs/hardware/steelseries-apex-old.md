@@ -34,6 +34,12 @@ Logo.
 
 **Shutdown.** No exit step and no other mode in OpenRGB: all zones black (A stays `0x08`).
 
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more with the report of a frame, `off` the same black; `restore` (and
+SignalRGB's call without a mode) and suspend are the shutdown above. Nothing is stored. OpenRGB
+sends no keepalive, so the device is expected to hold the colours until it loses power or other
+software takes it over (unverified on hardware).
+
 ## Left out
 
 Nothing lighting-related; no key or macro command exists in this driver.

@@ -71,6 +71,12 @@ only.
 **Shutdown.** OpenRGB has no exit step, and its "Onboard" mode sends nothing on the M750: all keys
 are set black.
 
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more with the reports of a frame, `off` the same black; `restore` (and
+SignalRGB's call without a mode) and suspend are the shutdown above. Nothing is stored. OpenRGB
+sends no keepalive, so the device is expected to hold the colours until it loses power or other
+software takes it over (unverified on hardware).
+
 ## Left out
 
 Nothing lighting-related. No profile, macro or key function command is sent.

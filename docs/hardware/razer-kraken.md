@@ -50,7 +50,10 @@ Interface 3, collection usage page `0x000C`, usage `0x0001`; HID **output** repo
   OpenRGB falls back to the first table entry, a keyboard). Unchanged frames are sent again after
   1 s.
 - Exit: OpenRGB has none; Lightloom sets the spectrum cycle, effect byte `0x05` (on + spectrum
-  cycling), with OpenRGB's `razer_set_mode_spectrum_cycle()`.
+  cycling), with OpenRGB's `razer_set_mode_spectrum_cycle()`. Exit modes (Lightloom extension,
+  [save-shutdown.md](../host-api/save-shutdown.md)): `keep` sends the last frame once more (the
+  custom colour and the effect byte "on"), `off` OpenRGB's `SetModeOff()` (`razer_set_mode_none()`,
+  effect byte `0x00`).
 
 Effect byte bits (`razer_kraken_effect_byte`, first field = bit 0): on/static `0x01`, single
 colour breathing `0x02`, spectrum cycling `0x04`, sync `0x08`, two colour breathing `0x10`,
@@ -64,7 +67,13 @@ three colour breathing `0x20`.
   and brightness `40 02 00 00 FF` (the maximum; Lightloom's colours carry the brightness).
 - Frame: `40 03 00 r g b ...` with the `cols` LEDs of the table entry (1; 4 on the Kitty V2 Pro:
   left and right cat ear, left and right logo).
-- Exit: Lightloom gives the headset its wave back, `40 01 00 0F 03` and `40 02 00 00 FF`.
+- Exit: Lightloom gives the headset its wave back, `40 01 00 0F 03` and `40 02 00 00 FF`. Exit
+  modes: `keep` sends the last Direct colours once more (`40 03 ...`), `off` black ones; the
+  headset stays in Direct mode.
+
+For both families `restore` (and SignalRGB's call without a mode) and suspend are the hardware
+effect above. OpenRGB sends no keepalive in either mode, so the headset is expected to hold the
+`keep` and `off` colours while it has power (unverified on hardware). Nothing is stored.
 
 ## Check against OpenRGB
 

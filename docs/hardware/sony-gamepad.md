@@ -193,6 +193,13 @@ same on exit and on system suspend:
 - DualSense: the frame report with a black light bar and every player LED off (`player_leds`
   `0x20`), the brightness byte from the parameter.
 
+That is `restore` (and SignalRGB's call without a mode), `off`, and suspend. Exit mode `keep`
+(Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)) sends the last frame once
+more in the frame's own output report. The controller keeps the colours of its last output report
+while it has power (OpenRGB sends a report only when the colours change, with no keepalive), until
+other software (a game, Steam) sends its own; nothing is stored (the controllers have no lighting
+memory). Unverified on hardware for `keep`.
+
 ## Left out
 
 - **Bluetooth.** OpenRGB builds Bluetooth reports for both controllers (DualShock 4 `0x11`,

@@ -16,6 +16,7 @@
     "hid"
   ],
   "conflictingProcesses": ["RazerAppEngine.exe", "RazerCentralService.exe", "Razer Synapse 3.exe", "Razer Synapse.exe"],
+  "shutdownModes": ["restore", "keep", "off"],
   "keywords": [
     "razer",
     "hanbo",

@@ -57,6 +57,12 @@ headset was recorded taking).
 **Shutdown.** OpenRGB has no exit step and no onboard-lighting command for this headset: both
 zones are set black with the same six reports.
 
+**Exit modes** (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+sends the last frame once more with the six reports per ear cup of a frame, `off` the same black;
+`restore` (and SignalRGB's call without a mode) and suspend are the shutdown above. Nothing is
+stored. OpenRGB sends no keepalive, so the device is expected to hold the colours until it loses
+power or other software takes it over (unverified on hardware).
+
 ## Left out
 
 Nothing lighting-related. The serial-number string read is not needed. Volume, sidetone,

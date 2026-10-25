@@ -168,9 +168,27 @@ export function Render() {
   }
 }
 
-// The device takes its own lighting back (its autonomous mode).
-export function Shutdown() {
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
+
+// "restore" (and SignalRGB's call without a mode, and suspend): the device takes its own lighting
+// back (its autonomous mode). "keep" sends the last frame once more and "off" every programmable
+// lamp black, each with the update reports of a frame (the last one flagged UpdateComplete), and
+// AutonomousMode stays off, so the lamps keep those colours: the LampArray usage tables define no
+// host timeout. Unverified on hardware: a device whose firmware takes its autonomous mode back on
+// its own, or Windows Dynamic Lighting taking the device over, would replace them. Nothing is
+// stored (LampArray has no persistent store).
+export function Shutdown(SystemSuspending, mode) {
   if (!enabled) {
+    return;
+  }
+  if (!SystemSuspending && (mode === "keep" || mode === "off")) {
+    sendColours(lamps.map((lamp) => {
+      if (!lamp.programmable) {
+        return null;
+      }
+      return mode === "keep" ? device.color(lamp.cell[0], lamp.cell[1]) : [0, 0, 0];
+    }));
     return;
   }
   setAutonomous(true);

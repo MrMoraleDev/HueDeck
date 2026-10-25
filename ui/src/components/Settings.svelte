@@ -250,7 +250,7 @@
 
   <section class="panel">
     <h2>When Lightloom closes</h2>
-    {#each [["restore", "Give each device its own lighting back (its built-in effect, or what it showed before Lightloom)"], ["keep", "Keep the last colours Lightloom showed (until the device is switched off)"], ["off", "Turn the lights off"]] as [mode, label] (mode)}
+    {#each [["restore", "Give each device its own lighting back (its built-in effect, what it showed before Lightloom, or what you saved to it); devices with no lighting of their own go dark"], ["keep", "Keep the last colours Lightloom showed (until the device is switched off)"], ["off", "Turn the lights off"]] as [mode, label] (mode)}
       <label class="check"
         ><input
           type="radio"
@@ -263,8 +263,8 @@
     {/each}
     <p class="muted">
       Nothing is stored in the devices: after a power cycle they show what they keep in their own memory (see Devices →
-      Save to devices). A device can have its own choice in its settings; devices whose plugin cannot do it fall back to
-      their own lighting.
+      Save to devices). To leave the lights as they are, choose "Keep". A device can have its own choice in its settings;
+      devices whose plugin cannot do it fall back to their own lighting.
     </p>
   </section>
 

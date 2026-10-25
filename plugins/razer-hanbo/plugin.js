@@ -94,9 +94,25 @@ export function Render() {
   lastSentAt = now;
 }
 
-/** OpenRGB has no exit step; Lightloom hands the cooler its hardware spectrum cycle. */
-export function Shutdown(_systemSuspending) {
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
+
+/**
+ * OpenRGB has no exit step; Lightloom hands the cooler its hardware spectrum cycle ("restore",
+ * SignalRGB's call without a mode, and suspend). "keep" (Lightloom extension) sends the last frame
+ * once more and "off" a black one, with the colour reports of a frame, and leave the cooler in
+ * Direct mode: OpenRGB sends no keepalive in Direct, so the cooler is expected to hold the colours
+ * until it loses power (unverified on hardware). Nothing is stored (OpenRGB has no save command).
+ */
+export function Shutdown(systemSuspending, mode) {
   if (!zones) {
+    return;
+  }
+  if (!systemSuspending && (mode === "keep" || mode === "off")) {
+    zones.forEach((zone, index) => setZoneLeds(index, zone.cells.map(([x, y]) => {
+      const c = mode === "keep" ? device.color(x, y) : [0, 0, 0];
+      return [c[0] & 0xFF, c[1] & 0xFF, c[2] & 0xFF];
+    })));
     return;
   }
   setModeSpectrumCycle();

@@ -59,7 +59,14 @@ Each report sits in a logical collection with the report's usage; LampArrayKind:
    intensity at its highest level. Devices without the multi-update report get one range
    update per lamp. Unchanged colours are resent once a second; frames closer together than
    3/4 of the device's minimum update interval are skipped.
-7. Shutdown: AutonomousMode 1, the device takes its own lighting back.
+7. Shutdown: AutonomousMode 1, the device takes its own lighting back (`restore`, SignalRGB's
+   call without a mode, and suspend). Exit modes (Lightloom extension,
+   [save-shutdown.md](../host-api/save-shutdown.md)): `keep` sends the last frame once more and
+   `off` every programmable lamp black, with the update reports of a frame (the last one flagged
+   update complete), and AutonomousMode stays 0. The usage tables define no host timeout, so the
+   lamps should keep those colours; a device whose firmware takes its autonomous mode back by
+   itself, or Windows Dynamic Lighting taking the device over, would replace them (unverified on
+   hardware). Nothing is stored.
 
 A plugin that claims the device by VID:PID always wins over this one (on the reference
 machine the Razer DeathAdder V2 Pro is claimed by `razer`); run with `--plugins plugins/hid-lamparray`

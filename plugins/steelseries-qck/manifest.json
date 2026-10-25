@@ -20,5 +20,6 @@
   ],
   "permissions": ["hid"],
   "conflictingProcesses": ["SteelSeriesGG.exe", "SteelSeriesEngine.exe"],
+  "shutdownModes": ["restore", "keep", "off"],
   "keywords": ["steelseries", "qck", "prism", "mousepad", "mousemat", "openrgb"]
 }

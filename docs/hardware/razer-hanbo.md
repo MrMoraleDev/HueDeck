@@ -38,7 +38,12 @@ checked.
   `"0107000000000" + zone`), then per LED **G, R, B**; no answer, 2 ms pause after each.
   Unchanged frames are sent again after 1 s.
 - Exit: OpenRGB has none; Lightloom sets the cooler's spectrum cycle with OpenRGB's
-  `SetModeSpectrumCycle()`: `82 01`, `80 01`, `80 01 01`, each followed by a read.
+  `SetModeSpectrumCycle()`: `82 01`, `80 01`, `80 01 01`, each followed by a read. That is
+  `restore` (and SignalRGB's call without a mode) and suspend.
+- Exit modes (Lightloom extension, [save-shutdown.md](../host-api/save-shutdown.md)): `keep`
+  sends the last frame once more with the colour reports of a frame, `off` a black frame; the
+  cooler stays in Direct mode. OpenRGB sends no keepalive in Direct, so the cooler is expected to
+  hold the colours until it loses power (unverified on hardware). Nothing is stored.
 
 ## Check against OpenRGB
 

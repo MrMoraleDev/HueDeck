@@ -242,7 +242,10 @@ export function createKeyboard(layout) {
    * EndLedsDirect(), which OpenRGB sends when the controller goes away: the keyboard goes back
    * to its own (stored) lighting. The same on suspend: colours sent now would not outlast the
    * missing refreshes. Sent even when the capabilities were not confirmed, as OpenRGB's
-   * KeepaliveThread() does on exit; 0x13 is volatile and stores nothing.
+   * KeepaliveThread() does on exit; 0x13 is volatile and stores nothing. The same for every exit
+   * mode: OpenRGB refreshes direct colours after 200 ms without an update, which says the firmware
+   * leaves direct mode by itself when the host stops, so a last frame (or a black one) would not
+   * stay; "keep" and "off" therefore end like "restore" (ShutdownModes() lists only that).
    */
   function shutdown() {
     query(CMD_END_DYNAMIC_COLORS);

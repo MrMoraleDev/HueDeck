@@ -50,11 +50,20 @@ export function Render() {
   }
 }
 
-export function Shutdown() {
+// Exit: both ear cups black, on exit and on suspend.
+// Exit modes (Lightloom extension): "keep" sends the last frame once more with the same recorded
+// packets per ear cup. The recordings show no keepalive, so the headset is expected to hold the
+// colours until it loses power (unverified on hardware); nothing is stored. "off" is black;
+// "restore" (and SignalRGB's call without a mode) is the exit above; suspend stays as it was.
+export function Shutdown(SystemSuspending, mode) {
+  const keep = !SystemSuspending && mode === "keep";
   for (let zone = 0; zone < 2; zone++) {
-    sendZone(zone, [0, 0, 0]);
+    sendZone(zone, keep ? device.color(zone, 0) : [0, 0, 0]);
   }
 }
+
+// Exit modes (Lightloom extension, docs/host-api/save-shutdown.md).
+export function ShutdownModes() { return ["restore", "keep", "off"]; }
 
 /** One zone's colour, in the order the headset was seen to take it. */
 function sendZone(zone, rgb) {

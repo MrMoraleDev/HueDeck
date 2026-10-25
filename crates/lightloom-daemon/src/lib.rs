@@ -20,6 +20,7 @@ pub mod lifecycle;
 pub mod paths;
 pub mod pawnio;
 pub mod port;
+pub mod screen;
 pub mod store;
 
 use lightloom_api::ApiContext;

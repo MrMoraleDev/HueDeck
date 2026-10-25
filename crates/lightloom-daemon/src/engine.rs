@@ -45,14 +45,16 @@ use crate::paths::{self, Paths};
 use crate::store::{StateExport, Store};
 use arc_swap::ArcSwap;
 use lightloom_api::model::{
-    BatteryView, ChannelView, DeviceSaveChoice, DeviceView, EffectView, Endpoint, Lighting,
-    NetworkControllerView, NetworkServiceView, PawnIoAction, PawnIoView, RendererView, SaveSupport, Settings,
+    BatteryView, ChannelView, DeviceMessageView, DeviceSaveChoice, DeviceView, EffectView, Endpoint,
+    Lighting, NetworkControllerView, NetworkServiceView, PawnIoAction, PawnIoView, RendererView, SaveSupport,
+    Settings,
 };
 use lightloom_api::{ApiError, Backend, Event, Request, Snapshot};
 use lightloom_engine::{
     Component, ComponentInstance, ComponentLibrary, DirectLeds, FrameStore, Layout, Placement, Rgb,
     CANVAS_HEIGHT, CANVAS_WIDTH,
 };
+use lightloom_hal::lamparray::LampArrayBackend;
 use lightloom_hal::notify::{Notification, Notifier};
 use lightloom_hal::HidBackend;
 use lightloom_plugin_host::battery::BatteryStatus;
@@ -60,7 +62,8 @@ use lightloom_plugin_host::catalog::{Catalog, CatalogEntry, ScanOptions};
 use lightloom_plugin_host::device::{Brightness, LogSink, WriteMode};
 use lightloom_plugin_host::discover::ScanBudget;
 use lightloom_plugin_host::manager::{Change, DeviceManager, OptionsFn, Present};
-use lightloom_plugin_host::meta::{ControllableParameter, ParamValue};
+use lightloom_plugin_host::meta::{coerce_param_value, ControllableParameter, ParamValue};
+use lightloom_plugin_host::plugin_ui::{PluginMessage, PluginUi};
 use lightloom_plugin_host::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode};
 use lightloom_plugin_host::service::{PluginSettings, ServiceCommand, ServiceHandle, ServiceOptions};
 use lightloom_plugin_host::session::{
@@ -83,6 +86,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, oneshot};
 
+mod playlists;
+
 /// Settings keys in the database.
 mod keys {
     pub const EFFECT: &str = "lighting.effect";
@@ -103,6 +108,10 @@ mod keys {
     /// Native API and dashboard port chosen in the dashboard (read at startup by [`crate::port`]).
     pub const PORT: &str = "settings.port";
     pub const OPENRGB_SDK: &str = "settings.openrgbSdk";
+    /// The playing playlist and its entry.
+    pub const PLAYLIST: &str = "lighting.playlist";
+    /// The auto-next timer.
+    pub const EFFECT_TIMER: &str = "lighting.effectTimer";
     pub const NETWORK: &str = "settings.network";
 }
 
@@ -178,6 +187,8 @@ pub enum HardwareMode {
         devices: Vec<SessionDevice>,
         /// SMBus buses scanned when SMBus is enabled.
         smbus: Vec<BusHandle>,
+        /// LampArray backend (Windows Dynamic Lighting); `None`: none.
+        lamparrays: Option<Arc<dyn LampArrayBackend>>,
     },
 }
 
@@ -410,6 +421,8 @@ struct Engine {
     canvas: Canvas,
     /// `engine.audio` capture, while the effect reads it.
     audio: Option<lightloom_inputs::audio::AudioInput>,
+    /// `engine.zone` / `engine.vision` capture, while the effect reads them.
+    screen: Option<lightloom_inputs::screen::ScreenInput>,
     effect: Option<String>,
     brightness: u8,
     enabled: bool,
@@ -469,6 +482,16 @@ struct Engine {
     battery_monitor: BatteryMonitor,
     /// Devices pulsing red now, with the start time of the session told to.
     alerting: BTreeMap<String, Instant>,
+    /// Playlists and the auto-next timer.
+    player: playlists::Player,
+    /// The LampArray backend (Windows Dynamic Lighting), when there is one.
+    lamp_backend: Option<Arc<dyn LampArrayBackend>>,
+    /// Its generation at the last scan.
+    lamp_generation: u64,
+    /// LampArrays no plugin owns (driven by the built-in session).
+    lamp_present: Vec<Present>,
+    /// LampArrays left to a plugin, already logged.
+    lamp_owned: BTreeSet<String>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -515,6 +538,7 @@ impl Engine {
             components: ComponentLibrary::default(),
             canvas: Canvas::Null(NullRenderer::new(Pattern::Solid(Rgb::new(0, 0, 0)), 30.0)),
             audio: None,
+            screen: None,
             effect: None,
             brightness: 100,
             enabled: true,
@@ -550,6 +574,11 @@ impl Engine {
             batteries: BTreeMap::new(),
             battery_monitor: BatteryMonitor::default(),
             alerting: BTreeMap::new(),
+            player: playlists::Player::default(),
+            lamp_backend: None,
+            lamp_generation: 0,
+            lamp_present: Vec::new(),
+            lamp_owned: BTreeSet::new(),
         };
         e.enter(LifecycleState::LoadingConfig);
         e.load_state();
@@ -664,6 +693,7 @@ impl Engine {
         d.parameters = rows.into_iter().map(|r| (r.key, r.parameters)).collect();
         drop(d);
         self.reload_channels();
+        self.load_player();
     }
 
     /// The stored component arrays of every device, as instances.
@@ -718,6 +748,11 @@ impl Engine {
             effects.add_dir(dir, EffectSource::Lightloom, false);
         }
         effects.add_dir(&self.opts.paths.user_effects(), EffectSource::User, false);
+        effects.add_dir(
+            &self.opts.paths.developer_effects(),
+            EffectSource::Developer,
+            false,
+        );
         self.effects = effects;
 
         let mut cdirs = Vec::new();
@@ -739,6 +774,11 @@ impl Engine {
 
     fn open_hardware(&mut self) {
         let mode = std::mem::replace(&mut self.opts.hardware, HardwareMode::None);
+        self.lamp_backend = match &mode {
+            HardwareMode::Real => lightloom_runtime::lamparray::open(),
+            HardwareMode::None => None,
+            HardwareMode::Fixed { lamparrays, .. } => lamparrays.clone(),
+        };
         let backend: Arc<dyn HidBackend> = match &mode {
             HardwareMode::Real => match lightloom_runtime::hardware::Hardware::open() {
                 Ok(hw) => {
@@ -847,6 +887,7 @@ impl Engine {
             Vec::new()
         };
         self.last_conflict_check = Instant::now();
+        self.scan_lamparrays();
         self.scan_smbus();
         self.merge_smbus();
         self.merge_network();
@@ -857,10 +898,50 @@ impl Engine {
         }
     }
 
-    /// Put the SMBus devices of the last scan (after `[devices] ignore`) into
-    /// the devices present, in place of the earlier ones, and record them.
+    /// The LampArrays (Windows Dynamic Lighting) no plugin owns, from the
+    /// HID devices present now: a plugin always wins on the same device
+    /// (`lightloom_runtime::lamparray`).
+    fn scan_lamparrays(&mut self) {
+        let Some(backend) = &self.lamp_backend else {
+            return;
+        };
+        self.lamp_generation = backend.generation();
+        let hid: Vec<Present> = self
+            .present
+            .iter()
+            .filter(|p| {
+                p.device.smbus.is_none() && p.device.lamparray.is_none() && p.device.network.is_none()
+            })
+            .cloned()
+            .collect();
+        match lightloom_runtime::lamparray::present(backend, &hid, &self.opts.config.devices.ignore) {
+            Ok(scan) => {
+                let mut lines = Vec::new();
+                for (lamp, owner, why) in &scan.owned {
+                    if self.lamp_owned.insert(lamp.clone()) {
+                        lines.push(format!(
+                            "{lamp}: Dynamic Lighting device left to the plugin of {owner} ({why:?})"
+                        ));
+                    }
+                }
+                self.lamp_owned
+                    .retain(|k| scan.owned.iter().any(|(l, _, _)| l == k));
+                self.lamp_present = scan.present;
+                for line in lines {
+                    self.log(line);
+                }
+            }
+            Err(e) => self.log(format!("Dynamic Lighting: enumerating LampArrays failed: {e}")),
+        }
+    }
+
+    /// Put the SMBus devices of the last scan (after `[devices] ignore`) and
+    /// the LampArrays of the last scan into the devices present, in place of
+    /// the earlier ones, and record them.
     fn merge_smbus(&mut self) {
-        self.present.retain(|p| p.device.smbus.is_none());
+        self.present
+            .retain(|p| p.device.smbus.is_none() && p.device.lamparray.is_none());
+        self.present.extend(self.lamp_present.iter().cloned());
         let ignore = &self.opts.config.devices.ignore;
         self.present.extend(
             self.smbus_present
@@ -1265,6 +1346,7 @@ impl Engine {
 
     fn start_canvas(&mut self) {
         self.audio = None;
+        self.screen = None;
         self.canvas.client().stop();
         if self
             .effect
@@ -1313,6 +1395,12 @@ impl Engine {
             Canvas::Cef(c) => Some(c.engine_sink()),
             Canvas::Null(_) => None,
         };
+        let meta = self
+            .effect
+            .as_deref()
+            .and_then(|id| self.effects.get(id))
+            .map(|e| &e.meta);
+        self.screen = crate::screen::feed(&self.opts.config.screen, meta, sink.clone());
         self.audio = crate::audio::feed(&self.opts.config.audio, fps, uses_audio, sink);
         self.canvas = canvas;
         self.dirty = true;
@@ -1338,7 +1426,12 @@ impl Engine {
             }
             // A plug produces a burst of events: (re)start the settle timer. A
             // session that lost its device asks for an enumeration too.
-            let plugged = self.hotplug.changed();
+            let lamps = self.lamp_backend.as_ref().map(|b| b.generation());
+            let lamps_changed = lamps.is_some_and(|g| g != self.lamp_generation);
+            if let Some(g) = lamps {
+                self.lamp_generation = g;
+            }
+            let plugged = self.hotplug.changed() | lamps_changed;
             let lost =
                 self.settle.is_none() && self.manager.as_ref().is_some_and(DeviceManager::has_disconnected);
             if plugged || lost {
@@ -1358,11 +1451,18 @@ impl Engine {
             }
             self.poll_pawnio_job();
             self.check_broker_service();
+            // A plugin changed its parameters or messages: show them now (every
+            // session's channel is drained).
+            let announced = self.sessions().map(|h| h.events().len()).sum::<usize>();
+            if announced > 0 {
+                self.dirty = true;
+            }
             if self.last_stats.elapsed() >= STATS_EVERY {
                 self.last_stats = Instant::now();
                 self.dirty = true;
                 self.check_batteries();
             }
+            self.tick_player();
             self.poll_services();
             if self.dirty {
                 self.publish();
@@ -1382,6 +1482,7 @@ impl Engine {
             }
         }
         self.audio = None;
+        self.screen = None;
         self.canvas.client().stop();
     }
 
@@ -1414,6 +1515,9 @@ impl Engine {
                 layout: self.layout.name.clone(),
                 layout_brightness: self.layout.brightness,
                 renderer: self.canvas.view(self.fps()),
+                playlist: self.player.playback(),
+                timer: self.player.timer(),
+                next_switch_ms: self.player.next_switch_ms(),
             },
             devices: self.device_views(),
             effects: self
@@ -1437,9 +1541,11 @@ impl Engine {
                         .presets(&e.id)
                         .map(|p| p.into_keys().collect())
                         .unwrap_or_default(),
+                    uses: effect_uses(e),
                 })
                 .collect(),
             layouts: self.store.layout_names().unwrap_or_default(),
+            playlists: self.store.playlists().unwrap_or_default(),
             settings: Settings {
                 signalrgb: self.signalrgb,
                 signalrgb_available: lightloom_plugin_host::catalog::signalrgb_app_dir().is_some(),
@@ -1471,10 +1577,20 @@ impl Engine {
             warnings: {
                 let mut all = self.warnings.clone();
                 all.extend(self.battery_warnings());
+                all.extend(self.lamparray_warning());
                 all
             },
             pawnio: self.pawnio_view(),
         }
+    }
+
+    /// Why Windows Dynamic Lighting devices may stay dark: no package identity.
+    fn lamparray_warning(&self) -> Option<String> {
+        let backend = self.lamp_backend.as_ref()?;
+        (!self.lamp_present.is_empty() && !backend.has_identity()).then(|| {
+            "Windows Dynamic Lighting devices: Lightloom runs without its identity package, so Windows              gives them to Lightloom only while it would be the foreground app (never, for the daemon).              Register the identity package (packaging/msix-identity) and put Lightloom first under              Settings > Personalization > Dynamic Lighting > Background light control."
+                .into()
+        })
     }
 
     // ---------------------------------------------------------------- battery
@@ -1709,11 +1825,19 @@ impl Engine {
             let enabled = row.is_none_or(|r| r.enabled);
             let meta = &p.plugin.meta;
             let stored = defaults.parameters.get(key).cloned().unwrap_or_default();
-            let parameters = meta
-                .controllable_parameters
+            // A running session's lists (changed at run time), else the exports'.
+            let ui = sessions.get(key).and_then(|h| h.plugin_ui()).unwrap_or_else(|| {
+                Arc::new(PluginUi::new(
+                    &meta.controllable_parameters,
+                    &meta.device_messages,
+                ))
+            });
+            let parameters = ui
+                .properties()
                 .iter()
                 .map(|c| parameter_json(c, stored.get(&c.property)))
                 .collect();
+            let messages = ui.messages().iter().map(message_view).collect();
             let image = meta.image_url.clone().or_else(|| {
                 meta.image_base64
                     .as_ref()
@@ -1728,6 +1852,12 @@ impl Engine {
                     .smbus
                     .as_ref()
                     .map(|t| format!("{} · 0x{:02x}", t.bus.descriptor().name, t.addr))
+                    .or_else(|| {
+                        p.device
+                            .lamparray
+                            .as_ref()
+                            .map(|_| "Windows Dynamic Lighting".into())
+                    })
                     .or_else(|| {
                         p.device
                             .network
@@ -1755,6 +1885,7 @@ impl Engine {
                 default_scale: meta.default_scale,
                 image,
                 parameters,
+                messages,
                 save: meta
                     .save_caps
                     .as_ref()
@@ -1778,7 +1909,11 @@ impl Engine {
             };
             if let Some(h) = sessions.get(key) {
                 let live = h.live();
-                view.state = state_name(live.state).into();
+                view.state = if live.paused && live.state == SessionState::Running {
+                    "paused".into()
+                } else {
+                    state_name(live.state).into()
+                };
                 view.frames = live.frames;
                 view.render_errors = live.render_errors;
                 view.io_errors = live.io_errors;
@@ -1856,14 +1991,9 @@ impl Engine {
                 if self.effects.get(&id).is_none() {
                     return Err(ApiError::not_found(format!("no effect {id}")));
                 }
-                if !values.is_empty() {
-                    self.store.set_effect_params(&id, &values).map_err(internal)?;
-                }
-                self.store.set(keys::EFFECT, &id).map_err(internal)?;
-                self.effect = Some(id.clone());
-                self.start_canvas();
-                self.log(format!("effect: {id}"));
-                Ok(json!({ "effect": id }))
+                // The user's choice ends a playlist.
+                self.stop_playlist();
+                self.show_effect(id, values)
             }
             Request::SetEffectValues { id, values } => {
                 if self.effects.get(&id).is_none() {
@@ -1916,6 +2046,15 @@ impl Engine {
                 }
                 Ok(json!({}))
             }
+            Request::StepEffect { previous } if self.player.is_playing() => self.step_playlist(previous),
+            r @ (Request::ShuffleEffect
+            | Request::SavePlaylist { .. }
+            | Request::DeletePlaylist { .. }
+            | Request::PlayPlaylist { .. }
+            | Request::StopPlaylist
+            | Request::SetEffectTimer { .. }
+            | Request::LoadEffect { .. }
+            | Request::EffectImage { .. }) => self.handle_playlist(r),
             Request::StepEffect { previous } => {
                 let ids: Vec<String> = self.effects.iter().map(|e| e.id.clone()).collect();
                 if ids.is_empty() {
@@ -2005,7 +2144,8 @@ impl Engine {
                         h.control(Control::ShutdownMode(effective));
                     }
                 }
-                if let Some(values) = parameters {
+                if let Some(mut values) = parameters {
+                    self.coerce_parameters(&key, &mut values);
                     self.store
                         .set_device_parameters(&key, &values)
                         .map_err(internal)?;
@@ -2562,6 +2702,27 @@ impl Engine {
         }
     }
 
+    /// Parameter values as their control types expect them (`"800"` -> 800
+    /// for a number), by the device's current parameter list.
+    fn coerce_parameters(&self, key: &str, values: &mut Map<String, Value>) {
+        let ui = self
+            .sessions()
+            .find(|h| h.key() == key)
+            .and_then(|h| h.plugin_ui());
+        let exported = self
+            .present
+            .iter()
+            .find(|p| p.device.key == key)
+            .map(|p| p.plugin.meta.controllable_parameters.as_slice())
+            .unwrap_or_default();
+        let list = ui.as_deref().map_or(exported, PluginUi::properties);
+        for (name, value) in values.iter_mut() {
+            if let Some(c) = list.iter().find(|c| &c.property == name) {
+                *value = coerce_param_value(c.param_type, value);
+            }
+        }
+    }
+
     fn push_brightness(&self) {
         let b = Brightness {
             global: self.brightness,
@@ -2660,6 +2821,23 @@ impl Engine {
     }
 }
 
+/// What an effect reads, by name (`EffectView::uses`).
+fn effect_uses(e: &lightloom_runtime::effects::EffectFile) -> Vec<String> {
+    let u = &e.meta.uses;
+    [
+        ("audio", u.audio),
+        ("video", u.video),
+        ("meters", u.meters),
+        ("engine", u.engine),
+        ("webgl", u.webgl),
+        ("input", u.input),
+    ]
+    .iter()
+    .filter(|(_, on)| *on)
+    .map(|(name, _)| (*name).to_string())
+    .collect()
+}
+
 fn param_value(v: &ParamValue) -> Value {
     match v {
         ParamValue::Number(n) => json!(n),
@@ -2690,6 +2868,17 @@ fn parameter_json(c: &ControllableParameter, stored: Option<&Value>) -> Value {
         "filter": c.filter,
         "value": stored.cloned().or(default).unwrap_or(Value::Null),
     })
+}
+
+/// A plugin message for clients.
+fn message_view(m: &PluginMessage) -> DeviceMessageView {
+    DeviceMessageView {
+        id: m.id.clone(),
+        title: m.title.clone(),
+        message: m.message.clone(),
+        tooltip: m.tooltip.clone(),
+        priority: m.priority,
+    }
 }
 
 /// Where the shipped resources and the renderer are, from config and the

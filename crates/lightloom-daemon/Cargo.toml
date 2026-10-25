@@ -39,6 +39,7 @@ arc-swap = { workspace = true }
 uuid = { workspace = true }
 toml = { workspace = true }
 lightloom-api = { path = "../lightloom-api" }
+lightloom-effects = { path = "../lightloom-effects" }
 lightloom-engine = { path = "../lightloom-engine" }
 lightloom-hal = { path = "../lightloom-hal" }
 lightloom-inputs = { path = "../lightloom-inputs" }

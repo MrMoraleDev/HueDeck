@@ -4,6 +4,7 @@
   import { daemon } from "../lib/store.svelte";
   import type { EffectView, Snapshot } from "../lib/types";
   import ControlInput from "./ControlInput.svelte";
+  import Playlists from "./Playlists.svelte";
   import Preview from "./Preview.svelte";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
@@ -20,6 +21,13 @@
     ),
   );
 
+  const SOURCES: Record<EffectView["source"], string> = {
+    lightloom: "Lightloom",
+    user: "yours",
+    signalrgb: "SignalRGB",
+    developer: "developer",
+  };
+
   function valueOf(e: EffectView, property: string, fallback: unknown) {
     return property in e.values ? e.values[property] : fallback;
   }
@@ -30,12 +38,13 @@
     <div class="row head">
       <h2>Effects</h2>
       <input type="text" placeholder="Filter" bind:value={filter} />
+      <button onclick={() => daemon.run(() => api.shuffleEffect())} title="A random effect (game integrations left out)">Shuffle</button>
       <button onclick={() => daemon.run(() => api.state())} title="Reload">↻</button>
     </div>
     {#each shown as e (e.id)}
       <button class="effect" class:active={e.id === snapshot.lighting.effect} onclick={() => daemon.run(() => api.applyEffect(e.id))}>
         <span class="title">{e.title}</span>
-        <span class="badge">{e.source === "signalrgb" ? "SignalRGB" : e.source === "user" ? "yours" : "Lightloom"}</span>
+        <span class="badge">{SOURCES[e.source] ?? e.source}{e.uses?.includes("meters") ? " · game" : ""}</span>
         {#if e.description}<span class="desc muted">{e.description}</span>{/if}
       </button>
     {:else}
@@ -47,6 +56,7 @@
     <div class="panel">
       <Preview width={480} />
     </div>
+    <Playlists {snapshot} />
     {#if current}
       <div class="panel">
         <h2>{current.title}</h2>

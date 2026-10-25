@@ -33,6 +33,18 @@ pub const SMBUS_PIIX4: Pin = Pin {
     sha256: "91f9b4b1c39e3d399ce48477a89d8f6bd3e58a2241064a4daec3a1513dff56e5",
 };
 
+/// The Intel PCH SMBus module (i801 family, MMIO BAR of 00:1F.4/1F.3/1F.1/80:1F.4).
+pub const SMBUS_I801: Pin = Pin {
+    name: "SmbusI801",
+    file: "SmbusI801.bin",
+    size: 55540,
+    sha256: "a0f7d066e7efda28c0e754c1f52dbd8dc280d388ba8575b514a80cb67490530c",
+};
+
+/// The chipset SMBus modules, in the order the broker tries them: each
+/// refuses (`STATUS_NOT_SUPPORTED`) a chipset it does not drive.
+pub const CHIPSET_MODULES: &[Pin] = &[SMBUS_PIIX4, SMBUS_I801];
+
 /// The harmless probe module (`ioctl_not`), used to detect an unrestricted driver.
 pub const ECHO: Pin = Pin {
     name: "Echo",
@@ -42,7 +54,7 @@ pub const ECHO: Pin = Pin {
 };
 
 /// Every module the broker may load.
-pub const MODULES: &[Pin] = &[SMBUS_PIIX4, ECHO];
+pub const MODULES: &[Pin] = &[SMBUS_PIIX4, SMBUS_I801, ECHO];
 
 /// A file `lightloom-setup --pawnio-install` downloads, pinned like the modules
 /// and checked for its Authenticode signer as well.
@@ -238,6 +250,9 @@ mod tests {
             assert_eq!(p.file, format!("{}.bin", p.name));
         }
         assert_eq!(pin("SmbusPIIX4"), Some(&SMBUS_PIIX4));
+        assert_eq!(pin("SmbusI801"), Some(&SMBUS_I801));
+        assert!(CHIPSET_MODULES.iter().all(|c| MODULES.contains(c)));
+        assert!(pin("SmbusIntelSkylakeIMC").is_none(), "not pinned yet");
         assert!(matches!(verify("SmbusNCT6793", &[]), Err(PinError::Unknown(_))));
         assert_eq!(
             sha256_hex(b"abc"),

@@ -1123,6 +1123,7 @@ dependencies = [
  "axum",
  "clap",
  "lightloom-api",
+ "lightloom-effects",
  "lightloom-engine",
  "lightloom-hal",
  "lightloom-inputs",
@@ -1177,6 +1178,7 @@ dependencies = [
  "lightloom-hal",
  "lightloom-hal-windows",
  "lightloom-hid-desc",
+ "lightloom-protocol",
  "libc",
  "tracing",
 ]
@@ -1209,6 +1211,7 @@ dependencies = [
  "rtrb",
  "serde",
  "tracing",
+ "windows",
 ]
 
 [[package]]

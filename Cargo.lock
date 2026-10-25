@@ -1491,6 +1491,7 @@ dependencies = [
  "lightloom-engine",
  "lightloom-hal",
  "lightloom-inputs",
+ "lightloom-macros",
  "lightloom-plugin-host",
  "lightloom-render",
  "lightloom-runtime",

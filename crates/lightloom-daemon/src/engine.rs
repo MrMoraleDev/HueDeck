@@ -99,6 +99,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, oneshot};
 
 mod actions;
+mod macros;
 mod playlists;
 
 /// Settings keys in the database.
@@ -254,6 +255,12 @@ pub struct EngineOptions {
     pub signalrgb_settings: Option<Arc<dyn SettingsSource + Send + Sync>>,
 }
 
+/// The macros' desktop and input hooks.
+type MacroPlatform = (
+    Arc<dyn lightloom_hal::input::Desktop>,
+    Option<Box<dyn lightloom_hal::input::InputHook>>,
+);
+
 struct Envelope {
     request: Request,
     reply: oneshot::Sender<Result<Value, ApiError>>,
@@ -365,6 +372,24 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
 /// [`start`], registering the `lightloom://` URL scheme through `url_scheme`
 /// when the user turns the setting on.
 pub fn start_with(opts: EngineOptions, url_scheme: crate::scheme::UrlScheme) -> anyhow::Result<EngineHandle> {
+    start_with_desktop(opts, url_scheme, None)
+}
+
+/// [`start_with`], with the macros' desktop given: `None` takes this OS's
+/// (`SendInput`, the input hooks) with real hardware, and a recording
+/// desktop without hooks otherwise; a given desktop never gets hooks (tests).
+pub fn start_with_desktop(
+    opts: EngineOptions,
+    url_scheme: crate::scheme::UrlScheme,
+    desktop: Option<Arc<dyn lightloom_hal::input::Desktop>>,
+) -> anyhow::Result<EngineHandle> {
+    let platform: MacroPlatform = match desktop {
+        Some(d) => (d, None),
+        None if matches!(opts.hardware, HardwareMode::Real) => {
+            (lightloom_runtime::input::desktop(), lightloom_runtime::input::hooks())
+        }
+        None => (lightloom_hal::input::RecordingDesktop::new(), None),
+    };
     let store = if opts.ephemeral {
         Store::in_memory()?
     } else {
@@ -394,7 +419,7 @@ pub fn start_with(opts: EngineOptions, url_scheme: crate::scheme::UrlScheme) -> 
         std::thread::Builder::new()
             .name("lightloom-engine".into())
             .spawn(move || {
-                let mut engine = Engine::boot(opts, store, shared, rx, power_rx, url_scheme);
+                let mut engine = Engine::boot(opts, store, shared, rx, power_rx, url_scheme, platform);
                 engine.run(&stop);
                 engine.shut_down();
             })?
@@ -587,6 +612,12 @@ struct Engine {
     display_off: bool,
     /// The canvas is black for that now.
     idle: bool,
+    /// The macro runtime.
+    macros: lightloom_macros::MacroManager,
+    /// What its scripts reach of the engine.
+    macro_link: Arc<macros::EngineLink>,
+    /// What the macros were last told.
+    macro_feed: macros::MacroFeed,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -631,7 +662,18 @@ impl Engine {
         requests: Receiver<Envelope>,
         power_rx: Receiver<PowerSignal>,
         url_scheme: crate::scheme::UrlScheme,
+        (desktop, hooks): MacroPlatform,
     ) -> Self {
+        let macro_link = Arc::new(macros::EngineLink {
+            shared: Arc::clone(&shared),
+            closing: AtomicBool::new(false),
+        });
+        let macro_manager = lightloom_macros::MacroManager::new(
+            macro_link.clone(),
+            desktop,
+            hooks,
+            Self::macro_config(&store),
+        );
         let defaults = Arc::new(Mutex::new(SessionDefaults {
             write_mode: if opts.dry_run {
                 WriteMode::DryRun
@@ -706,10 +748,14 @@ impl Engine {
             locked: false,
             display_off: false,
             idle: false,
+            macros: macro_manager,
+            macro_link,
+            macro_feed: macros::MacroFeed::default(),
         };
         e.enter(LifecycleState::LoadingConfig);
         e.load_state();
         e.sync_url_scheme(true);
+        e.sync_macro_dirs();
         e.enter(LifecycleState::RendererProbe);
         if e.opts.renderer.is_none() {
             e.warnings.push(
@@ -944,6 +990,7 @@ impl Engine {
         let defaults = Arc::clone(&self.defaults);
         let events = self.shared.events.clone();
         let direct = Arc::clone(&self.shared.direct);
+        let input_sink = self.macros.input_sink();
         let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
             let d = lock(&defaults).clone();
             let key = device.key.clone();
@@ -974,6 +1021,7 @@ impl Engine {
                 shutdown_mode: d.shutdown_mode_of(&key),
                 direct: Some(Arc::clone(&direct)),
                 battery_warning_level: d.battery_low,
+                input_sink: Some(Arc::clone(&input_sink)),
                 ..SessionOptions::default()
             }
         });
@@ -1636,6 +1684,7 @@ impl Engine {
                 self.check_batteries();
             }
             self.tick_player();
+            self.tick_macros();
             self.poll_services();
             if self.dirty {
                 self.publish();
@@ -1652,10 +1701,22 @@ impl Engine {
     fn power(&mut self, event: PowerEvent) {
         tracing::debug!(?event, "power event");
         match event {
-            PowerEvent::Suspend => self.suspend(),
-            PowerEvent::Resume => self.resume(),
-            PowerEvent::Lock => self.locked = true,
-            PowerEvent::Unlock => self.locked = false,
+            PowerEvent::Suspend => {
+                self.macros.system_power(true);
+                self.suspend()
+            }
+            PowerEvent::Resume => {
+                self.resume();
+                self.macros.system_power(false)
+            }
+            PowerEvent::Lock => {
+                self.locked = true;
+                self.macros.session_lock(true)
+            }
+            PowerEvent::Unlock => {
+                self.locked = false;
+                self.macros.session_lock(false)
+            }
             PowerEvent::DisplayOff => self.display_off = true,
             PowerEvent::DisplayOn => self.display_off = false,
         }
@@ -1737,6 +1798,8 @@ impl Engine {
 
     fn shut_down(&mut self) {
         self.enter(LifecycleState::ShuttingDown);
+        self.macro_link.closing.store(true, Ordering::Release);
+        self.macros.shutdown();
         for h in self.services.drain(..) {
             h.stop();
         }
@@ -2663,6 +2726,7 @@ impl Engine {
                         self.store.set(keys::SIGNALRGB, &on).map_err(internal)?;
                         lock(&self.defaults).use_signalrgb = on;
                         self.reload_libraries();
+                        self.sync_macro_dirs();
                     }
                 }
                 Ok(json!({
@@ -2748,6 +2812,11 @@ impl Engine {
             }
             Request::PawnIoSetup { action } => self.pawnio_setup(action),
             Request::Action { url } => self.run_action(&url),
+            r @ (Request::Macros
+            | Request::SetMacros { .. }
+            | Request::SetMacro { .. }
+            | Request::RunMacro { .. }
+            | Request::AnswerPrompt { .. }) => self.handle_macros(r),
             Request::SetUrlScheme { enabled } => self.set_url_scheme(enabled),
             Request::Rescan => {
                 self.smbus_scan_due = true;
@@ -3296,6 +3365,8 @@ impl Engine {
         self.sync_url_scheme(false);
         lock(&self.defaults).use_signalrgb = self.signalrgb;
         self.load_libraries();
+        self.sync_macro_dirs();
+        self.macros.rescan();
         self.start_canvas();
         self.rescan();
         self.start_services();

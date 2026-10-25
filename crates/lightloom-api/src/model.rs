@@ -94,6 +94,87 @@ pub enum PawnIoAction {
     Remove,
 }
 
+/// `GET /v1/update`: the update check (Settings → Updates). Nothing is
+/// fetched unless the user presses *Check for updates* or turned the weekly
+/// check on (docs/privacy.md).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateView {
+    /// The running version.
+    pub current_version: String,
+    /// Check once a week by itself (off by default).
+    pub check_weekly: bool,
+    /// Offer pre-releases too (off by default).
+    pub beta: bool,
+    /// A check runs now.
+    pub checking: bool,
+    /// When the last check ended (Unix seconds); `None`: never.
+    pub last_check: Option<u64>,
+    /// Why the last check failed; `None` when it worked.
+    pub error: Option<String>,
+    /// A newer release found by the last check; `None`: up to date (or never checked).
+    pub available: Option<UpdateRelease>,
+    /// *Download* downloads, verifies and opens the installer here (the
+    /// per-user MSI install on Windows); otherwise it opens the release page.
+    pub installable: bool,
+    /// Why *Download* opens the release page instead (portable copy, Linux, ...).
+    pub install_note: Option<String>,
+    /// The last download (running or ended).
+    pub job: Option<UpdateJob>,
+}
+
+/// A release on GitHub.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRelease {
+    /// Its version (`1.2.3`, `1.3.0-beta.1`).
+    pub version: String,
+    /// Its tag (`v1.2.3`).
+    pub tag: String,
+    /// Its title.
+    pub name: String,
+    /// Release notes as plain text (HTML tags and control characters removed, shortened).
+    pub notes: String,
+    /// The release page (always under `https://github.com/MrMoraleDev/Lightloom/`).
+    pub url: String,
+    /// Publication date (ISO 8601), as GitHub gives it.
+    pub published_at: Option<String>,
+    /// A pre-release (only offered with the beta channel on).
+    pub prerelease: bool,
+    /// The download for this system; `None`: open the release page.
+    pub asset: Option<UpdateAsset>,
+}
+
+/// One file of a release.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAsset {
+    /// File name (`Lightloom-1.2.3-x64.msi`).
+    pub name: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Its download address.
+    pub url: String,
+}
+
+/// The download of an update.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateJob {
+    /// The release's version.
+    pub version: String,
+    /// Still downloading.
+    pub running: bool,
+    /// How it ended; `None` while running.
+    pub ok: Option<bool>,
+    /// Bytes downloaded so far.
+    pub downloaded: u64,
+    /// Bytes in all (`0`: unknown).
+    pub total: u64,
+    /// What to tell the user.
+    pub message: String,
+}
+
 /// `GET /v1/sensors`: the hardware sensors (read-only), as of the last poll.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

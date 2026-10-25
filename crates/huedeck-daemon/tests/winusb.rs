@@ -84,6 +84,7 @@ fn a_device_without_winusb_is_listed_as_needing_it() {
         components_dir: None,
         renderer: None,
         plugin_cache: None,
+        signalrgb_settings: None,
         notifier: Arc::new(MockNotifier::default()),
         api_port: huedeck_api::NATIVE_PORT,
         api_port_notice: None,

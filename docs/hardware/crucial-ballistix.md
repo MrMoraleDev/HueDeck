@@ -31,7 +31,7 @@ here.)
    prompt: `huedeck-setup --pawnio-install --smbus` downloads the official PawnIO 2.2.0
    installer (SHA-256 and signer pinned) when PawnIO is missing or older, and registers the
    broker with the PawnIO.Modules 0.2.11 files bundled next to it (`SmbusPIIX4.bin`,
-   `Echo.bin`, `COPYING`, sources; SHA-256 pinned). By hand, from an elevated prompt:
+   `SmbusI801.bin`, `Echo.bin`, `COPYING`, sources; SHA-256 pinned). By hand, from an elevated prompt:
    `huedeck-setup --smbus [--pawnio-modules <dir>]`. Without PawnIO `huedeck` and the daemon
    say that RAM lighting is off (from PawnIO's uninstall entry) and GPU lighting keeps
    working. A broker of an older protocol (before v3) is reported as such and not used:

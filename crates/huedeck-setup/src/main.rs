@@ -28,7 +28,7 @@
 //! `--smbus` (install):
 //! 1. check the PawnIO driver: installed, official edition, 2.2.0 or later
 //!    (without `--pawnio-install` this tool does not install it and stops);
-//! 2. check `SmbusPIIX4.bin` and `Echo.bin` in the modules directory (default:
+//! 2. check `SmbusPIIX4.bin`, `SmbusI801.bin` and `Echo.bin` in the modules directory (default:
 //!    `pawnio-modules` next to this executable, where the HueDeck installer
 //!    puts the signed PawnIO.Modules 0.2.11 release) against their SHA-256
 //!    pins, and copy them with `COPYING` and the module sources (LGPL-2.1) to
@@ -211,7 +211,14 @@ fn plan_steps(action: &Action, pawnio: PawnIoStatus, layout: &Layout) -> Result<
 /// Files copied with the blobs when present: the licence and the module
 /// sources (LGPL-2.1 asks for the source next to the object code). The
 /// `include` directory of the sources is copied as well.
-const MODULE_EXTRAS: &[&str] = &["COPYING", "SmbusPIIX4.p", "Echo.p", "sleepmode.inc", "SOURCE.txt"];
+const MODULE_EXTRAS: &[&str] = &[
+    "COPYING",
+    "SmbusPIIX4.p",
+    "SmbusI801.p",
+    "Echo.p",
+    "sleepmode.inc",
+    "SOURCE.txt",
+];
 
 /// Check the pinned blobs in `dir` (and that `COPYING` is there).
 fn check_modules(dir: &Path) -> Result<(), String> {
@@ -812,6 +819,15 @@ mod tests {
             .unwrap_err()
             .contains("not the pinned release file"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_intel_module_and_its_source_are_installed() {
+        let files: Vec<&str> = huedeck_iobroker::pins::MODULES.iter().map(|p| p.file).collect();
+        assert_eq!(files, ["SmbusPIIX4.bin", "SmbusI801.bin", "Echo.bin"]);
+        for source in ["SmbusPIIX4.p", "SmbusI801.p", "Echo.p", "sleepmode.inc"] {
+            assert!(MODULE_EXTRAS.contains(&source), "{source}");
+        }
     }
 
     #[test]

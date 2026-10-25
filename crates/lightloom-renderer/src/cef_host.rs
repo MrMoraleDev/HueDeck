@@ -276,14 +276,20 @@ fn run_command(host: &HostCtx, meta: &EffectMeta, cmd: &Command) {
         Command::Set { values } => {
             let (js, skipped) = control::set_script(meta, values);
             if !skipped.is_empty() {
-                eprintln!("lightloom-renderer: ignored control values: {}", skipped.join(", "));
+                eprintln!(
+                    "lightloom-renderer: ignored control values: {}",
+                    skipped.join(", ")
+                );
             }
             exec(&js);
         }
         Command::Engine { data } => {
             let (js, skipped) = control::engine_script(data);
             if !skipped.is_empty() {
-                eprintln!("lightloom-renderer: ignored engine members: {}", skipped.join(", "));
+                eprintln!(
+                    "lightloom-renderer: ignored engine members: {}",
+                    skipped.join(", ")
+                );
             }
             exec(&js);
         }

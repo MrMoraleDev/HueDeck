@@ -788,7 +788,8 @@ impl PluginRuntime {
                 let install = || -> rquickjs::Result<()> {
                     if opts.device.is_none() {
                         cfg.set("mode", "scan")?;
-                        ctx.globals().set("__lightloomNative", Object::new(ctx.clone())?)?;
+                        ctx.globals()
+                            .set("__lightloomNative", Object::new(ctx.clone())?)?;
                     }
                     let natives: Object = ctx.globals().get("__lightloomNative")?;
                     crate::bus::install_bus(&ctx, &natives, guard, d, opts.device.as_ref())

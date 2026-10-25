@@ -153,7 +153,11 @@ fn actions_drive_the_engine() {
     let s = wait_for(b, "the effect", |s| {
         s.lighting.effect.as_deref() == Some("lightloom:rainbow-rise")
     });
-    let view = s.effects.iter().find(|e| e.id == "lightloom:rainbow-rise").unwrap();
+    let view = s
+        .effects
+        .iter()
+        .find(|e| e.id == "lightloom:rainbow-rise")
+        .unwrap();
     assert_eq!(view.values["speed"], 7);
     assert_eq!(view.values["reverse"], true);
     assert_eq!(view.values["tint"], "#ff0000");

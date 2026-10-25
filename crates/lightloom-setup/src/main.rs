@@ -310,7 +310,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(out)
 }
 
-const USAGE: &str = "usage: lightloom-setup --pawnio-install [--smbus] [--elevate] [--pause] [--plan]\n       \
+const USAGE: &str =
+    "usage: lightloom-setup --pawnio-install [--smbus] [--elevate] [--pause] [--plan]\n       \
 lightloom-setup --smbus [--pawnio-modules <dir>] [--client-sid SID] [--elevate] [--pause] [--plan]\n       \
 lightloom-setup --smbus --uninstall [--elevate] [--pause] [--plan]";
 

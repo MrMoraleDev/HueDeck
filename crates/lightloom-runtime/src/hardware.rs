@@ -238,7 +238,9 @@ impl Hardware {
     /// The hidraw backend (nothing is opened until a session starts).
     #[cfg(target_os = "linux")]
     pub fn open() -> anyhow::Result<Self> {
-        Ok(Self::Hidraw(Arc::new(lightloom_hal_linux::LinuxHidBackend::new())))
+        Ok(Self::Hidraw(
+            Arc::new(lightloom_hal_linux::LinuxHidBackend::new()),
+        ))
     }
 
     /// The backend as the plugin host sees it.

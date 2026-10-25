@@ -1100,282 +1100,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "lightloom-adl"
-version = "0.0.1"
-dependencies = [
- "lightloom-hal",
- "thiserror 2.0.21",
- "tracing",
- "windows",
-]
-
-[[package]]
-name = "lightloom-api"
-version = "0.0.1"
-dependencies = [
- "axum",
- "http-body-util",
- "lightloom-engine",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "lightloom-cli"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "ctrlc",
- "lightloom-api",
- "lightloom-effects",
- "lightloom-engine",
- "lightloom-hal",
- "lightloom-hal-windows",
- "lightloom-plugin-host",
- "lightloom-render",
- "lightloom-runtime",
- "lightloom-winres",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "lightloom-daemon"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "arc-swap",
- "axum",
- "clap",
- "lightloom-api",
- "lightloom-effects",
- "lightloom-engine",
- "lightloom-hal",
- "lightloom-inputs",
- "lightloom-plugin-host",
- "lightloom-render",
- "lightloom-runtime",
- "lightloom-tray",
- "lightloom-winres",
- "humantime",
- "rusqlite",
- "rusqlite_migration",
- "serde",
- "serde_json",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "lightloom-effects"
-version = "0.0.1"
-dependencies = [
- "scraper",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "lightloom-engine"
-version = "0.0.1"
-dependencies = [
- "serde",
- "serde_json",
- "triple_buffer",
- "uuid",
-]
-
-[[package]]
-name = "lightloom-hal"
-version = "0.0.1"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "lightloom-hal-linux"
-version = "0.0.1"
-dependencies = [
- "lightloom-hal",
- "lightloom-hal-windows",
- "lightloom-hid-desc",
- "lightloom-protocol",
- "libc",
- "tracing",
-]
-
-[[package]]
-name = "lightloom-hal-windows"
-version = "0.0.1"
-dependencies = [
- "hidapi",
- "lightloom-hal",
- "lightloom-hid-desc",
- "lightloom-protocol",
- "nusb",
- "serialport",
- "tracing",
- "windows",
-]
-
-[[package]]
-name = "lightloom-hid-desc"
-version = "0.0.1"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "lightloom-inputs"
-version = "0.0.1"
-dependencies = [
- "cpal",
- "realfft",
- "rtrb",
- "serde",
- "tracing",
- "windows",
-]
-
-[[package]]
-name = "lightloom-iobroker"
-version = "0.0.1"
-dependencies = [
- "lightloom-protocol",
- "lightloom-winres",
- "proptest",
- "sha2",
- "tracing",
- "tracing-subscriber",
- "windows",
- "windows-service",
-]
-
-[[package]]
-name = "lightloom-nvapi"
-version = "0.0.1"
-dependencies = [
- "lightloom-hal",
- "thiserror 2.0.21",
- "tracing",
- "windows",
-]
-
-[[package]]
-name = "lightloom-plugin-host"
-version = "0.0.1"
-dependencies = [
- "lightloom-engine",
- "lightloom-hal",
- "lightloom-hid-desc",
- "rquickjs",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tracing",
-]
-
-[[package]]
-name = "lightloom-protocol"
-version = "0.0.1"
-dependencies = [
- "postcard",
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "lightloom-render"
-version = "0.0.1"
-dependencies = [
- "lightloom-engine",
- "lightloom-protocol",
- "lightloom-renderer",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tracing",
-]
-
-[[package]]
-name = "lightloom-renderer"
-version = "0.0.1"
-dependencies = [
- "cef",
- "clap",
- "lightloom-effects",
- "lightloom-protocol",
- "lightloom-winres",
- "image",
- "memmap2",
- "parking_lot",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "lightloom-runtime"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "lightloom-adl",
- "lightloom-effects",
- "lightloom-engine",
- "lightloom-hal",
- "lightloom-hal-linux",
- "lightloom-hal-windows",
- "lightloom-nvapi",
- "lightloom-plugin-host",
- "lightloom-protocol",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
-name = "lightloom-setup"
-version = "0.0.1"
-dependencies = [
- "lightloom-hal-windows",
- "lightloom-iobroker",
- "lightloom-winres",
- "windows",
- "windows-service",
-]
-
-[[package]]
-name = "lightloom-tray"
-version = "0.0.1"
-dependencies = [
- "lightloom-api",
- "lightloom-runtime",
- "lightloom-winres",
- "serde_json",
- "windows",
-]
-
-[[package]]
-name = "lightloom-winres"
-version = "0.0.1"
-dependencies = [
- "winresource",
-]
-
-[[package]]
 name = "humantime"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1704,6 +1428,282 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "lightloom-adl"
+version = "0.0.1"
+dependencies = [
+ "lightloom-hal",
+ "thiserror 2.0.21",
+ "tracing",
+ "windows",
+]
+
+[[package]]
+name = "lightloom-api"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "lightloom-engine",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "lightloom-cli"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ctrlc",
+ "lightloom-api",
+ "lightloom-effects",
+ "lightloom-engine",
+ "lightloom-hal",
+ "lightloom-hal-windows",
+ "lightloom-plugin-host",
+ "lightloom-render",
+ "lightloom-runtime",
+ "lightloom-winres",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lightloom-daemon"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "axum",
+ "clap",
+ "humantime",
+ "lightloom-api",
+ "lightloom-effects",
+ "lightloom-engine",
+ "lightloom-hal",
+ "lightloom-inputs",
+ "lightloom-plugin-host",
+ "lightloom-render",
+ "lightloom-runtime",
+ "lightloom-tray",
+ "lightloom-winres",
+ "rusqlite",
+ "rusqlite_migration",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "lightloom-effects"
+version = "0.0.1"
+dependencies = [
+ "scraper",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lightloom-engine"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "triple_buffer",
+ "uuid",
+]
+
+[[package]]
+name = "lightloom-hal"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "lightloom-hal-linux"
+version = "0.0.1"
+dependencies = [
+ "libc",
+ "lightloom-hal",
+ "lightloom-hal-windows",
+ "lightloom-hid-desc",
+ "lightloom-protocol",
+ "tracing",
+]
+
+[[package]]
+name = "lightloom-hal-windows"
+version = "0.0.1"
+dependencies = [
+ "hidapi",
+ "lightloom-hal",
+ "lightloom-hid-desc",
+ "lightloom-protocol",
+ "nusb",
+ "serialport",
+ "tracing",
+ "windows",
+]
+
+[[package]]
+name = "lightloom-hid-desc"
+version = "0.0.1"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "lightloom-inputs"
+version = "0.0.1"
+dependencies = [
+ "cpal",
+ "realfft",
+ "rtrb",
+ "serde",
+ "tracing",
+ "windows",
+]
+
+[[package]]
+name = "lightloom-iobroker"
+version = "0.0.1"
+dependencies = [
+ "lightloom-protocol",
+ "lightloom-winres",
+ "proptest",
+ "sha2",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+ "windows-service",
+]
+
+[[package]]
+name = "lightloom-nvapi"
+version = "0.0.1"
+dependencies = [
+ "lightloom-hal",
+ "thiserror 2.0.21",
+ "tracing",
+ "windows",
+]
+
+[[package]]
+name = "lightloom-plugin-host"
+version = "0.0.1"
+dependencies = [
+ "lightloom-engine",
+ "lightloom-hal",
+ "lightloom-hid-desc",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "lightloom-protocol"
+version = "0.0.1"
+dependencies = [
+ "postcard",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "lightloom-render"
+version = "0.0.1"
+dependencies = [
+ "lightloom-engine",
+ "lightloom-protocol",
+ "lightloom-renderer",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "lightloom-renderer"
+version = "0.0.1"
+dependencies = [
+ "cef",
+ "clap",
+ "image",
+ "lightloom-effects",
+ "lightloom-protocol",
+ "lightloom-winres",
+ "memmap2",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "lightloom-runtime"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "lightloom-adl",
+ "lightloom-effects",
+ "lightloom-engine",
+ "lightloom-hal",
+ "lightloom-hal-linux",
+ "lightloom-hal-windows",
+ "lightloom-nvapi",
+ "lightloom-plugin-host",
+ "lightloom-protocol",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "lightloom-setup"
+version = "0.0.1"
+dependencies = [
+ "lightloom-hal-windows",
+ "lightloom-iobroker",
+ "lightloom-winres",
+ "windows",
+ "windows-service",
+]
+
+[[package]]
+name = "lightloom-tray"
+version = "0.0.1"
+dependencies = [
+ "lightloom-api",
+ "lightloom-runtime",
+ "lightloom-winres",
+ "serde_json",
+ "windows",
+]
+
+[[package]]
+name = "lightloom-winres"
+version = "0.0.1"
+dependencies = [
+ "winresource",
 ]
 
 [[package]]

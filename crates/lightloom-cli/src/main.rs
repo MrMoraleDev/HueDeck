@@ -316,7 +316,8 @@ mod tests {
         assert!(
             matches!(cli.command, Command::Rainbow { fps, ref run } if fps == 60.0 && run.duration == Some(600.0))
         );
-        let cli = Cli::try_parse_from(["lightloom", "bench", "--mock", "1462:7c91", "--seconds", "2"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["lightloom", "bench", "--mock", "1462:7c91", "--seconds", "2"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Bench {
@@ -397,7 +398,8 @@ mod tests {
 
     #[test]
     fn action_parses() {
-        let cli = Cli::try_parse_from(["lightloom", "action", "lightloom://brightness/40", "--json"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["lightloom", "action", "lightloom://brightness/40", "--json"]).unwrap();
         assert!(
             matches!(cli.command, Command::Action { ref url, json: true } if url == "lightloom://brightness/40")
         );

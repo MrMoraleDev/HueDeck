@@ -334,9 +334,8 @@ mod tests {
             false,
         )
         .unwrap();
-        assert!(
-            no_broker.contains("PawnIO 2.2.0 is installed but the Lightloom I/O broker service is not running")
-        );
+        assert!(no_broker
+            .contains("PawnIO 2.2.0 is installed but the Lightloom I/O broker service is not running"));
         let unknown = message(
             &PawnIoPresence::Installed {
                 version: String::new(),

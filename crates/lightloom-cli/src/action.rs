@@ -121,7 +121,8 @@ pub fn send(addr: &str, token: &str, url: &str) -> anyhow::Result<Reply> {
 /// `lightloom action <url>`: `true` when the daemon carried it out (or dropped
 /// an unknown action with a warning, which is printed).
 pub fn run(addr: &str, data: &Path, url: &str, json: bool) -> anyhow::Result<bool> {
-    let action = lightloom_api::actions::parse(url).map_err(|e| anyhow::anyhow!("invalid action URL: {e}"))?;
+    let action =
+        lightloom_api::actions::parse(url).map_err(|e| anyhow::anyhow!("invalid action URL: {e}"))?;
     let token = read_token(data)?;
     let reply = send(addr, token.trim(), url)?;
     if json {
@@ -131,7 +132,11 @@ pub fn run(addr: &str, data: &Path, url: &str, json: bool) -> anyhow::Result<boo
         let message = reply.body["error"]["message"]
             .as_str()
             .unwrap_or("the daemon refused the action");
-        eprintln!("lightloom: {} failed ({}): {message}", action.name(), reply.status);
+        eprintln!(
+            "lightloom: {} failed ({}): {message}",
+            action.name(),
+            reply.status
+        );
         return Ok(false);
     }
     if reply.body["dropped"] == true {

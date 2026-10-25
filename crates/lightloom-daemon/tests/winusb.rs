@@ -106,7 +106,10 @@ fn a_device_without_winusb_is_listed_as_needing_it() {
         .driver_problem
         .as_deref()
         .is_some_and(|p| p.starts_with("needs WinUSB driver")));
-    assert_eq!(needs.help_url.as_deref(), Some(lightloom_hal::usb::WINUSB_HELP_URL));
+    assert_eq!(
+        needs.help_url.as_deref(),
+        Some(lightloom_hal::usb::WINUSB_HELP_URL)
+    );
     // The bound hub's frames reach the wire; nothing was ever opened on the other.
     assert!(!usb
         .recorder()

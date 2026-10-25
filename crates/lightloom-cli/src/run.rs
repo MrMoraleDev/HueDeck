@@ -534,14 +534,18 @@ pub(crate) fn permissive_mock_smbus(meta: &lightloom_plugin_host::PluginMeta) ->
                 })
                 .with_instance("pci01")
         }
-        None => MockSmbus::new("MOCK AMD PIIX4 Bus - 0x0b00", lightloom_hal::SmbusBusKind::Amd, rec)
-            .with_pci(lightloom_hal::PciIds {
-                vendor: 0x1022,
-                device: 0x790B,
-                sub_vendor: 0x1022,
-                sub_device: 0x790B,
-            })
-            .with_instance("0b00"),
+        None => MockSmbus::new(
+            "MOCK AMD PIIX4 Bus - 0x0b00",
+            lightloom_hal::SmbusBusKind::Amd,
+            rec,
+        )
+        .with_pci(lightloom_hal::PciIds {
+            vendor: 0x1022,
+            device: 0x790B,
+            sub_vendor: 0x1022,
+            sub_device: 0x790B,
+        })
+        .with_instance("0b00"),
     };
     if meta.gpu_ids().is_empty() {
         if let Some(&a) = meta.smbus_addresses.first() {
@@ -692,7 +696,9 @@ fn print_change(mode: &Mode, change: &Change) {
         Change::Started { key, plugin } => eprintln!("lightloom {name}: {key} connected -> {plugin}"),
         Change::Removed { key } => eprintln!("lightloom {name}: {key} removed, session stopped"),
         Change::Restarted { key } => eprintln!("lightloom {name}: {key} reconnected, session restarted"),
-        Change::Failed { key, error } => eprintln!("lightloom {name}: {key}: cannot start a session: {error}"),
+        Change::Failed { key, error } => {
+            eprintln!("lightloom {name}: {key}: cannot start a session: {error}")
+        }
     }
 }
 

@@ -46,7 +46,11 @@ impl std::fmt::Debug for UrlScheme {
 
 /// The `lightloom` client next to this executable, if it is there.
 pub fn client_next_to_exe() -> Option<PathBuf> {
-    let name = if cfg!(windows) { "lightloom.exe" } else { "lightloom" };
+    let name = if cfg!(windows) {
+        "lightloom.exe"
+    } else {
+        "lightloom"
+    };
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|p| p.join(name)))

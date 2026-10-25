@@ -875,7 +875,11 @@ mod tests {
             .set_effect_params("lightloom:plasma", json!({"speed": 60}).as_object().unwrap())
             .unwrap();
         store
-            .save_preset("lightloom:plasma", "Calm", json!({"speed": 5}).as_object().unwrap())
+            .save_preset(
+                "lightloom:plasma",
+                "Calm",
+                json!({"speed": 5}).as_object().unwrap(),
+            )
             .unwrap();
         store
             .save_preset(

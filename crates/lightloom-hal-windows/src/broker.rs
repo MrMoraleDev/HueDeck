@@ -97,7 +97,9 @@ fn instance(info: &BusInfo) -> String {
 fn hal_error(e: BrokerError) -> HalError {
     match e {
         BrokerError::Unsupported => HalError::Unsupported("operation not served by the I/O broker"),
-        BrokerError::BusContended => HalError::Timeout(u32::from(lightloom_protocol::broker::BUS_LOCK_MAX_MS)),
+        BrokerError::BusContended => {
+            HalError::Timeout(u32::from(lightloom_protocol::broker::BUS_LOCK_MAX_MS))
+        }
         _ => HalError::Bus { status: -1 },
     }
 }

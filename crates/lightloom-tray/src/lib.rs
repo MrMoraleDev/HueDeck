@@ -791,7 +791,9 @@ mod tests {
         )
         .is_err());
         // The installer's value (another path) counts as on, and turning it off works.
-        s.key.set("Lightloom", r#""D:\Lightloom\lightloomw.exe""#).unwrap();
+        s.key
+            .set("Lightloom", r#""D:\Lightloom\lightloomw.exe""#)
+            .unwrap();
         assert!(s.enabled() && s.available());
         assert!(!s.toggle().unwrap());
         assert_eq!(s.key.get("Lightloom").unwrap(), None);

@@ -434,7 +434,8 @@ const deviceTarget = {
   productId: () => state.productId,
   bulk_transfer: (endpoint, data, length) =>
     Number(endpoint) >= 0x80 ? zeros(length) : Number(length) || (data && data.length) || 0,
-  control_transfer: (_rt, _rq, _v, _i, _data, length) => zeros(length),
+  control_transfer: (requestType, _rq, _v, _i, data, length) =>
+    Number(requestType) & 0x80 ? zeros(length) : Number(length) || (data && data.length) || 0,
   setProtocol: noop,
   pause: noop,
   setFrameRateTarget: noop,
@@ -679,11 +680,8 @@ if (deviceMode) {
   const stubAddFeature = deviceTarget.addFeature;
   Object.assign(deviceTarget, {
     // Not implemented in device sessions yet: these throw instead of answering
-    // with stub data (libusb transfers: M2, fans: M5, LCD: M6).
+    // with stub data (fans: M5, LCD: M6).
     ...unimplemented("device", [
-      "bulk_transfer",
-      "control_transfer",
-      "setProtocol",
       "createFanControl",
       "removeFanControl",
       "setRPM",
@@ -745,6 +743,30 @@ if (deviceMode) {
         unimplementedMember(`device.addFeature(${key})`)();
       }
       return stubAddFeature(name);
+    },
+    // Raw USB (hid-usb.md §2): the direction comes from bit 7 of the endpoint /
+    // bmRequestType. OUT returns the bytes sent or -1, IN the bytes received
+    // (empty on timeout or failure, getLastReadSize() of them). Default timeout 1000 ms.
+    bulk_transfer: (endpoint, data, length, timeout) => {
+      const ep = toInt(endpoint) & 0xff;
+      return ep & 0x80
+        ? native.usbBulkIn(ep, lengthArg(data, length), timeoutArg(timeout, -1))
+        : native.usbBulkOut(ep, bytesArg(data, length), timeoutArg(timeout, -1));
+    },
+    control_transfer: (requestType, request, value, index, data, length, timeout) => {
+      const setup = [
+        toInt(requestType) & 0xff,
+        toInt(request) & 0xff,
+        toInt(value) & 0xffff,
+        toInt(index) & 0xffff,
+        timeoutArg(timeout, -1),
+      ];
+      return setup[0] & 0x80
+        ? native.usbControlIn(setup, Math.min(lengthArg(data, length), 0xffff))
+        : native.usbControlOut(setup, bytesArg(data, length));
+    },
+    setProtocol: (name) => {
+      native.setProtocol(strArg(name));
     },
     write: (data, length) => native.hidWrite(bytesArg(data, length)),
     send_report: (data, length) => native.hidSendFeature(bytesArg(data, length)),

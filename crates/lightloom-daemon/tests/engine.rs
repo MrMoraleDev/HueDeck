@@ -83,6 +83,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
         hardware: HardwareMode::Fixed {
             backend,
             devices: vec![SessionDevice {
+                usb: None,
                 smbus: None,
                 lamparray: None,
                 serial: None,
@@ -99,6 +100,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
         plugins_dir: Some(plugins),
         effects_dir: paths::resource_dir("effects", "effects"),
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: Arc::new(MockNotifier::default()),
@@ -193,6 +195,20 @@ fn the_engine_drives_a_device_and_follows_requests() {
         device(s).is_some_and(|d| !d.channels.is_empty())
     });
     assert_eq!(device(&s).unwrap().channels[0].name, "ARGB");
+
+    // PawnIO / RAM lighting: the status reads; the elevated helper never runs from a mock run.
+    let v = call(b, Request::PawnIoStatus).unwrap();
+    assert_eq!(v["supported"], false, "{v}");
+    assert!(v["status"].as_str().is_some_and(|s| !s.is_empty()));
+    let e = call(
+        b,
+        Request::PawnIoSetup {
+            action: lightloom_api::model::PawnIoAction::Install,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(e.status, 409, "{e}");
+    assert!(b.snapshot().pawnio.job.is_none(), "nothing was started");
 
     // Lighting.
     call(
@@ -462,6 +478,7 @@ fn fixed_smbus_device_runs_and_is_listed() {
         plugins_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")),
         effects_dir: paths::resource_dir("effects", "effects"),
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: Arc::new(MockNotifier::default()),
@@ -569,6 +586,7 @@ fn save_to_devices_and_exit_modes() {
         plugins_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins")),
         effects_dir: None,
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         api_port: lightloom_api::NATIVE_PORT,
@@ -773,6 +791,7 @@ fn network_lights_follow_their_service() {
         plugins_dir: Some(plugins),
         effects_dir: None,
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: Arc::new(MockNotifier::default()),

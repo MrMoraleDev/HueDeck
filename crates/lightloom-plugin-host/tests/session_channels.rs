@@ -54,6 +54,7 @@ fn channels_components_and_subdevices_reach_the_plugin() {
 
     let handle = session::spawn(
         SessionDevice {
+            usb: None,
             smbus: None,
             lamparray: None,
             serial: None,
@@ -168,6 +169,7 @@ fn controls_apply_before_the_next_render_and_call_the_hooks() {
     frames.publish(Frame::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     let handle = session::spawn(
         SessionDevice {
+            usb: None,
             smbus: None,
             lamparray: None,
             serial: None,
@@ -235,6 +237,7 @@ fn endpoints_are_published_and_child_placements_apply_live() {
     opts.system_info = Some(Arc::new(SystemInfo::default()));
     let handle = session::spawn(
         SessionDevice {
+            usb: None,
             smbus: None,
             lamparray: None,
             serial: None,

@@ -133,7 +133,8 @@ pub struct NetworkConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SmbusConfig {
-    /// Drive SMBus devices (NVIDIA GPU RGB through NvAPI; RAM RGB through
+    /// Drive SMBus devices (NVIDIA GPU RGB through NvAPI, AMD GPU RGB through
+    /// ADL; RAM RGB through
     /// the Lightloom I/O broker, used only when it is installed and healthy)
     /// unless the dashboard setting says otherwise. On by default (opt-out);
     /// the safety rules hold either way: never alongside SignalRGB, OpenRGB,

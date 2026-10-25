@@ -119,6 +119,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
         hardware: HardwareMode::Fixed {
             backend,
             devices: vec![SessionDevice {
+                usb: None,
                 smbus: None,
                 lamparray: None,
                 serial: None,
@@ -135,6 +136,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
         plugins_dir: Some(plugins),
         effects_dir: None,
         components_dir: None,
+        signalrgb_settings: None,
         renderer: None,
         plugin_cache: None,
         notifier: notifier.clone(),

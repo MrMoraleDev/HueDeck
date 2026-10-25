@@ -21,7 +21,7 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
                          lightloom-hal  (traits + mock; no OS code)
           ┌──────────────┬───────┴─────────┬──────────────────┐
           ▼              ▼                 ▼                  ▼
- lightloom-hal-windows  lightloom-hal-linux  lightloom-nvapi   lightloom-plugin-host
+ lightloom-hal-windows  lightloom-hal-linux  lightloom-nvapi  lightloom-adl  lightloom-plugin-host
   (hidapi + native     (stub, M7)        (NvAPI GPU I2C)
    HID, broker client)
      ▲    ▲
@@ -48,22 +48,24 @@ Status as of `develop` 2026-10-23; the milestone view is `docs/status.md`.
 | crate | kind | status | contents |
 |---|---|---|---|
 | `lightloom-hal` | lib | done | `HidBackend/HidHandle`, `Notifier`, `UsbBackend`, `SerialBackend`, `SmbusBus` + `SmbusBusDescriptor{kind}`, `HotplugSource`, `SensorBackend`, `CaptureBackend`, `AudioBackend`, `LampArrayBackend` (+ `plugin_owner`), `HalError`, `DeviceKey`; feature `mock`: `MockHid`, `MockSmbus`, `MockSerial`, `TransactionRecorder` |
-| `lightloom-hal-windows` | lib | HID and serial done; USB missing | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `group`, `hotplug`, `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence, process and port probes, toast notifications, `lamparray` (WinRT Windows Dynamic Lighting backend), `serial` (`WindowsSerialBackend`: COM ports with their USB VID:PID; port I/O over `serialport`, shared with Linux) |
+| `lightloom-hal-windows` | lib | HID, raw USB (WinUSB) and serial done | `path` (HID interface paths → `{interface, collection}`), `WindowsHidBackend` (hidapi `windows-native`), `NativeHidBackend` (HID class driver, GET_REPORT(Input)), `WinUsbBackend` (`nusb`, WinUSB-bound interfaces only, no INF), `group`, `hotplug` (HID and USB device interfaces), `broker::BrokerSmbus` (I/O broker client as `SmbusBus`), PawnIO presence and the `lightloom-setup` contract (arguments, exit codes, quoting), `elevate::run_elevated` (UAC `runas`, on a user action only), `service::service_state` (read-only), process and port probes, toast notifications, `lamparray` (WinRT Windows Dynamic Lighting backend), `serial` (`WindowsSerialBackend`: COM ports with their USB VID:PID; port I/O over `serialport`, shared with Linux) |
 | `lightloom-hal-linux` | lib | stub (M7) | placeholder for hidraw, nusb, serialport, udev, `/dev/i2c-*`, hwmon |
 | `lightloom-hid-desc` | lib | done | HID 1.11 report-descriptor parser: items, top-level collections, report ids and sizes, report fields (LampArray) |
 | `lightloom-protocol` | lib | done | `shm` frame ring (`"HDFR"`, 3 slots, seqlock), `broker` operations (protocol 3: `BusLock`, `Batch`, `SpdRead`), postcard framing |
 | `lightloom-engine` | lib | done | `Rgb`, `Frame`, `FrameStore`, `Layout`/`Placement` (= `schemas/layout.schema.json`), the sampler, brightness math, components and channel instances |
 | `lightloom-render` | lib (+ test bin) | done | `NullRenderer` (solid, rainbow, test patterns), `CefRenderer` (spawns and supervises `lightloom-renderer --serve`), `FrameClock` |
 | `lightloom-renderer` | lib + bin | done; Chromium sandbox off | CEF windowless host (feature `cef`), shm ring writer, `window.engine` and control injection, URL filter, control pipe, snapshots and stats |
-| `lightloom-plugin-host` | lib | HID, SMBus, network and serial done; rawusb missing | QuickJS-NG runtime per plugin (64 MiB, deadlines), `js/host.js` compat host, natives (`device`, `children`, `bus`, `net`, `serial`), network services (`service`: DiscoveryService, mDNS, settings) and network device sessions (LAN-only sockets and HTTP), `@SignalRGB/*` / `@lightloom/*` resolver, catalogue and VID:PID index, device sessions, the `battery` feature, SMBus policy and SPD check, `compat dry-run` |
+| `lightloom-plugin-host` | lib | HID, SMBus, network, rawusb, hybrid and serial done | QuickJS-NG runtime per plugin (64 MiB, deadlines), `js/host.js` compat host, natives (`device`, `children`, `bus`, `net`, `serial`), network services (`service`: DiscoveryService, mDNS, settings) and network device sessions (LAN-only sockets and HTTP), `@SignalRGB/*` / `@lightloom/*` resolver, catalogue and VID:PID index, device sessions, the `battery` feature, SMBus policy and SPD check, `compat dry-run` |
 | `lightloom-effects` | lib | done | `parse_effect_meta(html)` (= `schemas/effect-meta.schema.json`), control coercion, JS initialisers |
 | `lightloom-inputs` | lib | shapes only (M6) | `AudioSnapshot`, `ZoneSnapshot`, `InputSource` |
 | `lightloom-api` | lib | native done; compat partial | axum routers: native `/v1` REST + WS + dashboard (`docs/api/openapi.yaml`), SignalRGB-compatible REST and canvas events, loopback / Origin / token guard, movable native listener |
-| `lightloom-runtime` | lib | done | what CLI and daemon share: HID backend and device matching, SMBus buses and scans, hotplug, conflict detection, the SignalRGB setup reader, data directories, system info |
+| `lightloom-runtime` | lib | done | what CLI and daemon share: HID backend and device matching, SMBus buses and scans, hotplug, conflict detection, the SignalRGB setup reader, data directories, system info, PawnIO / RAM lighting facts and the elevated helper run (`pawnio`) |
 | `lightloom-nvapi` | lib | done | dynamic `nvapi64.dll` binding, one NvAPI worker thread, `NvapiBus: SmbusBus` per GPU |
+| `lightloom-adl` | lib | done; untested on hardware | dynamic `atiadlxx.dll` (legacy ADL, MIT headers declared by hand) binding, one ADL worker thread, `AdlBus: SmbusBus` (kind `AmdGpu`) per AMD GPU |
 | `lightloom-iobroker` | lib + bin | done (AMD PIIX4; Intel I801 untested on hardware) | LocalSystem service: PawnIO IOCTLs, pinned modules, PIIX4 / I801 transfers, global SMBus mutex, static policy and rate limit, named pipe with DACL, audit log |
-| `lightloom-setup` | bin | done | `--smbus` (checks PawnIO, never installs it; copies the broker and modules, registers the service), `--uninstall`, `--plan` |
-| `lightloom-daemon` | lib + bin `lightloomd` | done | single instance, token, port choice, engine thread (sessions, canvas, renderer, SQLite), battery thresholds and alerts, API serving, a shutdown that restores devices |
+| `lightloom-setup` | bin | done | the elevated helper of RAM lighting: `--pawnio-install` (verified WinHTTP download of the official `PawnIO_setup.exe` 2.2.0: size, SHA-256, Authenticode signer `namazso.eu`; `-install -silent`; skipped when PawnIO >= 2.2.0), `--smbus` (pinned modules, default `pawnio-modules` next to it, and the broker under `%ProgramFiles%`, registers and starts `LightloomIoBroker`, replacing an older one), `--uninstall` (PawnIO stays), `--elevate` (relaunch through UAC), `--pause`, `--plan` |
+| `lightloom-winres` | lib (build) | done | build-script helper: icon (`packaging/wix/lightloom.ico`) and version resource of the Windows executables (`winresource`, Windows hosts only) |
+| `lightloom-daemon` | lib + bins `lightloomd`, `lightloomw` | done | single instance, token, port choice, engine thread (sessions, canvas, renderer, SQLite), battery thresholds and alerts, API serving, a shutdown that restores devices, Settings → PawnIO / RAM lighting (`pawnio`); `lightloomw` starts the daemon without a window and `--stop`s it |
 | `lightloom-cli` | bin `lightloom` | done | `devices`, `light`, `rainbow`, `bench` (`--mock`), `plugins`, `compat dry-run`, `url` |
 
 Test counts (`#[test]` and `#[tokio::test]` per crate, 2026-10-23): plugin-host 128, iobroker 52,

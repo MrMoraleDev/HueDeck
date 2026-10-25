@@ -96,6 +96,7 @@ fn rig_with(info: HidEndpointInfo) -> Rig {
         .unwrap();
     let mock = Arc::new(mock);
     let device = SessionDevice {
+        usb: None,
         smbus: None,
         lamparray: None,
         serial: None,

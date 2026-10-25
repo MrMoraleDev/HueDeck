@@ -408,8 +408,9 @@ fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
         Loaded::Meta(meta) => *meta,
         Loaded::Failed(why) => return Err(why),
     };
-    // Hybrid plugins also need libusb bulk/control transfers, which device
-    // sessions do not provide yet: refusing them beats faking that I/O.
+    // rawusb and hybrid plugins get WinUSB bulk/control transfers (a device
+    // without WinUSB is reported as needing it); serial plugins have no
+    // device session yet.
     match meta.plugin_type {
         PluginType::Smbus => {
             if meta.smbus_addresses.is_empty() {
@@ -442,12 +443,9 @@ fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
         _ if (meta.product_ids.is_empty() || meta.vendor_id == 0) && meta.hid_usages.is_empty() => {
             Err("no VendorId/ProductId exports (helper module?)".into())
         }
-        PluginType::Hid => Ok(meta),
+        PluginType::Hid | PluginType::RawUsb | PluginType::Hybrid => Ok(meta),
         // Bound to the COM / tty ports of the matched USB device (crate::serial).
         PluginType::Serial => Ok(meta),
-        other => Err(format!(
-            "plugin type {other:?} is not supported by device sessions yet"
-        )),
     }
 }
 

@@ -1316,14 +1316,18 @@ mod tests {
             r.resolve_name(base, "@SignalRGB/base64").unwrap(),
             "lightloom:prelude/base64.js"
         );
-        // Sockets: the device host's implementation when it has one, else the facade.
+        // Sockets and serial: the device host's implementation when it has one, else the facade.
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/udp").unwrap(),
             "lightloom:native/udp.js"
         );
         assert_eq!(
             r.resolve_name(base, "@SignalRGB/serial").unwrap(),
-            "lightloom:prelude/modules/serial.js"
+            "lightloom:native/serial.js"
+        );
+        assert_eq!(
+            r.resolve_name(base, "@SignalRGB/lcd").unwrap(),
+            "lightloom:prelude/modules/lcd.js"
         );
         assert_eq!(
             r.resolve_name("lightloom:prelude/modules/udp.js", "../HostApiMissing.js")

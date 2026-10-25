@@ -96,6 +96,7 @@ fn a_lamp_array_device_is_driven_by_the_generic_plugin() {
     frames.publish(red.clone());
     let backend: Arc<dyn HidBackend> = mock.clone();
     let device = SessionDevice {
+        usb: None,
         smbus: None,
         lamparray: None,
         serial: None,

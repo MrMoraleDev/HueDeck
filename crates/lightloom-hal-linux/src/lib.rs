@@ -11,6 +11,8 @@
 //!   [`SmbusBus`](lightloom_hal::SmbusBus) of each (Windows policy; the
 //!   device and opener are Linux only);
 //! * [`hwmon`]: read-only temperatures and fan speeds;
+//! * [`tty`]: serial ports and the USB device behind each from sysfs (nothing
+//!   opened); `LinuxSerialBackend` (Linux only) opens them over `serialport`;
 //! * `hidraw` (Linux only): [`LinuxHidBackend`], report I/O on `/dev/hidrawN`;
 //! * `hotplug` (Linux only): [`HidrawHotplug`], the udev netlink monitor.
 //!
@@ -18,7 +20,7 @@
 //! fixtures shared with the Windows path logic) run in Windows CI too.
 //! `unsafe` is confined to the Linux-only `sys` module (ioctls, poll, socket).
 //!
-//! Planned: `nusb` raw USB, `serialport`.
+//! Planned: `nusb` raw USB.
 
 #![deny(unsafe_code)]
 
@@ -26,6 +28,7 @@ pub mod hwmon;
 pub mod i2c;
 pub mod sysfs;
 pub mod tlc;
+pub mod tty;
 pub mod uevent;
 
 #[cfg(test)]
@@ -42,3 +45,5 @@ mod sys;
 pub use hidraw::LinuxHidBackend;
 #[cfg(target_os = "linux")]
 pub use hotplug::HidrawHotplug;
+#[cfg(target_os = "linux")]
+pub use tty::LinuxSerialBackend;

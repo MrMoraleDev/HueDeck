@@ -85,6 +85,7 @@ fn the_engine_drives_a_device_and_follows_requests() {
             devices: vec![SessionDevice {
                 smbus: None,
                 lamparray: None,
+                serial: None,
                 key: KEY.into(),
                 vid: 0x1234,
                 pid: 0x4D4D,

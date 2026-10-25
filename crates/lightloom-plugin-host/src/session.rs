@@ -50,6 +50,14 @@
 //! sockets and `XMLHttpRequest` go through its own [`NetContext`] (closed when
 //! the session ends), socket events are delivered before each `Render()`, and
 //! `Render()` runs at most once per [`NETWORK_FRAME_INTERVAL`].
+//!
+//! A serial device ([`SessionDevice::serial`], `Type() == "serial"`) has no
+//! HID collections either: `Validate(endpoint)` is offered each of its ports
+//! as `{interface: <USB interface>, usage: 0, usage_page: 0, collection: 0}`
+//! and the first accepted one is the port `serial.connect()` binds without a
+//! `portName`; `@SignalRGB/serial` opens only the device's own ports
+//! ([`crate::serial`]), and `Render()` runs at most once per
+//! [`SERIAL_FRAME_INTERVAL`].
 
 use crate::battery::{BatteryStatus, DEFAULT_WARNING_LEVEL};
 use crate::bus::{lock_guard, SharedGuard};
@@ -64,6 +72,7 @@ use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
 use crate::plugin_ui::PluginUi;
 use crate::runtime::{Budget, CallArgs, JsFailure, PluginRuntime, RuntimeOptions, PLUGIN_THREAD_STACK};
 use crate::save::{self, SaveAction, SaveChoice, SaveOutcome, ShutdownMode, ShutdownPlan};
+use crate::serial::{lock_serial, SerialContext, SerialReport, SharedSerial};
 use crate::smbus::{BusHandle, GuardedBus, Phase, SmbusStats};
 use crate::stats::LatencyHistogram;
 use lightloom_engine::{ComponentInstance, FrameStore, Placement, Rgb, SamplerConfig};
@@ -85,6 +94,10 @@ pub const SMBUS_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 /// Shortest time between two `Render()` calls of a network device (about 30
 /// fps); plugins pace their protocol further themselves.
 pub const NETWORK_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// Shortest time between two `Render()` calls of a serial device (about 30
+/// fps): a 115200 baud link carries about 11 KB/s, so a faster pace only
+/// queues frames in the port.
+pub const SERIAL_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 /// One physical device: every HID collection that belongs to it, or the
 /// SMBus address it answers at.
@@ -105,6 +118,8 @@ pub struct SessionDevice {
     pub lamparray: Option<crate::lamparray::LampArrayTarget>,
     /// A network device: the controller a network service announced.
     pub network: Option<NetworkTarget>,
+    /// A serial device (`Type() == "serial"`): its ports and their backend.
+    pub serial: Option<crate::serial::SerialTarget>,
 }
 
 /// A network device: what its service announced.
@@ -157,6 +172,7 @@ impl SessionDevice {
             endpoints,
             smbus: None,
             lamparray: None,
+            serial: None,
             network: None,
         }
     }
@@ -172,7 +188,28 @@ impl SessionDevice {
             endpoints: Vec::new(),
             smbus: Some(SmbusTarget { bus, addr }),
             lamparray: None,
+            serial: None,
             network: None,
+        }
+    }
+
+    /// The USB serial device whose ports are `target.ports` (never empty):
+    /// key `vid:pid:<USB serial number, else the first port name>`.
+    pub fn serial(vid: u16, pid: u16, target: crate::serial::SerialTarget) -> Self {
+        let serial = target
+            .ports
+            .first()
+            .map(crate::serial::port_key_serial)
+            .unwrap_or_default();
+        Self {
+            key: format!("{vid:04x}:{pid:04x}:{serial}"),
+            vid,
+            pid,
+            endpoints: Vec::new(),
+            smbus: None,
+            lamparray: None,
+            network: None,
+            serial: Some(target),
         }
     }
 
@@ -186,6 +223,7 @@ impl SessionDevice {
             endpoints: Vec::new(),
             smbus: None,
             lamparray: None,
+            serial: None,
             network: Some(target),
         }
     }
@@ -501,6 +539,8 @@ pub struct SessionReport {
     pub smbus: Option<SmbusStats>,
     /// Network counters (network devices only).
     pub network: Option<NetStats>,
+    /// Serial counters and records (serial devices only).
+    pub serial: Option<SerialReport>,
     /// The last battery report (plugins with the `battery` feature only).
     pub battery: Option<BatteryStatus>,
     /// Session wall time.
@@ -544,6 +584,7 @@ impl SessionReport {
             device_removed: false,
             smbus: None,
             network: None,
+            serial: None,
             battery: None,
             elapsed_ms: 0.0,
         }
@@ -917,12 +958,13 @@ fn run(
     let meta = &plugin.meta;
     let mut report = SessionReport::new(&device, &plugin);
 
-    // SMBus and network devices never open a HID collection.
-    let backend: Arc<dyn HidBackend> = if device.smbus.is_some() || device.network.is_some() {
-        Arc::new(NoHid)
-    } else {
-        backend
-    };
+    // SMBus, network and serial devices never open a HID collection.
+    let backend: Arc<dyn HidBackend> =
+        if device.smbus.is_some() || device.network.is_some() || device.serial.is_some() {
+            Arc::new(NoHid)
+        } else {
+            backend
+        };
     let mut ctx = DeviceContext::new(backend, device.endpoints.clone(), opts.write_mode);
     ctx.set_name(meta.name.clone());
     ctx.set_log_sink(opts.log_sink.clone());
@@ -963,7 +1005,20 @@ fn run(
             format!("0x{:02x}", t.addr),
         ]);
     }
+    if let Some(p) = device.serial.as_ref().and_then(|t| t.ports.first()) {
+        ctx.set_device_info([
+            p.manufacturer.clone().unwrap_or_default(),
+            p.product.clone().unwrap_or_else(|| meta.name.clone()),
+            p.serial.clone().unwrap_or_default(),
+        ]);
+    }
     let shared = ctx.shared();
+    let serial: Option<SharedSerial> = device.serial.as_ref().map(|t| {
+        let mut s = SerialContext::new(t, opts.write_mode);
+        let dev = Arc::clone(&shared);
+        s.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
+        s.shared()
+    });
     let net: Option<SharedNet> = device.network.as_ref().map(|_| {
         let mut n = NetContext::new(NetRole::Device, opts.write_mode);
         let dev = Arc::clone(&shared);
@@ -992,6 +1047,7 @@ fn run(
         module_stubs: false,
         net: net.clone(),
         controller: device.network.as_ref().map(|t| t.controller.to_string()),
+        serial: serial.clone(),
         ..RuntimeOptions::default()
     };
     let rt = match PluginRuntime::new(&meta.source_path, &ropts) {
@@ -1018,6 +1074,7 @@ fn run(
             &frames,
             &opts,
             net.as_ref(),
+            serial.as_ref(),
             stop,
             live,
             controls,
@@ -1114,6 +1171,11 @@ fn run(
     if let Some(n) = &net {
         report.network = Some(lock_net(n).stats().clone());
     }
+    if let Some(s) = &serial {
+        let mut s = lock_serial(s);
+        report.serial = Some(s.report());
+        s.disconnect();
+    }
     for (probe, bytes) in lifecycle.before {
         let after = lock_device(&shared)
             .probe_feature(probe.report_id, probe.len)
@@ -1154,6 +1216,7 @@ fn drive(
     frames: &FrameStore,
     opts: &SessionOptions,
     net: Option<&SharedNet>,
+    serial: Option<&SharedSerial>,
     stop: &Arc<AtomicBool>,
     live: &LiveStats,
     controls: &Receiver<Control>,
@@ -1185,6 +1248,29 @@ fn drive(
             target.ip().unwrap_or("no address"),
             target.service
         ));
+    } else if let (Some(target), Some(serial)) = (&device.serial, serial) {
+        // A serial device: Validate picks the port connect() binds by default.
+        let mut validated = Vec::new();
+        for (i, port) in target.ports.iter().enumerate() {
+            let tuple = HidEndpointTuple {
+                interface: port.interface.map_or(0, i32::from),
+                usage: 0,
+                usage_page: 0,
+                collection: 0,
+            };
+            match rt.validate(&tuple, budgets.call(budgets.validate)) {
+                Ok(true) => validated.push(i),
+                Ok(false) => {}
+                Err(e) => report.fail(format!("Validate #{i}"), e),
+            }
+        }
+        report.validated = validated.len();
+        let Some(&index) = validated.first() else {
+            report.faulted = Some("no serial port passed Validate(endpoint)".into());
+            return;
+        };
+        lock_serial(serial).set_default_port(index);
+        report.endpoint_path = Some(format!("{} (serial)", target.ports[index].port_name));
     } else if let Some(target) = &device.smbus {
         // An SMBus device has no collections to validate or reports to probe:
         // the scan found it, the guard binds the session to its address.
@@ -1296,6 +1382,8 @@ fn drive(
             Some(SMBUS_FRAME_INTERVAL)
         } else if device.network.is_some() {
             Some(NETWORK_FRAME_INTERVAL)
+        } else if device.serial.is_some() {
+            Some(SERIAL_FRAME_INTERVAL)
         } else {
             None
         };
@@ -1426,8 +1514,12 @@ fn drive(
             let n = lock_net(n);
             n.stats().errors + n.stats().refused + n.stats().http_errors
         });
+        let serial_errors = serial.map(|s| lock_serial(s).stats().errors());
         live.io_errors.store(
-            bus_errors.or(net_errors).unwrap_or_else(|| dev.stats().errors()),
+            bus_errors
+                .or(net_errors)
+                .or(serial_errors)
+                .unwrap_or_else(|| dev.stats().errors()),
             Ordering::Relaxed,
         );
         live.hid_disconnects
@@ -1598,10 +1690,11 @@ fn finish(
     report.first_write_ms = dev.first_write().map(|d| d.as_secs_f64() * 1000.0);
     report.io_log = dev.io_log().to_vec();
     report.battery = dev.battery();
-    report.io_errors = match (&report.smbus, &report.network) {
-        (Some(s), _) => s.errors + s.denied,
-        (None, Some(n)) => n.errors + n.refused,
-        (None, None) => report.io.errors(),
+    report.io_errors = match (&report.smbus, &report.network, &report.serial) {
+        (Some(s), _, _) => s.errors + s.denied,
+        (None, Some(n), _) => n.errors + n.refused,
+        (None, None, Some(s)) => s.stats.errors(),
+        (None, None, None) => report.io.errors(),
     };
     let (tail, lines) = dev.log_tail();
     report.log_tail = tail;

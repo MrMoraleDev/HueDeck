@@ -3,7 +3,9 @@
 //!
 //! [`Catalog::scan`] loads every candidate `*.js` file under the given
 //! directories in an isolated runtime with the recording stub host, reads its
-//! metadata exports and indexes HID plugins by `(vid, pid)`. Directories are
+//! metadata exports and indexes HID and serial plugins by `(vid, pid)` (a
+//! serial plugin owns the USB serial device with that VID:PID, never a HID
+//! device: [`Catalog::lookup_serial`], [`Catalog::lookup_device`]). Directories are
 //! scanned in the order given and files in sorted order, so SignalRGB's *last
 //! scanned wins* rule ([`PluginIndex`]) lets a later directory override an
 //! earlier one. No plugin lifecycle function runs here.
@@ -347,16 +349,35 @@ impl Catalog {
     /// scanned plugin whose `HidUsages()` names the usage page and usage of
     /// one of the device's HID collections (a generic driver, e.g. HID
     /// LampArray).
+    /// A serial plugin owning `(vid, pid)` is not a HID driver: the device is
+    /// left to [`Catalog::lookup_serial`].
     pub fn lookup_device(&self, vid: u16, pid: u16, endpoints: &[HidEndpointInfo]) -> Option<&CatalogEntry> {
-        self.lookup(vid, pid).or_else(|| {
-            self.entries.iter().rev().find(|e| {
-                e.meta.hid_usages.iter().any(|[page, usage]| {
-                    endpoints
-                        .iter()
-                        .any(|ep| ep.usage_page == *page && ep.usage == *usage)
-                })
+        if let Some(owner) = self.lookup(vid, pid) {
+            return (owner.meta.plugin_type != PluginType::Serial).then_some(owner);
+        }
+        self.entries.iter().rev().find(|e| {
+            e.meta.hid_usages.iter().any(|[page, usage]| {
+                endpoints
+                    .iter()
+                    .any(|ep| ep.usage_page == *page && ep.usage == *usage)
             })
         })
+    }
+}
+
+impl Catalog {
+    /// The serial plugin owning the USB serial device `(vid, pid)` under the
+    /// last-scanned-wins rule (`None` when the owner is not a serial plugin).
+    pub fn lookup_serial(&self, vid: u16, pid: u16) -> Option<&CatalogEntry> {
+        self.lookup(vid, pid)
+            .filter(|e| e.meta.plugin_type == PluginType::Serial)
+    }
+
+    /// Whether some serial plugin claims a VID:PID (no serial enumeration is needed otherwise).
+    pub fn has_serial_plugins(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.meta.plugin_type == PluginType::Serial)
     }
 }
 
@@ -422,6 +443,8 @@ fn accept(loaded: Loaded) -> Result<PluginMeta, String> {
             Err("no VendorId/ProductId exports (helper module?)".into())
         }
         PluginType::Hid => Ok(meta),
+        // Bound to the COM / tty ports of the matched USB device (crate::serial).
+        PluginType::Serial => Ok(meta),
         other => Err(format!(
             "plugin type {other:?} is not supported by device sessions yet"
         )),

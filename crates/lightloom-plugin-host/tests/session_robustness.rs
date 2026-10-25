@@ -131,6 +131,7 @@ fn msi_rig() -> MsiRig {
         device: SessionDevice {
             smbus: None,
             lamparray: None,
+            serial: None,
             key: "1462:7c91:A00000000001".into(),
             vid: 0x1462,
             pid: 0x7C91,
@@ -247,6 +248,7 @@ fn run_probe(probe: &str) -> (SessionReport, Arc<MockHid>) {
         SessionDevice {
             smbus: None,
             lamparray: None,
+            serial: None,
             key: "1234:5678:P".into(),
             vid: 0x1234,
             pid: 0x5678,
@@ -320,6 +322,7 @@ fn long_blocking_renders_survive_the_watchdog_and_stop_promptly() {
         SessionDevice {
             smbus: None,
             lamparray: None,
+            serial: None,
             key: "1234:6666:S".into(),
             vid: 0x1234,
             pid: 0x6666,
@@ -371,6 +374,7 @@ fn slow_session(mode: &str, opts: SessionOptions) -> (session::SessionHandle, Ar
         SessionDevice {
             smbus: None,
             lamparray: None,
+            serial: None,
             key: "1234:6666:S".into(),
             vid: 0x1234,
             pid: 0x6666,

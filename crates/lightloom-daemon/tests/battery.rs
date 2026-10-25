@@ -121,6 +121,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
             devices: vec![SessionDevice {
                 smbus: None,
                 lamparray: None,
+                serial: None,
                 key: KEY.into(),
                 vid: 0x1234,
                 pid: 0x4E4E,

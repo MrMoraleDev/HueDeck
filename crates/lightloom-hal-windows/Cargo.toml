@@ -22,4 +22,8 @@ hidapi = { workspace = true, features = ["windows-native"] }
 # cfgmgr32 (CM_Locate_DevNode / CM_Get_Parent) parent grouping and HIDP_CAPS probing.
 windows = { workspace = true }
 # Also WinRT Windows.Devices.Lights (LampArray) and the package-identity check.
-# TODO(M2): nusb, serialport.
+
+# COM port enumeration (SetupAPI, USB VID:PID of the parent) and port I/O;
+# the I/O half (`serial::open_port`) is shared with lightloom-hal-linux.
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+serialport = { workspace = true }

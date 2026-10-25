@@ -37,7 +37,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 |---|---|---|
 | M0 Bootstrap + spikes | **Done** | none worth noting; the crate README still describes M0 |
 | M1 First light | **Done** | the "within 100 ms" first light is met on the native backend only (56-58 ms) |
-| M2 Compatible plugin host | **Partial** | no rawusb/hybrid/serial sessions (`bulk_transfer`, `control_transfer`, `setProtocol` throw); the Sonix 320F keyboard is not driven (EVision V1); the physical hot-unplug test has not been run |
+| M2 Compatible plugin host | **Partial** | no rawusb/hybrid sessions (`bulk_transfer`, `control_transfer`, `setProtocol` throw); serial sessions (WP-SERIAL) mock-tested only, no serial device tested; the Sonix 320F keyboard is not driven (EVision V1); the physical hot-unplug test has not been run |
 | M3 Effects pipeline | **Done** | the Chromium sandbox is off until releases are signed |
 | M4 Dashboard, persistence, API, packaging | **Partial** | the MSI, winget and Authenticode signing; autostart and tray; the plugin sources manager; the logs page; compat API parts; the fresh-machine acceptance run |
 | M5 Privileged bus | **Partial** | PIIX4 and I801 (I801 mock-tested only, no Intel board run); no LpcIO; no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
@@ -79,8 +79,8 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `device.*` HID surface (write/read/feature/input reports, endpoints, info) | Done | `crates/lightloom-plugin-host/js/host.js` (device mode), `src/device.rs` |
 | Channels, subdevices, components | Done | `host.js`, `tests/session_channels.rs` |
 | `bus.*` (SMBus), Free/Fixed wrappers | Done (M5) | `src/smbus.rs`, `tests/session_smbus.rs` |
-| `bulk_transfer`, `control_transfer`, `setProtocol` (rawusb, hybrid) | **Missing** | `host.js` lists them under `unimplemented("device", …)`; `catalog.rs` `accept()` refuses `rawusb`/`hybrid`/`serial`; no `UsbBackend` impl anywhere (`nusb` is pinned but unused, `hal-windows/Cargo.toml` `TODO(M2)`) |
-| `@SignalRGB/serial` | **Missing** | stub only in dry-run (`host.js` `modules.serial`); no `SerialBackend` impl |
+| `bulk_transfer`, `control_transfer`, `setProtocol` (rawusb, hybrid) | **Missing** | `host.js` lists them under `unimplemented("device", …)`; `catalog.rs` `accept()` refuses `rawusb`/`hybrid`; no `UsbBackend` impl anywhere (`nusb` is pinned but unused, `hal-windows/Cargo.toml` `TODO(M2)`) |
+| `@SignalRGB/serial` | Done (mock only) | WP-SERIAL: `lightloom-plugin-host/src/serial.rs` (own ports only, dry-run writes, read timeouts, reconnect after unplug), `host.js` `serialModule`, `WindowsSerialBackend` (SetupAPI + `serialport`), `LinuxSerialBackend` (sysfs ttys + `serialport`, compile-checked only); `tests/session_serial.rs`; no serial device tested, no serial hotplug watch (ports are found on enumeration) |
 | `@SignalRGB/udp`, `tcp`, `XMLHttpRequest`, `addFeature("udp")` | Done (network plugins) | LAN-only (docs/host-api/network-lightloom.md); `addFeature("dtls")` and `https` missing (no TLS stack) |
 | `addFeature("battery")` | In progress (`feature/battery`) | today: recording stub |
 | `addFeature("keyboard"/"mouse")` (`sendEvent`, `sendHid`) | Missing | recording stubs; needs the M6 macro/input bus |
@@ -186,7 +186,8 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | hal-linux hidraw + hid-desc | Done, untested on Linux | `crates/lightloom-hal-linux/src/{sysfs,tlc,hidraw,sys}.rs`: sysfs enumeration, TLC split, raw hidraw ioctls; `lightloom devices` and hardware runs wired through `lightloom-runtime`. Checked with `cargo clippy --target x86_64-unknown-linux-gnu` only |
 | udev hotplug | Done, untested on Linux | `crates/lightloom-hal-linux/src/{hotplug,uevent}.rs`: netlink udev monitor, pure Rust |
 | i2c-dev SMBus, hwmon sensors | Done, untested on Linux | `crates/lightloom-hal-linux/src/{i2c,hwmon}.rs`: adapters by sysfs name (PIIX4 ports 0/1, i801, NVIDIA port 1, AMDGPU OEM), Windows policy plus the broker write allowlist on DIMM buses, SPD from the kernel `eeprom` file or a host-internal EE1004 page select; wired in `lightloom-runtime` (`smbus.rs`, `sensors.rs`); udev i2c rules per adapter name. Checked with `cargo clippy --target x86_64-unknown-linux-gnu` and fake-sysfs/fake-device tests only |
-| nusb, serialport, hwmon pwm (fan control) | Missing | WP-L3, WP-SENSORS-FANS |
+| nusb, hwmon pwm (fan control) | Missing | WP-L3, WP-SENSORS-FANS |
+| serialport (Linux) | Done (untested on Linux) | `lightloom-hal-linux/src/tty.rs`: tty enumeration from sysfs with the USB parent, `serialport` I/O (WP-SERIAL) |
 | `tools/gen-udev` | Done | `lightloom udev generate` (`crates/lightloom-cli/src/udev.rs`); generated `packaging/udev/70-lightloom.rules` with a drift test; `packaging/sysusers.d/lightloom.conf` |
 | CEF on Linux (X11/Wayland, headless CI) | Missing | `lightloom-renderer` builds with `cef` on Windows only (`ci.yml` `renderer-cef`) |
 | PipeWire audio + screen capture | Missing | |
@@ -256,7 +257,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
    - Touches: `lightloom-hal/src/usb.rs` (trait as needed) and `mock.rs`; new `lightloom-hal-windows/src/usb.rs` on `nusb` (WinUSB); `lightloom-plugin-host/src/{device,catalog,session}.rs`; `js/host.js` (remove the three names from `unimplemented`); `lightloom-runtime/src/hardware.rs` (enumeration); tests in `crates/lightloom-plugin-host/tests/`.
    - Prerequisite reading: `docs/research/drivers.md` (which devices get WinUSB without an INF).
    - Unblocks the OpenRGB rawusb families and SignalRGB's Lian Li, Aqua Computer and Thermalright plugins.
-2. **WP-SERIAL: `@SignalRGB/serial` and `Type() == "serial"`. Size M.**
+2. **WP-SERIAL: `@SignalRGB/serial` and `Type() == "serial"`. Size M.** Done on `feature/serial` (mock-tested; no serial device tested; the Linux tty backend is compile-checked only).
    - Touches: new `lightloom-hal-windows/src/serial.rs` (`serialport`); the plugin host native module (`src/device.rs` or a new `src/serial.rs`); `catalog.rs` `accept()`; `host.js` serial module; tests.
    - Conflicts with WP-USB on `catalog.rs`/`host.js`: run it after WP-USB, or give it only the module files.
 3. **WP-I801: Intel chipset SMBus (PawnIO `SmbusI801`). Size M.** Done on `feature/intel-smbus` (mock/fake/fuzz only; hardware acceptance on an Intel board pending).
@@ -366,7 +367,7 @@ These can start in parallel with Windows work: they touch `lightloom-hal-linux` 
 28. **WP-L2: udev hotplug and `tools/gen-udev`. Size S.**
     - `lightloom-hal-linux/src/hotplug.rs` (udev monitor).
     - `tools/gen-udev` (a Rust bin or `lightloom udev` subcommand) emitting `70-lightloom.rules` from the manifests; `packaging/udev/`.
-29. **WP-L3: nusb and serialport on Linux. Size S, after WP-USB and WP-SERIAL.**
+29. **WP-L3: nusb and serialport on Linux. Size S, after WP-USB and WP-SERIAL.** The serial half came with WP-SERIAL (`lightloom-hal-linux/src/tty.rs`); left: nusb, and running the serial backend on a Linux machine.
     - `lightloom-hal-linux/src/{usb,serial}.rs` behind the traits WP-USB and WP-SERIAL define.
 30. **WP-L4: `/dev/i2c-*` SMBus and hwmon. Size M.**
     - `lightloom-hal-linux/src/{i2c,hwmon}.rs` (`i2cdev`), adapter discovery by name (PIIX4, NVIDIA, AMDGPU DM aux) per `docs/research/m7-linux-backend.md`.

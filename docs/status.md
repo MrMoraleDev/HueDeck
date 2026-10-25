@@ -16,7 +16,9 @@ Legend:
 
 Every feature branch of the plan's work packages is merged; nothing is in flight. CI
 (`ci.yml`: `rust` on Windows and Ubuntu, `renderer-cef`, `renderer-cef-linux`, `deny`, `node`,
-`schemas`, `msi`) is green on `develop`. `release.yml` has never run (no tag yet).
+`schemas`, `msi`) is green on `develop`. The release build (`release-build.yml`, called by
+`release.yml` on a tag and by `ci.yml`'s weekly `release-dry-run`) and `flatpak.yml` have not
+run yet (no tag, no scheduled run so far).
 
 Test counts in `develop` (`#[test]` and `#[tokio::test]` per crate): plugin-host 192, iobroker 77,
 daemon 63, hal-windows 58, hal 42, runtime 39, hal-linux 39, inputs 37, renderer 36, api 35,
@@ -35,7 +37,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | M4 Dashboard, persistence, API, packaging | **Partial** | Authenticode signing (SignPath account); the MSI never installed on a clean machine (fresh-machine acceptance); the plugin sources manager; save-to-device, exit modes, suspend/resume, tray and import wizard not yet run live |
 | M5 Privileged bus | **Partial** | I801, AMD GPU (ADL) and the sensors not run on hardware; no LpcIO; fan control out of scope (decision 2026-10-25); no CPU temperature on Windows without LibreHardwareMonitor; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not bind WinUSB |
 | M6 Inputs, network, extras | **Partial** | audio, screen zones, meters, OpenRGB SDK server, network plugins, LampArray backend and runtime parameters are in; macro runtime in (untested with real input on hardware); LCD faces are in (mock-tested; no LCD hardware yet, NZXT formats unsupported); latency acceptance and real clients/devices untested; no DTLS |
-| M7 Linux + 1.0 | **Partial** | hidraw, udev hotplug, i2c-dev, hwmon, serial, raw USB (nusb), logind sleep/lock, notifications, the StatusNotifierItem tray, CEF and packaging are in and unit-tested on Ubuntu CI, but nothing has run on a Linux machine; PipeWire audio/screen missing; the CEF renderer is not staged into the Linux packages; cargo-dist deferred |
+| M7 Linux + 1.0 | **Partial** | hidraw, udev hotplug, i2c-dev, hwmon, serial, raw USB (nusb), logind sleep/lock, notifications, the StatusNotifierItem tray, CEF and packaging are in and unit-tested on Ubuntu CI, but nothing has run on a Linux machine; PipeWire audio/screen missing; the CEF renderer is in the tarball and AppImage but not the Flatpak; the release and Flatpak workflows have not run yet; cargo-dist deferred |
 
 ## M0 Bootstrap and risk retirement: Done
 
@@ -131,9 +133,9 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | Effect playlists / auto-next timer | Done | `crates/lightloom-daemon/src/engine/playlists.rs`, `store.rs` table `playlists`, `/v1/playlists*`, `/v1/lighting/timer`, `ui/src/components/Playlists.svelte`; `crates/lightloom-daemon/tests/playlists.rs` |
 | Suspend/resume (`Shutdown(true)` and re-`Initialize`) | Done on Windows, untested live | `crates/lightloom-hal-windows/src/power.rs` (hidden window: sleep/resume, lock/unlock, display off/on), `crates/lightloom-runtime/src/power.rs`, `crates/lightloom-daemon/src/lifecycle.rs`; `crates/lightloom-daemon/tests/suspend.rs`; `docs/power.md`. Real sleep on the user's PC not tried; Linux: `crates/lightloom-hal-linux/src/logind.rs` (`PrepareForSleep` with a delay inhibitor, session lock/unlock), fake-logind tests only |
 | On-exit behaviour, bake to device | Done, untested on hardware | `crates/lightloom-plugin-host/src/save.rs` (`SaveToDevice` behind confirmation, 60 s limiter, preview as dry run; `ShutdownMode` restore/keep/off with per-device overrides), `/v1/save`, `/v1/save/preview`, `ui/src/components/SaveDialog.svelte`; `tests/session_save.rs`; `docs/host-api/save-shutdown.md` ("untested on hardware"); plugins `msi-gpu`, `msi-mystic-light*`, `razer` |
-| Portable build | Done | `tools/package/stage-windows.ps1`, `release.yml` |
-| WiX MSI, winget | Done, never installed on a clean machine | `packaging/wix/` (per-user WiX v5 MSI, en-US and it-IT, options page, PawnIO option through `lightloom-setup`, `build.ps1`), `packaging/winget/` templates + `render.ps1`; `ci.yml` job `msi` builds it from a stand-in stage; `release.yml` (never run) builds the real one |
-| Authenticode (SignPath) | Missing | `release.yml` "SIGNING" placeholder; needs a SignPath OSS account |
+| Portable build | Done | `tools/package/stage-windows.ps1`, `release-build.yml` `windows` |
+| WiX MSI, winget | Done, never installed on a clean machine | `packaging/wix/` (per-user WiX v5 MSI, en-US and it-IT, options page, PawnIO option through `lightloom-setup`, `build.ps1`), `packaging/winget/` templates + `render.ps1`; `ci.yml` job `msi` builds it from a stand-in stage; `release-build.yml` `msi` (never run) builds the real one and checks its name (`Lightloom-<x.y.z>-x64.msi`, what the updater looks for) |
+| Authenticode (SignPath) | Missing | `release-build.yml` "SIGNING" placeholder; needs a SignPath OSS account |
 | Accept: fresh Win11 → MSI → lit devices with no terminal | Missing | the MSI exists; the fresh-machine run (VM or clean install) is not done |
 | Accept: component JSON on JRAINBOW1 lights an ARGB strip | Done | `imported-plugins-m2.md` (Default Strip on JRainbow 1/2), `daemon-m4.md` |
 | Accept: a tool hitting `GET /api/v1/lighting` on 16038 works | Done | `daemon-m4.md`, `server.rs` compat router |
@@ -192,17 +194,17 @@ fake sysfs and fake devices, 39 tests); none of it has run against hardware on a
 | hwmon `pwm` (fan control) | Out of scope | decided 2026-10-25; hwmon stays read-only |
 | serialport (Linux) | Done, untested on Linux hardware | `crates/lightloom-hal-linux/src/tty.rs`: tty enumeration from sysfs with the USB parent, `serialport` I/O |
 | `tools/gen-udev` | Done | `lightloom udev generate` (`crates/lightloom-cli/src/udev.rs`); generated `packaging/udev/70-lightloom.rules` with a drift test; `packaging/sysusers.d/lightloom.conf`, `packaging/modules-load.d/lightloom.conf` |
-| CEF on Linux (X11/Wayland, headless CI) | Done (CI only) | `crates/lightloom-renderer/src/ipc.rs` (tmpfs ring, unix-socket control), headless ozone by default, `$ORIGIN` rpath; `ci.yml` `renderer-cef-linux` (60-frame smoke run, `lightloom-render/tests/cef_real.rs`). Not run on a Linux desktop; not yet staged into the Linux packages (`release.yml` `linux` builds daemon + CLI only) |
+| CEF on Linux (X11/Wayland, headless CI) | Done (CI only) | `crates/lightloom-renderer/src/ipc.rs` (tmpfs ring, unix-socket control), headless ozone by default, `$ORIGIN` rpath; `ci.yml` `renderer-cef-linux` (60-frame smoke run, `lightloom-render/tests/cef_real.rs`). Staged into the tarball and AppImage with its CEF runtime (`stage-linux.sh --require-renderer`; `release-build.yml` `linux` smoke-runs the staged copy, never run yet). Not run on a Linux desktop; not in the Flatpak |
 | PipeWire audio + screen capture | Missing | WP-L6; `lightloom-inputs` has Windows backends only |
 | Linux sleep/resume, notifications, tray | Done, untested on a Linux desktop | WP-L8, zbus 6 (pure Rust, MIT) through `crates/lightloom-hal-linux/src/dbus.rs`: `logind.rs` (`LogindPower`: `PrepareForSleep` with a `delay` inhibitor lock, session `Lock`/`Unlock` and `LockedHint`), `notifications.rs` (`FreedesktopNotifier`, `org.freedesktop.Notifications`), wired in `lightloom-runtime` (`power.rs`, `notify.rs`); `crates/lightloom-tray/src/sni.rs` (StatusNotifierItem + `com.canonical.dbusmenu`, the Windows menu without Start at sign-in; no watcher: the old message). Tests over peer-to-peer D-Bus (fake logind, notification server and SNI host; Linux CI only). No display on/off from logind |
 | `systemd --user` unit | Partial | `packaging/systemd/lightloomd.service`: user-instance-safe hardening, restart limits; passes `systemd-analyze --user verify`; not yet run as a real service on Linux |
-| AppImage, Flatpak | Partial | `packaging/appimage` (linuxdeploy, AppRun) and `packaging/flatpak` (manifest, metainfo, source generation); `release.yml` `linux` builds the tarball and AppImage but has never run; the Flatpak is not built in any workflow; no CEF renderer inside |
+| AppImage, Flatpak | Partial | `packaging/appimage` (linuxdeploy in two steps so the CEF runtime is not patched, AppRun) and `packaging/flatpak` (25.08 manifest, metainfo, pinned offline source generation); `release-build.yml` `linux` builds the tarball and AppImage with the renderer; `flatpak.yml` builds the Flatpak (flatpak-builder in the Flathub container, weekly and on dispatch). Neither workflow has run yet; no renderer in the Flatpak |
 | `docs/linux-porting.md` | Done | user guide (udev, i2c, conflicts) and developer part (where the Linux code lives, what is missing) |
 | Accept: same plugins light the same hardware on Ubuntu LTS | Missing | needs a Linux run on the reference machine |
 | Accept: identical `Validate` tuples on both OSes (fixture) | Partial | `crates/lightloom-hal-linux/src/fixtures.rs`: one descriptor through the Windows path logic and the Linux split; descriptors are synthetic, a captured Linux `report_descriptor` per reference device is still to record |
 | Accept: RAM via `/dev/i2c-*` without a helper | Partial | code done; needs a Linux run on the reference machine |
 | Accept: conformance suite on both OSes | Partial | `tests/conformance/run.py` + `conformance-selfhosted.yml` (Windows reference machine, never dispatched); no Linux self-hosted runner |
-| Accept: reproducible release via cargo-dist | Partial | `release.yml` `linux-reproducible` (two builds, same hashes, daemon + CLI), never run; cargo-dist deferred with a migration plan in `docs/linux-porting.md` |
+| Accept: reproducible release via cargo-dist | Partial | `release-build.yml` `linux-reproducible` (two builds, same hashes, daemon + CLI; the release waits for it), never run; cargo-dist deferred with a migration plan in `docs/linux-porting.md` |
 
 ## Planned components outside the milestones
 
@@ -227,11 +229,12 @@ fake sysfs and fake devices, 39 tests); none of it has run against hardware on a
 | `docs/security.md`, `docs/linux-porting.md` | Done | both present |
 | Packaging: `wix/`, `winget/` | Done, never installed on a clean machine | `packaging/README.md`; `ci.yml` `msi` |
 | Packaging: `systemd/`, `udev/`, `sysusers.d/`, `modules-load.d/` | Done, untested on Linux | files present, `systemd-analyze verify` only |
-| Packaging: `appimage/`, `flatpak/` | Partial | files present; never built (release never run, Flatpak in no workflow) |
+| Packaging: `appimage/`, `flatpak/` | Partial | built by `release-build.yml` and `flatpak.yml`, neither run yet |
 | Packaging: `msix-identity/` | Partial | recipe and `build.ps1`; never registered |
 | CI `rust` (win + ubuntu), `renderer-cef`, `renderer-cef-linux`, `deny`, `node`, `schemas`, `msi` | Done | `ci.yml`, green on `develop` |
 | CI `conformance-selfhosted.yml` | Done, never dispatched | manual dispatch only, labels `self-hosted, windows, lightloom-reference`; needs the user's self-hosted runner |
-| CI `release.yml` via cargo-dist, signing, SBOM | Partial | hand-written workflow: SBOM + cargo-auditable, Windows zip + MSI, Linux tarball + AppImage, reproducibility job; never run; cargo-dist and signing missing |
+| CI `release.yml` via cargo-dist, signing, SBOM | Partial | hand-written: `release.yml` (tag → draft release) calls the reusable `release-build.yml` (SBOM + pinned cargo-auditable, Windows zip + MSI, Linux tarball + AppImage with the CEF renderer, reproducibility gate, one `SHA256SUMS`); `ci.yml` `release-dry-run` runs the same build weekly and on dispatch without publishing. Never run; cargo-dist and signing missing |
+| CI `flatpak.yml` | Done, never run | weekly and on dispatch: offline sources, flatpak-builder in the Flathub `freedesktop-25.08` container, bundle as an artifact |
 | Issue forms | Done | `.github/ISSUE_TEMPLATE/{device-report,bug-report,feature-request,config}.yml` |
 | Dependabot | Done | `.github/dependabot.yml`; `docs/research/dependabot-2026-10.md` |
 
@@ -297,7 +300,8 @@ the WiX installer and issue forms.
     - `lightloom-inputs` Linux backends: cpal ALSA/PipeWire monitor; portal ScreenCast + PipeWire for zones.
 14. **WP-L8: Linux desktop integration.** Done (`feature/linux-sys`): logind power source, freedesktop notifications, StatusNotifierItem tray.
 15. **WP-L7 remainder: release. Size M.**
-    - Stage the CEF renderer into the Linux tarball/AppImage (`release.yml` `linux`, `stage-linux.sh --require-renderer`); build the Flatpak in a workflow; `cargo dist init` replacing the hand-written `release.yml` (keep cargo-auditable and SBOM).
+    - Done (`feature/packaging-linux`): the CEF renderer in the Linux tarball/AppImage (`stage-linux.sh --require-renderer`), the release build as a reusable workflow with a weekly dry run, the Flatpak built in `flatpak.yml`.
+    - Left: first dry run and fixes from it; the renderer in the Flatpak (CEF as an offline source, zypak); `cargo dist init` replacing the hand-written workflows (keep cargo-auditable and SBOM).
 16. **Docs and tools.** Done (`feature/housekeeping`): `crates/README.md`, `docs/api/compat-openapi.yaml`, `tools/shm-dump`, `tools/pawnio-hash-pin`.
 
 ### Suggested order

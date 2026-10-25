@@ -1,13 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Lightloom release skeleton (tag-triggered).
+# Lightloom release (tag-triggered).
 #
-# Status: PLACEHOLDER. The intended final shape is a cargo-dist generated workflow
-# (`cargo dist init` writes .github/workflows/release.yml and dist-workspace.toml);
-# until cargo-dist is wired in, this hand-written job builds the daemon and CLI with
-# cargo-auditable on both targets, emits a CycloneDX SBOM, and uploads the artifacts.
+# `build` runs release-build.yml (Windows zip + MSI, Linux tarball + AppImage, SBOMs,
+# cargo-auditable, the reproducibility check, SHA256SUMS); `publish` turns its
+# `lightloom-release` artifact into a draft GitHub release. The same build runs weekly and on
+# demand without publishing: ci.yml `release-dry-run`.
 #
-# NOT YET: code signing. See the "SIGNING" block below for where SignPath goes.
+# Before tagging: Cargo.toml's [workspace.package] version must equal the tag (v1.2.3 ->
+# 1.2.3, a pre-release suffix aside), or the build stops; the in-app updater compares the
+# version the binaries report with the tag.
+#
+# NOT YET: code signing (see SIGNING in release-build.yml). cargo-dist deferred
+# (docs/linux-porting.md, "cargo-dist evaluation").
 
 name: Release
 
@@ -17,452 +22,49 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build (dry run when empty)"
+        description: "Tag or ref to build (dry run: a manual run never publishes)"
         required: false
         default: ""
 
-# Read-only by default; only the `release` job gets `contents: write`.
+# Read-only by default; only `publish` gets `contents: write`.
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  # Binaries that ship in the release archives (space separated).
-  LIGHTLOOM_BINS: lightloomd lightloom
-
 jobs:
   build:
-    name: build (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: zip
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            archive: tar.gz
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Manual runs may name a tag; pushes build the ref that triggered them.
-          ref: ${{ inputs.tag || github.ref }}
+    uses: ./.github/workflows/release-build.yml
+    with:
+      # Manual runs may name a tag; pushes build the tag that triggered them.
+      ref: ${{ inputs.tag || github.ref }}
 
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libudev-dev libusb-1.0-0-dev pkg-config
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-${{ matrix.target }}
-
-      # cargo-auditable embeds the exact dependency tree into each binary
-      # (readable later with `cargo audit bin`); cargo-cyclonedx writes the SBOM file.
-      - name: Install cargo-auditable and cargo-cyclonedx
-        run: cargo install --locked cargo-auditable cargo-cyclonedx
-
-      - name: Build (auditable, release)
-        run: cargo auditable build --release --workspace --target ${{ matrix.target }}
-
-      # Windows ships the effect renderer with its CEF runtime (the `cef` feature downloads the
-      # CEF minimal distribution into CEF_PATH and builds libcef_dll_wrapper with CMake + Ninja,
-      # as in the CI job) and the dashboard; tools/package/stage-windows.ps1 assembles them.
-      - name: Point CEF_PATH at the cached distribution
-        if: runner.os == 'Windows'
-        shell: bash
-        run: echo "CEF_PATH=$RUNNER_TEMP\\cef" >> "$GITHUB_ENV"
-
-      - name: Cache CEF distribution
-        if: runner.os == 'Windows'
-        uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}\cef
-          key: cef-154.0.34-windows-x86_64
-
-      - name: Build the effect renderer (auditable, release, --features cef)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          . crates/lightloom-renderer/tools/cef-env.sh
-          cargo auditable build --release -p lightloom-renderer --features cef --target ${{ matrix.target }}
-
-      - uses: actions/setup-node@v7
-        if: runner.os == 'Windows'
-        with:
-          node-version: "24"
-
-      - name: Build the dashboard
-        if: runner.os == 'Windows'
-        working-directory: ui
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm run build
-
-      # cargo-cyclonedx writes one <crate>.cdx.json per workspace member next to that
-      # crate's Cargo.toml. Collect them into sbom/ and suffix the target so the two
-      # matrix legs do not collide once the artifacts are merged in the release job.
-      - name: SBOM (CycloneDX)
-        shell: bash
-        run: |
-          set -eu
-          cargo cyclonedx --format json --target "${{ matrix.target }}"
-          mkdir -p sbom
-          find . \( -path ./target -o -path ./sbom \) -prune -o -name '*.cdx.json' -print |
-            while read -r f; do
-              n="$(basename "$f" .cdx.json)"
-              mv "$f" "sbom/${n}-${{ matrix.target }}.cdx.json"
-            done
-          ls -la sbom
-
-      # ---------------------------------------------------------------------------
-      # SIGNING (not enabled yet)
-      #
-      # Windows: Authenticode through SignPath Foundation (OSS program).
-      #   - Insert `signpath/github-action-submit-signing-request@v1` here, after the
-      #     build and before archiving, with organization-id / project-slug /
-      #     signing-policy-slug stored as repository secrets. The WiX MSI from
-      #     packaging/wix is signed the same way in the `msi` job.
-      #   - Point the signing request at the artifact uploaded below so SignPath can
-      #     verify provenance (origin verification against this workflow).
-      # Linux: detached minisign signature of the tarball + SHA256SUMS; key in a
-      #   repository secret; public key published in docs/security.md.
-      # ---------------------------------------------------------------------------
-
-      - name: Stage artifacts (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          set -eu
-          out="dist/lightloom-${{ matrix.target }}"
-          mkdir -p "$out"
-          for b in $LIGHTLOOM_BINS; do
-            cp "target/${{ matrix.target }}/release/$b" "$out/"
-          done
-          for f in LICENSE LICENSE-EXCEPTION.md README.md \
-            packaging/systemd/lightloomd.service packaging/udev/70-lightloom.rules \
-            packaging/sysusers.d/lightloom.conf; do
-            if [ -f "$f" ]; then cp "$f" "$out/"; fi
-          done
-          # SBOMs ship inside the archive and beside it (everything uploaded lives under
-          # dist/ so download-artifact + merge-multiple lands flat in the release job).
-          cp sbom/*.cdx.json "$out/"
-          cp sbom/*.cdx.json dist/
-          tar -C dist -czf "dist/lightloom-${{ matrix.target }}.tar.gz" "lightloom-${{ matrix.target }}"
-          (cd dist && sha256sum "lightloom-${{ matrix.target }}.tar.gz" > "lightloom-${{ matrix.target }}.sha256")
-
-      - name: Stage artifacts (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $target = "${{ matrix.target }}"
-          $out = "dist/lightloom-$target"
-          # Daemon, CLI, renderer + CEF runtime, dashboard, plugins, effects, licenses and the
-          # Chromium notices, laid out the way lightloomd looks for them (next to itself).
-          tools/package/stage-windows.ps1 -Release "target/$target/release" -Ui "ui/dist" -Out $out
-          Copy-Item "sbom/*.cdx.json" $out
-          Copy-Item "sbom/*.cdx.json" "dist"
-          # Archive the directory itself so the zip has the same lightloom-<target>/ root
-          # as the Linux tarball.
-          Compress-Archive -Path $out -DestinationPath "dist/lightloom-$target.zip" -Force
-          $hash = (Get-FileHash "dist/lightloom-$target.zip" -Algorithm SHA256).Hash.ToLower()
-          # LF only: the release job concatenates these into SHA256SUMS for `sha256sum -c`.
-          [System.IO.File]::WriteAllText(
-            (Join-Path (Get-Location) "dist/lightloom-$target.sha256"),
-            "$hash  lightloom-$target.zip`n")
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: lightloom-${{ matrix.target }}
-          # Keep every path under dist/ so the artifact root is dist/ (not the repo
-          # root) and the release job's globs match after merge-multiple.
-          path: |
-            dist/lightloom-${{ matrix.target }}.${{ matrix.archive }}
-            dist/lightloom-${{ matrix.target }}.sha256
-            dist/*.cdx.json
-          if-no-files-found: error
-
-  # The per-user MSI (packaging/wix, WiX v5), made from the same staged directory as the
-  # Windows zip. Version: the tag (v1.2.3 -> 1.2.3), else the workspace version.
-  msi:
-    name: MSI (x64)
+  publish:
+    name: GitHub release (draft)
     needs: build
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: lightloom-x86_64-pc-windows-msvc
-          path: dist
-      - name: Build the MSI
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          Expand-Archive "dist/lightloom-x86_64-pc-windows-msvc.zip" -DestinationPath "stage"
-          $ref = "${{ inputs.tag || github.ref_name }}"
-          $version = if ($ref -match '^v(\d+\.\d+\.\d+)') { $Matches[1] } else { "" }
-          $params = @{ Stage = "stage/lightloom-x86_64-pc-windows-msvc"; InstallWix = $true }
-          if ($version) { $params.Version = $version }
-          packaging/wix/build.ps1 @params
-          # SignPath signing of the MSI goes here (see SIGNING above).
-          foreach ($msi in Get-ChildItem dist/*.msi) {
-            $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
-            [System.IO.File]::WriteAllText("$($msi.FullName).sha256", "$hash  $($msi.Name)`n")
-          }
-      - uses: actions/upload-artifact@v7
-        with:
-          name: lightloom-msi
-          path: |
-            dist/*.msi
-            dist/*.msi.sha256
-          if-no-files-found: error
-
-  release:
-    name: GitHub release
-    needs: [build, msi]
     runs-on: ubuntu-latest
-    # Tag pushes only; a workflow_dispatch run (even with `tag` set) stops after the
-    # build job and leaves its artifacts on the run as a dry run.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Tag pushes only: a workflow_dispatch run stops after `build`, even when started on a tag,
+    # and leaves its files on the run as a dry run.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
+          name: lightloom-release
           path: dist
-          merge-multiple: true
 
-      - name: Combined checksums
+      - name: Verify SHA256SUMS
         run: |
           cd dist
-          cat ./*.sha256 > SHA256SUMS
+          sha256sum -c SHA256SUMS
           ls -la
 
-      - name: Publish draft release
+      # A draft: a maintainer checks the files and the notes and publishes it by hand. The
+      # updater ignores drafts, and offers a tag with a pre-release suffix only to beta users.
+      - name: Create the draft release
         uses: softprops/action-gh-release@v3
         with:
           draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
-          files: |
-            dist/*.zip
-            dist/*.msi
-            dist/*.tar.gz
-            dist/*.cdx.json
-            dist/SHA256SUMS
-
-  # ===========================================================================
-  # Linux (WP-L7). Separate jobs so the `build` matrix and the `release` job above stay
-  # untouched: `linux` builds the full Linux tarball and the AppImage, `linux-publish`
-  # adds them to the draft release once `release` has created it, `linux-reproducible`
-  # checks that two builds of the daemon and CLI are bit-identical.
-  # The `release` job downloads every artifact of the run; the names used here
-  # (.tar.xz, .AppImage, SHA256SUMS-linux) match none of its globs, so it publishes the
-  # same files whether or not `linux` finished first. Docs: docs/linux-porting.md.
-  # ===========================================================================
-  linux:
-    name: linux (tarball + AppImage)
-    # glibc 2.35 baseline: binaries built here also run on Ubuntu 22.04 and Debian 12.
-    runs-on: ubuntu-22.04
-    env:
-      TARGET: x86_64-unknown-linux-gnu
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libudev-dev libusb-1.0-0-dev pkg-config appstream desktop-file-utils
-
-      - name: Version and SOURCE_DATE_EPOCH
-        run: |
-          set -eu
-          ref="${{ inputs.tag || github.ref_name }}"
-          case "$ref" in
-            v[0-9]*) version="${ref#v}" ;;
-            *) version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)-$(git rev-parse --short HEAD)" ;;
-          esac
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ env.TARGET }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-linux-${{ env.TARGET }}
-
-      - name: Install cargo-auditable
-        run: cargo install --locked cargo-auditable
-
-      # Same path remapping as `linux-reproducible`, so that job checks what ships. When
-      # several prefixes match, rustc applies the last one: the target dir comes last.
-      - name: Build daemon and CLI (auditable, release)
-        run: |
-          set -eu
-          export RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/lightloom --remap-path-prefix=$GITHUB_WORKSPACE/target=/target"
-          cargo auditable build --release --locked -p lightloom-daemon -p lightloom-cli --target "$TARGET"
-
-      # The CEF effect renderer joins here once it builds on Linux (WP-L5):
-      #   cargo auditable build --release -p lightloom-renderer --features cef --target "$TARGET"
-      # stage-linux.sh then picks up lightloom-renderer and the CEF runtime next to it
-      # (pass --require-renderer from then on).
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-
-      - name: Build the dashboard
-        working-directory: ui
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm run build
-
-      - name: Stage
-        run: |
-          tools/package/stage-linux.sh --release "target/$TARGET/release" --ui ui/dist \
-            --out "dist/lightloom-$VERSION-linux-x86_64"
-
-      - name: Check the packaging files
-        run: |
-          set -eu
-          stage="dist/lightloom-$VERSION-linux-x86_64"
-          # systemd user unit, installed the documented way (symlink in ~/.local/bin).
-          mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user"
-          ln -sf "$PWD/$stage/lightloomd" "$HOME/.local/bin/lightloomd"
-          cp packaging/systemd/lightloomd.service "$HOME/.config/systemd/user/"
-          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg}"
-          mkdir -p "$XDG_RUNTIME_DIR"
-          systemd-analyze --user verify "$HOME/.config/systemd/user/lightloomd.service"
-          # Through the symlink the daemon still finds its dashboard next to the real
-          # executable (not the source-tree fallback) and serves it; no devices are opened.
-          log="$RUNNER_TEMP/lightloomd.log"
-          "$HOME/.local/bin/lightloomd" --home "$RUNNER_TEMP/lightloom-home" --no-hardware \
-            --ephemeral --port 53017 > "$log" 2>&1 &
-          pid=$!
-          ok=0
-          for _ in $(seq 1 100); do
-            if curl -fsS http://127.0.0.1:53017/ -o "$RUNNER_TEMP/index.html"; then ok=1; break; fi
-            sleep 0.2
-          done
-          kill -TERM "$pid"; wait "$pid" || true
-          cat "$log"
-          test "$ok" = 1
-          grep -qi '<html' "$RUNNER_TEMP/index.html"
-          grep -qF "$PWD/$stage/ui" "$log"
-          desktop-file-validate packaging/appimage/lightloom.desktop
-          appstreamcli validate --no-net packaging/flatpak/org.lightloom.Lightloom.metainfo.xml
-          sh -n packaging/appimage/AppRun
-
-      - name: Tarball (reproducible)
-        run: |
-          set -eu
-          name="lightloom-$VERSION-linux-x86_64"
-          tar -C dist --sort=name --owner=0 --group=0 --numeric-owner \
-            --mtime="@$SOURCE_DATE_EPOCH" -cf - "$name" | xz -T1 -9 > "dist/$name.tar.xz"
-
-      - name: AppImage
-        run: |
-          packaging/appimage/build-appimage.sh --stage "dist/lightloom-$VERSION-linux-x86_64" \
-            --version "$VERSION" --out dist
-
-      - name: Checksums
-        run: |
-          cd dist
-          sha256sum -- *.tar.xz *.AppImage > SHA256SUMS-linux
-          cat SHA256SUMS-linux
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: lightloom-linux
-          path: |
-            dist/*.tar.xz
-            dist/*.AppImage
-            dist/SHA256SUMS-linux
-          if-no-files-found: error
-
-  linux-publish:
-    name: GitHub release (Linux)
-    needs: [release, linux]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: lightloom-linux
-          path: dist
-      - name: Upload to the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          cd dist
-          gh release upload --clobber "${{ github.ref_name }}" *.tar.xz *.AppImage SHA256SUMS-linux
-
-  linux-reproducible:
-    name: linux reproducibility (daemon + CLI)
-    runs-on: ubuntu-22.04
-    env:
-      TARGET: x86_64-unknown-linux-gnu
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libudev-dev libusb-1.0-0-dev pkg-config
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ env.TARGET }}
-
-      - name: Install cargo-auditable
-        run: cargo install --locked cargo-auditable
-
-      # Two clean builds from the same checkout into different target directories (no
-      # rust-cache: nothing may be shared between them). The checkout path must stay the
-      # same: env!("CARGO_MANIFEST_DIR") is embedded and --remap-path-prefix does not
-      # rewrite it (docs/linux-porting.md, "Reproducibility limits").
-      - name: Build twice
-        run: |
-          set -eu
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          for run in a b; do
-            dir="$RUNNER_TEMP/target-$run"
-            RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/lightloom --remap-path-prefix=$dir=/target" \
-              CARGO_TARGET_DIR="$dir" \
-              cargo auditable build --release --locked -p lightloom-daemon -p lightloom-cli --target "$TARGET"
-          done
-
-      - name: Compare hashes
-        run: |
-          set -eu
-          status=0
-          for b in lightloomd lightloom; do
-            a="$(sha256sum "$RUNNER_TEMP/target-a/$TARGET/release/$b" | cut -d' ' -f1)"
-            c="$(sha256sum "$RUNNER_TEMP/target-b/$TARGET/release/$b" | cut -d' ' -f1)"
-            echo "$b  $a  $c"
-            if [ "$a" != "$c" ]; then
-              echo "::error::$b differs between two builds of the same commit"
-              status=1
-            fi
-          done
-          exit "$status"
+          fail_on_unmatched_files: true
+          files: dist/*

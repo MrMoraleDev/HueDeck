@@ -45,7 +45,9 @@ daemon_running() {
   lock="$(data_dir)/lightloomd.lock"
   [ -e "$lock" ] || return 1
   if command -v flock >/dev/null 2>&1; then
-    ! flock -n "$lock" true 2>/dev/null
+    # The lock is free (flock succeeds): no daemon.
+    if flock -n "$lock" true 2>/dev/null; then return 1; fi
+    return 0
   else
     [ -e "$(data_dir)/api-port" ]
   fi

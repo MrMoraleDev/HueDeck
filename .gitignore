@@ -20,3 +20,9 @@ Thumbs.db
 .idea/
 /packaging/msix-identity/out/
 __pycache__/
+# Flatpak: generated offline sources (packaging/flatpak/generate-sources.sh) and build dirs.
+/packaging/flatpak/cargo-sources.json
+/packaging/flatpak/node-sources.json
+/build-flatpak/
+/flatpak_app/
+/.flatpak-builder/

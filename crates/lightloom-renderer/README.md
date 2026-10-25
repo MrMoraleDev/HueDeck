@@ -218,7 +218,9 @@ linking and running against `libcef.so` happens only in CI (`renderer-cef-linux`
 - **Sandbox.** Off (`no_sandbox = 1`), as on Windows. The setuid `chrome-sandbox` helper needs
   `root:root 4755` next to the binary, and Ubuntu 24.04+ restricts unprivileged user namespaces
   to binaries with an AppArmor profile granting `userns` (an AppImage's random mount path cannot
-  be matched). Packaging (WP-L7) decides; effects are local files loaded with DNS blocked.
+  be matched). The Linux packages (WP-L7: `tools/package/stage-linux.sh`, tarball and AppImage)
+  therefore ship without `chrome-sandbox` and run unsandboxed; effects are local files loaded
+  with DNS blocked.
 - **System libraries.** Chromium's runtime list (NSS, GBM, ALSA, CUPS, ATK/AT-SPI, Pango/Cairo,
   xkbcommon and the X11/XCB client libraries, even with Ozone headless, because `libcef.so`
   links them). The CI job installs the Ubuntu 24.04 names (`t64` variants).

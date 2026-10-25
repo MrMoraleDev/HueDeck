@@ -193,6 +193,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: lightloom-windows
+          # Only needed by this run's publish job (or a look at a dry run).
+          retention-days: 7
           path: |
             dist/lightloom-${{ env.TARGET }}.zip
             dist/*.cdx.json
@@ -227,6 +229,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: lightloom-msi
+          # Only needed by this run's publish job (or a look at a dry run).
+          retention-days: 7
           path: msi/*.msi
           if-no-files-found: error
 
@@ -399,6 +403,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: lightloom-linux
+          # Only needed by this run's publish job (or a look at a dry run).
+          retention-days: 7
           path: |
             dist/*.tar.xz
             dist/*.AppImage
@@ -410,6 +416,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-linux-logs
+          # Only needed by this run's publish job (or a look at a dry run).
+          retention-days: 7
           path: |
             ${{ runner.temp }}/*.json
             ${{ runner.temp }}/*.log
@@ -515,5 +523,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: lightloom-release
+          # Only needed by this run's publish job (or a look at a dry run).
+          retention-days: 7
           path: release/*
           if-no-files-found: error

@@ -131,7 +131,7 @@ const NATIVE_MODULES: &[&str] = &[
 
 /// Rust-backed modules a device session implements (`js/host.js` `nativeModules`);
 /// the others keep their throwing facade there.
-const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo", "udp", "tcp", "serial"];
+const DEVICE_MODULES: &[&str] = &["permissions", "systeminfo", "udp", "tcp", "serial", "lcd"];
 
 /// Prefix of the generated modules that pick a device-session implementation.
 const NATIVE_PREFIX: &str = "lightloom:native/";
@@ -183,6 +183,8 @@ pub struct RuntimeOptions {
     /// Serial device session: the natives behind `@SignalRGB/serial` (needs
     /// [`RuntimeOptions::device`]).
     pub serial: Option<crate::serial::SharedSerial>,
+    /// Device session: the natives behind `@SignalRGB/lcd` (needs [`RuntimeOptions::device`]).
+    pub lcd: Option<crate::lcd::SharedLcd>,
 }
 
 impl Default for RuntimeOptions {
@@ -198,6 +200,7 @@ impl Default for RuntimeOptions {
             service: None,
             controller: None,
             serial: None,
+            lcd: None,
         }
     }
 }
@@ -777,6 +780,13 @@ impl PluginRuntime {
                 let install = || -> rquickjs::Result<()> {
                     let natives: Object = ctx.globals().get("__lightloomNative")?;
                     crate::serial::install(&ctx, &natives, serial, d, device)
+                };
+                install().map_err(|e| failure(&ctx, e, d))?;
+            }
+            if let (Some(lcd), Some(device)) = (&opts.lcd, &opts.device) {
+                let install = || -> rquickjs::Result<()> {
+                    let natives: Object = ctx.globals().get("__lightloomNative")?;
+                    crate::lcd::install(&ctx, &natives, lcd, d, device)
                 };
                 install().map_err(|e| failure(&ctx, e, d))?;
             }

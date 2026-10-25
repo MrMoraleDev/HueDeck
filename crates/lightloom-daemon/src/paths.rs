@@ -82,6 +82,11 @@ impl Paths {
         self.config.join("effects")
     }
 
+    /// The user's own LCD faces.
+    pub fn user_faces(&self) -> PathBuf {
+        self.config.join("faces")
+    }
+
     /// Effect pages loaded through the compatible API's `lighting/loadEffect`.
     pub fn developer_effects(&self) -> PathBuf {
         self.data.join("developer-effects")

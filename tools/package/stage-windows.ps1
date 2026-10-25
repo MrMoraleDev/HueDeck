@@ -91,6 +91,8 @@ foreach ($dir in Get-ChildItem -Directory (Join-Path $repo "plugins")) {
 
 # Starter effects (CC0) and component descriptors.
 Copy-Required (Join-Path $repo "effects") (Join-Path $Out "effects")
+# Starter LCD faces (CC0).
+Copy-Required (Join-Path $repo "faces") (Join-Path $Out "faces")
 if (Test-Path (Join-Path $repo "components")) {
   Copy-Item -Recurse -Force (Join-Path $repo "components") (Join-Path $Out "components")
 }

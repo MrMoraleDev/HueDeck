@@ -16,6 +16,7 @@ pub mod battery;
 pub mod config;
 pub mod engine;
 pub mod instance;
+pub mod lcd;
 pub mod lifecycle;
 pub mod paths;
 pub mod pawnio;

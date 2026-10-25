@@ -80,6 +80,9 @@ export const api = {
     request("PATCH", `/v1/devices/${enc(key)}`, patch),
   setChannel: (key: string, channel: string, components: unknown[]) =>
     request("PUT", `/v1/devices/${enc(key)}/channels/${enc(channel)}`, components),
+  /** Choose a device's LCD face (`""`: the default) and/or frame rate (1-60). */
+  setLcd: (key: string, patch: { face?: string; framerate?: number }) =>
+    request<{ key: string; face: string | null; framerate: number }>("PUT", `/v1/devices/${enc(key)}/lcd`, patch),
   setPlacement: (uid: string, placement: Placement) => request("PUT", `/v1/placements/${enc(uid)}`, placement),
   applyLayout: (name: string) => request("POST", `/v1/layouts/${enc(name)}/apply`),
   saveLayoutAs: (name: string) => request("PUT", `/v1/layouts/${enc(name)}`),

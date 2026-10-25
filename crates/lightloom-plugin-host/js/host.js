@@ -1843,10 +1843,100 @@ const serialModule = serialNative
     })
   : undefined;
 
+// `@SignalRGB/lcd` (effects-engine.md §4, docs/host-api/lcd-lightloom.md) over the
+// `lcd*` natives (src/lcd.rs): frames of the device's LCD face, encoded in Rust. A
+// native answers bytes as a Uint8Array (handed to the plugin as a plain array: plugins
+// use `.length`, `.slice` and `concat`), or `{code, message}`, thrown as an `LcdError`.
+const lcdNative = native !== undefined && typeof native.lcdGetFrame === "function";
+
+class LcdError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "LcdError";
+    this.code = code;
+  }
+}
+
+function lcdBytes(r) {
+  if (isView(r)) {
+    return arrayFrom(r);
+  }
+  throw new LcdError(String(r?.code ?? "LCD_ERROR"), String(r?.message ?? "LCD call failed"));
+}
+
+function lcdFormat(o, member) {
+  const f = o?.format;
+  if (typeof f !== "string") {
+    throw new LcdError(
+      "INVALID_FORMAT",
+      `LCD.${member}(): Invalid image format: ${stringify(f)}. Valid formats are: JPEG, PNG, BMP, RGBA, RGB, RGB565, NZXT::RGB565, NZXT::Q565`,
+    );
+  }
+  return f;
+}
+
+function lcdQuality(o) {
+  const q = Number(o?.quality);
+  return isFiniteNumber(q) ? q : -1;
+}
+
+const lcdModule = lcdNative
+  ? freeze({
+      initialize(settings) {
+        if (settings === null || typeof settings !== "object") {
+          throw new LcdError("INVALID_SETTINGS", "Settings must be an object");
+        }
+        if (typeof settings.width !== "number") {
+          throw new LcdError("INVALID_SETTINGS", "Width must be provided and must be a number");
+        }
+        if (typeof settings.height !== "number") {
+          throw new LcdError("INVALID_SETTINGS", "Height must be provided and must be a number");
+        }
+        // Both spellings are accepted (hid-usb.md Gap resolution).
+        const circular = settings.circular ?? settings.circularPreview;
+        if (circular !== undefined && typeof circular !== "boolean") {
+          throw new LcdError("INVALID_SETTINGS", "Circular must be a boolean");
+        }
+        const r = native.lcdInitialize(settings.width, settings.height, circular === true);
+        if (r !== "") {
+          throw new LcdError(String(r.code), String(r.message));
+        }
+      },
+      get initialized() {
+        return native.lcdInitialized();
+      },
+      getFrame(options) {
+        return lcdBytes(native.lcdGetFrame(lcdFormat(options, "getFrame"), lcdQuality(options)));
+      },
+      getSlicedFrame(options) {
+        const o = options ?? {};
+        const columns = Number(o.columns ?? o.cols);
+        const rows = Number(o.rows);
+        const r = native.lcdGetSlicedFrame(columns, rows, lcdFormat(o, "getSlicedFrame"), lcdQuality(o));
+        if (isArray(r)) {
+          return r.map(lcdBytes);
+        }
+        return lcdBytes(r);
+      },
+      getImageBuffer(x, y, width, height, options) {
+        const o = options ?? {};
+        const out = (v) => (v === undefined || v === null ? NaN : Number(v));
+        const format = o.format === undefined ? "RGB" : lcdFormat(o, "getImageBuffer");
+        return lcdBytes(
+          native.lcdGetImageBuffer(
+            [Number(x), Number(y), Number(width), Number(height), out(o.outputWidth), out(o.outputHeight)],
+            format,
+          ),
+        );
+      },
+    })
+  : undefined;
+
 const netModules = netNative ? { udp: udpModule, tcp: tcpModule } : {};
 const serialModules = serialModule === undefined ? {} : { serial: serialModule };
+const lcdModules = lcdModule === undefined ? {} : { lcd: lcdModule };
 const nativeModules = deviceMode
-  ? { permissions: permissionsModule, systeminfo: systeminfoModule, ...netModules, ...serialModules }
+  ? { permissions: permissionsModule, systeminfo: systeminfoModule, ...netModules, ...serialModules, ...lcdModules }
   : { ...netModules };
 
 // ---------------------------------------------------------------- install

@@ -34,7 +34,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | M3 Effects pipeline | **Done** | the Chromium sandbox is off until releases are signed |
 | M4 Dashboard, persistence, API, packaging | **Partial** | Authenticode signing (SignPath account); the MSI never installed on a clean machine (fresh-machine acceptance); the plugin sources manager; the log panel shows only lines since the page opened; save-to-device, exit modes, suspend/resume, tray and import wizard not yet run live |
 | M5 Privileged bus | **Partial** | I801, AMD GPU (ADL) and the sensors not run on hardware; no LpcIO, no fan control; no CPU temperature on Windows without LibreHardwareMonitor; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not bind WinUSB |
-| M6 Inputs, network, extras | **Partial** | audio, screen zones, meters, OpenRGB SDK server, network plugins, LampArray backend and runtime parameters are in; latency acceptance and real clients/devices untested; LCD faces and the macro runtime (Inputs/Actions, `keys`, hooks) missing; no DTLS |
+| M6 Inputs, network, extras | **Partial** | audio, screen zones, meters, OpenRGB SDK server, network plugins, LampArray backend and runtime parameters are in; LCD faces are in (mock-tested; no LCD hardware yet, NZXT formats unsupported); latency acceptance and real clients/devices untested; the macro runtime (Inputs/Actions, `keys`, hooks) missing; no DTLS |
 | M7 Linux + 1.0 | **Partial** | hidraw, udev hotplug, i2c-dev, hwmon, serial, CEF and packaging are in and unit-tested on Ubuntu CI, but nothing has run on a Linux machine; nusb, PipeWire audio/screen, logind sleep, hwmon `pwm`, Linux tray and notifications missing; the CEF renderer is not staged into the Linux packages; cargo-dist deferred |
 
 ## M0 Bootstrap and risk retirement: Done
@@ -164,7 +164,7 @@ hid-desc 8, winres 2 (about 800, plus the broker's proptest properties). Node te
 | Screen zones (`engine.zone`) | Done (Windows) | `crates/lightloom-inputs/src/screen/{dxgi,sample}.rs` (DXGI duplication, checked on the dev PC), `crates/lightloom-daemon/src/screen.rs`; `docs/screen.md`. Display only in `config.toml` (no dashboard picker) |
 | Area/linear meters (`engine.vision`) | Done | `crates/lightloom-inputs/src/screen/meters.rs` (area, linear, colormean from `<meta meter>`); OCR out of scope |
 | Network plugins (udp/tcp, DiscoveryService, mDNS, `service`/`controller`/`discovery`, XHR, settings, dashboard section) | Done, untested on hardware; DTLS missing | first-party `wled`, `ddp`, `e131`, `philips-hue` (CLIP v1), `nanoleaf`, `govee`, `lifx`, `yeelight`; `Network.svelte`; `docs/hardware/{wled,…}.md` |
-| LCD faces (`@SignalRGB/lcd`, second browser per device) | Missing | dry-run recording stub only (`host.js` `lcd`); `getImageBuffer` throws |
+| LCD faces (`@SignalRGB/lcd`, second browser per device) | Done, untested on hardware | `crates/lightloom-lcd` (JPEG, PNG, BMP, RGBA, RGB, RGB565 encoders; crops, slices); `crates/lightloom-plugin-host/src/lcd.rs` (`initialize`, `getFrame`, `getSlicedFrame`, `getImageBuffer`, typed `LcdError`); `crates/lightloom-daemon/src/lcd.rs` (one `lightloom-renderer --face` per LCD device at its size and `lcdFramerate`, mock pattern without a renderer, sensors); `PUT /v1/devices/{key}/lcd`, `GET /v1/lcd/faces`, `LcdFacePicker.svelte`; starter faces `faces/clock.html`, `faces/sensor.html`; `docs/host-api/lcd-lightloom.md`. Gaps: `NZXT::RGB565` / `NZXT::Q565` layouts unknown (typed `UNSUPPORTED_FORMAT`), per-face controls, background layer, rotation, idle blanking, dashboard preview |
 | Macros (Inputs/Actions), key/mouse hooks, `system.*`, `signalrgb.*`, `keys` | Missing | spec in `docs/host-api/macros-system.md`; no runtime (WP-MACROS b) |
 | Action router (`lightloom://`, `signalrgb://`) | Done | see M4 "Action URLs"; `signalrgb://` paths accepted by `actions.rs` |
 | LampArray HAL backend (WinRT `Windows.Devices.Lights`) | Done, untested on hardware | `crates/lightloom-hal-windows/src/lamparray.rs`, built-in session `crates/lightloom-plugin-host/src/lamparray.rs`, ownership `crates/lightloom-runtime/src/lamparray.rs`; identity package recipe `packaging/msix-identity/` (never registered); `docs/windows-dynamic-lighting.md` "Not verified on hardware". `plugins/hid-lamparray` drives HID LampArrays first (tested on the DeathAdder's LampArray collection) |
@@ -281,8 +281,9 @@ the WiX installer and issue forms.
 5. **WP-MACROS (b): macro runtime. Size L.**
    - QuickJS runtime per macro script, Inputs/Actions, `signalrgb.*`, `keys`/`mouse` via SendInput, opt-in low-level hooks.
    - Touches a new crate `lightloom-macros` plus the daemon. It also connects the `keyboard`/`mouse` `sendEvent` feature globals in `host.js`.
-6. **WP-LCD: LCD faces. Size L.**
-   - Touches: `lightloom-renderer` (a second browser per LCD device, its own shm ring); `lightloom-plugin-host` native `lcd` module (`getFrame` in JPEG, PNG, RGB565 and the other formats; `getImageBuffer`); the daemon (face selection).
+6. **WP-LCD remainder: LCD faces on hardware. Size M; needs an LCD device.**
+   - Done: face renderer per device, the `lcd` module and encoders, face selection, starter faces (`docs/host-api/lcd-lightloom.md`).
+   - Left: a real LCD device run; the NZXT formats (needs a capture of NZXT CAM and a Kraken Elite/Z3); per-face control values in the dashboard; background layer, rotation, idle blanking; a face preview.
 7. **WP-SENSORS-FANS (fan half). Size L.**
    - The plugin fan API (`createFanControl`, …) with curves; LpcIO/NCT6687D through PawnIO LpcIO in the broker; hwmon `pwm` on Linux; optionally CPU MSRs (`AMDFamily17` / `IntelMSR`) as a read-only broker op.
    - Opt-in only. Touches `lightloom-iobroker`, `lightloom-nvapi`, `host.js`, the daemon and a UI page.
@@ -305,5 +306,5 @@ the WiX installer and issue forms.
 ### Suggested order
 
 - **Now (no user needed):** WP-LOGS, WP-PICKERS, the docs/tools package, WP-L3, WP-L8 in parallel; then WP-MACROS (b), WP-L7 remainder.
-- **Then:** WP-LCD, WP-SENSORS-FANS (fan half), WP-L6, WP-DTLS.
+- **Then:** WP-SENSORS-FANS (fan half), WP-L6, WP-DTLS; WP-LCD remainder once an LCD device is available.
 - **With the user:** WP-SOAK, WP-EVISION-V1, WP-SIGN, WP-LINUX-RUN whenever the hardware, capture, account or machine is available.

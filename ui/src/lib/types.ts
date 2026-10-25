@@ -99,6 +99,31 @@ export interface DeviceView {
   driverProblem?: string;
   /** Where to read about driverProblem. */
   helpUrl?: string;
+  /** The device's LCD, while its plugin drives one. */
+  lcd?: LcdView | null;
+}
+
+/** A device's LCD (docs/host-api/lcd-lightloom.md). */
+export interface LcdView {
+  width: number;
+  height: number;
+  circular: boolean;
+  /** The face shown (null: none installed, a test pattern shows). */
+  face: string | null;
+  framerate: number;
+  /** "cef": the face page renders; "mock": a test pattern (no renderer). */
+  renderer: "cef" | "mock" | string;
+  running: boolean;
+  status?: string | null;
+}
+
+/** An LCD face: an HTML page with onReady(). */
+export interface LcdFace {
+  id: string;
+  title: string;
+  description: string;
+  publisher: string;
+  usesSensors: boolean;
 }
 
 export type ShutdownMode = "restore" | "keep" | "off";
@@ -271,6 +296,8 @@ export interface Snapshot {
   conflicts: string[];
   warnings: string[];
   pawnio: PawnIoView;
+  /** LCD faces devices with a screen can show. */
+  lcdFaces?: LcdFace[];
 }
 
 export interface PawnIoJob {

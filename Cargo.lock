@@ -1491,6 +1491,7 @@ dependencies = [
  "lightloom-engine",
  "lightloom-hal",
  "lightloom-inputs",
+ "lightloom-lcd",
  "lightloom-plugin-host",
  "lightloom-render",
  "lightloom-runtime",
@@ -1595,6 +1596,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightloom-lcd"
+version = "0.0.1"
+dependencies = [
+ "image",
+ "lightloom-engine",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lightloom-nvapi"
 version = "0.0.1"
 dependencies = [
@@ -1611,6 +1622,7 @@ dependencies = [
  "lightloom-engine",
  "lightloom-hal",
  "lightloom-hid-desc",
+ "lightloom-lcd",
  "rquickjs",
  "serde",
  "serde_json",

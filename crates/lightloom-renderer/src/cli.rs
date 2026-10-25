@@ -2,10 +2,12 @@
 //! Command line of the renderer.
 
 use clap::Parser;
+use lightloom_protocol::shm::{CANVAS_HEIGHT, CANVAS_WIDTH};
 use std::path::PathBuf;
 
-/// Render a lightscript offscreen in Chromium (CEF) at 320x200, publish every painted frame into
-/// a memory-mapped shm ring and print paint-interval statistics as JSON.
+/// Render a lightscript offscreen in Chromium (CEF) at 320x200 (or an LCD face at its LCD's
+/// size), publish every painted frame into a memory-mapped shm ring and print paint-interval
+/// statistics as JSON.
 #[derive(Clone, Debug, Parser)]
 #[command(name = "lightloom-renderer", version, about)]
 pub struct Args {
@@ -100,7 +102,23 @@ pub struct Args {
     /// else taken as a string; repeatable).
     #[arg(long = "prop", value_name = "NAME=VALUE", value_parser = parse_prop)]
     pub props: Vec<(String, serde_json::Value)>,
+
+    /// View width in pixels (lightscripts: the 320 canvas; LCD faces: the LCD's width).
+    #[arg(long, default_value_t = CANVAS_WIDTH, value_parser = clap::value_parser!(u32).range(1..=MAX_VIEW_SIDE as i64))]
+    pub width: u32,
+
+    /// View height in pixels (lightscripts: the 200 canvas; LCD faces: the LCD's height).
+    #[arg(long, default_value_t = CANVAS_HEIGHT, value_parser = clap::value_parser!(u32).range(1..=MAX_VIEW_SIDE as i64))]
+    pub height: u32,
+
+    /// The page is an LCD face (docs/host-api/lcd-lightloom.md): after load the engine calls
+    /// `onReady()` instead of `onEngineReady()`.
+    #[arg(long)]
+    pub face: bool,
 }
+
+/// Largest `--width` / `--height` (LCD faces; the biggest LCDs in the corpus are 1920 wide).
+pub const MAX_VIEW_SIDE: u32 = 2048;
 
 fn parse_prop(s: &str) -> Result<(String, serde_json::Value), String> {
     let (name, value) = s
@@ -221,6 +239,7 @@ mod tests {
         assert_eq!(a.fps, 30);
         assert_eq!(a.snapshot_frames, vec![10, 100]);
         assert_eq!(a.deadline(), std::time::Duration::from_secs(30));
+        assert_eq!((a.width, a.height, a.face), (320, 200, false));
         let sw = a.chromium_switches();
         assert!(!sw.contains(&"disable-gpu-compositing".to_string()));
         assert!(sw.contains(&BLOCK_DNS_SWITCH.to_string()));
@@ -298,6 +317,26 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["ozone-platform=x11"]
         );
+    }
+
+    #[test]
+    fn face_size_parses_and_is_bounded() {
+        let a = Args::try_parse_from([
+            "x",
+            "--effect=f.html",
+            "--out=o",
+            "--face",
+            "--width=480",
+            "--height=1920",
+        ])
+        .unwrap();
+        assert_eq!((a.width, a.height, a.face), (480, 1920, true));
+        for bad in ["--width=0", "--height=4096", "--width=-1"] {
+            assert!(
+                Args::try_parse_from(["x", "--effect=e", "--out=o", bad]).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

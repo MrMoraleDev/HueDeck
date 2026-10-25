@@ -2,7 +2,8 @@
 //! The sensor poller: one thread, `lightloom-sensors`, polls the sensor
 //! registry ([`lightloom_runtime::sensors`]) at most once a second, and only
 //! while something reads sensors: the active effect (its parsed
-//! `uses.sensors`, values pushed to the renderer as `engine.sensors`) or a
+//! `uses.sensors`, values pushed to the renderer as `engine.sensors`), an LCD
+//! face that reads them (pushed to its face renderer, `crate::lcd`), or a
 //! client of `GET /v1/sensors` (each request keeps polling on for
 //! [`LEASE`]). Otherwise the thread sleeps and no source is touched; the
 //! sources (NvAPI included) are opened at the first poll (docs/sensors.md).
@@ -38,12 +39,14 @@ struct State {
     polls: u64,
     lease_until: Option<Instant>,
     effect: Option<Arc<Push>>,
+    /// The LCD faces that read sensors.
+    faces: Option<Arc<Push>>,
     stop: bool,
 }
 
 impl State {
     fn wanted(&self, now: Instant) -> bool {
-        self.effect.is_some() || self.lease_until.is_some_and(|t| t > now)
+        self.effect.is_some() || self.faces.is_some() || self.lease_until.is_some_and(|t| t > now)
     }
 }
 
@@ -106,6 +109,19 @@ impl SensorPoller {
             p(engine_data(&st.readings));
         }
         st.effect = push;
+        drop(st);
+        self.inner.wake.notify_all();
+    }
+
+    /// LCD faces read sensors (`Some`: push their values there) or not. The
+    /// last values, when there are any, are pushed at once.
+    pub fn set_faces(&self, push: Option<Push>) {
+        let push = push.filter(|_| self.enabled).map(Arc::new);
+        let mut st = lock(&self.inner.state);
+        if let (Some(p), false) = (&push, st.readings.is_empty()) {
+            p(engine_data(&st.readings));
+        }
+        st.faces = push;
         drop(st);
         self.inner.wake.notify_all();
     }
@@ -201,12 +217,14 @@ fn run(inner: &Inner, interval: Duration, open: Open) {
         st.readings = readings;
         st.polled_at = Some(Instant::now());
         st.polls += 1;
-        let push = st.effect.clone();
-        let data = push.as_ref().map(|_| engine_data(&st.readings));
+        let pushes: Vec<Arc<Push>> = st.effect.iter().chain(st.faces.iter()).cloned().collect();
+        let data = (!pushes.is_empty()).then(|| engine_data(&st.readings));
         drop(st);
         inner.wake.notify_all();
-        if let (Some(push), Some(data)) = (push, data) {
-            push(data);
+        if let Some(data) = data {
+            for push in pushes {
+                push(data.clone());
+            }
         }
         // Wait out the interval (a stop ends it early).
         let st = lock(&inner.state);
@@ -328,6 +346,29 @@ mod tests {
         let a = Arc::clone(&again);
         p.set_effect(Some(Box::new(move |_| *a.lock().unwrap() += 1)));
         assert_eq!(*again.lock().unwrap(), 1);
+        p.set_effect(None);
+        p.stop();
+    }
+
+    #[test]
+    fn faces_get_pushes_alongside_the_effect() {
+        let (p, _, _) = poller(&SensorsConfig::default());
+        let faces: Arc<Mutex<usize>> = Arc::default();
+        let effect: Arc<Mutex<usize>> = Arc::default();
+        let (f, e) = (Arc::clone(&faces), Arc::clone(&effect));
+        p.set_faces(Some(Box::new(move |d| {
+            assert!(d["sensors"]["CPU Load"]["value"].is_number());
+            *f.lock().unwrap() += 1;
+        })));
+        p.set_effect(Some(Box::new(move |_| *e.lock().unwrap() += 1)));
+        let t = Instant::now();
+        while (*faces.lock().unwrap() == 0 || *effect.lock().unwrap() == 0)
+            && t.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(*faces.lock().unwrap() >= 1 && *effect.lock().unwrap() >= 1);
+        p.set_faces(None);
         p.set_effect(None);
         p.stop();
     }

@@ -6,6 +6,7 @@
   import ControlInput from "./ControlInput.svelte";
   import SaveDialog from "./SaveDialog.svelte";
   import BatteryBadge from "./BatteryBadge.svelte";
+  import LcdFacePicker from "./LcdFacePicker.svelte";
   import { groupParameters, groupTitle } from "../lib/params";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
@@ -103,6 +104,7 @@
           {m.message}
         </p>
       {/each}
+      {#if d.lcd}<LcdFacePicker device={d} faces={snapshot.lcdFaces ?? []} />{/if}
       {#if d.battery}
         <label class="check blink"
           ><input

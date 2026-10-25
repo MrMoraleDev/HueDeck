@@ -79,6 +79,9 @@ pub struct CefRendererConfig {
     pub software_compositing: bool,
     /// Where the ring, the CEF profile and the renderer's logs go.
     pub work_dir: PathBuf,
+    /// Render an LCD face of this `(width, height)` instead of a lightscript on the 320x200
+    /// canvas (`--face --width --height`: the page's load sequence ends with `onReady()`).
+    pub face: Option<(u32, u32)>,
 }
 
 /// What the client has seen so far.
@@ -269,10 +272,11 @@ impl RendererClient for CefRenderer {
         if self.thread.is_some() {
             return Err(RenderError::AlreadyRunning);
         }
-        let ring = lightloom_protocol::shm::FrameHeader::new(
+        let (width, height) = self.cfg.face.unwrap_or((
             lightloom_protocol::shm::CANVAS_WIDTH,
             lightloom_protocol::shm::CANVAS_HEIGHT,
-        );
+        ));
+        let ring = lightloom_protocol::shm::FrameHeader::new(width, height);
         if (store.width(), store.height()) != (ring.width, ring.height) {
             return Err(RenderError::SizeMismatch {
                 renderer: (ring.width, ring.height),
@@ -450,6 +454,13 @@ fn spawn(cfg: &CefRendererConfig, shared: &Shared, channel: &RunChannel) -> std:
         .arg(cfg.work_dir.join("renderer-report.json"));
     if cfg.software_compositing {
         cmd.arg("--software-compositing");
+    }
+    if let Some((width, height)) = cfg.face {
+        cmd.arg("--face")
+            .arg("--width")
+            .arg(width.to_string())
+            .arg("--height")
+            .arg(height.to_string());
     }
     for (name, value) in lock(&shared.properties).iter() {
         let v = match value {

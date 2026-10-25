@@ -130,6 +130,8 @@ mod keys {
     pub const URL_SCHEME: &str = "settings.urlScheme";
     /// Black canvas while the PC is locked or the display is off.
     pub const LIGHTS_OFF_WHEN_IDLE: &str = "settings.lightsOffWhenIdle";
+    /// Every device's LCD face and frame rate (`{key: {face, framerate}}`).
+    pub const LCD_FACES: &str = "lcd.faces";
 }
 
 /// Longest a sleep notification waits for the engine (Windows gives sleep
@@ -587,6 +589,10 @@ struct Engine {
     display_off: bool,
     /// The canvas is black for that now.
     idle: bool,
+    /// The LCD devices' face renderers (`@SignalRGB/lcd`).
+    lcd: Arc<crate::lcd::LcdFaces>,
+    /// Sensor values go to the LCD faces (one of them reads sensors).
+    lcd_sensors: bool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -640,7 +646,13 @@ impl Engine {
             },
             ..SessionDefaults::default()
         }));
+        let lcd = Arc::new(crate::lcd::LcdFaces::new(
+            opts.renderer.clone(),
+            opts.paths.renderer_work().join("lcd"),
+        ));
         let mut e = Self {
+            lcd,
+            lcd_sensors: false,
             opts,
             store,
             shared,
@@ -825,6 +837,13 @@ impl Engine {
         drop(d);
         self.reload_channels();
         self.load_player();
+        self.lcd.set_choices(
+            self.store
+                .get::<BTreeMap<String, crate::lcd::LcdChoice>>(keys::LCD_FACES)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+        );
     }
 
     /// The stored component arrays of every device, as instances.
@@ -891,6 +910,14 @@ impl Engine {
         );
         self.effects = effects;
 
+        // LCD faces: Lightloom's starter faces, then the user's (same ids as effects).
+        let mut faces = EffectLibrary::new();
+        if let Some(dir) = paths::resource_dir("faces", "faces") {
+            faces.add_dir(&dir, EffectSource::Lightloom, false);
+        }
+        faces.add_dir(&self.opts.paths.user_faces(), EffectSource::User, false);
+        self.lcd.set_library(faces);
+
         let mut cdirs = Vec::new();
         if self.signalrgb {
             cdirs.extend(lightloom_runtime::signalrgb::component_dirs());
@@ -944,6 +971,7 @@ impl Engine {
         let defaults = Arc::clone(&self.defaults);
         let events = self.shared.events.clone();
         let direct = Arc::clone(&self.shared.direct);
+        let lcd: Arc<dyn lightloom_lcd::LcdProvider> = self.lcd.clone();
         let options: OptionsFn = Box::new(move |device: &SessionDevice, _: &CatalogEntry| {
             let d = lock(&defaults).clone();
             let key = device.key.clone();
@@ -974,6 +1002,7 @@ impl Engine {
                 shutdown_mode: d.shutdown_mode_of(&key),
                 direct: Some(Arc::clone(&direct)),
                 battery_warning_level: d.battery_low,
+                lcd: Some(Arc::clone(&lcd)),
                 ..SessionOptions::default()
             }
         });
@@ -1499,6 +1528,7 @@ impl Engine {
         self.audio = None;
         self.screen = None;
         self.canvas.client().stop();
+        self.lcd.set_software_compositing(!self.gpu);
         if self
             .effect
             .as_deref()
@@ -1528,6 +1558,7 @@ impl Engine {
                     properties: self.store.effect_params(&effect.id).unwrap_or_default(),
                     software_compositing: !self.gpu,
                     work_dir: self.opts.paths.renderer_work(),
+                    face: None,
                 })),
                 _ => Canvas::Null(NullRenderer::new(Pattern::Rainbow, f64::from(fps))),
             }
@@ -1634,6 +1665,7 @@ impl Engine {
                 self.last_stats = Instant::now();
                 self.dirty = true;
                 self.check_batteries();
+                self.follow_lcd_sensors();
             }
             self.tick_player();
             self.poll_services();
@@ -1711,6 +1743,7 @@ impl Engine {
         self.audio = None;
         self.screen = None;
         self.canvas.client().stop();
+        self.lcd.stop_all();
         self.log(format!(
             "system sleep: {} device session(s) shut down (Shutdown(true))",
             stopped.len()
@@ -1748,8 +1781,24 @@ impl Engine {
         }
         self.audio = None;
         self.screen = None;
+        self.shared.sensors.set_faces(None);
+        self.lcd.stop_all();
         self.shared.sensors.stop();
         self.canvas.client().stop();
+    }
+
+    /// Hand sensor values to the LCD faces while one of them reads sensors.
+    fn follow_lcd_sensors(&mut self) {
+        let wanted = self.lcd.uses_sensors();
+        if wanted == self.lcd_sensors {
+            return;
+        }
+        self.lcd_sensors = wanted;
+        let push: Option<crate::sensors::Push> = wanted.then(|| {
+            let lcd = Arc::clone(&self.lcd);
+            Box::new(move |d| lcd.push_sensors(d)) as crate::sensors::Push
+        });
+        self.shared.sensors.set_faces(push);
     }
 
     // --------------------------------------------------------------- snapshot
@@ -1852,6 +1901,7 @@ impl Engine {
                 all
             },
             pawnio: self.pawnio_view(),
+            lcd_faces: self.lcd.faces_view(),
         }
     }
 
@@ -2236,6 +2286,7 @@ impl Engine {
                     })
                     .collect();
             }
+            view.lcd = self.lcd.view(key);
             out.push(view);
         }
         for r in rows {
@@ -2479,6 +2530,23 @@ impl Engine {
                     self.restart_device(&device);
                 }
                 Ok(json!({ "device": device, "channel": channel, "components": array }))
+            }
+            Request::SetLcd { key, face, framerate } => {
+                let choice = self.lcd.select(&key, face, framerate).map_err(|e| {
+                    if e.starts_with("no LCD face") {
+                        ApiError::not_found(e)
+                    } else {
+                        ApiError::bad_request(e)
+                    }
+                })?;
+                self.store
+                    .set(keys::LCD_FACES, &self.lcd.choices())
+                    .map_err(internal)?;
+                Ok(json!({
+                    "key": key,
+                    "face": choice.face,
+                    "framerate": choice.framerate.unwrap_or(crate::lcd::DEFAULT_FRAMERATE),
+                }))
             }
             Request::SetPlacement { uid, placement } => {
                 self.store

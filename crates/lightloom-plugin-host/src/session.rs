@@ -75,6 +75,7 @@ use crate::device::Protocol;
 use crate::device::{
     lock_device, panic_text, Brightness, DeviceContext, IoRecord, IoStats, LogSink, SharedDevice, WriteMode,
 };
+use crate::lcd::{lock_lcd, LcdContext, SharedLcd};
 use crate::meta::{PluginMeta, PluginType};
 use crate::net::{lock_net, NetContext, NetRole, NetStats, SharedNet};
 use crate::plugin_ui::PluginUi;
@@ -404,6 +405,8 @@ pub struct SessionOptions {
     pub direct: Option<Arc<lightloom_engine::DirectLeds>>,
     /// `battery.lowBatteryWarningLevel` (percent).
     pub battery_warning_level: u8,
+    /// Renders the LCD faces of `@SignalRGB/lcd` plugins; `None`: their LCDs show black.
+    pub lcd: Option<Arc<dyn lightloom_lcd::LcdProvider>>,
 }
 
 impl Default for SessionOptions {
@@ -424,6 +427,7 @@ impl Default for SessionOptions {
             shutdown_mode: ShutdownMode::Restore,
             direct: None,
             battery_warning_level: DEFAULT_WARNING_LEVEL,
+            lcd: None,
         }
     }
 }
@@ -605,6 +609,8 @@ pub struct SessionReport {
     pub network: Option<NetStats>,
     /// Serial counters and records (serial devices only).
     pub serial: Option<SerialReport>,
+    /// LCD counters (plugins that called `LCD.initialize` only).
+    pub lcd: Option<crate::lcd::LcdStats>,
     /// The last battery report (plugins with the `battery` feature only).
     pub battery: Option<BatteryStatus>,
     /// Session wall time.
@@ -650,6 +656,7 @@ impl SessionReport {
             smbus: None,
             network: None,
             serial: None,
+            lcd: None,
             battery: None,
             elapsed_ms: 0.0,
         }
@@ -1117,6 +1124,7 @@ fn run(
         g.set_log_sink(Some(Arc::new(move |line: &str| lock_device(&dev).log(line))));
         g.shared()
     });
+    let lcd: SharedLcd = LcdContext::new(&device.key, &meta.name, opts.lcd.clone()).shared();
     if let Err(e) = geometry {
         report.faulted = Some(format!("Size() export rejected: {e}"));
         return finish(report, &shared, None, started);
@@ -1132,6 +1140,7 @@ fn run(
         net: net.clone(),
         controller: device.network.as_ref().map(|t| t.controller.to_string()),
         serial: serial.clone(),
+        lcd: Some(Arc::clone(&lcd)),
         ..RuntimeOptions::default()
     };
     let rt = match PluginRuntime::new(&meta.source_path, &ropts) {
@@ -1258,6 +1267,14 @@ fn run(
         let mut s = lock_serial(s);
         report.serial = Some(s.report());
         s.disconnect();
+    }
+    {
+        // The face renderer stops with the session, not with the runtime.
+        let mut l = lock_lcd(&lcd);
+        if l.stats().spec.is_some() {
+            report.lcd = Some(l.stats().clone());
+        }
+        l.release();
     }
     for (probe, bytes) in lifecycle.before {
         let after = lock_device(&shared)

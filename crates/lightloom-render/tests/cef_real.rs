@@ -36,6 +36,7 @@ fn the_real_renderer_paints_and_takes_controls() {
         // CI runners have no GPU; Ozone headless is software-only anyway.
         software_compositing: true,
         work_dir: work_dir.clone(),
+        face: None,
     });
     let store = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     r.start(Arc::clone(&store)).unwrap();

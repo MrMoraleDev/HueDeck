@@ -37,6 +37,51 @@ pub struct Snapshot {
     pub warnings: Vec<String>,
     /// PawnIO / RAM lighting (Settings).
     pub pawnio: PawnIoView,
+    /// LCD faces devices with a screen can show, by id.
+    #[serde(default)]
+    pub lcd_faces: Vec<LcdFaceView>,
+}
+
+/// An LCD face (docs/host-api/lcd-lightloom.md): an HTML page with `onReady()`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcdFaceView {
+    /// `<source>:<name>` (`lightloom:clock`, `user:my-face`).
+    pub id: String,
+    /// `<title>`.
+    pub title: String,
+    /// `<meta description>`.
+    #[serde(default)]
+    pub description: String,
+    /// `<meta publisher>`.
+    #[serde(default)]
+    pub publisher: String,
+    /// The face reads hardware sensors (`engine.getSensorValue`).
+    #[serde(default)]
+    pub uses_sensors: bool,
+}
+
+/// A device's LCD while its plugin drives it (`LCD.initialize` was called).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LcdView {
+    /// Face width in pixels (what the plugin asked for).
+    pub width: u32,
+    /// Face height in pixels.
+    pub height: u32,
+    /// Round screen.
+    pub circular: bool,
+    /// The face shown (`None`: no face is available, a test pattern is shown).
+    pub face: Option<String>,
+    /// Face frame rate (`lcdFramerate`).
+    pub framerate: u32,
+    /// `cef` (the face page in its own browser) or `mock` (a test pattern: no renderer).
+    pub renderer: String,
+    /// The face renderer runs.
+    pub running: bool,
+    /// Renderer status line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// PawnIO and the Lightloom I/O broker: what RAM lighting needs (Windows).
@@ -375,6 +420,9 @@ pub struct DeviceView {
     /// Where to read about [`DeviceView::driver_problem`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_url: Option<String>,
+    /// The device's LCD, while its plugin drives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lcd: Option<LcdView>,
 }
 
 /// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).
@@ -653,6 +701,16 @@ pub enum Request {
         /// `{"ProductName": ...}` from the library gets a new `ComponentId`).
         components: Vec<Value>,
     },
+    /// Choose a device's LCD face and/or its frame rate (kept per device; a running face
+    /// renderer restarts on the new face).
+    SetLcd {
+        /// Device key.
+        key: String,
+        /// Face id (`""`: back to the default face).
+        face: Option<String>,
+        /// Frames per second, 1-60.
+        framerate: Option<u32>,
+    },
     /// Move an endpoint in the current layout.
     SetPlacement {
         /// Endpoint uid.
@@ -855,6 +913,7 @@ impl Request {
             Request::SetDevice { .. } => "setDevice",
             Request::SaveToDevices { .. } => "saveToDevices",
             Request::SetChannel { .. } => "setChannel",
+            Request::SetLcd { .. } => "setLcd",
             Request::SetPlacement { .. } => "setPlacement",
             Request::ApplyLayout { .. } => "applyLayout",
             Request::SaveLayoutAs { .. } => "saveLayoutAs",

@@ -488,6 +488,44 @@ impl Ui for Console {
 }
 
 /// `lightloom probe msi-gpu-perled`.
+/// The register rows the dump reads (0x20-0x3F, 0x80-0x8F, 0xE0-0xEF). On the RTX 3060
+/// Gaming X Trio (LED type 0x0A) a full 0x00-0xFF sweep left the LED controller answering
+/// nothing until the PC was powered off: reads of 0x40 and 0xF0-0xFF already failed in that
+/// sweep. Everything outside these rows read 0xFF (unimplemented) there.
+pub const DUMP_ROWS: [u8; 4] = [0x2, 0x3, 0x8, 0xE];
+
+/// One byte from every register of [`DUMP_ROWS`], 16 per line; `--` where the read failed.
+/// Reads only.
+pub fn dump(bus: &mut dyn ProbeBus) -> Vec<String> {
+    let mut lines = vec!["     00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F".to_string()];
+    for row in DUMP_ROWS {
+        let mut line = format!("{:02X}: ", row << 4);
+        for col in 0..16u8 {
+            match bus.read((row << 4) | col, 1) {
+                Ok(v) if !v.is_empty() => line.push_str(&format!(" {:02X}", v[0])),
+                _ => line.push_str(" --"),
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+/// `lightloom probe msi-gpu-regs`: the read-only register dump.
+pub fn dump_cli() -> anyhow::Result<crate::run::Outcome> {
+    let _claim =
+        crate::run::claim_smbus_now().map_err(|why| anyhow::anyhow!("GPU I2C is not free: {why}"))?;
+    let mut bus = open_card()?;
+    println!(
+        "card: {} (reads only, address 0x{ADDR:02X})",
+        bus.0.descriptor().name
+    );
+    for line in dump(&mut bus) {
+        println!("{line}");
+    }
+    Ok(crate::run::Outcome::Clean)
+}
+
 pub fn run_cli(args: &PerLedArgs) -> anyhow::Result<crate::run::Outcome> {
     let mut console = Console::new(args.auto);
     let ended = if args.dry_run {
@@ -522,6 +560,36 @@ mod tests {
             dry_run: false,
             static_first: false,
         }
+    }
+
+    /// Counts reads and refuses every write.
+    struct ReadOnly(usize);
+
+    impl ProbeBus for ReadOnly {
+        fn read(&mut self, reg: u8, len: usize) -> Result<Vec<u8>, i32> {
+            self.0 += 1;
+            assert!(
+                DUMP_ROWS.contains(&(reg >> 4)),
+                "read outside the safe rows: 0x{reg:02X}"
+            );
+            Ok(vec![reg; len])
+        }
+        fn write_byte(&mut self, _: u8, _: u8) -> Result<(), i32> {
+            panic!("the dump wrote")
+        }
+        fn write_raw(&mut self, _: &[u8]) -> Result<(), i32> {
+            panic!("the dump wrote")
+        }
+    }
+
+    #[test]
+    fn the_dump_reads_every_register_once_and_writes_nothing() {
+        let mut bus = ReadOnly(0);
+        let lines = dump(&mut bus);
+        assert_eq!(bus.0, 64);
+        assert_eq!(lines.len(), 5);
+        assert!(lines[1].starts_with("20:  20 21 22"), "{}", lines[1]);
+        assert!(lines[4].starts_with("E0:  E0 E1"), "{}", lines[4]);
     }
 
     #[test]

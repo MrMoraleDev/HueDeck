@@ -168,6 +168,9 @@ enum ProbeCommand {
     /// MSI GPU per-LED stream (0x2E/0x49) on the RTX 3060 Gaming X Trio LHR: identify, step
     /// through the 34 slots, colour order, short frame; always leaves with 0x2E <- 0.
     MsiGpuPerled(probe::PerLedArgs),
+    /// Read-only dump of the RTX 3060 Gaming X Trio LHR's LED controller at 0x68: the register
+    /// rows 0x20-0x3F, 0x80-0x8F, 0xE0-0xEF (a full sweep hung the controller). Writes nothing.
+    MsiGpuRegs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -254,6 +257,9 @@ fn dispatch(cli: Cli) -> anyhow::Result<run::Outcome> {
         Command::Probe {
             command: ProbeCommand::MsiGpuPerled(args),
         } => probe::run_cli(&args),
+        Command::Probe {
+            command: ProbeCommand::MsiGpuRegs,
+        } => probe::dump_cli(),
         Command::Udev {
             command: UdevCommand::Generate { plugins, out, check },
         } => {

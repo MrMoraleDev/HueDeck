@@ -25,6 +25,15 @@ runs of `lightloom probe msi-gpu-perled`:
 2. `--static-first` (`0x36 <- 100`, `0x22 <- 0x13`, `0x26 <- 0`, then the same stream). The card
    went static white (colour 1), as in Lightloom's one-colour mode, and no frame changed it.
 
+**Register dump (2026-10-25, reads only).** `lightloom probe msi-gpu-regs` first read every
+register 0x00-0xFF once. Implemented registers: 0x22 = 0x20, 0x23-0x28 = 0, 0x29 = 0xE0,
+0x2A = 0, 0x2B = 0xE0, 0x2C-0x2D = 0, 0x36 = 0x64, 0x37 = 0, 0x38 = 0x02, 0x39 = 0x02, 0x82 = 0x10,
+0xEC = 0x0A. Every other register read 0xFF (unimplemented), 0x40 and 0xF0-0xFF failed. There is no
+hidden per-LED or LED-count register, and 0x04/0x06 (the NV5000 stream) are unimplemented here.
+**Caution:** after that sweep the LED controller answered nothing, neither reads nor writes,
+until the PC was powered off at the supply. The probe now reads only the rows 0x20-0x3F,
+0x80-0x8F and 0xE0-0xEF (`DUMP_ROWS`).
+
 So this controller takes the per-LED stream on the bus and shows nothing of it. MSI's own
 "SignalRGB bridge" sends that stream to every non-NV5000 card, which explains why it exists for
 this card in MSI's code without working. The plugin refuses per-LED mode on LED type `0x0A`

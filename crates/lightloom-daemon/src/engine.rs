@@ -597,6 +597,17 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
     ApiError::internal(e.to_string())
 }
 
+/// Why the plugin cannot reach the device's raw USB side, only for plugins that use it
+/// (rawusb and hybrid); a HID plugin never needs WinUSB, so its device shows no notice.
+fn usb_driver_problem(p: &Present) -> Option<String> {
+    use lightloom_plugin_host::PluginType::{Hybrid, RawUsb};
+    if matches!(p.plugin.meta.plugin_type, RawUsb | Hybrid) {
+        p.device.driver_problem()
+    } else {
+        None
+    }
+}
+
 /// A rawusb device without WinUSB: no session starts, the device list says why.
 fn needs_driver(p: &Present) -> bool {
     p.plugin.meta.plugin_type == lightloom_plugin_host::PluginType::RawUsb
@@ -2166,11 +2177,8 @@ impl Engine {
                     .map(|m| m.as_str().to_string()),
                 battery: self.battery_view(key),
                 blink_low_battery: self.blink.contains(key),
-                driver_problem: p.device.driver_problem(),
-                help_url: p
-                    .device
-                    .driver_problem()
-                    .map(|_| lightloom_hal::usb::WINUSB_HELP_URL.to_string()),
+                driver_problem: usb_driver_problem(p),
+                help_url: usb_driver_problem(p).map(|_| lightloom_hal::usb::WINUSB_HELP_URL.to_string()),
                 ..DeviceView::default()
             };
             if enabled && needs_driver(p) {

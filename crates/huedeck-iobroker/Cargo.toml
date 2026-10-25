@@ -36,3 +36,6 @@ windows-service = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+
+[build-dependencies]
+huedeck-winres = { path = "../huedeck-winres" }

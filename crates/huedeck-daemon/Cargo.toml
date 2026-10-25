@@ -18,6 +18,11 @@ path = "src/lib.rs"
 name = "huedeckd"
 path = "src/main.rs"
 
+# Starts huedeckd without a console window (Start menu, sign-in).
+[[bin]]
+name = "huedeckw"
+path = "src/bin/huedeckw.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -44,3 +49,6 @@ huedeck-runtime = { path = "../huedeck-runtime" }
 
 [dev-dependencies]
 huedeck-hal = { path = "../huedeck-hal", features = ["mock"] }
+
+[build-dependencies]
+huedeck-winres = { path = "../huedeck-winres" }

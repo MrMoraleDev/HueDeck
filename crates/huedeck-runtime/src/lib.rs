@@ -13,6 +13,8 @@
 //!   components, placements, effects);
 //! * [`notify`]: this OS's system notifications (Windows toasts);
 //! * [`dirs`]: HueDeck's data and config directories and the daemon's `api-port` file;
+//! * [`pawnio`]: PawnIO / RAM lighting facts (read-only) and the elevated
+//!   helper run behind the dashboard's Install / Remove buttons;
 //! * [`system`]: machine facts for `@SignalRGB/systeminfo` and the process's memory.
 
 #![forbid(unsafe_code)]
@@ -24,6 +26,7 @@ pub mod hardware;
 pub mod hotplug;
 pub mod lamparray;
 pub mod notify;
+pub mod pawnio;
 pub mod sensors;
 pub mod signalrgb;
 pub mod smbus;

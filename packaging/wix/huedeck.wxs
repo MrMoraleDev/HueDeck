@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!--
+  HueDeck MSI (WiX Toolset v5; built by build.ps1 from the staged build of
+  tools/package/stage-windows.ps1).
+
+  Per-user package: installs to %LOCALAPPDATA%\Programs\HueDeck without
+  administrator rights. The only privileged part, RAM lighting (the PawnIO
+  driver and the HueDeck I/O service), is set up after the install by
+  huedeck-setup.exe behind one UAC prompt, when the user leaves the option
+  checked (see HueDeckUI.wxs and packaging/README.md for why it is not a
+  per-machine package or a Burn bundle). Uninstall removes the I/O service
+  (UAC prompt) and leaves PawnIO, which other programs may use.
+
+  Preprocessor variables (build.ps1 passes them):
+    Version   - product version, x.y.z
+    StageDir  - absolute path of the staged build
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="HueDeck"
+           Manufacturer="HueDeck contributors"
+           Version="$(var.Version)"
+           UpgradeCode="1C9B0603-FD78-41A6-BE05-78B638CDAD01"
+           Scope="perUser"
+           Language="!(loc.Language)"
+           Compressed="yes">
+    <SummaryInformation Description="HueDeck: open source RGB lighting manager" />
+
+    <MajorUpgrade DowngradeErrorMessage="!(loc.Downgrade)" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="HueDeckIcon" SourceFile="huedeck.ico" />
+    <Property Id="ARPPRODUCTICON" Value="HueDeckIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/MrMoraleDev/HueDeck" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/MrMoraleDev/HueDeck/issues" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Options (HueDeckOptionsDlg). Both on by default. -->
+    <Property Id="INSTALLPAWNIO" Value="1" Secure="yes" />
+    <Property Id="AUTOSTART" Value="1" Secure="yes" />
+
+    <!-- Is the I/O service registered? (read-only; every user may read it) -->
+    <Property Id="BROKERINSTALLED" Secure="yes">
+      <RegistrySearch Id="BrokerServiceSearch"
+                      Root="HKLM"
+                      Key="SYSTEM\CurrentControlSet\Services\HueDeckIoBroker"
+                      Name="ImagePath"
+                      Type="raw"
+                      Bitness="always64" />
+    </Property>
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="HueDeck" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="HueDeck" Title="HueDeck" Level="1">
+      <ComponentGroupRef Id="StagedFiles" />
+      <ComponentRef Id="Launcher" />
+      <ComponentRef Id="SetupHelper" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="Autostart" />
+    </Feature>
+
+    <!-- Everything staged (daemon, CLI, renderer + CEF, dashboard, plugins,
+         effects, broker, pinned PawnIO modules with their sources, licences),
+         except the two files referenced below by id. -->
+    <ComponentGroup Id="StagedFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.StageDir)\**">
+        <Exclude Files="$(var.StageDir)\huedeckw.exe" />
+        <Exclude Files="$(var.StageDir)\huedeck-setup.exe" />
+      </Files>
+    </ComponentGroup>
+
+    <Component Id="Launcher" Directory="INSTALLFOLDER">
+      <File Id="HueDeckW" Source="$(var.StageDir)\huedeckw.exe" KeyPath="yes" />
+    </Component>
+
+    <Component Id="SetupHelper" Directory="INSTALLFOLDER">
+      <File Id="HueDeckSetup" Source="$(var.StageDir)\huedeck-setup.exe" KeyPath="yes" />
+    </Component>
+
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="39433945-76BA-48B5-A571-CC4E3DE8E378">
+      <Shortcut Id="StartMenuHueDeck"
+                Name="HueDeck"
+                Description="!(loc.ShortcutDescription)"
+                Target="[#HueDeckW]"
+                Arguments="--open"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="HueDeckIcon" />
+      <RegistryValue Root="HKCU" Key="Software\HueDeck\Installer" Name="StartMenuShortcut"
+                     Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- Start at sign-in, without a window (huedeckw starts huedeckd hidden). -->
+    <Component Id="Autostart" Directory="INSTALLFOLDER" Guid="865B33E0-6407-4651-9548-19D0C4376177"
+               Condition="AUTOSTART = 1">
+      <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="HueDeck"
+                     Type="string" Value="&quot;[#HueDeckW]&quot;" KeyPath="yes" />
+    </Component>
+
+    <!-- After the install (Finish button, see HueDeckUI.wxs): RAM lighting
+         setup through huedeck-setup's own UAC prompt, not waited for, so
+         the installer closes; a declined prompt or a failed download changes
+         nothing and the dashboard offers it again. -->
+    <CustomAction Id="SetUpRamLighting"
+                  FileRef="HueDeckSetup"
+                  ExeCommand="--pawnio-install --smbus --elevate --pause"
+                  Execute="immediate"
+                  Return="asyncNoWait" />
+    <CustomAction Id="LaunchHueDeck"
+                  FileRef="HueDeckW"
+                  ExeCommand="--open"
+                  Execute="immediate"
+                  Return="asyncNoWait" />
+
+    <!-- Before files are replaced or removed: ask a running daemon to stop
+         (its plugins restore the devices). The installed huedeckw.exe is
+         used, so this also works during a major upgrade; nothing to stop on
+         a first install. -->
+    <CustomAction Id="StopHueDeck"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]huedeckw.exe&quot; --stop"
+                  Execute="immediate"
+                  Return="ignore" />
+
+    <!-- Uninstall (not an upgrade): remove the I/O service and its files
+         (UAC prompt). PawnIO stays. -->
+    <CustomAction Id="RemoveRamLighting"
+                  FileRef="HueDeckSetup"
+                  ExeCommand="--smbus --uninstall --elevate --pause"
+                  Execute="immediate"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="StopHueDeck" Before="InstallValidate" Condition="Installed OR WIX_UPGRADE_DETECTED" />
+      <Custom Action="RemoveRamLighting" Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND BROKERINSTALLED" />
+    </InstallExecuteSequence>
+
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+    <UIRef Id="HueDeckUI" />
+  </Package>
+</Wix>

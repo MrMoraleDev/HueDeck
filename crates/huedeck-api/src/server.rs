@@ -14,7 +14,7 @@
 //!   `Authorization: Bearer <token>`, the token from the user's data directory.
 //!   The dashboard page gets it embedded when it is served (same-origin only).
 
-use crate::model::{ApiError, Event, Playlist, Request, Snapshot};
+use crate::model::{ApiError, Event, PawnIoAction, Playlist, Request, Snapshot};
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -217,6 +217,9 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/import/signalrgb", post(import_signalrgb))
         .route("/v1/export", get(export))
         .route("/v1/import", post(import))
+        .route("/v1/pawnio", get(pawnio))
+        .route("/v1/pawnio/install", post(pawnio_install))
+        .route("/v1/pawnio/remove", post(pawnio_remove))
         .route("/v1/rescan", post(rescan))
         .route("/v1/network", get(network))
         .route("/v1/network/{plugin}/add", post(network_add))
@@ -649,6 +652,28 @@ async fn export(State(ctx): State<ApiContext>) -> Response {
 
 async fn import(State(ctx): State<ApiContext>, Json(state): Json<Value>) -> Response {
     reply(ctx.call(Request::Import { state }).await)
+}
+
+async fn pawnio(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::PawnIoStatus).await)
+}
+
+async fn pawnio_install(State(ctx): State<ApiContext>) -> Response {
+    reply(
+        ctx.call(Request::PawnIoSetup {
+            action: PawnIoAction::Install,
+        })
+        .await,
+    )
+}
+
+async fn pawnio_remove(State(ctx): State<ApiContext>) -> Response {
+    reply(
+        ctx.call(Request::PawnIoSetup {
+            action: PawnIoAction::Remove,
+        })
+        .await,
+    )
 }
 
 async fn network(State(ctx): State<ApiContext>) -> Response {

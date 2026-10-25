@@ -27,7 +27,11 @@
 //!   RAM lighting) as `huedeck_hal::SmbusBus` objects; the named-pipe
 //!   transport is Windows only.
 //! * [`pawnio`]: whether the PawnIO driver is installed (its uninstall entry,
-//!   never the device) and what to tell the user.
+//!   never the device), what to tell the user, and the contract with the
+//!   elevated helper `huedeck-setup`.
+//! * [`elevate`] (Windows only): start a program through the UAC prompt
+//!   (`runas`) on an explicit user action, and wait for it.
+//! * [`service`] (Windows only): read-only state of the I/O broker service.
 //! * [`owner`] (Windows only): the named mutex that lets one HueDeck process
 //!   at a time drive SMBus / GPU I2C.
 //!
@@ -52,6 +56,8 @@ pub mod pawnio;
 #[cfg(windows)]
 pub mod console;
 #[cfg(windows)]
+pub mod elevate;
+#[cfg(windows)]
 pub mod hid;
 #[cfg(windows)]
 pub mod hotplug;
@@ -65,6 +71,8 @@ pub mod owner;
 pub mod probe;
 #[cfg(windows)]
 pub mod registry;
+#[cfg(windows)]
+pub mod service;
 #[cfg(windows)]
 pub mod system;
 #[cfg(windows)]

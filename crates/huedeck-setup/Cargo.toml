@@ -2,7 +2,7 @@
 [package]
 publish = false
 name = "huedeck-setup"
-description = "huedeck-setup: one-shot elevated registration of the HueDeck I/O broker service (RAM lighting over SMBus) with its hash-pinned PawnIO modules; does not install PawnIO itself"
+description = "huedeck-setup: the elevated helper of RAM lighting: verified download and silent install of the official PawnIO driver on request, registration of the HueDeck I/O broker service with its hash-pinned PawnIO modules"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,8 +17,14 @@ path = "src/main.rs"
 
 [dependencies]
 huedeck-iobroker = { path = "../huedeck-iobroker" }
+# PawnIO presence, the helper contract (exit codes, arguments), UAC relaunch.
+huedeck-hal-windows = { path = "../huedeck-hal-windows" }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = { workspace = true }
 # The client SID from the process token.
+# WinHTTP download, WinVerifyTrust.
 windows = { workspace = true }
+
+[build-dependencies]
+huedeck-winres = { path = "../huedeck-winres" }

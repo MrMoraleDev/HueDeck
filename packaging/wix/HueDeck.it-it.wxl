@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- HueDeck installer strings, Italian (the stock dialogs come with WixToolset.UI.wixext). -->
+<WixLocalization Culture="it-IT" Codepage="1252" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="Language" Value="1040" />
+  <String Id="Downgrade" Value="È già installata una versione più recente di HueDeck." />
+  <String Id="ShortcutDescription" Value="Apri la dashboard di HueDeck" />
+  <String Id="LaunchHueDeck" Value="Avvia HueDeck adesso" />
+  <String Id="ExitNote" Value="Se hai scelto l'illuminazione di RAM e scheda madre, dopo Fine Windows chiede l'autorizzazione una volta; una finestra mostra ogni passo." />
+  <String Id="OptionsDlg_Title" Value="Installazione di [ProductName]" />
+  <String Id="OptionsDlgTitle" Value="{\WixUI_Font_Title}Opzioni" />
+  <String Id="OptionsDlgDescription" Value="Scegli cosa preparare con HueDeck." />
+  <String Id="PawnIoCheck" Value="Illuminazione RAM e scheda madre (installa il driver PawnIO)" />
+  <String Id="PawnIoText" Value="L'illuminazione di RAM e scheda madre richiede il driver PawnIO, scaricato dalla sua release ufficiale (verificata con SHA-256 e firma) e installato con una sola richiesta di autorizzazione di Windows. Senza, tutto il resto funziona; puoi aggiungerlo dopo dalle Impostazioni." />
+  <String Id="AutostartCheck" Value="Avvia HueDeck all'accesso" />
+  <String Id="AutostartText" Value="HueDeck resta in esecuzione in background, senza finestre." />
+  <String Id="ShortcutText" Value="Un collegamento HueDeck nel menu Start apre la dashboard. HueDeck viene installato solo per te, nella tua cartella utente, senza diritti di amministratore." />
+</WixLocalization>

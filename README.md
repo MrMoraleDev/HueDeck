@@ -31,8 +31,9 @@ and gives you a modern dashboard in your browser.
 </p>
 
 > **Pre-alpha.** HueDeck already drives real hardware with its own plugins, renders
-> effects and has a working dashboard, but there is no installer yet: today you build
-> it from source. Watch the repository to catch the first release.
+> effects and has a working dashboard. A per-user Windows installer (MSI, no administrator
+> rights) is built by the release workflow; until the first release, build it from source.
+> Watch the repository to catch the first release.
 
 ## Why HueDeck
 
@@ -40,7 +41,9 @@ and gives you a modern dashboard in your browser.
   RGB program in the background, no cloud service.
 - **Private by design.** No account, no sign-in, no telemetry, no ads, no "Pro"
   subscription. HueDeck never phones home: its daemon listens only on `127.0.0.1`,
-  and every change needs a token that only your user account can read.
+  and every change needs a token that only your user account can read. The one network
+  access it makes on its own is the optional PawnIO download for RAM lighting
+  ([privacy](docs/privacy.md)).
 - **A dashboard you will enjoy using.** Pick an effect and tune it live, save presets,
   watch a live preview of the canvas and drag your devices into place on a visual
   layout. It runs in any browser, served by HueDeck itself.

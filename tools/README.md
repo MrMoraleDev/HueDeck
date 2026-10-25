@@ -10,7 +10,7 @@ Developer and packaging helpers that are not part of the shipped binaries.
 | `shm-dump/`       | Dump the renderer shared-memory ring (3x 320x200 BGRA + engine data + seq) to PNG/JSON for debugging frame timing | planned |
 | `effects-bench/`  | `bench.py`: paint cadence, errors and memory of effects through `huedeck-renderer` (GPU and software compositing); `psnr.py`: frames against stock Chrome on a frozen harness page (docs/hardware/effects-m3.md) | done (M3) |
 | `device-probe/`   | Probe effect and trace readers for learning a device's lighting protocol from its own traffic (see plugins/README.md) | done |
-| `package/`        | `stage-windows.ps1`: the portable Windows build in one directory (daemon, CLI, renderer + CEF runtime, dashboard, plugins, effects, licenses, Chromium notices); used by the release workflow | done (M4) |
+| `package/`        | `stage-windows.ps1`: the Windows build in one directory (daemon and `huedeckw`, CLI, renderer + CEF runtime, `huedeck-setup` and the I/O broker, dashboard, plugins, effects, licenses, Chromium notices) for the portable zip and the MSI; `fetch-pawnio-modules.ps1`: the PawnIO.Modules 0.2.11 files and sources, SHA-256 pinned; used by the release workflow | done (M4) |
 
 Conventions:
 

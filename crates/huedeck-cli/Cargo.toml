@@ -37,3 +37,6 @@ huedeck-api = { path = "../huedeck-api" }
 # Ctrl-C on Unix; Windows uses huedeck_hal_windows::console (close/log-off/shutdown too).
 [target.'cfg(not(windows))'.dependencies]
 ctrlc = { workspace = true }
+
+[build-dependencies]
+huedeck-winres = { path = "../huedeck-winres" }

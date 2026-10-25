@@ -12,15 +12,19 @@
 //!   reads the same table).
 //! * [`tcp_listener_pids`]: processes listening on a TCP port (the daemon
 //!   leaves SignalRGB's API ports alone while SignalRGB listens on them).
+//! * [`cpu_times`] / [`memory_status`]: system-wide CPU idle/total time and
+//!   physical memory (the `CPU Load` / `RAM Load` sensors).
 
-use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::Foundation::{CloseHandle, FILETIME};
 use windows::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, TCP_TABLE_OWNER_PID_LISTENER};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
-use windows::Win32::System::SystemInformation::{GetSystemFirmwareTable, RSMB};
-use windows::Win32::System::Threading::GetCurrentProcess;
+use windows::Win32::System::SystemInformation::{
+    GetSystemFirmwareTable, GlobalMemoryStatusEx, MEMORYSTATUSEX, RSMB,
+};
+use windows::Win32::System::Threading::{GetCurrentProcess, GetSystemTimes};
 
 /// Executable file names (`SignalRgb.exe`, …) of all running processes, in
 /// snapshot order. Duplicates are kept (one entry per process).
@@ -182,4 +186,25 @@ mod listener_tests {
         drop(l);
         assert!(!tcp_listener_pids(port).unwrap().contains(&std::process::id()));
     }
+}
+
+/// System-wide `(idle, total)` CPU time in 100 ns units since boot, all
+/// cores together (`GetSystemTimes`; kernel time includes idle time).
+pub fn cpu_times() -> Option<(u64, u64)> {
+    let (mut idle, mut kernel, mut user) = (FILETIME::default(), FILETIME::default(), FILETIME::default());
+    // SAFETY: three valid out pointers.
+    unsafe { GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)) }.ok()?;
+    let t = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
+    Some((t(idle), t(kernel) + t(user)))
+}
+
+/// Physical memory `(total, available)` in bytes (`GlobalMemoryStatusEx`).
+pub fn memory_status() -> Option<(u64, u64)> {
+    let mut m = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `dwLength` is set as the API requires; a valid out pointer.
+    unsafe { GlobalMemoryStatusEx(&mut m) }.ok()?;
+    Some((m.ullTotalPhys, m.ullAvailPhys))
 }

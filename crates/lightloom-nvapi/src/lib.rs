@@ -14,6 +14,8 @@
 //!   not cross threads); [`hub::NvapiHub`] hands out one [`bus::NvapiBus`] per GPU.
 //! * [`bus`]: [`lightloom_hal::SmbusBus`] over the hub. NvAPI status codes pass
 //!   through as negative bus statuses, the way SignalRGB plugins see them.
+//! * [`sensors`]: read-only GPU temperature, load, fan speed and clocks as a
+//!   [`lightloom_hal::sensors::SensorBackend`], on the same worker thread.
 //!
 //! Capability notes for the `bus.*` mapping: NvAPI buses have **no
 //! `WriteQuick`**; register-addressed reads are limited to 16 bytes
@@ -37,11 +39,13 @@ mod ffi;
 pub mod hub;
 pub mod ids;
 pub mod info;
+pub mod sensors;
 pub mod status;
 
 pub use bus::NvapiBus;
 pub use hub::{FakeNvI2c, GpuInfo, I2cTransport, NvapiHub};
 pub use info::{I2cOp, I2cPlan};
+pub use sensors::{GpuSensors, NvapiSensors};
 pub use status::NvStatus;
 
 /// DLL name on 64-bit Windows.

@@ -264,6 +264,8 @@ pub struct Shared {
     frames: Arc<FrameStore>,
     /// OpenRGB SDK clients' colours, read by every session.
     direct: Arc<DirectLeds>,
+    /// Hardware sensors (`engine.getSensorValue`, `GET /v1/sensors`).
+    sensors: crate::sensors::SensorPoller,
     shutdown: tokio::sync::Notify,
     power: Sender<PowerSignal>,
 }
@@ -312,6 +314,10 @@ impl Backend for Shared {
 
     fn direct(&self) -> Option<Arc<DirectLeds>> {
         Some(Arc::clone(&self.direct))
+    }
+
+    fn sensors(&self) -> lightloom_api::model::SensorsView {
+        self.sensors.view()
     }
 }
 
@@ -368,6 +374,7 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
         requests: tx,
         frames,
         direct: Arc::new(DirectLeds::new()),
+        sensors: sensor_poller(&opts),
         shutdown: tokio::sync::Notify::new(),
         power,
     });
@@ -387,6 +394,21 @@ pub fn start(opts: EngineOptions) -> anyhow::Result<EngineHandle> {
         stop,
         thread: Some(thread),
     })
+}
+
+/// The sensor poller: this machine's sources on real hardware; without
+/// hardware (tests, `--no-hardware`) the system load and, when configured,
+/// LibreHardwareMonitor only (never NvAPI).
+fn sensor_poller(opts: &EngineOptions) -> crate::sensors::SensorPoller {
+    let cfg = &opts.config.sensors;
+    let options = lightloom_runtime::sensors::SensorOptions {
+        nvapi: cfg.nvapi && matches!(opts.hardware, HardwareMode::Real),
+        lhm_url: cfg.lhm_url.clone(),
+    };
+    crate::sensors::SensorPoller::new(
+        cfg,
+        Box::new(move || lightloom_runtime::sensors::SensorRegistry::open(&options)),
+    )
 }
 
 /// What every new session starts with; the options callback reads it.
@@ -1503,6 +1525,16 @@ impl Engine {
             .as_deref()
             .and_then(|id| self.effects.get(id))
             .map(|e| &e.meta);
+        let sensor_push: Option<crate::sensors::Push> = match (&sink, meta.is_some_and(|m| m.uses.sensors)) {
+            (Some(s), true) => {
+                let s = s.clone();
+                Some(Box::new(move |d| {
+                    s.push(d);
+                }))
+            }
+            _ => None,
+        };
+        self.shared.sensors.set_effect(sensor_push);
         self.screen = crate::screen::feed(&self.opts.config.screen, meta, sink.clone());
         self.audio = crate::audio::feed(&self.opts.config.audio, fps, uses_audio, sink);
         self.canvas = canvas;
@@ -1690,6 +1722,7 @@ impl Engine {
         }
         self.audio = None;
         self.screen = None;
+        self.shared.sensors.stop();
         self.canvas.client().stop();
     }
 
@@ -3245,6 +3278,7 @@ fn effect_uses(e: &lightloom_runtime::effects::EffectFile) -> Vec<String> {
         ("video", u.video),
         ("meters", u.meters),
         ("engine", u.engine),
+        ("sensors", u.sensors),
         ("webgl", u.webgl),
         ("input", u.input),
     ]

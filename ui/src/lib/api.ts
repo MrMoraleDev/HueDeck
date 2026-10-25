@@ -9,6 +9,7 @@ import type {
   Placement,
   Playlist,
   SaveResult,
+  SensorsView,
   ShutdownMode,
   SignalRgbImport,
   Snapshot,
@@ -57,6 +58,7 @@ const enc = encodeURIComponent;
 
 export const api = {
   state: () => request<Snapshot>("GET", "/v1/state"),
+  sensors: () => request<SensorsView>("GET", "/v1/sensors"),
   applyEffect: (id: string) => request("POST", `/v1/effects/${enc(id)}/apply`),
   setEffectValues: (id: string, values: Record<string, unknown>) =>
     request("PATCH", `/v1/effects/${enc(id)}/values`, values),

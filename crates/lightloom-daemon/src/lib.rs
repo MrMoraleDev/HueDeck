@@ -21,6 +21,7 @@ pub mod paths;
 pub mod pawnio;
 pub mod port;
 pub mod screen;
+pub mod sensors;
 pub mod store;
 
 use lightloom_api::ApiContext;

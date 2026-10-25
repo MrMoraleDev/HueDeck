@@ -154,7 +154,7 @@ export interface EffectView {
   /** A third-party effect read in place (SignalRGB's). */
   thirdParty?: boolean;
   /** What the effect reads; "meters" marks game integrations. */
-  uses?: ("audio" | "video" | "meters" | "engine" | "webgl" | "input")[];
+  uses?: ("audio" | "video" | "meters" | "engine" | "sensors" | "webgl" | "input")[];
 }
 
 /** An effect in the SignalRGB import (preview or result). */
@@ -291,6 +291,26 @@ export interface NetworkController {
   canPair: boolean;
   /** The device key once the plugin announced it. */
   device?: string | null;
+}
+
+/** `GET /v1/sensors` (read-only hardware sensors). */
+export interface SensorsView {
+  enabled: boolean;
+  polling: boolean;
+  intervalMs: number;
+  ageMs: number | null;
+  sensors: Sensor[];
+  sources: { name: string; sensors: number; error: string | null }[];
+}
+
+/** One sensor: what `engine.getSensorValue(name)` returns, plus its name. */
+export interface Sensor {
+  name: string;
+  value: number;
+  units: string;
+  min: number;
+  max: number;
+  type: "Temperature" | "Fan" | "Voltage" | "Load" | "Clock" | "Power" | "Other";
 }
 
 export interface NetworkService {

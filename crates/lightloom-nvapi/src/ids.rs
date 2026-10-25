@@ -23,3 +23,14 @@ pub const I2C_READ_EX: u32 = 0x4D7B_0709;
 pub const I2C_WRITE_EX: u32 = 0x283A_C65A;
 /// `NvAPI_SYS_GetDriverAndBranchVersion`.
 pub const SYS_GET_DRIVER_AND_BRANCH_VERSION: u32 = 0x2926_AAAD;
+
+// Read-only sensors (public ids, `nvapi_interface.h`).
+
+/// `NvAPI_GPU_GetThermalSettings`.
+pub const GPU_GET_THERMAL_SETTINGS: u32 = 0xE364_0A56;
+/// `NvAPI_GPU_GetDynamicPstatesInfoEx`.
+pub const GPU_GET_DYNAMIC_PSTATES_INFO_EX: u32 = 0x60DE_D2ED;
+/// `NvAPI_GPU_GetTachReading`.
+pub const GPU_GET_TACH_READING: u32 = 0x5F60_8315;
+/// `NvAPI_GPU_GetAllClockFrequencies`.
+pub const GPU_GET_ALL_CLOCK_FREQUENCIES: u32 = 0xDCB6_16C3;

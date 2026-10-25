@@ -58,6 +58,7 @@
         "video": { "type": "boolean", "default": false },
         "meters": { "type": "boolean", "default": false },
         "engine": { "type": "boolean", "default": false },
+        "sensors": { "type": "boolean", "default": false, "description": "Calls engine.getSensorValue or reads engine.sensors." },
         "webgl": { "type": "boolean", "default": false },
         "input": { "type": "boolean", "default": false }
       },

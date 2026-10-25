@@ -39,6 +39,12 @@
 //! enabled = true                # capture while the active effect reads engine.zone or declares meters
 //! # display = "DISPLAY2"        # display to capture (default: the primary display)
 //! fps = 30                      # capture rate, 10-60
+//!
+//! [sensors]
+//! enabled = true                # read sensors while an effect or the dashboard uses them (read-only; no fan control)
+//! interval_ms = 1000            # poll interval, at least 1000 (1 Hz)
+//! nvapi = true                  # NVIDIA GPU temperature, load, fan, clocks (Windows)
+//! # lhm_url = "http://127.0.0.1:8085/data.json"   # LibreHardwareMonitor's web server (CPU temperature); loopback only
 //! ```
 
 use anyhow::Context;
@@ -69,6 +75,35 @@ pub struct Config {
     pub network: NetworkConfig,
     /// `engine.zone` / `engine.vision` capture.
     pub screen: ScreenConfig,
+    /// Hardware sensors.
+    pub sensors: SensorsConfig,
+}
+
+/// `[sensors]`: read-only hardware sensors for `engine.getSensorValue` and
+/// `GET /v1/sensors` (docs/sensors.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SensorsConfig {
+    /// Poll while an effect or the dashboard reads sensors; `false` never
+    /// polls (effects then see `null`).
+    pub enabled: bool,
+    /// Poll interval in milliseconds, at least 1000.
+    pub interval_ms: u64,
+    /// NVIDIA GPU sensors through NvAPI (Windows).
+    pub nvapi: bool,
+    /// LibreHardwareMonitor's `data.json` URL (loopback only); `None`: not read.
+    pub lhm_url: Option<String>,
+}
+
+impl Default for SensorsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_ms: 1000,
+            nvapi: true,
+            lhm_url: None,
+        }
+    }
 }
 
 /// `[screen]`: display capture for `engine.zone` and `engine.vision` (docs/screen.md).
@@ -258,6 +293,15 @@ mod tests {
             (c.screen.enabled, c.screen.fps, c.screen.display),
             (true, 30, None)
         );
+        assert_eq!(
+            (c.sensors.enabled, c.sensors.interval_ms, c.sensors.lhm_url),
+            (true, 1000, None)
+        );
+        let c: Config =
+            toml::from_str("[sensors]\ninterval_ms = 2000\nlhm_url = 'http://127.0.0.1:8085/data.json'\n")
+                .unwrap();
+        assert_eq!(c.sensors.interval_ms, 2000);
+        assert!(c.sensors.lhm_url.is_some());
         let c: Config = toml::from_str("[screen]\nfps = 60\ndisplay = 'DISPLAY2'\n").unwrap();
         assert_eq!(
             (c.screen.fps, c.screen.display.as_deref()),

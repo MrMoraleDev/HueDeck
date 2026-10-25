@@ -47,6 +47,12 @@ pub trait Backend: Send + Sync + 'static {
     fn direct(&self) -> Option<Arc<lightloom_engine::DirectLeds>> {
         None
     }
+    /// The hardware sensors (`GET /v1/sensors`). Asking keeps polling on for
+    /// a few seconds and may block briefly for a first poll, so the router
+    /// calls it off the async runtime. Default: sensors are not supported.
+    fn sensors(&self) -> crate::model::SensorsView {
+        crate::model::SensorsView::default()
+    }
 }
 
 /// Shared by every router.
@@ -224,6 +230,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/pawnio/install", post(pawnio_install))
         .route("/v1/pawnio/remove", post(pawnio_remove))
         .route("/v1/rescan", post(rescan))
+        .route("/v1/sensors", get(sensors))
         .route("/v1/network", get(network))
         .route("/v1/network/{plugin}/add", post(network_add))
         .route(
@@ -662,6 +669,14 @@ async fn export(State(ctx): State<ApiContext>) -> Response {
 
 async fn import(State(ctx): State<ApiContext>, Json(state): Json<Value>) -> Response {
     reply(ctx.call(Request::Import { state }).await)
+}
+
+async fn sensors(State(ctx): State<ApiContext>) -> Response {
+    let backend = Arc::clone(&ctx.backend);
+    match tokio::task::spawn_blocking(move || backend.sensors()).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => error_response(&ApiError::internal(e.to_string())),
+    }
 }
 
 async fn pawnio(State(ctx): State<ApiContext>) -> Response {

@@ -159,6 +159,7 @@ fn detect_uses(html: &str, has_meters: bool) -> Uses {
         video: html.contains("engine.zone"),
         meters: has_meters || html.contains("engine.vision"),
         engine: html.contains("engine."),
+        sensors: html.contains("getSensorValue") || html.contains("engine.sensors"),
         webgl: lower.contains("webgl"),
         input: html.contains("onCanvasTapped")
             || html.contains("onKeyPressed")
@@ -353,6 +354,18 @@ function onmodeChanged(){}
         );
         assert!(m.uses.video && m.uses.engine);
         assert!(!m.uses.audio && !m.uses.webgl);
+    }
+
+    #[test]
+    fn sensor_flag() {
+        let m = parse_effect_meta(
+            r#"<head><meta property="targetSensor" label="Sensor" type="sensor" default="CPU Load"/></head>
+            <script>var v = engine.getSensorValue(targetSensor);</script>"#,
+        );
+        assert!(m.uses.sensors && m.uses.engine);
+        assert!(!parse_effect_meta(AMBIENCE).uses.sensors);
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["uses"]["sensors"], true);
     }
 
     #[test]

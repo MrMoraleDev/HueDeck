@@ -53,6 +53,28 @@ impl Backend for Scripted {
     fn frames(&self) -> Arc<FrameStore> {
         Arc::clone(&self.frames)
     }
+
+    fn sensors(&self) -> crate::model::SensorsView {
+        crate::model::SensorsView {
+            enabled: true,
+            polling: true,
+            interval_ms: 1000,
+            age_ms: Some(120),
+            sensors: vec![crate::model::SensorView {
+                name: "CPU Load".into(),
+                value: 12.5,
+                units: "%".into(),
+                min: 0.0,
+                max: 100.0,
+                kind: "Load".into(),
+            }],
+            sources: vec![crate::model::SensorSourceView {
+                name: "system".into(),
+                sensors: 1,
+                error: None,
+            }],
+        }
+    }
 }
 
 const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 13, 10, 26, 10, b'f', b'a', b'k', b'e'];
@@ -202,6 +224,20 @@ async fn the_guard_wants_a_loopback_host_the_same_origin_and_a_token_for_changes
             enabled: None
         }
     );
+}
+
+#[tokio::test]
+async fn sensors_need_no_token() {
+    let b = backend();
+    let r = native_router(ctx(&b, false), NATIVE_PORT);
+    let (s, v) = send(&r, "GET", "/v1/sensors", HOST, false, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["intervalMs"], 1000);
+    assert_eq!(
+        v["sensors"][0],
+        json!({ "name": "CPU Load", "value": 12.5, "units": "%", "min": 0.0, "max": 100.0, "type": "Load" })
+    );
+    assert_eq!(v["sources"][0]["name"], "system");
 }
 
 #[tokio::test]

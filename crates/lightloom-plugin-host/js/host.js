@@ -725,7 +725,9 @@ if (deviceMode) {
     },
     getLedCount: () => native.ledCount(),
     getChannelPulseColor: () => PULSE_COLOR,
-    // Lightloom does not drive fans yet; plugins that check this skip fan control.
+    // Lightloom never drives fans (fan control is a future opt-in feature,
+    // docs/sensors.md); plugins that check this skip fan control and their
+    // temperature probes, and the fan API below stays a no-op.
     fanControlDisabled: () => true,
     // Network device sessions get the real `udp` feature; DTLS is not provided.
     addFeature: (name) => {

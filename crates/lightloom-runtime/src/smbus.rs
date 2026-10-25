@@ -36,7 +36,7 @@ pub const BLOCKED: &str = "is running: Lightloom never touches SMBus/GPU I2C alo
 /// The SMBus buses of this machine (kept for the whole run: the NvAPI and ADL workers live here).
 pub struct SmbusHardware {
     buses: Vec<BusHandle>,
-    nvapi: Option<lightloom_nvapi::NvapiHub>,
+    nvapi: Option<std::sync::Arc<lightloom_nvapi::NvapiHub>>,
     adl: Option<lightloom_adl::AdlHub>,
     notes: Vec<String>,
     broker: Option<BrokerHealth>,
@@ -66,7 +66,8 @@ impl SmbusHardware {
             // GPU I2C comes from /dev/i2c-* there (chipset_buses).
             (Vec::new(), None)
         } else {
-            match lightloom_nvapi::NvapiHub::start() {
+            // The process-wide hub: the sensors share its worker thread.
+            match lightloom_nvapi::NvapiHub::shared() {
                 Ok(hub) => {
                     let buses: Vec<BusHandle> = hub
                         .buses()

@@ -13,6 +13,7 @@
 //! * [`hwmon`]: read-only temperatures and fan speeds;
 //! * [`tty`]: serial ports and the USB device behind each from sysfs (nothing
 //!   opened); `LinuxSerialBackend` (Linux only) opens them over `serialport`;
+//! * [`procfs`]: system-wide CPU time and memory (`/proc/stat`, `/proc/meminfo`);
 //! * `hidraw` (Linux only): [`LinuxHidBackend`], report I/O on `/dev/hidrawN`;
 //! * `hotplug` (Linux only): [`HidrawHotplug`], the udev netlink monitor.
 //!
@@ -26,6 +27,7 @@
 
 pub mod hwmon;
 pub mod i2c;
+pub mod procfs;
 pub mod sysfs;
 pub mod tlc;
 pub mod tty;

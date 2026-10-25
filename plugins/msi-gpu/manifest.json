@@ -23,5 +23,6 @@
   "permissions": ["gpu-i2c"],
   "save": { "static": true, "effects": ["spectrum", "breathing"] },
   "shutdownModes": ["restore", "keep", "off"],
+  "hardwareModes": ["static", "rainbow", "raindrop", "magic", "patrolling", "streaming", "lightning", "wave", "meteor", "stack", "rhythm", "flowing", "whirling", "twisting", "laminating", "fadein", "breathing", "flashing", "doubleflashing"],
   "keywords": ["msi", "gpu", "nvidia", "rtx", "mystic light", "i2c", "smbus"]
 }

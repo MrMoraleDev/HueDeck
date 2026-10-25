@@ -13,6 +13,9 @@
 //!   through the sessions' input sink.
 //! * The settings are one database value ([`MACROS_KEY`]), so they travel
 //!   with the export.
+//! * Dashboards follow the runtime through `macros` events carrying the view
+//!   of `GET /v1/macros`, sent when it changed (looked at every
+//!   [`VIEW_EVERY`], and at once after a request), only while a client listens.
 //! * Only real hardware gets this OS's desktop (`SendInput`, the hooks); runs
 //!   without hardware get a recording desktop and no hooks.
 
@@ -31,6 +34,8 @@ use tokio::sync::oneshot;
 pub const MACROS_KEY: &str = "macros";
 /// Longest a macro waits for the engine's answer.
 pub const CALL_WAIT: Duration = Duration::from_secs(5);
+/// How often the macro view is compared with the one last sent (`macros` events).
+pub const VIEW_EVERY: Duration = Duration::from_millis(500);
 
 /// What macro scripts reach of the engine.
 pub(crate) struct EngineLink {
@@ -154,6 +159,9 @@ impl MacroHost for EngineLink {
 pub(super) struct MacroFeed {
     effect: Option<String>,
     layout: String,
+    /// The view last sent in a `macros` event.
+    view: Option<Value>,
+    checked: Option<Instant>,
 }
 
 fn api_error(e: MacroError) -> ApiError {
@@ -218,7 +226,34 @@ impl Engine {
             self.macros.layout_changed(&self.layout.name);
         }
         self.macros.tick();
+        self.follow_macro_sensors();
         self.save_macros();
+        self.publish_macros(false);
+    }
+
+    /// Send a `macros` event when the view changed since the last one: from
+    /// the tick at most every [`VIEW_EVERY`], at once with `now`. Nothing is
+    /// built while no client listens.
+    pub(super) fn publish_macros(&mut self, now: bool) {
+        if !now && self.macro_feed.checked.is_some_and(|t| t.elapsed() < VIEW_EVERY) {
+            return;
+        }
+        self.macro_feed.checked = Some(Instant::now());
+        if self.shared.events.receiver_count() == 0 {
+            self.macro_feed.view = None;
+            return;
+        }
+        let Ok(view) = serde_json::to_value(self.macros.view()) else {
+            return;
+        };
+        if self.macro_feed.view.as_ref() == Some(&view) {
+            return;
+        }
+        self.macro_feed.view = Some(view.clone());
+        let _ = self.shared.events.send(Event {
+            kind: "macros".into(),
+            data: view,
+        });
     }
 
     fn save_macros(&mut self) {
@@ -231,6 +266,13 @@ impl Engine {
 
     /// The macro requests.
     pub(super) fn handle_macros(&mut self, request: Request) -> Result<Value, ApiError> {
+        let answer = self.macro_request(request);
+        self.follow_macro_sensors();
+        self.publish_macros(true);
+        answer
+    }
+
+    fn macro_request(&mut self, request: Request) -> Result<Value, ApiError> {
         let view =
             |e: &Engine| serde_json::to_value(e.macros.view()).map_err(|e| ApiError::internal(e.to_string()));
         match request {

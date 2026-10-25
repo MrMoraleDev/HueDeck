@@ -12,10 +12,14 @@
 //!   Run button, or an Input's `block.trigger()` running the Input's chain of
 //!   Actions) and keeps running.
 //! * Events reach Inputs on a bus: `onApplication` (effect and layout
-//!   changes, lock, sleep and resume from the engine; idle time and process
-//!   start/end polled here), `onKey` / `onMouse` from the low-level hooks and
-//!   from device plugins (`keyboard.sendEvent`, `mouse.sendEvent`). A hook
-//!   event waits at most [`HOOK_WAIT`] for the scripts' answer to swallow it.
+//!   changes, lock, log-off, sleep and resume from the engine; idle time,
+//!   process start/end, the foreground window and the minute polled here),
+//!   `onKey` / `onMouse` from the low-level hooks and from device plugins
+//!   (`keyboard.sendEvent`, `mouse.sendEvent`), `onSensorUpdate` from the
+//!   sensor poller ([`MacroManager::sensor_sink`]). A hook event waits at most
+//!   [`HOOK_WAIT`] for the scripts' answer to swallow it.
+//! * Window titles (`Foreground App Changed`) are handed to the scripts only:
+//!   like keys, they are never logged, nor is what the handler prints.
 //! * The hooks are installed only while macros are on, the user allowed the
 //!   hook ([`MacroConfig::keyboard_hook`], [`MacroConfig::mouse_hook`], off by
 //!   default) and an enabled Input has the handler. Key events are processed
@@ -49,6 +53,22 @@ pub const WATCH_EVERY: Duration = Duration::from_secs(2);
 pub const IDLE_EVERY: Duration = Duration::from_secs(1);
 /// How often running processes are compared.
 pub const PROCESSES_EVERY: Duration = Duration::from_secs(2);
+/// How often the foreground window is looked at (`Foreground App Changed`).
+pub const FOREGROUND_EVERY: Duration = Duration::from_millis(500);
+/// How often the clock is looked at (`System Time` is sent when the minute changes).
+pub const TIME_EVERY: Duration = Duration::from_secs(1);
+/// A second log-off within this time is the same log-off (Windows reports it twice).
+pub const LOGOFF_ONCE: Duration = Duration::from_secs(30);
+/// Day names of `System Time`'s `dayOfWeek`, Monday first.
+const DAYS: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
 /// The key combination that turns macros off.
 pub const EMERGENCY_STOP: &str = "Ctrl + Alt + Shift + F12";
 /// Events queued per script before new ones are dropped.
@@ -64,6 +84,9 @@ pub const MAX_PROMPTS: usize = 16;
 /// URL schemes `system.openUrl` opens besides `http(s)` and `mailto`: chat and
 /// media apps the bundled scripts open (`discord://`, `slack://`, ...).
 pub const APP_SCHEMES: &[&str] = &["discord", "slack", "spotify", "steam", "msteams", "zoommtg"];
+
+/// Where sensor values go ([`MacroManager::sensor_sink`]).
+pub type SensorSink = Arc<dyn Fn(&Map<String, Value>) + Send + Sync>;
 
 /// Action or Input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -273,6 +296,8 @@ enum Cmd {
     Handle {
         handler: &'static str,
         event: Value,
+        /// Nothing the handler prints or throws is logged (keys, window titles).
+        private: bool,
         reply: Option<SyncSender<bool>>,
     },
     Options(Map<String, Value>),
@@ -313,6 +338,18 @@ impl Core {
     /// Send `event` to every running Input with `handler`; with `wait`, collect
     /// their answers for that long and return whether one asked to swallow it.
     fn deliver(&self, handler: &'static str, event: &Value, wait: Option<Duration>) -> bool {
+        let private = handler == "onKey" || handler == "onMouse";
+        self.deliver_as(handler, event, wait, private)
+    }
+
+    /// [`Core::deliver`], with `private` saying whether the handler's output may be logged.
+    fn deliver_as(
+        &self,
+        handler: &'static str,
+        event: &Value,
+        wait: Option<Duration>,
+        private: bool,
+    ) -> bool {
         if !self.enabled.load(Ordering::Acquire) {
             return false;
         }
@@ -333,6 +370,7 @@ impl Core {
             match tx.try_send(Cmd::Handle {
                 handler,
                 event: event.clone(),
+                private,
                 reply,
             }) {
                 Ok(()) => replies.extend(rx),
@@ -752,7 +790,7 @@ impl Natives for WorkerNatives {
         if self.private.load(Ordering::Acquire) {
             if !self.hidden_noted.swap(true, Ordering::AcqRel) {
                 self.log_line(
-                    "console output inside onKey / onMouse is not logged (it could hold typed text)",
+                    "console output inside onKey / onMouse and on Foreground App Changed is not logged (it could hold typed text or window titles)",
                 );
             }
             return;
@@ -836,9 +874,9 @@ fn worker_main(
             Cmd::Handle {
                 handler,
                 event,
+                private,
                 reply,
             } => {
-                let private = handler == "onKey" || handler == "onMouse";
                 natives.private.store(private, Ordering::Release);
                 let r = rt.handle(handler, &event);
                 natives.private.store(false, Ordering::Release);
@@ -879,6 +917,13 @@ pub struct MacroManager {
     last_idle: Instant,
     last_processes: Instant,
     processes: Option<BTreeSet<String>>,
+    last_foreground: Instant,
+    /// The foreground window last reported (`None`: not looked at yet).
+    foreground: Option<u64>,
+    last_time: Instant,
+    /// The minute last seen: `(year, month, day, hour, minute)`.
+    minute: Option<(i32, u8, u8, u8, u8)>,
+    last_logoff: Option<Instant>,
     changed: bool,
 }
 
@@ -919,6 +964,11 @@ impl MacroManager {
             last_idle: Instant::now(),
             last_processes: Instant::now(),
             processes: None,
+            last_foreground: Instant::now(),
+            foreground: None,
+            last_time: Instant::now(),
+            minute: None,
+            last_logoff: None,
             changed: false,
         }
     }
@@ -927,6 +977,29 @@ impl MacroManager {
     pub fn input_sink(&self) -> InputSink {
         let core = Arc::clone(&self.core);
         Arc::new(move |_device: &str, input| core.plugin(input))
+    }
+
+    /// Where the sensor poller's values go (`onSensorUpdate`): the poller's
+    /// `{"sensors": {name: {value, units, min, max, type}}}`. Callable from any
+    /// thread; nothing is sent while macros are off.
+    pub fn sensor_sink(&self) -> SensorSink {
+        let core = Arc::clone(&self.core);
+        Arc::new(move |data| {
+            let e = envelope(
+                "SensorUpdate",
+                "Sensor Update",
+                "SignalRGB",
+                "Sensors",
+                Value::Object(data.clone()),
+            );
+            core.deliver("onSensorUpdate", &e, None);
+        })
+    }
+
+    /// Whether an enabled Input listens for sensor values (poll the sensors
+    /// for macros only while this is `true`).
+    pub fn wants_sensors(&self) -> bool {
+        self.config.enabled && self.running_with("onSensorUpdate")
     }
 
     /// The settings to persist.
@@ -1365,6 +1438,15 @@ impl MacroManager {
         self.application(t, "SignalRGB", "System", json!({}));
     }
 
+    /// The user is logging off (`System Logoff`); a repeat within [`LOGOFF_ONCE`] is dropped.
+    pub fn system_logoff(&mut self) {
+        if self.last_logoff.is_some_and(|t| t.elapsed() < LOGOFF_ONCE) {
+            return;
+        }
+        self.last_logoff = Some(Instant::now());
+        self.application("System Logoff", "SignalRGB", "System", json!({}));
+    }
+
     /// Housekeeping, called often by the engine: the emergency stop, triggered
     /// chains, ended scripts, the folder watch and the polled events.
     pub fn tick(&mut self) {
@@ -1409,6 +1491,8 @@ impl MacroManager {
         }
         if !self.config.enabled || !self.running_with("onApplication") {
             self.processes = None;
+            self.foreground = None;
+            self.minute = None;
             return;
         }
         if self.last_idle.elapsed() >= IDLE_EVERY {
@@ -1426,6 +1510,59 @@ impl MacroManager {
             self.last_processes = Instant::now();
             self.poll_processes();
         }
+        if self.last_foreground.elapsed() >= FOREGROUND_EVERY {
+            self.last_foreground = Instant::now();
+            self.poll_foreground();
+        }
+        if self.last_time.elapsed() >= TIME_EVERY {
+            self.last_time = Instant::now();
+            self.poll_time();
+        }
+    }
+
+    /// Look at the foreground window (`Foreground App Changed` when another
+    /// window came to the front, and for the first look). The title goes to the
+    /// scripts only; the handlers' output is not logged.
+    pub fn poll_foreground(&mut self) {
+        let Some(app) = self.core.desktop.foreground() else {
+            return;
+        };
+        if self.foreground == Some(app.window) {
+            return;
+        }
+        self.foreground = Some(app.window);
+        let e = envelope(
+            "Application",
+            "Foreground App Changed",
+            "SignalRGB",
+            "Context",
+            json!({ "exe": app.exe, "title": app.title }),
+        );
+        self.core.deliver_as("onApplication", &e, None, true);
+    }
+
+    /// Look at the clock (`System Time` when the minute changed since the last
+    /// look; the first look only notes it).
+    pub fn poll_time(&mut self) {
+        let t = self.core.desktop.local_time();
+        let minute = (t.year, t.month, t.day, t.hour, t.minute);
+        let before = self.minute.replace(minute);
+        if before.is_none() || before == Some(minute) {
+            return;
+        }
+        self.application(
+            "System Time",
+            "SignalRGB",
+            "Input",
+            json!({
+                "currentTime": format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second),
+                "currentDate": format!("{:04}-{:02}-{:02}", t.year, t.month, t.day),
+                "dayOfWeek": DAYS[usize::from(t.weekday.clamp(1, 7) - 1)],
+                "dayOfWeekNumber": t.weekday,
+                "hour": t.hour,
+                "minute": t.minute,
+            }),
+        );
     }
 
     /// Compare the running processes with the last look (`Process Started`, `Process Ended`).
@@ -1573,8 +1710,12 @@ fn inspect(dir: &ScriptDir, path: &Path) -> ScriptInfo {
             (Kind::Action, "input") => Some("an Input script in the Actions folder".into()),
             (Kind::Input, "action") => Some("an Action script in the Inputs folder".into()),
             (Kind::Action, _) if !has("onExecute") => Some("Missing execute callback.".into()),
-            (Kind::Input, _) if !["onApplication", "onKey", "onMouse"].iter().any(|h| has(h)) => {
-                Some("Input has no handler (onApplication, onKey or onMouse)".into())
+            (Kind::Input, _)
+                if !["onApplication", "onKey", "onMouse", "onSensorUpdate"]
+                    .iter()
+                    .any(|h| has(h)) =>
+            {
+                Some("Input has no handler (onApplication, onKey, onMouse or onSensorUpdate)".into())
             }
             _ => None,
         };

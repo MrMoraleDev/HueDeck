@@ -40,6 +40,12 @@ export function SetHardwareMode(request) {
   mode without them. The plugin gets colours as `[r, g, b]`.
 * `SetHardwareMode(null)` must put the device back in the mode `Render()` streams to; the next frame is
   sent whole. It is only called when the device runs a hardware mode.
+* `manifest.json` repeats the mode ids, in order, as `hardwareModes`
+  (`schemas/plugin-manifest-v2.schema.json`), so a catalog can show them without running the plugin.
+  The plugin lint (`sdk/lint`) reads `HardwareModes()` in its mock run the way the host does (entries the
+  host would drop are warnings) and reports `hardware-modes-mismatch` when the ids differ from
+  `hardwareModes`, and `hardware-modes-without-export` for modes without a `SetHardwareMode` export.
+  `plugins/_testkit/manifests.test.mjs` runs the lint over every first-party plugin.
 
 ## What the host guarantees
 

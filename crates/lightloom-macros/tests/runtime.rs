@@ -135,7 +135,7 @@ fn scripts_are_listed_with_options_and_errors() {
     assert_eq!(v["enabled"], false);
     assert_eq!(v["emergencyStop"], "Ctrl + Alt + Shift + F12");
     let scripts = v["scripts"].as_array().unwrap();
-    assert_eq!(scripts.len(), 6);
+    assert_eq!(scripts.len(), 7);
     let by = |id: &str| {
         scripts
             .iter()
@@ -433,5 +433,127 @@ fn application_events_carry_both_casings_and_folders_are_watched() {
         "restarted"
     );
     assert!(!r.m.watch());
+    let _ = std::fs::remove_dir_all(&r.root);
+}
+
+#[test]
+fn time_logoff_foreground_and_sensor_events() {
+    use lightloom_hal::input::{ForegroundApp, LocalTime};
+    let mut r = rig("context");
+    r.m.update_settings(Some(true), None, None, None);
+    r.m.update_script("user:input:Effect Watch", Some(true), None, None)
+        .unwrap();
+    assert!(!r.m.wants_sensors(), "nobody listens for sensors yet");
+    r.m.update_script(
+        "user:input:Context Watch",
+        Some(true),
+        None,
+        Some(vec!["user:action:Brightness".into()]),
+    )
+    .unwrap();
+    assert!(r.m.wants_sensors());
+
+    // System Time: the first look only notes the minute; a new minute is sent.
+    let at = |minute: u8, second: u8| LocalTime {
+        year: 2026,
+        month: 10,
+        day: 25,
+        hour: 21,
+        minute,
+        second,
+        weekday: 7,
+    };
+    r.desktop.set_time(Some(at(59, 58)));
+    r.m.poll_time();
+    r.desktop.set_time(Some(at(59, 59)));
+    r.m.poll_time();
+    r.desktop.set_time(Some(LocalTime { hour: 22, ..at(0, 1) }));
+    r.m.poll_time();
+    // A second log-off right after the first is the same one.
+    r.m.system_logoff();
+    r.m.system_logoff();
+    wait("time and log-off", || {
+        let l = lines(&r.engine);
+        l.iter().any(|x| x.contains("|System Logoff|")) && l.iter().any(|x| x.contains("|System Time|"))
+    });
+    let l = lines(&r.engine);
+    let time: Vec<&String> = l.iter().filter(|x| x.contains("|System Time|")).collect();
+    assert_eq!(time.len(), 1, "{l:?}");
+    assert!(
+        time[0].ends_with(r#"{"currentDate":"2026-10-25","currentTime":"22:00:01","dayOfWeek":"Sunday","dayOfWeekNumber":7,"hour":22,"minute":0}"#),
+        "{time:?}"
+    );
+    assert_eq!(
+        l.iter().filter(|x| x.contains("|System Logoff|true|{}")).count(),
+        1,
+        "{l:?}"
+    );
+
+    // Foreground App Changed: once per window; the title reaches the script, never the log.
+    let brightness = |e: &Engine| {
+        e.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| **c == EngineCall::Brightness(40))
+            .count()
+    };
+    let window = |id: u64, exe: &str, title: &str| ForegroundApp {
+        window: id,
+        exe: exe.into(),
+        title: title.into(),
+    };
+    r.desktop
+        .set_foreground(Some(window(42, "notepad.exe", "Secret plans")));
+    r.m.poll_foreground();
+    wait("the foreground trigger", || {
+        r.m.tick();
+        brightness(&r.engine) == 1
+    });
+    // The same window again: no event; another window, then notepad again: one more.
+    r.m.poll_foreground();
+    r.desktop.set_foreground(Some(window(43, "code.exe", "Other")));
+    r.m.poll_foreground();
+    r.desktop
+        .set_foreground(Some(window(42, "notepad.exe", "Secret plans")));
+    r.m.poll_foreground();
+    wait("the second trigger", || {
+        r.m.tick();
+        brightness(&r.engine) >= 2
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    r.m.tick();
+    assert_eq!(brightness(&r.engine), 2, "one event per window change");
+    let l = lines(&r.engine);
+    // Effect Watch logs every application event it gets: the foreground ones stay private.
+    assert!(
+        !l.iter()
+            .any(|x| x.contains("Secret plans") || x.contains("Other") || x.contains("|Foreground")),
+        "titles are never logged: {l:?}"
+    );
+    assert!(
+        l.iter().any(|x| x.contains("is not logged")),
+        "the note says why: {l:?}"
+    );
+
+    // onSensorUpdate from the poller's sink.
+    let sink = r.m.sensor_sink();
+    let data = json!({"sensors": {"CPU Load": {"value": 12.5, "units": "%", "min": 0.0, "max": 100.0, "type": "Load"}}});
+    sink(data.as_object().unwrap());
+    wait("the sensor update", || {
+        lines(&r.engine)
+            .iter()
+            .any(|x| x == "[Context Watch] SensorUpdate|Sensor Update|SignalRGB|12.5%")
+    });
+
+    // Macros off: nothing more is sent, and nothing wants sensors.
+    r.m.update_settings(Some(false), None, None, None);
+    assert!(!r.m.wants_sensors());
+    let before = lines(&r.engine).len();
+    sink(data.as_object().unwrap());
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(lines(&r.engine)[before..]
+        .iter()
+        .all(|x| !x.contains("Sensor Update")));
     let _ = std::fs::remove_dir_all(&r.root);
 }

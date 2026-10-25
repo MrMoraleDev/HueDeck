@@ -168,3 +168,97 @@ fn user_actions_run_through_the_engine() {
     handle.shutdown();
     let _ = std::fs::remove_dir_all(&home);
 }
+
+const WATCH: &str = r#"
+export function Input() {
+  this.Name = "Watch";
+  this.Description = "Logs log-off and sensor updates";
+  this.Options = [];
+  this.onApplication = function (event) {
+    if (event.EventType === "System Logoff") console.log(`logoff ${event.Sender}/${event.SenderType}`);
+  };
+  this.onSensorUpdate = function (event) {
+    console.log(`sensors ${typeof event.data.sensors}`);
+  };
+}
+"#;
+
+/// `macros` events follow the runtime; a log-off and the sensor poller reach Inputs.
+#[test]
+fn macro_events_logoff_and_sensors_reach_inputs() {
+    use lightloom_hal::PowerEvent;
+    let home = std::env::temp_dir().join(format!("lightloom-macros-events-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join("effects")).unwrap();
+    let inputs = Paths::under(&home).config.join("macroscripts").join("Inputs");
+    std::fs::create_dir_all(&inputs).unwrap();
+    std::fs::write(inputs.join("Watch.js"), WATCH).unwrap();
+    let id = "user:input:Watch";
+
+    let handle = engine::start_with_desktop(
+        options(&home),
+        UrlScheme::unavailable(),
+        Some(RecordingDesktop::new()),
+    )
+    .unwrap();
+    let shared = handle.shared();
+    let b: &dyn Backend = &*shared;
+    let mut events = b.subscribe();
+    call(
+        b,
+        Request::SetMacros {
+            enabled: Some(true),
+            keyboard_hook: None,
+            mouse_hook: None,
+            allow_launch: None,
+        },
+    )
+    .unwrap();
+    call(
+        b,
+        Request::SetMacro {
+            id: id.into(),
+            enabled: Some(true),
+            options: None,
+            actions: None,
+        },
+    )
+    .unwrap();
+    let power = shared.power_sink();
+    power(PowerEvent::Logoff);
+    power(PowerEvent::Logoff);
+
+    let (mut running, mut logoffs, mut sensors) = (false, 0, false);
+    let end = Instant::now() + Duration::from_secs(20);
+    while !(running && logoffs >= 1 && sensors) {
+        assert!(
+            Instant::now() < end,
+            "timed out: running {running}, logoffs {logoffs}, sensors {sensors}"
+        );
+        match events.try_recv() {
+            Ok(e) if e.kind == "macros" => {
+                running |= e.data["scripts"]
+                    .as_array()
+                    .is_some_and(|s| s.iter().any(|s| s["id"] == id && s["running"] == true));
+            }
+            Ok(e) if e.kind == "log" => {
+                let line = e.data.as_str().unwrap_or_default();
+                if line == "[macro Watch] logoff SignalRGB/System" {
+                    logoffs += 1;
+                }
+                sensors |= line == "[macro Watch] sensors object";
+            }
+            Ok(_) => {}
+            Err(_) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(e) = events.try_recv() {
+        if e.kind == "log" && e.data == "[macro Watch] logoff SignalRGB/System" {
+            logoffs += 1;
+        }
+    }
+    assert_eq!(logoffs, 1, "a repeated log-off is the same one");
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(&home);
+}

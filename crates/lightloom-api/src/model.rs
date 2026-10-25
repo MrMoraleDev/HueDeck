@@ -208,6 +208,10 @@ pub struct LcdFaceView {
     /// The face reads hardware sensors (`engine.getSensorValue`).
     #[serde(default)]
     pub uses_sensors: bool,
+    /// `<meta property>` controls (effect-meta schema shape), set per device with
+    /// `PUT /v1/devices/{key}/lcd` `{values}`.
+    #[serde(default)]
+    pub controls: Vec<Value>,
 }
 
 /// A device's LCD while its plugin drives it (`LCD.initialize` was called).
@@ -231,6 +235,9 @@ pub struct LcdView {
     /// Renderer status line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// The device's control values for the face shown (the others keep their defaults).
+    #[serde(default)]
+    pub values: Map<String, Value>,
 }
 
 /// PawnIO and the Lightloom I/O broker: what RAM lighting needs (Windows).
@@ -1064,8 +1071,9 @@ pub enum Request {
         /// `{"ProductName": ...}` from the library gets a new `ComponentId`).
         components: Vec<Value>,
     },
-    /// Choose a device's LCD face and/or its frame rate (kept per device; a running face
-    /// renderer restarts on the new face).
+    /// Choose a device's LCD face, its frame rate and/or the face's control values (kept
+    /// per device; a running face renderer restarts on a new face or rate, new values
+    /// reach it live).
     SetLcd {
         /// Device key.
         key: String,
@@ -1073,6 +1081,9 @@ pub enum Request {
         face: Option<String>,
         /// Frames per second, 1-60.
         framerate: Option<u32>,
+        /// Control values of the face the device shows (after `face`), by property.
+        #[serde(default)]
+        values: Option<Map<String, Value>>,
     },
     /// The LED painter's view of a device's endpoints ([`LedMapView`]).
     LedMap {
@@ -1484,7 +1495,8 @@ pub struct Event {
     /// or `action` (an action URL for the dashboard: `{action: "view", page, tab, uid}`,
     /// `{action: "raiseWindow"}` or `{action: "toast", title, message}`; a macro's
     /// `system.prompt`: `{action: "prompt", id, script, title, message, placeholder,
-    /// confirmText, cancelText}`, answered with `POST /v1/macros/prompts/{id}`).
+    /// confirmText, cancelText}`, answered with `POST /v1/macros/prompts/{id}`),
+    /// or `macros` (the macro runtime changed: the view of `GET /v1/macros`).
     pub kind: String,
     /// Event payload (`log`: the line).
     #[serde(default, skip_serializing_if = "Value::is_null")]

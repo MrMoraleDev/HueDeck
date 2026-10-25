@@ -132,6 +132,7 @@ pub const NATIVE_ROUTES: &[Route] = &[
     r("PATCH", "/devices/{key}", true),
     r("PUT", "/devices/{key}/channels/{channel}", true),
     r("PUT", "/devices/{key}/lcd", true),
+    r("GET", "/devices/{key}/lcd/preview", false),
     r("PUT", "/devices/{key}/mode", true),
     r("GET", "/devices/{key}/leds", false),
     r("PATCH", "/devices/{key}/leds/{uid}", true),

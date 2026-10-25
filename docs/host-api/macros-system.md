@@ -11,10 +11,11 @@ Evidence base (all read-only): 48 macroscript files (`%USERPROFILE%\AppData\Loca
 > methods mapped onto the engine, `keys`, `mouse.click`, `block.trigger`, `console`. Refused calls
 > throw `MacroRefused`. Events carry `EventHandler`, `Sender`, `SenderType`, `EventType` and the
 > payload under both `data` and `Data`. Emitted: Effect Changed, Layout Changed, Session Lock,
-> System Suspend / Resume, System Idle Time, Process Started / Ended, key and mouse events from the
-> opt-in hooks and from device plugins' `keyboard` / `mouse` features. Not implemented: layers,
-> Tier-1 native rules, `onSensorUpdate`, System Time / Logoff, Foreground App Changed, Audio
-> Capture. User scripts live in `<config>/macroscripts/{Actions,Inputs}`; an Input's chain of
+> System Suspend / Resume / Logoff, System Idle Time, System Time (each new minute), Process
+> Started / Ended, Foreground App Changed (`exe`, `title`; never logged), key and mouse events
+> from the opt-in hooks and from device plugins' `keyboard` / `mouse` features, and
+> `onSensorUpdate` from the sensor poller (Lightloom's own shape, `{sensors: {...}}`; SignalRGB
+> 2.5.80 has no emitter). Not implemented: layers, Tier-1 native rules, Audio Capture. User scripts live in `<config>/macroscripts/{Actions,Inputs}`; an Input's chain of
 > Actions replaces SignalRGB's macroblocks. Emergency stop: `Ctrl + Alt + Shift + F12`.
 
 ---

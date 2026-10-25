@@ -5,7 +5,9 @@
 //! * [`WindowsDesktop`]: `SendInput` (keys by virtual-key code or as UTF-16
 //!   characters, mouse buttons, the wheel), the clipboard (`CF_UNICODETEXT`),
 //!   `ShellExecuteW("open")` for URLs, programs started directly (no shell),
-//!   `GetLastInputInfo` and the running process names.
+//!   `GetLastInputInfo`, the running process names, the foreground window
+//!   (`GetForegroundWindow`, its process image name and title, read only when
+//!   asked: nothing is logged) and `GetLocalTime`.
 //! * [`LowLevelHooks`]: `WH_KEYBOARD_LL` / `WH_MOUSE_LL` on a thread of their
 //!   own that pumps messages. Every event goes to the sink, which answers at
 //!   once whether to swallow it; Windows drops a hook whose procedure is slow
@@ -15,17 +17,23 @@
 //! the hooks let it through without showing it to the sink, so a macro that
 //! presses the key it listens for cannot loop. Hooks never log keys.
 
-use lightloom_hal::input::{Desktop, HookEvent, HookSink, InputHook, MouseButton, SynthInput};
+use lightloom_hal::input::{
+    Desktop, ForegroundApp, HookEvent, HookSink, InputHook, LocalTime, MouseButton, SynthInput,
+};
 use lightloom_hal::{HalError, HalResult};
 use std::cell::RefCell;
 use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
+use windows::core::PWSTR;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-use windows::Win32::System::SystemInformation::GetTickCount;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount};
+use windows::Win32::System::Threading::{
+    GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetLastInputInfo, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
     KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, LASTINPUTINFO, MOUSEEVENTF_HWHEEL,
@@ -35,11 +43,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP,
-    LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, SW_SHOWNORMAL, WHEEL_DELTA, WH_KEYBOARD_LL, WH_MOUSE_LL,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowTextW,
+    GetWindowThreadProcessId, PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+    HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP, LLMHF_INJECTED, MSG,
+    MSLLHOOKSTRUCT, SW_SHOWNORMAL, WHEEL_DELTA, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 /// `dwExtraInfo` of the input Lightloom injects ("LLMC").
@@ -243,6 +252,58 @@ impl Desktop for WindowsDesktop {
     fn processes(&self) -> Option<Vec<String>> {
         crate::system::running_process_names().ok()
     }
+
+    fn foreground(&self) -> Option<ForegroundApp> {
+        // SAFETY: no arguments; a null handle means no window has the focus.
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let mut title = [0u16; 512];
+        // SAFETY: a window handle (it may close meanwhile: then 0) and a buffer of its length.
+        let n = unsafe { GetWindowTextW(hwnd, &mut title) }.max(0) as usize;
+        let mut pid = 0u32;
+        // SAFETY: as above; `pid` is written.
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        Some(ForegroundApp {
+            window: hwnd.0 as usize as u64,
+            exe: image_name(pid).unwrap_or_default(),
+            title: String::from_utf16_lossy(&title[..n.min(title.len())]),
+        })
+    }
+
+    fn local_time(&self) -> LocalTime {
+        // SAFETY: no arguments.
+        let t = unsafe { GetLocalTime() };
+        LocalTime {
+            year: i32::from(t.wYear),
+            month: t.wMonth as u8,
+            day: t.wDay as u8,
+            hour: t.wHour as u8,
+            minute: t.wMinute as u8,
+            second: t.wSecond as u8,
+            // SYSTEMTIME counts from Sunday = 0.
+            weekday: if t.wDayOfWeek == 0 { 7 } else { t.wDayOfWeek as u8 },
+        }
+    }
+}
+
+/// The image name (`notepad.exe`) of process `pid`, when it may be queried.
+fn image_name(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    // SAFETY: plain call; the handle is closed below.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    // SAFETY: an open process handle and a buffer of `len` units.
+    let r = unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len) };
+    // SAFETY: opened above, closed once.
+    let _ = unsafe { CloseHandle(h) };
+    r.ok()?;
+    let path = String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())]);
+    path.rsplit(['\\', '/']).next().map(str::to_string)
 }
 
 // ------------------------------------------------------------------ hooks
@@ -506,6 +567,19 @@ mod tests {
             assert_eq!(r[3].Anonymous.mi.mouseData, XBUTTON2);
             assert_eq!(r[4].Anonymous.mi.mouseData as i32, -240);
         }
+    }
+
+    #[test]
+    fn image_names_are_file_names() {
+        // Our own process only: no other window or process is looked at.
+        let me = image_name(std::process::id()).expect("our own image name");
+        assert!(
+            me.to_ascii_lowercase().ends_with(".exe") && !me.contains(['\\', '/']),
+            "{me}"
+        );
+        assert_eq!(image_name(0), None);
+        let t = WindowsDesktop.local_time();
+        assert!((1..=7).contains(&t.weekday) && (1..=12).contains(&t.month) && t.hour < 24);
     }
 
     #[test]

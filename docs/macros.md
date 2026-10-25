@@ -33,7 +33,13 @@ import anything. There is no `window`, `setTimeout` or `Image`.
 - **Actions**: set their options and press **Run** to try one.
 - Option values are checked against their type (a number within its range, a combobox key
   it lists, a key combination like `Ctrl + Shift + F1`) and saved; they travel with the
-  settings export.
+  settings export. A `layoutname` option picks one of the saved layouts and a `profilename`
+  option one of the saved profiles (a name that is gone stays, marked "missing", until
+  changed).
+- The page follows the runtime live: the daemon sends a `macros` event with the new view
+  when something changes (a script starts or stops, fails, a folder changes, a hook comes
+  or goes), and the page updates only what changed. It loads the view again after a
+  reconnect and when the browser tab becomes visible.
 
 ## What scripts can do
 
@@ -67,15 +73,28 @@ second name for `data` (scripts use both spellings).
 | `Layout Changed` | the layout changed | `LayoutName` |
 | `Session Lock` | the PC was locked or unlocked | `locked` |
 | `System Suspend`, `System Resume` | sleep and wake | none |
+| `System Logoff` | the user logs off (Windows: `WTS_SESSION_LOGOFF`, `WM_ENDSESSION`; once per log-off) | none |
 | `System Idle Time` | every second | `idleTime` (seconds) |
+| `System Time` | the local minute changed (checked every second) | `currentTime` (`HH:mm:ss`), `currentDate` (`yyyy-MM-dd`), `dayOfWeek` (`Monday`...), `dayOfWeekNumber` (1 Monday - 7 Sunday), `hour`, `minute` |
 | `Process Started`, `Process Ended` | a program started or ended (checked every 2 s) | `exeName` |
+| `Foreground App Changed` | another window came to the front (checked every 0.5 s; also the first look) | `exe` (image name, `""` when it cannot be read), `title` |
 | key (`onKey`) | keyboard hook or device plugin | `key`, `keyCode`, `released`, `shift`, `control`, `alt`, `win`, `keyString`, `injected` |
 | mouse (`onMouse`) | mouse hook or device plugin | `button`, `buttonCode`, `released`, `injected` |
+| sensors (`onSensorUpdate`) | every sensor poll (at most once a second, docs/sensors.md) | `sensors`: `{name: {value, units, min, max, type}}` |
 
-Idle time and processes are polled only while an enabled Input has `onApplication`.
-Returning `true` from `onKey` / `onMouse` swallows the key or click (the hook waits at most
-40 ms for the answer). Not emitted yet: `System Time`, `System Logoff`, `Foreground App
-Changed`, `Audio Capture`, `onSensorUpdate`.
+`Sender` is `SignalRGB`; `SenderType` is `System` for the power and log-off events, `Input`
+for idle time, lock and time, `Process` for processes, `Context` for the foreground window and
+`Sensors` for sensor updates (`EventHandler` `SensorUpdate`, `EventType` `Sensor Update`).
+
+Idle time, processes, the clock and the foreground window are looked at only while an
+enabled Input has `onApplication`; the sensors are polled for macros only while an enabled
+Input has `onSensorUpdate`. Returning `true` from `onKey` / `onMouse` swallows the key or
+click (the hook waits at most 40 ms for the answer). Not emitted yet: `Audio Capture`.
+
+**Window titles.** `Foreground App Changed` hands the window title to the scripts. Like keys,
+titles are never logged: Lightloom reads them in memory only, and what a handler prints
+(or throws) while handling that event is not logged either. On Linux there is no foreground
+window and the clock is UTC.
 
 ## Keyboard and mouse hooks (privacy)
 

@@ -583,6 +583,8 @@ fn the_real_client_sends_nothing_but_the_request() {
         .filter_map(|l| l.split_once(':'))
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
         .collect();
+    // Each header once.
+    assert_eq!(headers.len(), head.len() - 1, "{head:?}");
     assert_eq!(headers["user-agent"], USER_AGENT);
     assert_eq!(headers["accept"], "application/vnd.github+json");
     let allowed = ["host", "user-agent", "accept"];

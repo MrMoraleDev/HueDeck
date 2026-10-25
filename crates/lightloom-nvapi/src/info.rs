@@ -285,7 +285,11 @@ mod tests {
         assert!(I2cPlan::of(&I2cOp::WriteNoReg { data: vec![] }).is_err());
         // The other limits are unchanged.
         assert!(I2cPlan::of(&I2cOp::ReadNoReg { len: 33 }).is_err());
-        assert!(I2cPlan::of(&I2cOp::WriteBlock { reg: 0, data: vec![0; 33] }).is_err());
+        assert!(I2cPlan::of(&I2cOp::WriteBlock {
+            reg: 0,
+            data: vec![0; 33]
+        })
+        .is_err());
     }
 
     #[test]

@@ -135,9 +135,7 @@ impl ProbeBus for HalBus {
         Ok(buf)
     }
     fn write_byte(&mut self, reg: u8, value: u8) -> Result<(), i32> {
-        self.0
-            .write_byte(ADDR, reg, value)
-            .map_err(|e| e.plugin_status())
+        self.0.write_byte(ADDR, reg, value).map_err(|e| e.plugin_status())
     }
     fn write_raw(&mut self, data: &[u8]) -> Result<(), i32> {
         self.0
@@ -203,8 +201,14 @@ impl<'a> Guarded<'a> {
     fn read(&mut self, ui: &mut dyn Ui, reg: u8, len: usize) -> Result<Vec<u8>, i32> {
         let r = self.bus.read(reg, len);
         match &r {
-            Ok(b) => ui.say(&format!("read  0x{ADDR:02X} reg 0x{reg:02X} x{len}: {} -> 0{}", hex(b), self.tag())),
-            Err(s) => ui.say(&format!("read  0x{ADDR:02X} reg 0x{reg:02X} x{len}: failed -> {s}")),
+            Ok(b) => ui.say(&format!(
+                "read  0x{ADDR:02X} reg 0x{reg:02X} x{len}: {} -> 0{}",
+                hex(b),
+                self.tag()
+            )),
+            Err(s) => ui.say(&format!(
+                "read  0x{ADDR:02X} reg 0x{reg:02X} x{len}: failed -> {s}"
+            )),
         }
         r
     }
@@ -228,7 +232,11 @@ impl<'a> Guarded<'a> {
     /// One raw frame (must start with 0x49, at most 34 records).
     fn frame(&mut self, ui: &mut dyn Ui, data: &[u8]) -> Result<(), i32> {
         if data.first() != Some(&REG_FRAME) || data.len() < 5 || data.len() > 1 + 4 * SLOTS {
-            ui.say(&format!("REFUSED: raw write of {} bytes starting {:02X?}", data.len(), data.first()));
+            ui.say(&format!(
+                "REFUSED: raw write of {} bytes starting {:02X?}",
+                data.len(),
+                data.first()
+            ));
             return Err(-1);
         }
         let r = self.bus.write_raw(data);
@@ -295,7 +303,9 @@ pub fn run(bus: &mut dyn ProbeBus, args: &PerLedArgs, ui: &mut dyn Ui) -> anyhow
     ui.say("v1 controller: entering the per-LED stream (0x2E <- 1)");
     let entered = g.direct(ui, 1);
     let result = match entered {
-        Err(s) => Err(anyhow::anyhow!("entering the stream (0x2E <- 1) failed with status {s}")),
+        Err(s) => Err(anyhow::anyhow!(
+            "entering the stream (0x2E <- 1) failed with status {s}"
+        )),
         Ok(()) => match catch_unwind(AssertUnwindSafe(|| steps(&mut g, args, ui))) {
             Ok(r) => r,
             Err(_) => Err(anyhow::anyhow!("the probe panicked")),
@@ -304,7 +314,9 @@ pub fn run(bus: &mut dyn ProbeBus, args: &PerLedArgs, ui: &mut dyn Ui) -> anyhow
     ui.say("leaving the per-LED stream (0x2E <- 0)");
     if g.direct(ui, 0).is_err() && g.direct(ui, 0).is_err() {
         ui.say("WARNING: leaving failed twice: the card may stay in per-LED mode until a power cycle");
-        return Err(result.err().unwrap_or_else(|| anyhow::anyhow!("leaving the stream (0x2E <- 0) failed")));
+        return Err(result
+            .err()
+            .unwrap_or_else(|| anyhow::anyhow!("leaving the stream (0x2E <- 0) failed")));
     }
     result
 }
@@ -447,7 +459,8 @@ pub fn run_cli(args: &PerLedArgs) -> anyhow::Result<crate::run::Outcome> {
         run(&mut DryRun, args, &mut console)
     } else {
         // Not beside lightloomd, SignalRGB, OpenRGB or MSI's service; held until the end.
-        let _claim = crate::run::claim_smbus_now().map_err(|why| anyhow::anyhow!("GPU I2C is not free: {why}"))?;
+        let _claim =
+            crate::run::claim_smbus_now().map_err(|why| anyhow::anyhow!("GPU I2C is not free: {why}"))?;
         let mut bus = open_card()?;
         println!("card: {}", bus.0.descriptor().name);
         run(&mut bus, args, &mut console)
@@ -595,7 +608,10 @@ mod tests {
         assert_eq!(&frames[SLOTS + 1][2..6], &[0x40, 0, 0, 0], "all blue");
         assert_eq!(frames[SLOTS + 2].len(), 1 + 1 + 4 * SHORT_SLOTS);
         assert!(ui.lines.iter().any(|l| l == "short frame result code: 0"));
-        assert!(ui.lines.iter().any(|l| l.starts_with("LED type 0x01, module type 0x0102, firmware 0x03")));
+        assert!(ui
+            .lines
+            .iter()
+            .any(|l| l.starts_with("LED type 0x01, module type 0x0102, firmware 0x03")));
     }
 
     #[test]
@@ -654,7 +670,11 @@ mod tests {
         let mut g = Guarded::new(&mut card, false);
         assert_eq!(g.frame(&mut ui, &[0x3F, 1, 2, 3, 4]), Err(-1));
         assert_eq!(g.frame(&mut ui, &[0x22, 1, 2, 3, 4]), Err(-1));
-        assert_eq!(g.frame(&mut ui, &vec![REG_FRAME; 2 + 4 * SLOTS]), Err(-1), "over 34 records");
+        assert_eq!(
+            g.frame(&mut ui, &[REG_FRAME; 2 + 4 * SLOTS]),
+            Err(-1),
+            "over 34 records"
+        );
         assert_eq!(g.direct(&mut ui, 2), Err(-1));
         assert!(card.writes().is_empty());
     }
@@ -672,6 +692,9 @@ mod tests {
         assert_eq!(writes.len(), 1 + SLOTS + 3 + 1);
         assert!(writes.iter().all(|l| l.ends_with("(dry run, not sent)")));
         assert!(writes[1].contains("49 40 00 00 00 00"), "{}", writes[1]);
-        assert_eq!(writes.last().unwrap().as_str(), "write 0x68: 2E 00 -> 0 (dry run, not sent)");
+        assert_eq!(
+            writes.last().unwrap().as_str(),
+            "write 0x68: 2E 00 -> 0 (dry run, not sent)"
+        );
     }
 }

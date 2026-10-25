@@ -968,9 +968,21 @@ mod tests {
         frame.extend(std::iter::repeat_n(0x40, 136));
         assert_eq!(g.write_block_no_reg(0x68, &frame), Ok(()), "MSI per-LED frame");
         frame[0] = 0x3F;
-        assert_eq!(g.write_block_no_reg(0x68, &frame), Err(-1), "first byte is the register");
-        assert_eq!(g.write_block_no_reg(0x68, &[0x49; 141]), Err(-1), "over 140 bytes");
-        assert_eq!(g.write_block(0x68, 0x49, &[0; 33]), Err(-1), "Block Write stays at 32");
+        assert_eq!(
+            g.write_block_no_reg(0x68, &frame),
+            Err(-1),
+            "first byte is the register"
+        );
+        assert_eq!(
+            g.write_block_no_reg(0x68, &[0x49; 141]),
+            Err(-1),
+            "over 140 bytes"
+        );
+        assert_eq!(
+            g.write_block(0x68, 0x49, &[0; 33]),
+            Err(-1),
+            "Block Write stays at 32"
+        );
         assert_eq!(g.read_block(0x68, 0x49, 33), Err(-1));
         assert_eq!(g.read_block_no_reg(0x68, 33), Err(-1));
         let sent = rec.payloads(TransactionKind::SmbusWrite);
@@ -980,7 +992,11 @@ mod tests {
         let (h, rec) = handle(SmbusBusKind::Amd, &[0x39]);
         h.allow(0x39);
         let mut g = run(&h, 0x39);
-        assert_eq!(g.write_block_no_reg(0x39, &[0; 33]), Err(-1), "chipset buses keep 32");
+        assert_eq!(
+            g.write_block_no_reg(0x39, &[0; 33]),
+            Err(-1),
+            "chipset buses keep 32"
+        );
         assert!(rec.payloads(TransactionKind::SmbusWrite).is_empty());
     }
 

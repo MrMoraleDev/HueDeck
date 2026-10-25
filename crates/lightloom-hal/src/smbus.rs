@@ -468,8 +468,16 @@ mod tests {
             instance: String::new(),
             max_block_len: SMBUS_BLOCK_MAX,
         };
-        assert_eq!(bus(SmbusBusKind::Nvidia).max_raw_write_len(), NVIDIA_RAW_WRITE_MAX);
-        for kind in [SmbusBusKind::Amd, SmbusBusKind::Intel, SmbusBusKind::AmdGpu, SmbusBusKind::Nuvoton] {
+        assert_eq!(
+            bus(SmbusBusKind::Nvidia).max_raw_write_len(),
+            NVIDIA_RAW_WRITE_MAX
+        );
+        for kind in [
+            SmbusBusKind::Amd,
+            SmbusBusKind::Intel,
+            SmbusBusKind::AmdGpu,
+            SmbusBusKind::Nuvoton,
+        ] {
             assert_eq!(bus(kind).max_raw_write_len(), SMBUS_BLOCK_MAX, "{kind:?}");
         }
     }

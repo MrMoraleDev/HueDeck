@@ -102,6 +102,10 @@ const REG_FW_INFO = 0xEC;
 const REG_CHIP_ID = 0xED;
 const NV5000_MODULE = 0x5000;
 const NV5000_LED_TYPE = 0x81;
+// LED controllers that take the stream on the bus but show nothing of it. 0x0A: the RTX 3060
+// Gaming X Trio (1462:3903, firmware 0x11, chip id 0xFFFF), tried 2026-10-25 with and without
+// static mode first: every write acknowledged, the card stayed on its own colour.
+const IGNORES_STREAM_LED_TYPES = [0x0A];
 // MSI always streams 34 records of 4 bytes; laid out as a 34 x 1 strip until the mapping is known.
 const PER_LED_SLOTS = 34;
 
@@ -293,6 +297,11 @@ function identifyPerLed() {
   const ledType = info[0];
   const moduleType = (info[1] << 8) | info[2];
   device.log(`MSI GPU per-LED: LED type ${hex2(ledType)}, module type 0x${moduleType.toString(16)}, firmware ${hex2(info[3])}, chip id 0x${((chip[0] << 8) | chip[1]).toString(16)}`);
+  if (IGNORES_STREAM_LED_TYPES.includes(ledType)) {
+    device.log(`MSI GPU per-LED: LED type ${hex2(ledType)} ignores the per-LED stream (tested); staying in one-colour mode`);
+    perLedOk = false;
+    return false;
+  }
   perLedOk = moduleType !== NV5000_MODULE && ledType !== NV5000_LED_TYPE;
   if (!perLedOk) {
     device.log("MSI GPU per-LED: an NV5000 controller (another protocol); staying in one-colour mode");

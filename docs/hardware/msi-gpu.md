@@ -139,7 +139,13 @@ Never `0x3F`: the mode is gone at the next power cycle. `SetHardwareMode(null)` 
 mode running. Tests: `plugins/msi-gpu/tests/packets.test.mjs`, `crates/lightloom-plugin-host/tests/session_hwmode.rs`.
 The card takes one colour in Direct mode; its moving effects come only from these modes.
 
-## Per-LED mode (experimental, UNVERIFIED, off by default)
+## Per-LED mode (experimental, off by default; does NOT work on the RTX 3060 Gaming X Trio)
+
+Tried on the reference card on 2026-10-25: its LED controller (LED type `0x0A`, firmware `0x11`)
+acknowledges the stream on the bus but shows nothing of it, with or without static mode first
+(details: `docs/research/msi-gpu-perled.md`, Summary). The plugin therefore refuses per-LED mode on
+LED type `0x0A` and keeps the one-colour path; the card's built-in effects (hardware modes) are the
+way to get moving light on it.
 
 The "Per-LED (experimental)" parameter (`perLed`, default `false`) switches the plugin to the
 per-LED stream MSI's LEDKeeper2 sends to non-"NV5000" NVIDIA cards, found by static analysis

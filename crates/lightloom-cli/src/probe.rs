@@ -108,7 +108,15 @@ pub struct PerLedArgs {
     /// Print every transfer without loading NvAPI or touching the card.
     #[arg(long)]
     pub dry_run: bool,
+    /// Before entering, put the card in its static mode at full brightness, as the plugin's
+    /// Initialize() does (0x36 <- 100, 0x22 <- 0x13, 0x26 <- 0): live registers, no save.
+    #[arg(long)]
+    pub static_first: bool,
 }
+
+/// `--static-first`: the only other writes the probe may make, in this order (the msi-gpu
+/// plugin's Initialize() and DeviceUpdateLEDs(): brightness, static mode, 0x26 cleared).
+pub const STATIC_FIRST: [(u8, u8); 3] = [(0x36, 100), (0x22, 0x13), (0x26, 0x00)];
 
 /// What the probe talks to: the card's bus at [`ADDR`]. Errors are statuses
 /// (NvAPI's own on NVIDIA buses).
@@ -229,6 +237,24 @@ impl<'a> Guarded<'a> {
         r
     }
 
+    /// One of the [`STATIC_FIRST`] writes, and nothing else.
+    fn prepare(&mut self, ui: &mut dyn Ui, reg: u8, value: u8) -> Result<(), i32> {
+        if !STATIC_FIRST.contains(&(reg, value)) {
+            ui.say(&format!(
+                "REFUSED: 0x{reg:02X} <- 0x{value:02X} (not a --static-first write)"
+            ));
+            return Err(-1);
+        }
+        let r = self.bus.write_byte(reg, value);
+        ui.say(&format!(
+            "write 0x{ADDR:02X}: {} -> {}{}",
+            hex(&[reg, value]),
+            r.err().unwrap_or(0),
+            self.tag()
+        ));
+        r
+    }
+
     /// One raw frame (must start with 0x49, at most 34 records).
     fn frame(&mut self, ui: &mut dyn Ui, data: &[u8]) -> Result<(), i32> {
         if data.first() != Some(&REG_FRAME) || data.len() < 5 || data.len() > 1 + 4 * SLOTS {
@@ -299,6 +325,16 @@ pub fn run(bus: &mut dyn ProbeBus, args: &PerLedArgs, ui: &mut dyn Ui) -> anyhow
     ));
     if module == 0x5000 || led_type == 0x81 {
         bail!("an NV5000 controller: it takes another protocol; nothing was written");
+    }
+    if args.static_first {
+        ui.say("static first: brightness 100, static mode, 0x26 cleared (as the plugin's Initialize)");
+        for (reg, value) in STATIC_FIRST {
+            if let Err(s) = g.prepare(ui, reg, value) {
+                bail!(
+                    "the static-first write 0x{reg:02X} failed with status {s}; the stream was not entered"
+                );
+            }
+        }
     }
     ui.say("v1 controller: entering the per-LED stream (0x2E <- 1)");
     let entered = g.direct(ui, 1);
@@ -484,7 +520,26 @@ mod tests {
             auto: Some(0),
             brightness: 0x40,
             dry_run: false,
+            static_first: false,
         }
+    }
+
+    #[test]
+    fn static_first_writes_only_the_plugin_init_registers_before_entering() {
+        let mut ui = TestUi::default();
+        let a = PerLedArgs {
+            dry_run: true,
+            static_first: true,
+            ..args()
+        };
+        assert_eq!(run(&mut DryRun, &a, &mut ui).unwrap(), Ended::Done);
+        let writes: Vec<&String> = ui.lines.iter().filter(|l| l.starts_with("write")).collect();
+        assert!(writes[0].contains(": 36 64 "), "{}", writes[0]);
+        assert!(writes[1].contains(": 22 13 "), "{}", writes[1]);
+        assert!(writes[2].contains(": 26 00 "), "{}", writes[2]);
+        assert!(writes[3].contains(": 2E 01 "), "{}", writes[3]);
+        assert!(writes.last().unwrap().contains(": 2E 00 "));
+        assert!(!writes.iter().any(|l| l.contains(": 3F ")));
     }
 
     /// Answers at once; stops after `stop_after` slots, if set.

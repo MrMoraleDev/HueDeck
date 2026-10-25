@@ -14,6 +14,23 @@ reference machine (static, nothing executed), **[U]** inference, **[D]** Lightlo
 
 ## Summary
 
+**Result on the reference card (2026-10-25): the stream is ignored.** RTX 3060 Gaming X Trio LHR
+(10DE:2504, 1462:3903), NvAPI port 1, 0x68. The identification reads gave LED type `0x0A`, module
+type `0x0000`, firmware `0x11` and chip id `0xFFFF` (the chip-id register is not implemented). Two
+runs of `lightloom probe msi-gpu-perled`:
+
+1. Plain: `0x2E <- 1`, 34 single-slot frames, all red, all blue, a 6-slot short frame, `0x2E <- 0`.
+   NvAPI acknowledged every transfer (status 0), including the 137-byte raw writes. The card kept
+   showing the effect last saved in its flash by MSI Center and never changed.
+2. `--static-first` (`0x36 <- 100`, `0x22 <- 0x13`, `0x26 <- 0`, then the same stream). The card
+   went static white (colour 1), as in Lightloom's one-colour mode, and no frame changed it.
+
+So this controller takes the per-LED stream on the bus and shows nothing of it. MSI's own
+"SignalRGB bridge" sends that stream to every non-NV5000 card, which explains why it exists for
+this card in MSI's code without working. The plugin refuses per-LED mode on LED type `0x0A`
+(`IGNORES_STREAM_LED_TYPES`); other MSI cards with other controllers stay untried.
+
+
 - **Channel: NvAPI I2C, address `0x68`** (8-bit `0xD0`), the same controller and bus as the
   one-colour path. Not the NVIDIA illumination API (that is used only for reference/Founders
   style zones, through command lines such as `--set_control --zoneidx …`), and not a separate

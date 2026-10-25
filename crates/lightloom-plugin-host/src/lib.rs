@@ -19,6 +19,8 @@
 //! * [`device`]: the native backing of `device.*` for a real device (HID I/O
 //!   through lightloom-hal, canvas sampling, I/O statistics, dry-run writes).
 //! * [`battery`]: what a plugin reports through the `battery` feature global.
+//! * [`input`]: key and button events of the `keyboard` / `mouse` feature
+//!   globals, handed to the macro runtime.
 //! * [`plugin_ui`]: a device plugin's parameters and messages as they change
 //!   at run time (`device.addProperty`, `device.addMessage`, `device.notify`).
 //! * [`children`]: subdevices and channels (with their component instances),
@@ -53,6 +55,7 @@ pub mod device;
 pub mod discover;
 pub mod dryrun;
 pub mod exports;
+pub mod input;
 pub mod lamparray;
 pub mod loader;
 pub mod manager;

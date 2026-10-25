@@ -186,6 +186,11 @@ pub const NATIVE_ROUTES: &[Route] = &[
     r("POST", "/canvas/event", true),
     r("POST", "/canvas/tap", true),
     r("POST", "/actions", true),
+    r("GET", "/macros", false),
+    r("PATCH", "/macros", true),
+    r("PATCH", "/macros/scripts/{id}", true),
+    r("POST", "/macros/scripts/{id}/run", true),
+    r("POST", "/macros/prompts/{id}", true),
     r("GET", "/events", false),  // WebSocket: JSON events
     r("GET", "/preview", false), // WebSocket: canvas frames
 ];

@@ -1493,6 +1493,7 @@ dependencies = [
  "lightloom-engine",
  "lightloom-hal",
  "lightloom-inputs",
+ "lightloom-macros",
  "lightloom-plugin-host",
  "lightloom-render",
  "lightloom-runtime",
@@ -1597,6 +1598,18 @@ dependencies = [
  "tracing-subscriber",
  "windows",
  "windows-service",
+]
+
+[[package]]
+name = "lightloom-macros"
+version = "0.0.1"
+dependencies = [
+ "lightloom-hal",
+ "lightloom-plugin-host",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

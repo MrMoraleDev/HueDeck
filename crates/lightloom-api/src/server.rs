@@ -286,6 +286,10 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
         .route("/v1/canvas/event", post(canvas_event))
         .route("/v1/canvas/tap", post(canvas_tap))
         .route("/v1/actions", post(run_action))
+        .route("/v1/macros", get(macros).patch(patch_macros))
+        .route("/v1/macros/scripts/{id}", axum::routing::patch(patch_macro))
+        .route("/v1/macros/scripts/{id}/run", post(run_macro))
+        .route("/v1/macros/prompts/{id}", post(answer_prompt))
         .route("/v1/events", get(events_ws))
         .route("/v1/preview", get(preview_ws))
         .route("/", get(index))
@@ -924,6 +928,81 @@ struct ActionBody {
 /// (docs/integrations/actions.md).
 async fn run_action(State(ctx): State<ApiContext>, Json(b): Json<ActionBody>) -> Response {
     reply(ctx.call(Request::Action { url: b.url }).await)
+}
+
+// ------------------------------------------------------------------- macros
+
+async fn macros(State(ctx): State<ApiContext>) -> Response {
+    reply(ctx.call(Request::Macros).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MacrosBody {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    keyboard_hook: Option<bool>,
+    #[serde(default)]
+    mouse_hook: Option<bool>,
+    #[serde(default)]
+    allow_launch: Option<bool>,
+}
+
+async fn patch_macros(State(ctx): State<ApiContext>, Json(b): Json<MacrosBody>) -> Response {
+    reply(
+        ctx.call(Request::SetMacros {
+            enabled: b.enabled,
+            keyboard_hook: b.keyboard_hook,
+            mouse_hook: b.mouse_hook,
+            allow_launch: b.allow_launch,
+        })
+        .await,
+    )
+}
+
+#[derive(Deserialize)]
+struct MacroBody {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    options: Option<serde_json::Map<String, Value>>,
+    #[serde(default)]
+    actions: Option<Vec<String>>,
+}
+
+async fn patch_macro(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<String>,
+    Json(b): Json<MacroBody>,
+) -> Response {
+    reply(
+        ctx.call(Request::SetMacro {
+            id,
+            enabled: b.enabled,
+            options: b.options,
+            actions: b.actions,
+        })
+        .await,
+    )
+}
+
+async fn run_macro(State(ctx): State<ApiContext>, Path(id): Path<String>) -> Response {
+    reply(ctx.call(Request::RunMacro { id }).await)
+}
+
+#[derive(Deserialize)]
+struct PromptBody {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+async fn answer_prompt(
+    State(ctx): State<ApiContext>,
+    Path(id): Path<u64>,
+    Json(b): Json<PromptBody>,
+) -> Response {
+    reply(ctx.call(Request::AnswerPrompt { id, text: b.text }).await)
 }
 
 // --------------------------------------------------------------- websockets

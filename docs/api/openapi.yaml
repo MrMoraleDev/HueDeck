@@ -44,6 +44,7 @@ tags:
   - name: backup
   - name: canvas
   - name: actions
+  - name: macros
   - name: streams
 paths:
   /v1/health:
@@ -1210,6 +1211,134 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorBody" }
+  /v1/macros:
+    get:
+      tags: [macros]
+      operationId: macros
+      summary: The macro runtime
+      description: |
+        Settings and scripts of the macro runtime (docs/macros.md): SignalRGB-shaped Actions and
+        Inputs from `<config>/macroscripts/{Actions,Inputs}` (and SignalRGB's bundled folder while
+        its library is on). Each script lists its options with their current values, its handlers,
+        whether it runs and why it cannot. Everything is off by default.
+      responses:
+        "200":
+          description: The settings and the scripts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MacrosView" }
+    patch:
+      tags: [macros]
+      operationId: setMacros
+      summary: Change the macro settings
+      description: |
+        `enabled` runs macros; `keyboardHook` / `mouseHook` allow the low-level hooks (installed
+        only while an enabled Input listens; they see every key, processed in memory only);
+        `allowLaunch` lets `system.openApplication` start programs. Omitted fields stay.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                keyboardHook: { type: boolean }
+                mouseHook: { type: boolean }
+                allowLaunch: { type: boolean }
+      responses:
+        "200":
+          description: The new state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MacrosView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/macros/scripts/{id}:
+    patch:
+      tags: [macros]
+      operationId: setMacro
+      summary: Change one script's settings
+      description: |
+        `enabled` (Inputs only), `options` (values by property, coerced strictly to the option's
+        type), `actions` (an Input's chain: Action ids run in order by `block.trigger()`).
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: "Script id (`user:input:Key Pressed`)." }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                options: { type: object, additionalProperties: true }
+                actions: { type: array, items: { type: string }, maxItems: 16 }
+      responses:
+        "200":
+          description: The new state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MacrosView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`conflict`: the script cannot run."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+  /v1/macros/scripts/{id}/run:
+    post:
+      tags: [macros]
+      operationId: runMacro
+      summary: Run an Action now
+      description: Queues the Action's `onExecute()` (macros must be on). Its console lines arrive as `log` events.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Queued.
+          content:
+            application/json:
+              schema: { type: object, properties: { queued: { type: boolean } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`conflict`: macros are off or the script cannot run."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+  /v1/macros/prompts/{id}:
+    post:
+      tags: [macros]
+      operationId: answerPrompt
+      summary: Answer a macro's prompt
+      description: |
+        Completes a `system.prompt` shown through an `action` event (`{action: "prompt", id, ...}`).
+        `text` absent or `null` cancels it.
+      security: [{ bearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: [string, "null"] }
+      responses:
+        "200":
+          description: Delivered.
+          content:
+            application/json:
+              schema: { type: object, properties: { answered: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/events:
     get:
       tags: [streams]
@@ -1221,7 +1350,8 @@ paths:
         `stats` that only counters changed, `log` carries a log line in `data`, `battery` a low
         or critical battery alert (`data`: `{key, name, level, severity}`), `action` an action URL
         for the dashboard (`data`: `{action: "view", page, tab, uid}`, `{action: "raiseWindow"}` or
-        `{action: "toast", title, message}`). A client too slow
+        `{action: "toast", title, message}`; a macro prompt: `{action: "prompt", id, script, title,
+        message, placeholder, confirmText, cancelText}`). A client too slow
         to keep up gets `state` again instead of the events it missed. Client frames are ignored.
       responses:
         "101":
@@ -1341,6 +1471,43 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorBody" }
   schemas:
+    MacrosView:
+      type: object
+      required: [enabled, keyboardHook, mouseHook, allowLaunch, hooksAvailable, hooks, emergencyStop, folders, scripts]
+      properties:
+        enabled: { type: boolean, description: Macros run (off by default). }
+        keyboardHook: { type: boolean, description: The keyboard hook is allowed (off by default). }
+        mouseHook: { type: boolean, description: The mouse hook is allowed (off by default). }
+        allowLaunch: { type: boolean, description: "`system.openApplication` may start programs (off by default)." }
+        hooksAvailable: { type: boolean, description: This system has low-level hooks (Windows). }
+        hooks: { type: object, properties: { keyboard: { type: boolean }, mouse: { type: boolean } }, description: Installed now. }
+        hookError: { type: [string, "null"] }
+        emergencyStop: { type: string, description: "The key combination that turns macros off (`Ctrl + Alt + Shift + F12`)." }
+        folders:
+          type: array
+          items: { type: object, properties: { source: { type: string }, kind: { type: string, enum: [action, input] }, path: { type: string } } }
+        scripts:
+          type: array
+          items:
+            type: object
+            required: [id, kind, source, name, options, handlers, enabled, actions, running]
+            properties:
+              id: { type: string }
+              kind: { type: string, enum: [action, input] }
+              source: { type: string, enum: [user, signalrgb] }
+              file: { type: string }
+              name: { type: string }
+              description: { type: string }
+              options:
+                type: array
+                description: "SignalRGB option descriptors (`property`, `label`, `type`, `default`, `values`, `filter`, `min`, `max`, `step`, `description`) with the current `value`."
+                items: { type: object, additionalProperties: true }
+              handlers: { type: array, items: { type: string } }
+              enabled: { type: boolean }
+              actions: { type: array, items: { type: string } }
+              running: { type: boolean }
+              error: { type: [string, "null"] }
+              warnings: { type: array, items: { type: string } }
     ErrorBody:
       type: object
       required: [error]

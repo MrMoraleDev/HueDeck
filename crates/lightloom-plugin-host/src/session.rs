@@ -404,6 +404,9 @@ pub struct SessionOptions {
     pub direct: Option<Arc<lightloom_engine::DirectLeds>>,
     /// `battery.lowBatteryWarningLevel` (percent).
     pub battery_warning_level: u8,
+    /// Where the plugin's `keyboard` / `mouse` feature events go (the macro
+    /// runtime); `None` drops them.
+    pub input_sink: Option<crate::input::InputSink>,
 }
 
 impl Default for SessionOptions {
@@ -424,6 +427,7 @@ impl Default for SessionOptions {
             shutdown_mode: ShutdownMode::Restore,
             direct: None,
             battery_warning_level: DEFAULT_WARNING_LEVEL,
+            input_sink: None,
         }
     }
 }
@@ -1044,6 +1048,10 @@ fn run(
     let mut ctx = DeviceContext::new(backend, device.endpoints.clone(), opts.write_mode);
     ctx.set_name(meta.name.clone());
     ctx.set_log_sink(opts.log_sink.clone());
+    if let Some(sink) = opts.input_sink.clone() {
+        let key = device.key.clone();
+        ctx.set_input_sink(Some(Arc::new(move |event| sink(&key, event))));
+    }
     ctx.set_brightness(opts.brightness);
     ctx.set_sampler(SamplerConfig {
         default_scale: meta.default_scale,

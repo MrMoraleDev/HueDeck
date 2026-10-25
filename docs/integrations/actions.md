@@ -44,9 +44,10 @@ everywhere a URL does.
 * `dashboard`, `customize`, `effects`, `library` → Effects;
 * `layouts`, `layout` → Layout;
 * `devices`, `showdevice` (which needs `uid`), `network` → Devices;
+* `macros` → Macros;
 * `settings[/<sub>]`, `addons`, `debuginfo`, `logs` → Settings.
 
-`cooling`, `monitoring`, `macros` and `dumps` have no Lightloom page, so they are dropped.
+`cooling`, `monitoring` and `dumps` have no Lightloom page, so they are dropped.
 
 ### Effects and their properties
 

@@ -9,14 +9,18 @@
   import Network from "./components/Network.svelte";
   import Sensors from "./components/Sensors.svelte";
   import Settings from "./components/Settings.svelte";
+  import Macros from "./components/Macros.svelte";
+  import MacroPrompt from "./components/MacroPrompt.svelte";
+  import { prompts } from "./lib/macros.svelte";
   import BatteryBadge from "./components/BatteryBadge.svelte";
   import logotype from "./assets/lightloom-logotype.svg";
 
-  type Tab = "effects" | "layout" | "devices" | "settings";
+  type Tab = "effects" | "layout" | "devices" | "macros" | "settings";
   const tabs: { id: Tab; label: string }[] = [
     { id: "effects", label: "Effects" },
     { id: "layout", label: "Layout" },
     { id: "devices", label: "Devices" },
+    { id: "macros", label: "Macros" },
     { id: "settings", label: "Settings" },
   ];
   let tab = $state<Tab>((location.hash.slice(1) as Tab) || "effects");
@@ -29,6 +33,7 @@
   onMount(() => {
     // Action URLs: view/<page> switches tabs (and scrolls to a device), app/raiseWindow focuses the page.
     daemon.onAction = (a) => {
+      if (prompts.take(a)) return;
       if (a.action === "view") {
         if (tabs.some((x) => x.id === a.tab)) select(a.tab as Tab);
         if (a.uid) {
@@ -119,6 +124,8 @@
   {/each}
 </nav>
 
+<MacroPrompt />
+
 <main>
   {#if daemon.error}
     <div class="banner bad">{daemon.error}</div>
@@ -148,6 +155,8 @@
       <Network snapshot={s} />
       <Devices snapshot={s} />
       <Sensors />
+    {:else if tab === "macros"}
+      <Macros />
     {:else}
       <Settings snapshot={s} />
     {/if}

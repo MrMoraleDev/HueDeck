@@ -984,6 +984,51 @@ pub enum Request {
         /// Registered.
         enabled: bool,
     },
+    /// The macro runtime: settings and scripts (read-only).
+    Macros,
+    /// Macro settings; `None` leaves one as it is.
+    #[serde(rename_all = "camelCase")]
+    SetMacros {
+        /// Macros run.
+        #[serde(default)]
+        enabled: Option<bool>,
+        /// The low-level keyboard hook may be installed.
+        #[serde(default)]
+        keyboard_hook: Option<bool>,
+        /// The low-level mouse hook may be installed.
+        #[serde(default)]
+        mouse_hook: Option<bool>,
+        /// Macros may start programs (`system.openApplication`).
+        #[serde(default)]
+        allow_launch: Option<bool>,
+    },
+    /// One macro script's settings.
+    SetMacro {
+        /// Script id (`user:input:Key Pressed`).
+        id: String,
+        /// An Input runs.
+        #[serde(default)]
+        enabled: Option<bool>,
+        /// Option values by property.
+        #[serde(default)]
+        options: Option<Map<String, Value>>,
+        /// An Input's chain of Actions (script ids).
+        #[serde(default)]
+        actions: Option<Vec<String>>,
+    },
+    /// Run a macro Action now.
+    RunMacro {
+        /// Script id.
+        id: String,
+    },
+    /// Answer a macro's `system.prompt` (`text` absent: cancelled).
+    AnswerPrompt {
+        /// Prompt id.
+        id: u64,
+        /// What the user typed.
+        #[serde(default)]
+        text: Option<String>,
+    },
     /// Enumerate devices again now.
     Rescan,
     /// Stop the daemon (every plugin restores its device first).
@@ -1033,6 +1078,11 @@ impl Request {
             Request::EffectImage { .. } => "effectImage",
             Request::Action { .. } => "action",
             Request::SetUrlScheme { .. } => "setUrlScheme",
+            Request::Macros => "macros",
+            Request::SetMacros { .. } => "setMacros",
+            Request::SetMacro { .. } => "setMacro",
+            Request::RunMacro { .. } => "runMacro",
+            Request::AnswerPrompt { .. } => "answerPrompt",
             Request::Rescan => "rescan",
             Request::Shutdown => "shutdown",
         }
@@ -1046,7 +1096,9 @@ pub struct Event {
     /// `state` (the snapshot changed), `stats` (counters only), `log`,
     /// `battery` (a low or critical battery alert: `{key, name, level, severity}`)
     /// or `action` (an action URL for the dashboard: `{action: "view", page, tab, uid}`,
-    /// `{action: "raiseWindow"}` or `{action: "toast", title, message}`).
+    /// `{action: "raiseWindow"}` or `{action: "toast", title, message}`; a macro's
+    /// `system.prompt`: `{action: "prompt", id, script, title, message, placeholder,
+    /// confirmText, cancelText}`, answered with `POST /v1/macros/prompts/{id}`).
     pub kind: String,
     /// Event payload (`log`: the line).
     #[serde(default, skip_serializing_if = "Value::is_null")]

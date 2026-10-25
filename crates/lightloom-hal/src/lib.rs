@@ -21,6 +21,7 @@ pub mod capture;
 pub mod error;
 pub mod hid;
 pub mod hotplug;
+pub mod input;
 pub mod key;
 pub mod lamparray;
 pub mod notify;

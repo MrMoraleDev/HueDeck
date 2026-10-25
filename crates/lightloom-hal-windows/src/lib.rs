@@ -49,6 +49,10 @@
 //!   package-identity check).
 //! * [`power`] (Windows only): sleep/resume, lock/unlock and display off/on
 //!   from a hidden window (`lightloom_hal::PowerSource`).
+//! * [`input`] (Windows only): the macro runtime's synthetic input
+//!   (`SendInput`), clipboard, URL opening and idle time
+//!   (`lightloom_hal::input::Desktop`), and the opt-in low-level keyboard and
+//!   mouse hooks (`lightloom_hal::input::InputHook`).
 //!
 //! * [`serial`] (Windows and Linux): COM port enumeration with the USB
 //!   VID:PID behind each port (Windows) and port I/O over `serialport`
@@ -70,6 +74,8 @@ pub mod elevate;
 pub mod hid;
 #[cfg(windows)]
 pub mod hotplug;
+#[cfg(windows)]
+pub mod input;
 #[cfg(windows)]
 pub mod lamparray;
 #[cfg(windows)]

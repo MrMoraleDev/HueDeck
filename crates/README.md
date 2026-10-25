@@ -40,7 +40,8 @@ Status as of `develop` 2026-10-25; the milestone view is `docs/status.md`.
 
  lightloom-runtime  ◄── hal, hal-windows, hal-linux, nvapi, adl, protocol, plugin-host, engine, effects
  lightloom-api      ◄── engine
- lightloom-daemon   ◄── api, effects, engine, hal, inputs, plugin-host, render, runtime, tray
+ lightloom-macros   ◄── hal, plugin-host
+ lightloom-daemon   ◄── api, effects, engine, hal, inputs, macros, plugin-host, render, runtime, tray
  lightloom-cli      ◄── api, engine, effects, hal, hal-windows, plugin-host, render, renderer, runtime
  lightloom-tray     ◄── api, runtime
  lightloom-winres   (build-dependency of every Windows executable)
@@ -63,6 +64,7 @@ Status as of `develop` 2026-10-25; the milestone view is `docs/status.md`.
 | `lightloom-renderer` | lib + bin | done; Chromium sandbox off | CEF windowless host (feature `cef`), shm ring writer/reader, `ipc` (tmpfs ring and unix-socket control on Linux), `window.engine` and control injection, URL filter, control pipe, snapshots and stats |
 | `lightloom-plugin-host` | lib | done (rawusb, hybrid, serial mock-tested only) | QuickJS-NG runtime per plugin (64 MiB, deadlines), `js/host.js` compat host, natives (`device`, `children`, `bus`, `net`, `serial`), network services (`service`: DiscoveryService, mDNS, settings) and network device sessions, `@SignalRGB/*` / `@lightloom/*` resolver, catalogue and VID:PID index, device sessions, runtime parameters (`plugin_ui`), the `battery` feature, save to device and exit modes (`save`), the built-in LampArray session, SMBus policy and SPD check, `compat dry-run` |
 | `lightloom-effects` | lib | done | `parse_effect_meta(html)` (= `schemas/effect-meta.schema.json`), control coercion, meters, JS initialisers |
+| `lightloom-macros` | lib | done; untested with real input | macro runtime: QuickJS runtime and thread per Action/Input script, `system`/`signalrgb`/`keys`/`mouse`/`block`/`console` globals (`js/macro_host.js`), options, key names, event bus, opt-in input hooks, emergency stop (`docs/macros.md`) |
 | `lightloom-inputs` | lib | done on Windows; Linux backends missing | `audio`: WASAPI loopback of an output device (cpal) + FFT analyzer (200 bands, level, width, density), `output_devices()`; `screen`: DXGI duplication of one display, 28x20 zones, 160x100 thumbnail, area/linear/colormean meters, `displays()` |
 | `lightloom-api` | lib | done | axum routers: native `/v1` REST + WS + dashboard (`docs/api/openapi.yaml`), SignalRGB-compatible REST on 16038 and canvas events on 16034 (`docs/api/compat-openapi.yaml`), `actions` (`lightloom://` / `signalrgb://` URLs), `logs` (filtering and token redaction of `/v1/logs`), the OpenRGB SDK server (`openrgb`, opt-in, 6742), loopback / Origin / token guard, movable native listener |
 | `lightloom-runtime` | lib | done | what CLI and daemon share: HID backend and device matching, SMBus buses and scans, hotplug, power events, conflict detection, sensors (system load, NvAPI, hwmon, LibreHardwareMonitor), LampArray ownership, the SignalRGB setup reader, data directories, system info, notifications, PawnIO / RAM lighting facts and the elevated helper run (`pawnio`) |

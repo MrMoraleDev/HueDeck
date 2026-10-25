@@ -288,6 +288,8 @@ pub struct DeviceContext {
     log_tail: VecDeque<String>,
     log_lines: u64,
     log_sink: Option<LogSink>,
+    /// Where `keyboard` / `mouse` feature events go (the macro runtime).
+    input_sink: Option<Arc<dyn Fn(crate::input::PluginInput) + Send + Sync>>,
     warned: BTreeSet<&'static str>,
     logged: BTreeSet<String>,
     fatal: Option<String>,
@@ -421,6 +423,7 @@ impl DeviceContext {
             log_tail: VecDeque::new(),
             log_lines: 0,
             log_sink: None,
+            input_sink: None,
             warned: BTreeSet::new(),
             logged: BTreeSet::new(),
             fatal: None,
@@ -448,6 +451,26 @@ impl DeviceContext {
     /// Forward plugin log lines to `sink` as well.
     pub fn set_log_sink(&mut self, sink: Option<LogSink>) {
         self.log_sink = sink;
+    }
+
+    /// Hand `keyboard` / `mouse` feature events to `sink`.
+    pub fn set_input_sink(&mut self, sink: Option<Arc<dyn Fn(crate::input::PluginInput) + Send + Sync>>) {
+        self.input_sink = sink;
+    }
+
+    /// A `keyboard` / `mouse` feature call (`kind`: `key`, `button`, `keyHid`,
+    /// `buttonHid`; see [`crate::input::parse`]). Dropped without a sink or when malformed.
+    pub fn input_event(&mut self, kind: &str, json: &str) {
+        let Some(sink) = &self.input_sink else {
+            return;
+        };
+        match crate::input::parse(kind, json) {
+            Some(event) => sink(event),
+            None => self.warn_once(
+                "input",
+                "keyboard/mouse feature call with malformed arguments (dropped)",
+            ),
+        }
     }
 
     /// Display name used in logs (`Name()` export or `device.setName`).
@@ -1810,6 +1833,9 @@ pub(crate) fn install(ctx: &Ctx<'_>, device: &SharedDevice, deadline: &Deadline)
         Protocol::Hybrid => "hybrid",
     }
     .to_string());
+    // The `keyboard` / `mouse` features (crate::input).
+    native!("inputEvent", |d, kind: String, json: String| d
+        .input_event(&kind, &json));
     // The `battery` feature (docs/host-api/hid-usb.md §addFeature).
     native!("batteryEnable", |d| d.enable_battery());
     native!("batterySetLevel", |d, level: f64| d.set_battery_level(level));

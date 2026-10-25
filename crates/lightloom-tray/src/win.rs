@@ -9,8 +9,8 @@
 //! menu is skipped).
 
 use lightloom_tray::{
-    ico_image, menu, perform, tooltip, Action, Api, Autostart, Desktop, Entry, HttpApi, Outcome, Status,
-    WinRunKey, WINDOW_CLASS,
+    ico_image, menu_with_profiles, perform, tooltip, Action, Api, Autostart, Desktop, Entry, HttpApi,
+    Outcome, Status, WinRunKey, WINDOW_CLASS,
 };
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -188,7 +188,17 @@ impl App {
 
     fn show_menu(&mut self) {
         let status = self.refresh();
-        let entries = menu(status, (self.autostart.enabled(), self.autostart.available()));
+        let (profiles, current) = if status == Status::NotRunning {
+            (Vec::new(), None)
+        } else {
+            self.api.profiles()
+        };
+        let entries = menu_with_profiles(
+            status,
+            (self.autostart.enabled(), self.autostart.available()),
+            &profiles,
+            current.as_deref(),
+        );
         // SAFETY: the menu is built, shown and destroyed here, on the window's
         // thread; the window is ours.
         let chosen = unsafe {

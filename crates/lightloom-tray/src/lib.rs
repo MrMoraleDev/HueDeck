@@ -12,6 +12,8 @@
 //!   directory.
 //! * **Pause / Resume lighting**: `PATCH /v1/lighting {"enabled"}`.
 //! * **Brightness** presets: `PATCH /v1/lighting {"brightness"}`.
+//! * **Profiles**: the saved profiles (`GET /v1/profiles`), the current one
+//!   checked; choosing one applies it (`POST /v1/profiles/{name}/apply`).
 //! * **Start at sign-in**: the `Lightloom` value under
 //!   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, the same value the
 //!   installer writes (`"<install dir>\lightloomw.exe"`).
@@ -73,6 +75,14 @@ pub trait Api {
     fn set_brightness(&self, brightness: u8) -> Result<(), String>;
     /// Stop the daemon (plugins restore their devices).
     fn shutdown(&self) -> Result<(), String>;
+    /// The saved profile names, and the profile applied or saved last.
+    fn profiles(&self) -> (Vec<String>, Option<String>) {
+        (Vec::new(), None)
+    }
+    /// Apply a profile.
+    fn apply_profile(&self, name: &str) -> Result<(), String> {
+        Err(format!("cannot apply {name}"))
+    }
 }
 
 /// The values under one registry key (the per-user `Run` key).
@@ -183,10 +193,14 @@ pub enum Action {
     ToggleAutostart,
     /// Stop the daemon and the tray.
     Quit,
+    /// Apply the profile at this index of the list the menu showed.
+    Profile(u8),
 }
 
 /// The brightness presets in the menu.
 pub const BRIGHTNESS_PRESETS: [u8; 4] = [25, 50, 75, 100];
+/// Most profiles the menu lists (the dashboard has them all).
+pub const MAX_MENU_PROFILES: usize = 30;
 
 impl Action {
     /// The menu command id (non-zero: 0 means "no choice" to the shell).
@@ -197,6 +211,7 @@ impl Action {
             Action::ToggleAutostart => 3,
             Action::Quit => 4,
             Action::Brightness(b) => 100 + u16::from(b.min(100)),
+            Action::Profile(i) => 300 + u16::from(i),
         }
     }
 
@@ -208,6 +223,7 @@ impl Action {
             3 => Action::ToggleAutostart,
             4 => Action::Quit,
             100..=200 => Action::Brightness((id - 100) as u8),
+            300..=555 => Action::Profile((id - 300) as u8),
             _ => return None,
         })
     }
@@ -254,6 +270,52 @@ fn item(action: Action, label: impl Into<String>, checked: bool, enabled: bool) 
 
 /// The menu for `status`; `autostart` is `(on, available)`.
 pub fn menu(status: Status, autostart: (bool, bool)) -> Vec<Entry> {
+    menu_with_profiles(status, autostart, &[], None)
+}
+
+/// [`menu`] with a Profiles submenu (when there are profiles): the first
+/// [`MAX_MENU_PROFILES`] of `profiles`, `current` checked.
+pub fn menu_with_profiles(
+    status: Status,
+    autostart: (bool, bool),
+    profiles: &[String],
+    current: Option<&str>,
+) -> Vec<Entry> {
+    let mut entries = base_menu(status, autostart);
+    let running = status != Status::NotRunning;
+    if running && !profiles.is_empty() {
+        let items = profiles
+            .iter()
+            .take(MAX_MENU_PROFILES)
+            .enumerate()
+            .map(|(i, name)| {
+                // `&` marks a mnemonic in a Windows menu.
+                item(
+                    Action::Profile(i as u8),
+                    name.replace('&', "&&"),
+                    current == Some(name.as_str()),
+                    true,
+                )
+            })
+            .collect();
+        // After Brightness.
+        let at = entries
+            .iter()
+            .position(|e| matches!(e, Entry::Submenu { label, .. } if label == "Brightness"))
+            .map_or(entries.len(), |i| i + 1);
+        entries.insert(
+            at,
+            Entry::Submenu {
+                label: "Profiles".into(),
+                enabled: true,
+                items,
+            },
+        );
+    }
+    entries
+}
+
+fn base_menu(status: Status, autostart: (bool, bool)) -> Vec<Entry> {
     let running = status != Status::NotRunning;
     let (enabled, brightness) = match status {
         Status::Running {
@@ -381,7 +443,30 @@ pub fn perform<A: Api, K: RunKey, D: Desktop>(
             Status::NotRunning => Ok(Outcome::Exit),
             Status::Running { .. } => api.shutdown().map(|_| Outcome::Exit),
         },
+        Action::Profile(i) => match status {
+            Status::Running { .. } => {
+                let (names, _) = api.profiles();
+                let name = names
+                    .get(usize::from(i))
+                    .ok_or("that profile is gone; open the menu again")?;
+                api.apply_profile(name).map(|_| Outcome::Stay)
+            }
+            Status::NotRunning => Err("Lightloom is not running".into()),
+        },
     }
+}
+
+/// `text` as one URL path segment (RFC 3986 unreserved characters kept).
+pub fn path_segment(text: &str) -> String {
+    let mut out = String::new();
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 impl<K: RunKey> RunKey for &K {
@@ -492,6 +577,28 @@ impl Api for HttpApi {
 
     fn shutdown(&self) -> Result<(), String> {
         self.call("POST", "/v1/shutdown", None).map(drop)
+    }
+
+    fn profiles(&self) -> (Vec<String>, Option<String>) {
+        let names = self
+            .json("/v1/profiles")
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|p| p.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        let current = self
+            .json("/v1/lighting")
+            .and_then(|l| l.get("profile").and_then(|p| p.as_str()).map(String::from));
+        (names, current)
+    }
+
+    fn apply_profile(&self, name: &str) -> Result<(), String> {
+        let path = format!("/v1/profiles/{}/apply", path_segment(name));
+        self.call("POST", &path, None).map(drop)
     }
 }
 
@@ -1018,5 +1125,85 @@ mod tests {
         assert_ne!(img16, img20, "20 px picks the 24 px image");
         assert!(ico_image(ico, 1000).is_some(), "too big: the largest");
         assert_eq!(ico_image(b"not an icon", 16), None);
+    }
+
+    struct ProfileApi {
+        applied: RefCell<Vec<String>>,
+    }
+
+    impl Api for ProfileApi {
+        fn status(&self) -> Status {
+            Status::Running {
+                devices: 1,
+                enabled: true,
+                brightness: 100,
+            }
+        }
+        fn dashboard_url(&self) -> Option<String> {
+            None
+        }
+        fn set_enabled(&self, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_brightness(&self, _: u8) -> Result<(), String> {
+            Ok(())
+        }
+        fn shutdown(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn profiles(&self) -> (Vec<String>, Option<String>) {
+            (vec!["Day".into(), "R&D".into()], Some("R&D".into()))
+        }
+        fn apply_profile(&self, name: &str) -> Result<(), String> {
+            self.applied.borrow_mut().push(name.into());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn profiles_are_a_quick_switch() {
+        let api = ProfileApi {
+            applied: RefCell::new(Vec::new()),
+        };
+        let (names, current) = api.profiles();
+        let m = menu_with_profiles(api.status(), (false, true), &names, current.as_deref());
+        let Some(Entry::Submenu { items, .. }) = m
+            .iter()
+            .find(|e| matches!(e, Entry::Submenu { label, .. } if label == "Profiles"))
+        else {
+            panic!("no Profiles submenu: {m:?}");
+        };
+        assert_eq!(
+            items[1],
+            Entry::Item {
+                action: Action::Profile(1),
+                label: "R&&D".into(),
+                checked: true,
+                enabled: true,
+                default: false,
+            }
+        );
+        assert_eq!(Action::from_id(Action::Profile(1).id()), Some(Action::Profile(1)));
+        perform(
+            Action::Profile(1),
+            &api,
+            &autostart(None),
+            &FakeDesktop::default(),
+        )
+        .unwrap();
+        assert_eq!(*api.applied.borrow(), ["R&D"]);
+        assert!(perform(
+            Action::Profile(7),
+            &api,
+            &autostart(None),
+            &FakeDesktop::default()
+        )
+        .is_err());
+        // No profiles, or no daemon: no submenu.
+        assert_eq!(
+            menu_with_profiles(Status::NotRunning, (false, true), &names, None),
+            menu(Status::NotRunning, (false, true))
+        );
+        assert_eq!(path_segment("R&D night/1"), "R%26D%20night%2F1");
     }
 }

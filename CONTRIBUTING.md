@@ -137,13 +137,25 @@ node --test "plugins/**/*.test.{js,mjs}"
 python -I tests/schemas/validate_corpus.py --skip-if-missing-corpus
 ```
 
-Hardware conformance (`tests/conformance/`) runs on a self-hosted runner against a
-user-supplied plugin directory and real devices:
+Conformance (`tests/conformance/run.py`) runs on the reference machine, by hand or
+through the manually dispatched `conformance-selfhosted.yml` workflow (self-hosted
+runner labelled `self-hosted, windows, lightloom-reference`). It needs no device: a
+dry run over a user-supplied plugin directory (100 % must parse, at least 95 % of
+`Initialize()` calls must succeed, API gaps are reported), a replay of every recorded
+HID trace in `plugins/*/fixtures/`, and optionally the effects PSNR comparison:
 
 ```text
-lightloom compat dry-run "<path to your plugin directory>"   # parse + Initialize() report
-lightloom bench                                              # frame / sample / write histograms
+cargo build --release -p lightloom-cli
+python -I tests/conformance/run.py --lightloom target/release/lightloom.exe \
+    --corpus "<path to your plugin directory>" [--traces <your recordings>] \
+    [--renderer <lightloom-renderer with cef> --chrome <chrome.exe>]
+python -I -m unittest discover -s tests/conformance -p "test_*.py"   # the runner's own tests
 ```
+
+A trace recorded with `lightloom light <colour> --record FILE` on real hardware goes in
+the plugin's `fixtures/` (any `*.json` name; the runner tells traces from packet
+expectations by their content). On real devices, `lightloom bench` prints frame, sample
+and write histograms.
 
 Linux builds need `libudev-dev`, `libusb-1.0-0-dev` and `pkg-config`. CEF binaries
 are fetched by the `cef` crate's build script on first build; set

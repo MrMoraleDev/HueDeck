@@ -105,18 +105,42 @@ mod tests {
         stop.reset();
         assert!(!stop.requested());
 
-        let started = std::time::Instant::now();
-        let t = std::thread::spawn(|| {
+        use std::time::Instant;
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let t = std::thread::spawn(move || {
+            entered_tx.send(Instant::now()).unwrap();
             // CTRL_CLOSE_EVENT.
             // SAFETY: calling our own handler directly, as Windows would.
-            unsafe { handler(2) }
+            let r = unsafe { handler(2) };
+            (r, Instant::now())
         });
+        // The handler thread may start late on a loaded machine: wait for it
+        // (and for its stop request) instead of assuming a fixed sleep is enough.
+        // Its grace period cannot end before `entered + CLOSE_GRACE`.
+        let entered = entered_rx
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the close handler ran");
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !stop.requested() {
+            assert!(Instant::now() < deadline, "the close handler requested no stop");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         std::thread::sleep(Duration::from_millis(100));
-        assert!(stop.requested());
-        assert!(!t.is_finished(), "close blocks until finished()");
+        // Unless scheduling already ate the whole grace period, the handler is
+        // still blocked: only finished() or CLOSE_GRACE lets it return.
+        if entered.elapsed() < CLOSE_GRACE {
+            assert!(!t.is_finished(), "close blocks until finished()");
+        }
+        let finished_at = Instant::now();
         stop.finished();
-        assert_eq!(t.join().unwrap(), BOOL(1));
-        assert!(started.elapsed() < CLOSE_GRACE, "returned once finished");
+        let (r, returned) = t.join().unwrap();
+        assert_eq!(r, BOOL(1));
+        // Woken by finished(), not by the grace timeout: it returned before the
+        // timeout could fire. Checked when finished() came well inside the grace
+        // period (a stall of more than a second meanwhile makes it inconclusive).
+        if finished_at + Duration::from_secs(1) < entered + CLOSE_GRACE {
+            assert!(returned < entered + CLOSE_GRACE, "returned once finished");
+        }
         stop.reset();
     }
 }

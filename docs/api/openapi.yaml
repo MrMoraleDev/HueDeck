@@ -1554,7 +1554,7 @@ components:
         enabled: { type: boolean, description: "`[sensors] enabled`; `false`: nothing is read." }
         polling: { type: boolean, description: Polling runs now (an effect or a client reads sensors). }
         intervalMs: { type: integer, minimum: 1000 }
-        ageMs: { type: [integer, "null"], description: Milliseconds since the last poll (`null`: never polled). }
+        ageMs: { type: [integer, "null"], description: "Milliseconds since the last poll (`null`: never polled)." }
         sensors: { type: array, items: { $ref: "#/components/schemas/SensorView" } }
         sources:
           type: array

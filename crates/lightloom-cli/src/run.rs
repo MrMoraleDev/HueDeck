@@ -44,6 +44,9 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+/// Longest a run waits past its time limit for `--min-frames`.
+pub const MIN_FRAMES_GRACE: Duration = Duration::from_secs(120);
+
 /// Options shared by `light`, `rainbow` and `bench`.
 #[derive(Debug, Clone, Args)]
 pub struct RunArgs {
@@ -68,6 +71,11 @@ pub struct RunArgs {
     /// Stop after this many seconds (default: until Ctrl-C; `bench` uses --seconds).
     #[arg(long, value_name = "SECS", value_parser = parse_secs)]
     pub duration: Option<f64>,
+    /// With --duration / --seconds: keep running past that time until every session
+    /// rendered this many frames, or 120 s more went by. For
+    /// CI benches on a loaded machine, where a fixed time may not reach Initialize.
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub min_frames: u64,
     /// Exit without calling the plugin's Shutdown(): the device keeps the last colour.
     #[arg(long)]
     pub keep: bool,
@@ -1327,7 +1335,14 @@ pub fn run(mode: Mode, args: &RunArgs) -> anyhow::Result<Outcome> {
             }
         }
         let interrupted = interrupt.requested();
-        let expired = limit.is_some_and(|l| started.elapsed() >= l);
+        let expired = limit.is_some_and(|l| {
+            let t = started.elapsed();
+            t >= l
+                && (t >= l + MIN_FRAMES_GRACE
+                    || manager
+                        .sessions()
+                        .all(|h| h.is_finished() || h.live().frames >= args.min_frames))
+        });
         // Every session ended on its own (when devices may come back, a run
         // whose devices were all unplugged waits for them instead).
         let all_done = manager.all_finished() && (!hotplug.active() || manager.sessions().next().is_some());
@@ -1620,6 +1635,11 @@ mod tests {
         BENCH.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Frames every bench test waits for past its time limit: the counts the
+    /// tests assert follow from frames rendered, not from the wall clock, so a
+    /// loaded machine makes a run longer instead of failing it.
+    const BENCH_MIN_FRAMES: u64 = 30;
+
     #[test]
     fn colors_parse() {
         assert_eq!(parse_color("#ff0000"), Ok(Rgb::new(255, 0, 0)));
@@ -1678,6 +1698,7 @@ mod tests {
             layout: None,
             record: None,
             duration: None,
+            min_frames: BENCH_MIN_FRAMES,
             keep: false,
             ignore_conflicts: false,
             no_smbus: false,
@@ -1712,6 +1733,7 @@ mod tests {
             layout: None,
             record: None,
             duration: None,
+            min_frames: BENCH_MIN_FRAMES,
             keep: false,
             ignore_conflicts: false,
             no_smbus: false,
@@ -1730,8 +1752,8 @@ mod tests {
         let out = std::env::temp_dir().join(format!("lightloom-bench-smbus-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
-            // Long enough for Initialize on a loaded CI or dev machine.
-            seconds: 3.0,
+            // Then on until BENCH_MIN_FRAMES frames, however long Initialize takes.
+            seconds: 1.0,
             mock: None,
             mock_smbus: Some("msi-gpu".into()),
         };
@@ -1760,8 +1782,8 @@ mod tests {
         let out = std::env::temp_dir().join(format!("lightloom-bench-amdgpu-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
-            // Long enough for Initialize on a loaded CI or dev machine.
-            seconds: 3.0,
+            // Then on until BENCH_MIN_FRAMES frames, however long Initialize takes.
+            seconds: 1.0,
             mock: None,
             mock_smbus: Some("sapphire-nitro-glow".into()),
         };
@@ -1782,8 +1804,8 @@ mod tests {
         let out = std::env::temp_dir().join(format!("lightloom-bench-ram-{}.json", std::process::id()));
         let mode = Mode::Bench {
             fps: 60.0,
-            // Long enough for Initialize on a loaded CI or dev machine.
-            seconds: 3.0,
+            // Then on until BENCH_MIN_FRAMES frames, however long Initialize takes.
+            seconds: 1.0,
             mock: None,
             mock_smbus: Some("crucial-ballistix".into()),
         };

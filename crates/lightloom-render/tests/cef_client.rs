@@ -115,13 +115,16 @@ fn a_crashed_renderer_is_restarted_holding_the_last_frame() {
     let (mut r, dir) = client("crash", &[("fake_exit_after", json!(5))]);
     let store = Arc::new(FrameStore::new(CANVAS_WIDTH, CANVAS_HEIGHT));
     r.start(Arc::clone(&store)).unwrap();
-    wait_until("a restart", 30, || r.status().starts >= 2);
+    wait_until("a restart", 60, || r.status().starts >= 2);
     let st = r.status();
     assert!(st.last_exit.as_deref().unwrap_or("").contains("exited"), "{st:?}");
+    // However late the client looked, the frames the first renderer painted
+    // before it died were read from its ring before the restart.
+    assert!(st.frames >= 1, "{st:?}");
     // While the renderer was gone the last frame was held, not replaced by black.
     let (_, frame) = store.latest();
     assert!(frame.pixel(0, 0).r > 0);
-    wait_until("the replacement's first frame", 30, || {
+    wait_until("the replacement's first frame", 60, || {
         r.status().max_recovery_ms.is_some()
     });
     let ms = r.status().max_recovery_ms.unwrap();

@@ -19,3 +19,4 @@ Thumbs.db
 .vscode/settings.json
 .idea/
 /packaging/msix-identity/out/
+__pycache__/

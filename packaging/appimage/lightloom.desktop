@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Desktop Entry]
+Type=Application
+Name=Lightloom
+GenericName=RGB Lighting Manager
+Comment=Control the RGB lighting of your PC components and peripherals
+# AppImage: AppRun opens the dashboard and starts lightloomd when it is not running.
+# Flatpak rewrites Exec to its own command (packaging/flatpak/org.lightloom.Lightloom.yml).
+Exec=lightloomd --open
+Icon=lightloom
+Terminal=false
+Categories=Settings;HardwareSettings;Utility;
+Keywords=RGB;LED;lighting;keyboard;mouse;fan;
+StartupNotify=false
+X-AppImage-Name=Lightloom

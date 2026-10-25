@@ -260,3 +260,209 @@ jobs:
             dist/*.tar.gz
             dist/*.cdx.json
             dist/SHA256SUMS
+
+  # ===========================================================================
+  # Linux (WP-L7). Separate jobs so the `build` matrix and the `release` job above stay
+  # untouched: `linux` builds the full Linux tarball and the AppImage, `linux-publish`
+  # adds them to the draft release once `release` has created it, `linux-reproducible`
+  # checks that two builds of the daemon and CLI are bit-identical.
+  # The `release` job downloads every artifact of the run; the names used here
+  # (.tar.xz, .AppImage, SHA256SUMS-linux) match none of its globs, so it publishes the
+  # same files whether or not `linux` finished first. Docs: docs/linux-porting.md.
+  # ===========================================================================
+  linux:
+    name: linux (tarball + AppImage)
+    # glibc 2.35 baseline: binaries built here also run on Ubuntu 22.04 and Debian 12.
+    runs-on: ubuntu-22.04
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev libusb-1.0-0-dev pkg-config appstream desktop-file-utils
+
+      - name: Version and SOURCE_DATE_EPOCH
+        run: |
+          set -eu
+          ref="${{ inputs.tag || github.ref_name }}"
+          case "$ref" in
+            v[0-9]*) version="${ref#v}" ;;
+            *) version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)-$(git rev-parse --short HEAD)" ;;
+          esac
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux-${{ env.TARGET }}
+
+      - name: Install cargo-auditable
+        run: cargo install --locked cargo-auditable
+
+      # Same path remapping as `linux-reproducible`, so that job checks what ships. When
+      # several prefixes match, rustc applies the last one: the target dir comes last.
+      - name: Build daemon and CLI (auditable, release)
+        run: |
+          set -eu
+          export RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/lightloom --remap-path-prefix=$GITHUB_WORKSPACE/target=/target"
+          cargo auditable build --release --locked -p lightloom-daemon -p lightloom-cli --target "$TARGET"
+
+      # The CEF effect renderer joins here once it builds on Linux (WP-L5):
+      #   cargo auditable build --release -p lightloom-renderer --features cef --target "$TARGET"
+      # stage-linux.sh then picks up lightloom-renderer and the CEF runtime next to it
+      # (pass --require-renderer from then on).
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Build the dashboard
+        working-directory: ui
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Stage
+        run: |
+          tools/package/stage-linux.sh --release "target/$TARGET/release" --ui ui/dist \
+            --out "dist/lightloom-$VERSION-linux-x86_64"
+
+      - name: Check the packaging files
+        run: |
+          set -eu
+          stage="dist/lightloom-$VERSION-linux-x86_64"
+          # systemd user unit, installed the documented way (symlink in ~/.local/bin).
+          mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user"
+          ln -sf "$PWD/$stage/lightloomd" "$HOME/.local/bin/lightloomd"
+          cp packaging/systemd/lightloomd.service "$HOME/.config/systemd/user/"
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg}"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          systemd-analyze --user verify "$HOME/.config/systemd/user/lightloomd.service"
+          # Through the symlink the daemon still finds its dashboard next to the real
+          # executable (not the source-tree fallback) and serves it; no devices are opened.
+          log="$RUNNER_TEMP/lightloomd.log"
+          "$HOME/.local/bin/lightloomd" --home "$RUNNER_TEMP/lightloom-home" --no-hardware \
+            --ephemeral --port 53017 > "$log" 2>&1 &
+          pid=$!
+          ok=0
+          for _ in $(seq 1 100); do
+            if curl -fsS http://127.0.0.1:53017/ -o "$RUNNER_TEMP/index.html"; then ok=1; break; fi
+            sleep 0.2
+          done
+          kill -TERM "$pid"; wait "$pid" || true
+          cat "$log"
+          test "$ok" = 1
+          grep -qi '<html' "$RUNNER_TEMP/index.html"
+          grep -qF "$PWD/$stage/ui" "$log"
+          desktop-file-validate packaging/appimage/lightloom.desktop
+          appstreamcli validate --no-net packaging/flatpak/org.lightloom.Lightloom.metainfo.xml
+          sh -n packaging/appimage/AppRun
+
+      - name: Tarball (reproducible)
+        run: |
+          set -eu
+          name="lightloom-$VERSION-linux-x86_64"
+          tar -C dist --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$SOURCE_DATE_EPOCH" -cf - "$name" | xz -T1 -9 > "dist/$name.tar.xz"
+
+      - name: AppImage
+        run: |
+          packaging/appimage/build-appimage.sh --stage "dist/lightloom-$VERSION-linux-x86_64" \
+            --version "$VERSION" --out dist
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- *.tar.xz *.AppImage > SHA256SUMS-linux
+          cat SHA256SUMS-linux
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lightloom-linux
+          path: |
+            dist/*.tar.xz
+            dist/*.AppImage
+            dist/SHA256SUMS-linux
+          if-no-files-found: error
+
+  linux-publish:
+    name: GitHub release (Linux)
+    needs: [release, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: lightloom-linux
+          path: dist
+      - name: Upload to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd dist
+          gh release upload --clobber "${{ github.ref_name }}" *.tar.xz *.AppImage SHA256SUMS-linux
+
+  linux-reproducible:
+    name: linux reproducibility (daemon + CLI)
+    runs-on: ubuntu-22.04
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libudev-dev libusb-1.0-0-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Install cargo-auditable
+        run: cargo install --locked cargo-auditable
+
+      # Two clean builds from the same checkout into different target directories (no
+      # rust-cache: nothing may be shared between them). The checkout path must stay the
+      # same: env!("CARGO_MANIFEST_DIR") is embedded and --remap-path-prefix does not
+      # rewrite it (docs/linux-porting.md, "Reproducibility limits").
+      - name: Build twice
+        run: |
+          set -eu
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          for run in a b; do
+            dir="$RUNNER_TEMP/target-$run"
+            RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/lightloom --remap-path-prefix=$dir=/target" \
+              CARGO_TARGET_DIR="$dir" \
+              cargo auditable build --release --locked -p lightloom-daemon -p lightloom-cli --target "$TARGET"
+          done
+
+      - name: Compare hashes
+        run: |
+          set -eu
+          status=0
+          for b in lightloomd lightloom; do
+            a="$(sha256sum "$RUNNER_TEMP/target-a/$TARGET/release/$b" | cut -d' ' -f1)"
+            c="$(sha256sum "$RUNNER_TEMP/target-b/$TARGET/release/$b" | cut -d' ' -f1)"
+            echo "$b  $a  $c"
+            if [ "$a" != "$c" ]; then
+              echo "::error::$b differs between two builds of the same commit"
+              status=1
+            fi
+          done
+          exit "$status"

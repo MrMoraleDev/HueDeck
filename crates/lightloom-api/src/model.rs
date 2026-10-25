@@ -37,6 +37,9 @@ pub struct Snapshot {
     pub warnings: Vec<String>,
     /// PawnIO / RAM lighting (Settings).
     pub pawnio: PawnIoView,
+    /// The operating system and its build (`Windows 11 Pro 25H2 (build 26200)`), for device reports.
+    #[serde(default)]
+    pub os: String,
 }
 
 /// PawnIO and the Lightloom I/O broker: what RAM lighting needs (Windows).
@@ -375,6 +378,22 @@ pub struct DeviceView {
     /// Where to read about [`DeviceView::driver_problem`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_url: Option<String>,
+    /// Someone has run the plugin on this very product: it is in the `tested`
+    /// list of the plugin's `manifest.json` (USB product id, or the card's PCI ids).
+    #[serde(default)]
+    pub tested: bool,
+    /// The plugin's version: its manifest's, else its `Version()` export.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_version: Option<String>,
+    /// How the plugin reaches the device: `hid`, `rawusb`, `hybrid`, `serial`,
+    /// `smbus` or `network` (`lamparray` for Windows Dynamic Lighting devices).
+    #[serde(default)]
+    pub plugin_type: String,
+    /// The device's interfaces as enumeration saw them, one line each (HID
+    /// collections, USB interfaces and their drivers, serial ports), for device
+    /// reports. No paths and no serial numbers.
+    #[serde(default)]
+    pub interfaces: Vec<String>,
 }
 
 /// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).

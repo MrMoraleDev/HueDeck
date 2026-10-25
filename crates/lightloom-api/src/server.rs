@@ -252,7 +252,7 @@ pub fn native_router(ctx: ApiContext, port: u16) -> Router {
 
 async fn health(State(ctx): State<ApiContext>) -> Response {
     let s = ctx.backend.snapshot();
-    Json(json!({ "status": "ok", "version": s.version, "state": s.state })).into_response()
+    Json(json!({ "status": "ok", "version": s.version, "state": s.state, "os": s.os })).into_response()
 }
 
 async fn state(State(ctx): State<ApiContext>) -> Response {

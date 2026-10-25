@@ -73,6 +73,9 @@ and a protocol note in `docs/hardware/<device>.md`: where every fact comes from.
 
 Usually a product id: add it to `ProductId()` in `plugin.js` and to `pids` in
 `manifest.json`. Leave it out of `tested` until someone has run it on the device.
+The dashboard's Devices tab shows each device as "Tested" or "Untested" from this list
+(the API's `tested` field) and offers a prefilled GitHub device report (docs/privacy.md,
+"Device reports"); a "Works" report is how a product id earns its place in `tested`.
 If the model has more or fewer LEDs, adjust `Size`, `LedNames` and `LedPositions`.
 
 ## Writing a new family

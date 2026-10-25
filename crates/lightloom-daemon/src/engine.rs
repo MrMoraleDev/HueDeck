@@ -99,6 +99,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, oneshot};
 
 mod actions;
+mod device_facts;
 mod playlists;
 
 /// Settings keys in the database.
@@ -495,6 +496,10 @@ struct Engine {
     defaults: Arc<Mutex<SessionDefaults>>,
     /// Supported devices present now (enabled or not).
     present: Vec<Present>,
+    /// The plugins' manifest facts (tested devices, versions) for the device list.
+    manifests: device_facts::ManifestCache,
+    /// The OS and its build, for device reports (read once).
+    os: String,
     effects: EffectLibrary,
     components: ComponentLibrary,
     canvas: Canvas,
@@ -653,6 +658,8 @@ impl Engine {
             manager: None,
             defaults,
             present: Vec::new(),
+            manifests: device_facts::ManifestCache::default(),
+            os: lightloom_runtime::system::os_description(),
             effects: EffectLibrary::new(),
             components: ComponentLibrary::default(),
             canvas: Canvas::Null(NullRenderer::new(Pattern::Solid(Rgb::new(0, 0, 0)), 30.0)),
@@ -1852,6 +1859,7 @@ impl Engine {
                 all
             },
             pawnio: self.pawnio_view(),
+            os: self.os.clone(),
         }
     }
 
@@ -2114,7 +2122,15 @@ impl Engine {
                     .as_ref()
                     .map(|b| format!("data:image/png;base64,{b}"))
             });
+            let manifest = self.manifests.get(&meta.source_path);
             let mut view = DeviceView {
+                tested: device_facts::tested(manifest.as_deref(), &p.device),
+                plugin_version: manifest
+                    .as_ref()
+                    .and_then(|m| m.version.clone())
+                    .or_else(|| meta.version.clone()),
+                plugin_type: device_facts::plugin_type(p).into(),
+                interfaces: device_facts::interfaces(&p.device),
                 key: key.to_string(),
                 vid: p.device.vid,
                 pid: p.device.pid,
@@ -2751,6 +2767,7 @@ impl Engine {
             Request::SetUrlScheme { enabled } => self.set_url_scheme(enabled),
             Request::Rescan => {
                 self.smbus_scan_due = true;
+                self.manifests.clear();
                 self.rescan();
                 Ok(json!({ "devices": self.present.len() }))
             }

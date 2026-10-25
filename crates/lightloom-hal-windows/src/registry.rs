@@ -134,6 +134,14 @@ pub fn current_user_values(subkey: &str) -> io::Result<Vec<(String, RegValue)>> 
     values(&key)
 }
 
+/// The values directly under `HKLM\<subkey>` (read-only); empty when the key is missing.
+pub fn local_machine_values(subkey: &str) -> io::Result<Vec<(String, RegValue)>> {
+    let Some(key) = open_in(HKEY_LOCAL_MACHINE, subkey)? else {
+        return Ok(Vec::new());
+    };
+    values(&key)
+}
+
 /// The string values directly under `HKLM\<subkey>` (read-only), as
 /// [`current_user_strings`] does for `HKCU`.
 pub fn local_machine_strings(subkey: &str) -> io::Result<Vec<(String, String)>> {

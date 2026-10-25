@@ -63,6 +63,7 @@ paths:
                   status: { const: ok }
                   version: { type: string, examples: ["0.1.0"] }
                   state: { type: string, description: "Lifecycle state (`Running`, `ScanningHardware`, ...)." }
+                  os: { type: string, description: "Operating system and build, as device reports show it.", examples: ["Windows 11 Pro 25H2 (build 26200.6899)"] }
   /v1/state:
     get:
       tags: [daemon]
@@ -1230,6 +1231,7 @@ components:
         conflicts: { type: array, items: { type: string }, description: Running software that holds the same devices (reported, never terminated). }
         warnings: { type: array, items: { type: string } }
         pawnio: { $ref: "#/components/schemas/PawnIoView" }
+        os: { type: string, description: "Operating system and build (`Windows 11 Pro 25H2 (build 26200.6899)`, `Ubuntu 24.04.1 LTS (kernel 6.8.0)`), for device reports." }
     PawnIoView:
       type: object
       description: PawnIO and the Lightloom I/O service, what RAM lighting needs (Windows).
@@ -1356,6 +1358,19 @@ components:
             Why the device cannot be driven as plugged in, e.g. "needs WinUSB driver: ..." for a raw USB
             device Windows bound no WinUSB driver to (Lightloom never installs one). Absent when there is none.
         helpUrl: { type: string, description: Where to read about `driverProblem`. }
+        tested:
+          type: boolean
+          description: >-
+            The plugin's `manifest.json` lists this very product as tested (`tested` of its USB claim, or
+            the card's PCI ids in its SMBus claim). False for plugins without a manifest.
+        pluginVersion: { type: string, description: "The plugin's version: its manifest's, else its `Version()` export. Absent when unknown." }
+        pluginType: { enum: [hid, rawusb, hybrid, serial, smbus, network, lamparray, ""], description: How the plugin reaches the device (empty for absent devices). }
+        interfaces:
+          type: array
+          items: { type: string }
+          description: >-
+            The device's interfaces as enumeration saw them, one line each (HID collections, USB interfaces
+            and their drivers, serial ports, the SMBus address), for device reports. No paths, no serial numbers.
         save:
           oneOf:
             - $ref: "#/components/schemas/SaveSupport"

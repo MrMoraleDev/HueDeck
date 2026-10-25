@@ -6,7 +6,10 @@
   import ControlInput from "./ControlInput.svelte";
   import SaveDialog from "./SaveDialog.svelte";
   import BatteryBadge from "./BatteryBadge.svelte";
+  import DeviceReport, { skipWorksPreview } from "./DeviceReport.svelte";
   import { groupParameters, groupTitle } from "../lib/params";
+  import { token } from "../lib/api";
+  import { buildReport, type ReportResult } from "../lib/report";
 
   let { snapshot }: { snapshot: Snapshot } = $props();
   let library = $state<LibraryComponent[]>([]);
@@ -15,6 +18,21 @@
   let pick = $state<Record<string, string>>({});
   let strip = $state<Record<string, number>>({});
   let saving = $state(false);
+  /** The device report being previewed. */
+  let reporting = $state<{ device: DeviceView; result: ReportResult } | null>(null);
+
+  function report(d: DeviceView, result: ReportResult) {
+    if (result === "works" && skipWorksPreview()) {
+      // The user turned the preview off for "Works": one click opens the form.
+      const r = buildReport(
+        { device: $state.snapshot(d) as DeviceView, version: snapshot.version, os: snapshot.os ?? "", logs: daemon.logs, token: token() },
+        "works",
+      );
+      window.open(r.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    reporting = { device: d, result };
+  }
   const MODE_NAMES: Record<string, string> = {
     restore: "Its own lighting",
     keep: "Keep the last colours",
@@ -53,6 +71,16 @@
 {#if saving}
   <SaveDialog {snapshot} onclose={() => (saving = false)} />
 {/if}
+{#if reporting}
+  <DeviceReport
+    device={reporting.device}
+    result={reporting.result}
+    version={snapshot.version}
+    os={snapshot.os ?? ""}
+    logs={daemon.logs}
+    onclose={() => (reporting = null)}
+  />
+{/if}
 
 <div class="list">
   {#each snapshot.devices as d (d.key)}
@@ -64,6 +92,14 @@
           <span class="muted key">{d.bus ? (d.bus.startsWith("network") ? d.bus : `SMBus · ${d.bus}`) : d.key}</span>
         </div>
         <span class={`badge ${stateBadge(d)}`}>{d.state}</span>
+        <span
+          class="badge"
+          class:good={d.tested}
+          title={d.tested
+            ? "Someone has run this plugin on this very device: it is in the plugin's tested list."
+            : "Nobody has reported this device with this plugin yet. If it works (or not), the buttons below open a prefilled report."}
+          >{d.tested ? "Tested" : "Untested"}</span
+        >
         {#if d.thirdParty}<span class="badge" title="Driven by a plugin read from your SignalRGB installation"
             >third-party plugin</span
           >{/if}
@@ -89,7 +125,23 @@
           >
         {/if}
       </div>
-      <p class="muted plugin">Plugin: {d.plugin} <span class="path">({d.pluginPath})</span></p>
+      <div class="row plugin">
+        <p class="muted">
+          Plugin: {d.plugin}{d.pluginVersion ? ` ${d.pluginVersion}` : ""} <span class="path">({d.pluginPath})</span>
+        </p>
+        <span class="report">
+          <button
+            class="small"
+            title="Open a prefilled GitHub issue saying this device works (you see it first; Lightloom sends nothing)"
+            onclick={() => report(d, "works")}>Works</button
+          >
+          <button
+            class="small"
+            title="Open a prefilled GitHub issue about a problem with this device (you see it first; Lightloom sends nothing)"
+            onclick={() => report(d, "problem")}>Report a problem</button
+          >
+        </span>
+      </div>
       {#if d.driverProblem}
         <p class="driver-problem">
           <span class="badge bad">needs WinUSB driver</span>
@@ -239,9 +291,28 @@
   }
   .stats {
     flex: 1;
+    /* Counters change every second: fixed-width digits keep the row from shifting. */
+    font-variant-numeric: tabular-nums;
   }
   .plugin {
     margin: 6px 0 0;
+    font-size: 12px;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+  }
+  .plugin p {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .report {
+    display: inline-flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .small {
+    padding: 2px 8px;
     font-size: 12px;
   }
   .driver-problem {

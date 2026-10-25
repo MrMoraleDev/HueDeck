@@ -4,6 +4,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api } from "../lib/api";
+  import { reconcile } from "../lib/reconcile";
   import type { SensorsView } from "../lib/types";
 
   const EVERY = 2000;
@@ -13,8 +14,11 @@
   async function refresh() {
     if (document.visibilityState !== "visible") return;
     try {
-      view = await api.sensors();
-      failed = null;
+      const next = await api.sensors();
+      // In place: only the readings that moved re-render.
+      if (view) reconcile(view, next);
+      else view = next;
+      if (failed !== null) failed = null;
     } catch (e) {
       failed = e instanceof Error ? e.message : String(e);
     }

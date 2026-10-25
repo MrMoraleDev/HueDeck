@@ -31,6 +31,33 @@ Everything else stays on your computer:
 - **Effects** are web pages rendered offline by the bundled Chromium; an effect you add
   yourself could load web content, as any web page can.
 
+## Device reports
+
+The Devices tab has two buttons per device, **Works** and **Report a problem**. They do not
+send anything: they open a GitHub issue form (`.github/ISSUE_TEMPLATE/device-report.yml`)
+in your browser with the fields filled in, and you decide there whether to submit it.
+Before the browser opens, the dashboard shows exactly what the form will contain. What goes
+in, all built inside the dashboard page:
+
+- the result ("Works" or "Does not work"), the device's name, its USB VID:PID (or SMBus
+  address, or "network device"), the plugin's name and version, the Lightloom version and the
+  operating system with its build number;
+- for a problem, the text you type;
+- diagnostics: the device key with the serial number masked, the plugin's type and file,
+  the device state and driver state, frame and error counters, its interfaces (HID
+  collections, USB interfaces and their drivers), endpoints, channels, the plugin's messages,
+  and the log lines that name the device and arrived since the dashboard page opened.
+
+Before anything goes into the link, the dashboard removes the API token, replaces the user
+folder in paths (`C:Users<name>`, `/home/<name>`) with `%USERPROFILE%` or `~`, masks serial
+numbers and network ids except their last 4 characters, and replaces IP and MAC addresses
+with `<ip>` and `<mac>`. The diagnostics are kept under about 6 KB (the oldest log lines go
+first) because the whole form travels in the link. Opening the link is a normal visit to
+github.com; you need a GitHub account to submit the issue.
+
+If you tick "Open Works reports without this preview", a later **Works** click opens the
+form directly; the choice is kept in the browser's local storage for the dashboard page.
+
 ## What is stored
 
 Settings, layouts, presets and the API token stay in your user profile

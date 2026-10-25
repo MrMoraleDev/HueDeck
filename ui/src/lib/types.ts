@@ -99,6 +99,14 @@ export interface DeviceView {
   driverProblem?: string;
   /** Where to read about driverProblem. */
   helpUrl?: string;
+  /** The plugin's manifest lists this very product as tested. */
+  tested?: boolean;
+  /** The plugin's version (its manifest's, else its Version() export). */
+  pluginVersion?: string;
+  /** hid, rawusb, hybrid, serial, smbus, network or lamparray ("" for absent devices). */
+  pluginType?: string;
+  /** Interfaces as enumeration saw them, one line each (no paths, no serials). */
+  interfaces?: string[];
 }
 
 export type ShutdownMode = "restore" | "keep" | "off";
@@ -271,6 +279,8 @@ export interface Snapshot {
   conflicts: string[];
   warnings: string[];
   pawnio: PawnIoView;
+  /** OS and build ("Windows 11 Pro 25H2 (build 26200.6899)"), for device reports. */
+  os?: string;
 }
 
 export interface PawnIoJob {

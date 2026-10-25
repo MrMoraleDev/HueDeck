@@ -151,7 +151,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `huedeck-setup` one-shot elevated installer | Partial | `crates/huedeck-setup/src/`: `--pawnio-install` (verified download and silent install of PawnIO 2.2.0), pinned modules + broker, registers the service; the installer option and Settings → PawnIO / RAM lighting run it behind one UAC prompt. No WinUSB binding |
 | `bus.*` mapping, capability matrix | Done | `crates/huedeck-plugin-host/src/smbus.rs`, `plugins/README.md` "SMBus plugins" |
 | `huedeck-nvapi` GPU I2C | Done | `crates/huedeck-nvapi/`, 19 tests; `plugins/msi-gpu`, `docs/hardware/msi-gpu.md` |
-| AMD GPU I2C (ADLX/ADL) | Missing | see `docs/research/drivers.md` |
+| AMD GPU I2C (ADL) | Done, untested on hardware | `crates/huedeck-adl/` (legacy ADL, fake-backed tests); `plugins/sapphire-nitro-glow`, `docs/hardware/sapphire-nitro-glow.md`; no AMD card on the reference PC |
 | Sensors (MSR, NvAPI thermal, LibreHardwareMonitor JSON) | Missing | `huedeck-hal/src/sensors.rs` trait only; `engine.getSensorValue` reads pushed values (`inject.rs`), nothing pushes them |
 | Fan curves + SuperIO | Missing | stretch goal in the plan |
 | Accept: Crucial Ballistix via SmbusPIIX4, unmodified imported plugin | Done with a first-party plugin | `docs/hardware/crucial-ballistix.md`: both modules tested 2026-10-22 with HueDeck's `plugins/crucial-ballistix` (the standalone direction replaces the imported plugin) |
@@ -265,6 +265,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
 4. **WP-AMDGPU: AMD GPU I2C via ADL/ADLX. Size M.**
    - New crate `huedeck-adl` mirroring `huedeck-nvapi` (dynamic `atiadlxx.dll`, worker thread, `SmbusBus` impl, fake), wired in `huedeck-runtime/src/smbus.rs`.
    - See `docs/research/drivers.md`.
+   - Status: implemented on `feature/amd-gpu` (`crates/huedeck-adl`, `plugins/sapphire-nitro-glow`, `docs/hardware/sapphire-nitro-glow.md`); mock-tested only, needs an AMD card.
 5. **WP-SUSPEND: system sleep and resume. Size S.**
    - Touches: `huedeck-hal-windows` (`PowerRegisterSuspendResumeNotification` or a hidden window), `huedeck-daemon/src/{lifecycle,engine}.rs`.
    - `Shutdown(true)` before sleep, re-`Initialize` on resume.

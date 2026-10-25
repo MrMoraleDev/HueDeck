@@ -439,7 +439,7 @@ pub struct Settings {
     pub signalrgb_available: bool,
     /// Composite effects on the GPU instead of in software.
     pub gpu_compositing: bool,
-    /// Drive SMBus devices (GPU RGB through NvAPI; RAM RGB through the I/O
+    /// Drive SMBus devices (GPU RGB through NvAPI and AMD ADL; RAM RGB through the I/O
     /// broker when it is installed and healthy); on unless turned off.
     pub smbus: bool,
     /// Network lights: run the network plugins' discovery and drive the LAN

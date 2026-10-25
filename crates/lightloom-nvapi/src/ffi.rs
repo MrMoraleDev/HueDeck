@@ -7,6 +7,7 @@
 //! (`NVAPI_INTERFACE` is `__cdecl`, i.e. `extern "C"`).
 
 use crate::info::NvI2cInfoV3;
+use crate::sensors::{NvClockFrequenciesV2, NvDynamicPstatesInfoEx, NvThermalSettingsV2};
 use crate::NvapiError;
 use std::ffi::c_void;
 use windows::core::{s, w};
@@ -34,6 +35,18 @@ pub type GetBusIdFn = unsafe extern "C" fn(h: NvPhysicalGpuHandle, bus: *mut u32
 /// `NvAPI_I2CReadEx` / `NvAPI_I2CWriteEx(h, NV_I2C_INFO_V3*, NvU32* unknown)` (OpenRGB's ids).
 pub type I2cExFn =
     unsafe extern "C" fn(h: NvPhysicalGpuHandle, info: *mut NvI2cInfoV3, unknown: *mut u32) -> i32;
+
+/// `NvAPI_GPU_GetThermalSettings(h, NvU32 sensorIndex, NV_GPU_THERMAL_SETTINGS*)`.
+pub type GetThermalSettingsFn =
+    unsafe extern "C" fn(h: NvPhysicalGpuHandle, index: u32, out: *mut NvThermalSettingsV2) -> i32;
+/// `NvAPI_GPU_GetDynamicPstatesInfoEx(h, NV_GPU_DYNAMIC_PSTATES_INFO_EX*)`.
+pub type GetDynamicPstatesInfoExFn =
+    unsafe extern "C" fn(h: NvPhysicalGpuHandle, out: *mut NvDynamicPstatesInfoEx) -> i32;
+/// `NvAPI_GPU_GetTachReading(h, NvU32*)`.
+pub type GetTachReadingFn = unsafe extern "C" fn(h: NvPhysicalGpuHandle, rpm: *mut u32) -> i32;
+/// `NvAPI_GPU_GetAllClockFrequencies(h, NV_GPU_CLOCK_FREQUENCIES*)`.
+pub type GetAllClockFrequenciesFn =
+    unsafe extern "C" fn(h: NvPhysicalGpuHandle, out: *mut NvClockFrequenciesV2) -> i32;
 
 /// Most physical GPUs `NvAPI_EnumPhysicalGPUs` reports.
 pub const NVAPI_MAX_PHYSICAL_GPUS: usize = 64;

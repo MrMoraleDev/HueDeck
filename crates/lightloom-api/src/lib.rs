@@ -165,6 +165,7 @@ pub const NATIVE_ROUTES: &[Route] = &[
     r("GET", "/export", false),
     r("POST", "/import", true),
     r("POST", "/rescan", true),
+    r("GET", "/sensors", false),
     r("GET", "/network", false),
     r("POST", "/network/{plugin}/add", true),
     r("POST", "/network/{plugin}/controllers/{id}/{action}", true),

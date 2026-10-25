@@ -40,7 +40,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | M2 Compatible plugin host | **Partial** | no rawusb/hybrid/serial sessions (`bulk_transfer`, `control_transfer`, `setProtocol` throw); the Sonix 320F keyboard is not driven (EVision V1); the physical hot-unplug test has not been run |
 | M3 Effects pipeline | **Done** | the Chromium sandbox is off until releases are signed |
 | M4 Dashboard, persistence, API, packaging | **Partial** | the MSI, winget and Authenticode signing; autostart and tray; the plugin sources manager; the logs page; compat API parts; the fresh-machine acceptance run |
-| M5 Privileged bus | **Partial** | PIIX4 and I801 (I801 mock-tested only, no Intel board run); no LpcIO; no AMD GPU (ADLX); no sensors or fans; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
+| M5 Privileged bus | **Partial** | PIIX4 and I801 (I801 mock-tested only, no Intel board run); no LpcIO; no AMD GPU (ADLX); sensors read-only (no CPU temperature on Windows without LibreHardwareMonitor), no fan control; no fuzz target; no soak with HWiNFO/OpenRGB running; `lightloom-setup` does not install PawnIO or bind WinUSB |
 | M6 Inputs, network, extras | **Missing** (network in progress) | audio, screen, meters, LCD faces, macros, actions, LampArray HAL backend, OpenRGB SDK server, runtime parameters UI |
 | M7 Linux + 1.0 | **Partial** | hidraw backend, udev hotplug and `lightloom udev generate` (WP-L1, WP-L2) compile-checked for Linux and unit-tested, not yet run on Linux; nusb/serial/i2c/hwmon, CEF, packaging and cargo-dist missing |
 
@@ -152,7 +152,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | `bus.*` mapping, capability matrix | Done | `crates/lightloom-plugin-host/src/smbus.rs`, `plugins/README.md` "SMBus plugins" |
 | `lightloom-nvapi` GPU I2C | Done | `crates/lightloom-nvapi/`, 19 tests; `plugins/msi-gpu`, `docs/hardware/msi-gpu.md` |
 | AMD GPU I2C (ADLX/ADL) | Missing | see `docs/research/drivers.md` |
-| Sensors (MSR, NvAPI thermal, LibreHardwareMonitor JSON) | Missing | `lightloom-hal/src/sensors.rs` trait only; `engine.getSensorValue` reads pushed values (`inject.rs`), nothing pushes them |
+| Sensors (NvAPI thermal, LibreHardwareMonitor JSON, system load, hwmon) | Done, read-only, not run on hardware | `docs/sensors.md`: registry `crates/lightloom-runtime/src/sensors.rs` (system load, NvAPI, hwmon, optional LibreHardwareMonitor JSON, `CPU Temperature` alias); NvAPI thermal/usage/tach/clock queries on the shared worker (`crates/lightloom-nvapi/src/sensors.rs`); poller at most 1 Hz, only while an effect (`uses.sensors`) or `GET /v1/sensors` reads (`crates/lightloom-daemon/src/sensors.rs`); pushed as `engine.sensors`; dashboard Sensors list. CPU MSRs through PawnIO left as future work |
 | Fan curves + SuperIO | Missing | stretch goal in the plan |
 | Accept: Crucial Ballistix via SmbusPIIX4, unmodified imported plugin | Done with a first-party plugin | `docs/hardware/crucial-ballistix.md`: both modules tested 2026-10-22 with Lightloom's `plugins/crucial-ballistix` (the standalone direction replaces the imported plugin) |
 | Accept: RTX 3060 via NvAPI I2C | Done | commit `9311108`, `docs/hardware/msi-gpu.md` |
@@ -329,6 +329,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
     - The plugin fan API (`createFanControl`, …) with curves.
     - LpcIO/NCT6687D through PawnIO LpcIO in the broker.
     - Opt-in only. Touches `lightloom-iobroker`, `lightloom-nvapi`, `lightloom-inputs`, `host.js`, the daemon and a UI page.
+    - **Sensors half done** on `feature/sensors`, read-only (`docs/sensors.md`): system CPU/RAM load, NvAPI GPU temperature/load/fan/clocks, Linux hwmon, LibreHardwareMonitor `data.json` (opt-in `[sensors] lhm_url`, loopback only) for the CPU temperature on Windows; `engine.getSensorValue`, `GET /v1/sensors`, dashboard list; polled at most 1 Hz and only on demand. CPU MSRs through PawnIO (`AMDFamily17` / `IntelMSR`) not done (would need a new read-only broker op and module pins). Fan control (plugin fan API, curves, LpcIO, hwmon `pwm`) remains, opt-in; the plugin fan API stays a no-op.
 19. **WP-FUZZ: broker fuzz target. Size S.**
     - `crates/lightloom-iobroker/fuzz/` (cargo-fuzz) or a proptest of `BrokerRequest` decoding and `server` handling with the fakes.
     - Accept: 1M iterations, no panic.

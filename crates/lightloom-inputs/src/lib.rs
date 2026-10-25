@@ -4,7 +4,8 @@
 //!
 //! Audio: [`audio`] (WASAPI loopback + FFT, docs/audio.md). Screen:
 //! [`screen`] (DXGI Desktop Duplication, zones and meters, docs/screen.md).
-//! The sensor facade arrives with its work package.
+//! Sensors (`engine.sensors`) are polled by the daemon from
+//! `lightloom_runtime::sensors` (docs/sensors.md).
 
 // Only the DXGI duplication (`screen/dxgi.rs`) opts back in.
 #![deny(unsafe_code)]

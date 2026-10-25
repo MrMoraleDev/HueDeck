@@ -416,6 +416,9 @@ pub struct Uses {
     pub meters: bool,
     /// References any `engine.*` global (sensors, now-playing, …).
     pub engine: bool,
+    /// Calls `engine.getSensorValue` or reads `engine.sensors`.
+    #[serde(skip_serializing_if = "is_false")]
+    pub sensors: bool,
     /// Requests a WebGL context.
     pub webgl: bool,
     /// Implements `onCanvasTapped` / `onKeyPressed` / `onCanvasApiEvent`.

@@ -40,6 +40,7 @@ tags:
   - name: layouts
   - name: settings
   - name: network
+  - name: sensors
   - name: backup
   - name: canvas
   - name: streams
@@ -812,6 +813,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorBody" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/sensors:
+    get:
+      tags: [sensors]
+      operationId: getSensors
+      summary: Hardware sensors (read-only)
+      description: |
+        Temperatures, loads, fan speeds and clocks from the system (CPU/RAM load), NvAPI (NVIDIA
+        GPUs, Windows), hwmon (Linux) and, when `[sensors] lhm_url` is set, LibreHardwareMonitor.
+        Each request keeps polling on for 10 s (at most once a second, `[sensors] interval_ms`);
+        with no request and no effect reading sensors nothing is polled. The first request waits
+        up to 1.5 s for a first poll. Names are what `engine.getSensorValue(name)` takes
+        (docs/sensors.md). Nothing is ever written: there is no fan control.
+      responses:
+        "200":
+          description: The values of the last poll.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SensorsView" }
   /v1/network:
     get:
       tags: [network]
@@ -1305,7 +1324,7 @@ components:
         presets: { type: array, items: { type: string } }
         uses:
           type: array
-          items: { enum: [audio, video, meters, engine, webgl, input] }
+          items: { enum: [audio, video, meters, engine, sensors, webgl, input] }
           description: What the effect reads; effects with `meters` are game integrations.
     Settings:
       type: object
@@ -1324,6 +1343,32 @@ components:
         batteryNotifications: { type: boolean }
         shutdownMode: { enum: [restore, keep, off], description: What devices show when Lightloom closes. }
         notificationsAvailable: { type: boolean, description: This OS has system notifications Lightloom can show. }
+    SensorsView:
+      type: object
+      properties:
+        enabled: { type: boolean, description: "`[sensors] enabled`; `false`: nothing is read." }
+        polling: { type: boolean, description: Polling runs now (an effect or a client reads sensors). }
+        intervalMs: { type: integer, minimum: 1000 }
+        ageMs: { type: [integer, "null"], description: Milliseconds since the last poll (`null`: never polled). }
+        sensors: { type: array, items: { $ref: "#/components/schemas/SensorView" } }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string, enum: [system, nvapi, hwmon, lhm] }
+              sensors: { type: integer }
+              error: { type: [string, "null"] }
+    SensorView:
+      type: object
+      description: "`engine.getSensorValue(name)` returns this object without `name`."
+      properties:
+        name: { type: string, examples: ["CPU Load", "CPU Temperature", "GPU Temperature"] }
+        value: { type: number }
+        units: { type: string, examples: ["°C", "%", "RPM", "MHz"] }
+        min: { type: number }
+        max: { type: number }
+        type: { type: string, enum: [Temperature, Fan, Voltage, Load, Clock, Power, Other] }
     NetworkServiceView:
       type: object
       properties:

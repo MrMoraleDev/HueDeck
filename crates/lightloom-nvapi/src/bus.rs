@@ -8,7 +8,7 @@
 //! here: the plugin host's per-bus turn queue keeps other sessions off the
 //! bus, and no other program shares NvAPI's I2C controller under a mutex.
 
-use crate::hub::{GpuInfo, Job, Request, REPLY_GRACE, REPLY_TIMEOUT};
+use crate::hub::{GpuInfo, Job, Reply, Request, REPLY_GRACE, REPLY_TIMEOUT};
 use crate::info::{I2cOp, I2cPlan};
 use crate::NvapiError;
 use lightloom_hal::smbus::{validate_address, SmbusBus, SmbusBusDescriptor};
@@ -54,7 +54,9 @@ impl NvapiBus {
             })
             .map_err(|_| HalError::from(NvapiError::WorkerGone))?;
         match answer.recv_timeout(REPLY_TIMEOUT + REPLY_GRACE) {
-            Ok(r) => Ok(r?),
+            Ok(Ok(Reply::Bytes(b))) => Ok(b),
+            Ok(Ok(Reply::Sensors(_))) => Err(HalError::Backend("unexpected NvAPI reply".into())),
+            Ok(Err(e)) => Err(e.into()),
             Err(RecvTimeoutError::Timeout) => {
                 Err(NvapiError::Timeout(REPLY_TIMEOUT.as_millis() as u32).into())
             }

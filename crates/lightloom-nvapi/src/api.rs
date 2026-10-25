@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The NvAPI calls Lightloom makes: initialise, enumerate GPUs with their PCI
-//! ids, names and bus numbers, and one I2C transfer. Lives on the hub's worker
+//! ids, names and bus numbers, one I2C transfer, and the read-only sensor
+//! queries. Lives on the hub's worker
 //! thread only ([`crate::hub`]); GPU handles never leave it.
 
 use crate::ffi::{
-    EnumPhysicalGpusFn, GetBusIdFn, GetFullNameFn, GetPciIdentifiersFn, I2cExFn, InitializeFn, Library,
+    EnumPhysicalGpusFn, GetAllClockFrequenciesFn, GetBusIdFn, GetDynamicPstatesInfoExFn, GetFullNameFn,
+    GetPciIdentifiersFn, GetTachReadingFn, GetThermalSettingsFn, I2cExFn, InitializeFn, Library,
     NvPhysicalGpuHandle, NVAPI_MAX_PHYSICAL_GPUS, NVAPI_SHORT_STRING_MAX,
+};
+use crate::sensors::{
+    GpuSensors, NvClockFrequenciesV2, NvDynamicPstatesInfoEx, NvThermalSettingsV2, CLOCK_GRAPHICS,
+    CLOCK_MEMORY, THERMAL_TARGET_ALL, UTILIZATION_FB, UTILIZATION_GPU,
 };
 use crate::hub::{decode_pci, locate, GpuInfo, I2cTransport};
 use crate::info::{fill_info, I2cPlan};
@@ -27,6 +33,11 @@ pub struct NvApi {
     bus_id: GetBusIdFn,
     read_ex: I2cExFn,
     write_ex: I2cExFn,
+    /// Sensor queries; each optional (a driver without one lacks that sensor).
+    thermal: Option<GetThermalSettingsFn>,
+    pstates: Option<GetDynamicPstatesInfoExFn>,
+    tach: Option<GetTachReadingFn>,
+    clocks: Option<GetAllClockFrequenciesFn>,
     gpus: Vec<NvGpu>,
     // Dropped last: every function pointer above points into it.
     _lib: Library,
@@ -59,6 +70,14 @@ impl NvApi {
         let bus_id = resolve!(ids::GPU_GET_BUS_ID, GetBusIdFn);
         let read_ex = resolve!(ids::I2C_READ_EX, I2cExFn);
         let write_ex = resolve!(ids::I2C_WRITE_EX, I2cExFn);
+        // SAFETY: as above; read-only queries with the signatures of nvapi.h.
+        let thermal = unsafe { lib.query::<GetThermalSettingsFn>(ids::GPU_GET_THERMAL_SETTINGS) };
+        // SAFETY: as above.
+        let pstates = unsafe { lib.query::<GetDynamicPstatesInfoExFn>(ids::GPU_GET_DYNAMIC_PSTATES_INFO_EX) };
+        // SAFETY: as above.
+        let tach = unsafe { lib.query::<GetTachReadingFn>(ids::GPU_GET_TACH_READING) };
+        // SAFETY: as above.
+        let clocks = unsafe { lib.query::<GetAllClockFrequenciesFn>(ids::GPU_GET_ALL_CLOCK_FREQUENCIES) };
         // SAFETY: resolved above; takes no arguments. Paired with Unload in Drop.
         check(unsafe { init() })?;
         let mut api = Self {
@@ -70,6 +89,10 @@ impl NvApi {
             bus_id,
             read_ex,
             write_ex,
+            thermal,
+            pstates,
+            tach,
+            clocks,
             gpus: Vec::new(),
             _lib: lib,
         };
@@ -154,6 +177,56 @@ impl NvApi {
     }
 }
 
+impl NvApi {
+    /// Every sensor query on card `gpu`; a failing query leaves its sensor out.
+    fn sensors_once(&self, gpu: &GpuInfo) -> Result<GpuSensors, NvapiError> {
+        let infos: Vec<GpuInfo> = self.gpus.iter().map(|g| g.info.clone()).collect();
+        let handle = self.gpus[locate(&infos, gpu)?].handle;
+        let mut out = GpuSensors::default();
+        let mut reinit = None;
+        let mut note = |status: i32| {
+            if status::needs_reinit(status) {
+                reinit = Some(status);
+            }
+            status == 0
+        };
+        if let Some(f) = self.thermal {
+            let mut t = NvThermalSettingsV2::default();
+            // SAFETY: a valid handle and a versioned out struct of the size its version names.
+            if note(unsafe { f(handle, THERMAL_TARGET_ALL, &mut t) }) {
+                out.temperature = GpuSensors::from_thermal(&t);
+            }
+        }
+        if let Some(f) = self.pstates {
+            let mut p = NvDynamicPstatesInfoEx::default();
+            // SAFETY: as above.
+            if note(unsafe { f(handle, &mut p) }) {
+                out.load = GpuSensors::utilization(&p, UTILIZATION_GPU);
+                out.memory_load = GpuSensors::utilization(&p, UTILIZATION_FB);
+            }
+        }
+        if let Some(f) = self.tach {
+            let mut rpm = 0u32;
+            // SAFETY: a valid handle and out pointer.
+            if note(unsafe { f(handle, &mut rpm) }) {
+                out.fan_rpm = Some(f64::from(rpm));
+            }
+        }
+        if let Some(f) = self.clocks {
+            let mut c = NvClockFrequenciesV2::default();
+            // SAFETY: as for the thermal query.
+            if note(unsafe { f(handle, &mut c) }) {
+                out.core_clock = GpuSensors::clock(&c, CLOCK_GRAPHICS);
+                out.memory_clock = GpuSensors::clock(&c, CLOCK_MEMORY);
+            }
+        }
+        match reinit {
+            Some(s) => Err(NvapiError::Status(s)),
+            None => Ok(out),
+        }
+    }
+}
+
 impl I2cTransport for NvApi {
     fn gpus(&mut self) -> Result<Vec<GpuInfo>, NvapiError> {
         Ok(self.gpus.iter().map(|g| g.info.clone()).collect())
@@ -177,6 +250,19 @@ impl I2cTransport for NvApi {
                 tracing::info!(status = s, "NvAPI asked for re-initialisation; retrying once");
                 self.reinit()?;
                 self.transfer_once(gpu, addr, plan, out)
+            }
+            other => other,
+        }
+    }
+
+    fn sensors(&mut self, gpu: &GpuInfo) -> Result<GpuSensors, NvapiError> {
+        if self.gpus.is_empty() {
+            self.reinit()?;
+        }
+        match self.sensors_once(gpu) {
+            Err(NvapiError::Status(s)) if status::needs_reinit(s) => {
+                self.reinit()?;
+                self.sensors_once(gpu)
             }
             other => other,
         }

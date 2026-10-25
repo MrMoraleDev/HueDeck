@@ -23,6 +23,21 @@ pub enum SensorKind {
     Other,
 }
 
+impl SensorKind {
+    /// The `type` effects see in `engine.getSensorValue(name).type`.
+    pub fn label(self) -> &'static str {
+        match self {
+            SensorKind::Temperature => "Temperature",
+            SensorKind::Fan => "Fan",
+            SensorKind::Voltage => "Voltage",
+            SensorKind::Load => "Load",
+            SensorKind::Clock => "Clock",
+            SensorKind::Power => "Power",
+            SensorKind::Other => "Other",
+        }
+    }
+}
+
 /// One sensor sample.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SensorReading {

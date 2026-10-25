@@ -7,6 +7,7 @@
   import Layout from "./components/Layout.svelte";
   import Devices from "./components/Devices.svelte";
   import Network from "./components/Network.svelte";
+  import Sensors from "./components/Sensors.svelte";
   import Settings from "./components/Settings.svelte";
   import BatteryBadge from "./components/BatteryBadge.svelte";
   import logotype from "./assets/lightloom-logotype.svg";
@@ -124,6 +125,7 @@
     {:else if tab === "devices"}
       <Network snapshot={s} />
       <Devices snapshot={s} />
+      <Sensors />
     {:else}
       <Settings snapshot={s} />
     {/if}

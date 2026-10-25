@@ -37,6 +37,55 @@ pub struct Snapshot {
     pub warnings: Vec<String>,
 }
 
+/// `GET /v1/sensors`: the hardware sensors (read-only), as of the last poll.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensorsView {
+    /// Sensors are read at all (`[sensors] enabled`).
+    pub enabled: bool,
+    /// Polling runs now (an effect or a client reads sensors).
+    pub polling: bool,
+    /// Poll interval in milliseconds.
+    pub interval_ms: u64,
+    /// Milliseconds since the last poll (`None`: never polled).
+    pub age_ms: Option<u64>,
+    /// Every sensor, by source then name.
+    pub sensors: Vec<SensorView>,
+    /// How each source did at the last poll.
+    pub sources: Vec<SensorSourceView>,
+}
+
+/// One sensor: what `engine.getSensorValue(name)` returns, plus its name.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensorView {
+    /// Display name (the argument of `engine.getSensorValue`).
+    pub name: String,
+    /// Current value.
+    pub value: f64,
+    /// Unit (`°C`, `%`, `RPM`, `MHz`, …).
+    pub units: String,
+    /// Expected minimum.
+    pub min: f64,
+    /// Expected maximum.
+    pub max: f64,
+    /// `Temperature`, `Fan`, `Load`, `Clock`, `Voltage`, `Power` or `Other`.
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+/// One sensor source.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensorSourceView {
+    /// `system`, `nvapi`, `hwmon` or `lhm`.
+    pub name: String,
+    /// Sensors it reported.
+    pub sensors: usize,
+    /// Why it failed at the last poll.
+    pub error: Option<String>,
+}
+
 /// One network plugin's discovery service.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

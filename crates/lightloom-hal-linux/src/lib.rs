@@ -11,6 +11,7 @@
 //!   [`SmbusBus`](lightloom_hal::SmbusBus) of each (Windows policy; the
 //!   device and opener are Linux only);
 //! * [`hwmon`]: read-only temperatures and fan speeds;
+//! * [`procfs`]: system-wide CPU time and memory (`/proc/stat`, `/proc/meminfo`);
 //! * `hidraw` (Linux only): [`LinuxHidBackend`], report I/O on `/dev/hidrawN`;
 //! * `hotplug` (Linux only): [`HidrawHotplug`], the udev netlink monitor.
 //!
@@ -24,6 +25,7 @@
 
 pub mod hwmon;
 pub mod i2c;
+pub mod procfs;
 pub mod sysfs;
 pub mod tlc;
 pub mod uevent;

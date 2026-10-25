@@ -130,6 +130,7 @@ fn sleep_shuts_every_session_down_and_resume_starts_them_over() {
                 pid: 0x5D5D,
                 endpoints: vec![info],
                 network: None,
+                usb: None,
             }],
             smbus: vec![BusHandle::new(Box::new(bus))],
             lamparrays: None,
@@ -143,6 +144,7 @@ fn sleep_shuts_every_session_down_and_resume_starts_them_over() {
         notifier: Arc::new(MockNotifier::default()),
         api_port: lightloom_api::NATIVE_PORT,
         api_port_notice: None,
+        signalrgb_settings: None,
     })
     .unwrap();
     let shared = handle.shared();

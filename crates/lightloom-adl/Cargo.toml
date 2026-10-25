@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+publish = false
+name = "lightloom-adl"
+description = "Lightloom dynamic AMD ADL binding: AMD GPU I2C (RGB controllers) as a HAL SMBus bus, on one worker thread"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+lightloom-hal = { path = "../lightloom-hal" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }

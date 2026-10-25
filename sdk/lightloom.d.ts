@@ -262,13 +262,24 @@ declare namespace Lightloom {
     getDeviceInfo(): DeviceInfo;
     /** USB product id of the opened device. @signalrgb */
     productId(): number;
-    /** libusb bulk transfer. @signalrgb @unimplemented */
+    /**
+     * Raw USB bulk (or interrupt) transfer on the device's WinUSB interface (`Type()` `"rawusb"`/`"hybrid"`,
+     * or after `setProtocol("hybrid")`). `endpoint >= 0x80` is IN: returns the bytes received (empty on
+     * timeout or failure; `getLastReadSize()` of them), `length` is the buffer size. Otherwise OUT: sends
+     * `data` padded or cut to `length`, returns the bytes sent or `-1`. `timeout` defaults to 1000 ms,
+     * at most 5000. Never throws. @signalrgb
+     */
     bulk_transfer(endpoint: number, data: Bytes, length: number, timeout?: number): number[] | number;
-    /** libusb control transfer. @signalrgb @unimplemented */
+    /**
+     * Raw USB control transfer. `requestType & 0x80` is IN: returns the data stage (empty on timeout or
+     * failure). Otherwise OUT: returns the bytes sent or `-1`; standard OUT requests (SET_CONFIGURATION,
+     * SET_ADDRESS, ...) are refused. Requests addressed to an interface another driver owns (HID, audio)
+     * fail, the host never claims it. @signalrgb
+     */
     control_transfer(
       requestType: number, request: number, value: number, index: number, data: Bytes, length: number, timeout?: number,
-    ): number[];
-    /** Switch between `"hid"` and `"hybrid"` at run time. @signalrgb @unimplemented */
+    ): number[] | number;
+    /** Switch between `"hid"` and `"hybrid"` at run time (opens or closes the raw USB side). @signalrgb */
     setProtocol(protocol: "hid" | "hybrid"): void;
     /** Sleep the plugin thread (time paused is not charged to the script budget). @signalrgb */
     pause(ms: number): void;

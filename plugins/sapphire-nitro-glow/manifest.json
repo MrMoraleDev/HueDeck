@@ -1,0 +1,53 @@
+{
+  "manifestVersion": 2,
+  "id": "lightloom.sapphire-nitro-glow",
+  "name": "Sapphire Nitro Glow",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "publisher": "Lightloom",
+  "description": "The Nitro Glow V3 RGB controller of Sapphire Radeon Nitro+, Pure and Toxic cards (RX 5500 XT to RX 9070 XT) at I2C address 0x28 on the GPU's bus (AMD through ADL, line 1), adapted from OpenRGB's SapphireNitroGlowV3Controller (GPL-2.0-or-later). Lighting registers only (external control, mode, colour); the controller has no save command. Untested: no AMD card on the reference machine. Protocol notes: docs/hardware/sapphire-nitro-glow.md.",
+  "entry": "plugin.js",
+  "compat": "signalrgb-2.5",
+  "deviceType": "gpu",
+  "devices": [
+    {
+      "smbus": {
+        "addresses": [40],
+        "buses": ["amdgpu"],
+        "pci": [
+          { "vendor": "0x1002", "device": "0x7340", "subVendor": "0x1DA2", "subDevice": "0xE423" },
+          { "vendor": "0x1002", "device": "0x731F", "subVendor": "0x1DA2", "subDevice": "0xE409" },
+          { "vendor": "0x1002", "device": "0x731F", "subVendor": "0x1DA2", "subDevice": "0xE410" },
+          { "vendor": "0x1002", "device": "0x731F", "subVendor": "0x1DA2", "subDevice": "0x426E" },
+          { "vendor": "0x1002", "device": "0x73FF", "subVendor": "0x1DA2", "subDevice": "0xE448" },
+          { "vendor": "0x1002", "device": "0x73EF", "subVendor": "0x1DA2", "subDevice": "0xE448" },
+          { "vendor": "0x1002", "device": "0x73DF", "subVendor": "0x1DA2", "subDevice": "0xE445" },
+          { "vendor": "0x1002", "device": "0x73DF", "subVendor": "0x1DA2", "subDevice": "0xE465" },
+          { "vendor": "0x1002", "device": "0x73BF", "subVendor": "0x1DA2", "subDevice": "0xE439" },
+          { "vendor": "0x1002", "device": "0x73BF", "subVendor": "0x1DA2", "subDevice": "0x438E" },
+          { "vendor": "0x1002", "device": "0x73BF", "subVendor": "0x1DA2", "subDevice": "0xE438" },
+          { "vendor": "0x1002", "device": "0x73BF", "subVendor": "0x1DA2", "subDevice": "0x440E" },
+          { "vendor": "0x1002", "device": "0x73AF", "subVendor": "0x1DA2", "subDevice": "0xF440" },
+          { "vendor": "0x1002", "device": "0x73BF", "subVendor": "0x1DA2", "subDevice": "0x440F" },
+          { "vendor": "0x1002", "device": "0x73BF", "subVendor": "0x1DA2", "subDevice": "0xF441" },
+          { "vendor": "0x1002", "device": "0x73A5", "subVendor": "0x1DA2", "subDevice": "0xD440" },
+          { "vendor": "0x1002", "device": "0x73A5", "subVendor": "0x1DA2", "subDevice": "0x441D" },
+          { "vendor": "0x1002", "device": "0x73A5", "subVendor": "0x1DA2", "subDevice": "0x440D" },
+          { "vendor": "0x1002", "device": "0x747E", "subVendor": "0x1DA2", "subDevice": "0xF475" },
+          { "vendor": "0x1002", "device": "0x747E", "subVendor": "0x1DA2", "subDevice": "0xD475" },
+          { "vendor": "0x1002", "device": "0x744C", "subVendor": "0x1DA2", "subDevice": "0xE475" },
+          { "vendor": "0x1002", "device": "0x744C", "subVendor": "0x1DA2", "subDevice": "0xE471" },
+          { "vendor": "0x1002", "device": "0x7590", "subVendor": "0x1DA2", "subDevice": "0x493E" },
+          { "vendor": "0x1002", "device": "0x7590", "subVendor": "0x1DA2", "subDevice": "0xE493" },
+          { "vendor": "0x1002", "device": "0x7550", "subVendor": "0x1DA2", "subDevice": "0x4499" },
+          { "vendor": "0x1002", "device": "0x7550", "subVendor": "0x1DA2", "subDevice": "0xE489" },
+          { "vendor": "0x1002", "device": "0x7550", "subVendor": "0x1DA2", "subDevice": "0x4892" },
+          { "vendor": "0x1002", "device": "0x7550", "subVendor": "0x1DA2", "subDevice": "0x3490" }
+        ],
+        "tested": []
+      }
+    }
+  ],
+  "permissions": ["gpu-i2c"],
+  "keywords": ["sapphire", "nitro", "nitro glow", "radeon", "amd", "gpu", "i2c", "smbus"]
+}

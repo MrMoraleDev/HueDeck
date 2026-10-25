@@ -47,11 +47,11 @@ use windows::Win32::Storage::FileSystem::{
 /// Maximum parent hops (HID collection → USB interface → USB device is 2).
 const MAX_HOPS: usize = 8;
 
-fn wide(s: &str) -> Vec<u16> {
+pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn device_id(devinst: u32) -> Result<String, String> {
+pub(crate) fn device_id(devinst: u32) -> Result<String, String> {
     let mut buf = vec![0u16; MAX_DEVICE_ID_LEN as usize + 1];
     // SAFETY: `buf` is a valid, writable UTF-16 buffer; cfgmgr32 writes at most `buf.len()` units.
     let cr = unsafe { CM_Get_Device_IDW(devinst, &mut buf, 0) };
@@ -283,7 +283,7 @@ fn parent_devnode(path: &str) -> Option<u32> {
 }
 
 /// A string or string-list property of a devnode, as UTF-16 strings.
-fn devnode_strings(inst: u32, key: &DEVPROPKEY) -> Vec<String> {
+pub(crate) fn devnode_strings(inst: u32, key: &DEVPROPKEY) -> Vec<String> {
     let mut buf = vec![0u16; 512];
     for _ in 0..2 {
         let mut kind = DEVPROPTYPE(0);

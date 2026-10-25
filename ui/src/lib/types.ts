@@ -41,7 +41,23 @@ export interface Parameter {
   max?: number | null;
   step?: number | null;
   default?: unknown;
+  /** false: apply when the control is released / committed, not while it moves. */
+  live?: boolean;
+  /** Display order (lower first; unordered ones keep their place after). */
+  order?: number | null;
+  /** Textfield regex the whole value must match. */
+  filter?: string | null;
   value?: unknown;
+}
+
+/** A message a device plugin shows on its card (DeviceMessages, addMessage, notify). */
+export interface DeviceMessage {
+  id: string;
+  title?: string | null;
+  message: string;
+  tooltip?: string | null;
+  /** notify priority: 0 info, 1 important, 2 and 3 errors; absent for plain messages. */
+  priority?: number | null;
 }
 
 export interface DeviceView {
@@ -63,6 +79,8 @@ export interface DeviceView {
   defaultScale: number;
   image?: string | null;
   parameters: Parameter[];
+  /** Plugin messages (may change while the device runs). */
+  messages?: DeviceMessage[];
   endpoints: Endpoint[];
   channels: ChannelView[];
   /** What "Save to devices" can store in the device (null: nothing). */
@@ -127,10 +145,35 @@ export interface EffectView {
   title: string;
   description: string;
   publisher: string;
-  source: "huedeck" | "user" | "signalrgb";
+  source: "huedeck" | "user" | "signalrgb" | "developer";
   controls: EffectControl[];
   values: Record<string, unknown>;
   presets: string[];
+  /** What the effect reads; "meters" marks game integrations. */
+  uses?: ("audio" | "video" | "meters" | "engine" | "webgl" | "input")[];
+}
+
+/** The auto-next timer (SignalRGB's "Effect Timer Interval"). */
+export interface EffectTimer {
+  enabled: boolean;
+  /** Seconds per effect. */
+  interval: number;
+}
+
+export interface PlaylistEntry {
+  effect: string;
+  preset?: string;
+  values?: Record<string, unknown>;
+  /** Seconds; absent: the timer's interval. */
+  duration?: number;
+}
+
+export interface Playlist {
+  id: string;
+  name: string;
+  shuffle: boolean;
+  entries: PlaylistEntry[];
+  updatedAt: string;
 }
 
 export interface Lighting {
@@ -141,6 +184,11 @@ export interface Lighting {
   layout: string;
   layoutBrightness: number;
   renderer: { kind: string; running: boolean; fps: number; status?: string | null };
+  /** The playlist playing now; `entry` indexes its entries. */
+  playlist?: { id: string; name: string; entry: number } | null;
+  timer: EffectTimer;
+  /** When the next effect comes by itself (Unix ms). */
+  nextSwitchMs?: number | null;
 }
 
 export interface Settings {
@@ -172,6 +220,7 @@ export interface Snapshot {
   devices: DeviceView[];
   effects: EffectView[];
   layouts: string[];
+  playlists: Playlist[];
   settings: Settings;
   network: NetworkService[];
   conflicts: string[];

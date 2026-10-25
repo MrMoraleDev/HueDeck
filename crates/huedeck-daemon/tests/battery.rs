@@ -121,6 +121,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
             devices: vec![SessionDevice {
                 usb: None,
                 smbus: None,
+                lamparray: None,
                 key: KEY.into(),
                 vid: 0x1234,
                 pid: 0x4E4E,
@@ -128,6 +129,7 @@ fn battery_levels_raise_warnings_notifications_and_the_pulse() {
                 network: None,
             }],
             smbus: Vec::new(),
+            lamparrays: None,
         },
         ephemeral: true,
         plugins_dir: Some(plugins),

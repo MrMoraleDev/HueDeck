@@ -118,10 +118,10 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| SQLite + migrations | Done | `crates/huedeck-daemon/src/store.rs` (`rusqlite` + `rusqlite_migration`; tables kv, devices, device_parameters, layouts, placements, channel_components, effect_params, presets); export/import round-trip test |
+| SQLite + migrations | Done | `crates/huedeck-daemon/src/store.rs` (`rusqlite` + `rusqlite_migration`; tables kv, devices, device_parameters, layouts, placements, channel_components, effect_params, presets, playlists); export/import round-trip test |
 | Native API 16138 (REST + WS, token, Host check) | Done | `crates/huedeck-api/src/server.rs` (`/v1/*`, `/v1/events`, `/v1/preview`); `docs/hardware/daemon-m4.md` |
 | Configurable API port | In progress (`feature/api-port`) | today: fixed 16138 |
-| Compat REST 16038 | Partial | `compat_router()`: app, lighting, global_brightness, enabled, effects, effect, apply, presets, next, previous, playlists (empty), scenes/current_layout, scenes/layouts. Missing: `lighting/shuffle`, `lighting/loadEffect`, `effects/{id}/image`, `playlists/{id}/play`, `partners/{id}`, `new` |
+| Compat REST 16038 | Done | `compat_router()`: every route of SignalRGB's local API (app, new, partners, lighting, global_brightness, enabled, effects, effect, image, apply, presets, next, previous, shuffle, loadEffect, playlists, playlist, play, scenes/current_layout, scenes/layouts); envelope contract test for every route; `docs/integrations/signalrgb-api.md` |
 | Compat canvas events 16034 | Done | `server.rs` `compat_canvas_event`; listeners wait while SignalRGB owns the ports |
 | Dashboard: devices, layout editor (drag, scale, rotate, flip), effects + controls + presets, channels/components, settings | Done | `ui/src/components/{Devices,Layout,Effects,Preview,Settings,ControlInput}.svelte` |
 | Dashboard: logs page | Missing | no log view in `ui/src` |
@@ -129,7 +129,7 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | Own export/import of the whole setup | Done | `/v1/export`, `/v1/import`, `store.rs` test `export_import_round_trips_byte_for_byte` |
 | Plugin sources manager (pre-listed community repos, licence acknowledgement, hash pinning) | Missing | `schemas/plugin-source.schema.json` exists; no code. Lower priority under the standalone direction |
 | Tray shell, autostart | Missing | no Tauri crate, no Run-key entry |
-| Effect playlists / auto-next timer | Missing | compat `playlists` answers an empty list |
+| Effect playlists / auto-next timer | Done | `crates/huedeck-daemon/src/engine/playlists.rs`, `store.rs` table `playlists`, `/v1/playlists*`, `/v1/lighting/timer`, `ui/src/components/Playlists.svelte`; test `tests/playlists.rs` |
 | Suspend/resume (`Shutdown(true)` and re-`Initialize`) | Missing | `LifecycleState::Suspending/Resuming` exist in `crates/huedeck-daemon/src/lifecycle.rs`, nothing listens for power events |
 | On-exit behaviour, bake to device | In progress (`feature/bake`) | today: `Shutdown(false)` restore on exit |
 | Portable build | Done | `tools/package/stage-windows.ps1`, `release.yml` |
@@ -171,13 +171,13 @@ runtime 10, render 10, hid-desc 8, setup 5, api 2, inputs 1, hal-linux 0. Node t
 | LCD faces (`@SignalRGB/lcd`, second browser per device) | Missing | dry-run stub only |
 | Macros (Inputs/Actions), key/mouse hooks, `system.*`, `signalrgb.*`, `keys` | Missing | spec in `docs/host-api/macros-system.md`; no code |
 | Action router (`huedeck://`, `signalrgb://`) | Missing | no URL handler |
-| LampArray HAL backend (WinRT `Windows.Devices.Lights`) | Missing | trait `crates/huedeck-hal/src/lamparray.rs`; no implementation. Partly covered another way: `plugins/hid-lamparray` drives HID LampArray devices directly (tested on the DeathAdder's LampArray collection) |
+| LampArray HAL backend (WinRT `Windows.Devices.Lights`) | Done, not run on hardware | `crates/huedeck-hal-windows/src/lamparray.rs` (DeviceWatcher, `IsAvailable`/`AvailabilityChanged`, identity check); built-in session `crates/huedeck-plugin-host/src/lamparray.rs`; ownership (a plugin wins: interface path, container id, VID:PID) `crates/huedeck-runtime/src/lamparray.rs`; identity package recipe `packaging/msix-identity/` (built, never registered). Design: `docs/windows-dynamic-lighting.md`. `plugins/hid-lamparray` still drives HID LampArrays first (tested on the DeathAdder's LampArray collection) |
 | OpenRGB SDK server :6742 | Missing | `OPENRGB_SDK_PORT` constant in `crates/huedeck-api/src/lib.rs` only |
 | Dynamic ControllableParameters UI | Partial | static `ControllableParameters` render in `Devices.svelte` and persist (`device_parameters` table); runtime `device.addProperty/removeProperty` changes stay inside the plugin (`host.js`) and never reach the API or UI; `DeviceMessages`/`addMessage` are not shown |
 | Accept: audio-reactive + screen effects track input < 100 ms | Missing | |
 | Accept: Govee/Yeelight/WLED-class plugin drives a LAN device | Mock and loopback tests only | needs a real device |
 | Accept: OpenRGB SDK client sets a colour on the MSI board | Missing | |
-| Accept: a DL-certified keyboard lights with no plugin | Partial | the generic `hid-lamparray` plugin is that path for HID LampArray devices; not tested on a keyboard |
+| Accept: a DL-certified keyboard lights with no plugin | Partial | the generic `hid-lamparray` plugin is that path for HID LampArray devices, the WinRT backend for LampArrays no plugin owns (needs the identity package); not tested on a keyboard |
 
 ## M7 Linux backend + 1.0: Missing
 
@@ -294,13 +294,14 @@ packages that touch the same one in parallel, and merge the smaller one first:
     - Maps sessions to RGBControllers through a new daemon request (`engine.rs`: "set LEDs of device X, direct").
     - Opt-in setting; binds to 127.0.0.1.
     - Accept: the OpenRGB client sets a colour on the MSI board.
-11. **WP-LAMPARRAY: WinRT LampArray HAL backend. Size L.**
+11. **WP-LAMPARRAY: WinRT LampArray HAL backend. Size L. Done (feature/lamparray), not run on hardware; see `docs/windows-dynamic-lighting.md`.**
     - Touches: new `huedeck-hal-windows/src/lamparray.rs` (`Windows.Devices.Lights`); a pseudo-session in the plugin host or the daemon that samples the layout like a plugin; the identity package (sparse MSIX) recipe in `packaging/` per §1.4.
     - Rule: a plugin wins over the backend on the same device.
     - Overlaps `plugins/hid-lamparray`: decide which owns which device first.
 12. **WP-PARAMS: runtime ControllableParameters and device messages. Size S.**
     - Touches: `host.js` (`addProperty`/`removeProperty`/`addMessage` → native calls), `huedeck-plugin-host/src/session.rs` (an events channel), `huedeck-daemon/src/engine.rs` (device view), `huedeck-api/src/model.rs`, `ui/src/components/Devices.svelte`.
     - Also the `keycode` type and `filter` in `ControlInput.svelte`.
+    - **Done** on `feature/runtime-params`: `huedeck-plugin-host/src/plugin_ui.rs` keeps a device's parameters and messages (seeded from `ControllableParameters()` / `DeviceMessages()`); the device-mode `device.addProperty` / `removeProperty` / `addMessage` / `removeMessage` / `notify` / `denotify` change them through natives (refusals logged with the exe's messages, re-adding an identical entry is no change). The session publishes them (`SessionHandle::plugin_ui`) and announces changes on its events channel (`SessionHandle::events`); the engine refreshes the snapshot on an event. `DeviceView.messages` is new; values set from the dashboard are coerced to the control type (`coerce_param_value`), as are the plugin's numeric and boolean strings (`default`, `min`/`max`/`step`/`order`, `live: "false"`). Dashboard: parameters sorted by `order` and grouped by `group`, `live` sliders send while dragging (throttled), `filter` validates textfields, `keycode` records a key combination, messages shown on the device card.
 13. **WP-MACROS: macros and actions. Size L. Split it in two.**
     - (a) Action router: `huedeck://` URL scheme and `system.action` endpoints for app, view, effect, layout and device, in the daemon and API.
     - (b) Macro runtime: QuickJS runtime per macro script, Inputs/Actions, `signalrgb.*`, `keys`/`mouse` via SendInput, opt-in low-level hooks.
@@ -312,6 +313,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
     - Touches: `huedeck-api/src/server.rs` `compat_router` only.
     - Adds `lighting/shuffle`, `lighting/loadEffect`, `effects/{id}/image`, `playlists/{id}/play`, `app` fields, `partners`/`new` as documented empty answers, and contract tests for the envelope.
     - Coordinate with `feature/api-port`, which also touches `server.rs`.
+    - **Done** on `feature/compat-rest-playlists` (with WP-PLAYLISTS).
 16. **WP-IMPORT: import wizard completeness. Size S.**
     - Touches: `huedeck-runtime/src/signalrgb.rs`, `huedeck-daemon/src/store.rs` (import mapping), the `/v1/import/signalrgb` reply, `Settings.svelte`.
     - Imports effect parameters and presets, the selected effect, global and layout brightness, and per-device enable and brightness, from HKCU.
@@ -319,6 +321,7 @@ packages that touch the same one in parallel, and merge the smaller one first:
 17. **WP-PLAYLISTS: effect playlists and the auto-next timer. Size S.**
     - Touches: `store.rs` (a table), `engine.rs`, the API, `Effects.svelte`.
     - Also fills compat `playlists`.
+    - **Done** on `feature/compat-rest-playlists`: ordered entries with a preset, values and a duration each, shuffle, the auto-next timer (off, 300 s by default), next/previous within the playlist, resume after restart, dashboard panel.
 
 ### Priority 3: M5 remainder and hardening
 

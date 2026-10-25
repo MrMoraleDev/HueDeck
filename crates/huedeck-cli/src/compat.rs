@@ -263,6 +263,7 @@ fn replay(
         let device = SessionDevice {
             usb: None,
             smbus: None,
+            lamparray: None,
             key: d.key.clone(),
             vid: d.vid,
             pid: d.pid,

@@ -36,6 +36,7 @@ tags:
   - name: devices
   - name: effects
   - name: lighting
+  - name: playlists
   - name: layouts
   - name: settings
   - name: network
@@ -115,7 +116,7 @@ paths:
                 parameters:
                   type: object
                   additionalProperties: true
-                  description: "`ControllableParameters` values by property, applied live and stored."
+                  description: "Parameter values by property (`ControllableParameters` and run-time `device.addProperty` names), coerced to the control type (`\"800\"` -> 800 for a number), applied live and stored."
                 blinkLowBattery: { type: boolean, description: Pulse the device red while its battery is low. }
                 shutdownMode: { enum: [restore, keep, off, default], description: "This device's exit mode (\"When HueDeck closes\"); `default`: the setting's. See docs/host-api/save-shutdown.md." }
       responses:
@@ -194,10 +195,22 @@ paths:
       tags: [effects]
       operationId: previousEffect
       summary: Show the previous effect of the library
+      description: While a playlist plays, next and previous move within the playlist.
       security: [{ bearer: [] }]
       responses:
         "200": { $ref: "#/components/responses/EffectApplied" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/effects/shuffle:
+    post:
+      tags: [effects]
+      operationId: shuffleEffect
+      summary: Show a random effect of the library
+      description: Game integrations (effects with screen meters) and developer effects are left out; a playing playlist stops.
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/EffectApplied" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/effects/{id}:
     parameters:
       - $ref: "#/components/parameters/EffectId"
@@ -322,6 +335,149 @@ paths:
                   enabled: { type: boolean }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/lighting/timer:
+    patch:
+      tags: [playlists]
+      operationId: setEffectTimer
+      summary: The auto-next timer (SignalRGB's "Effect Timer Interval")
+      description: |
+        While no playlist plays and the timer is enabled, the next effect of the library is shown
+        every `interval` seconds (game integrations and developer effects skipped). The interval is
+        also the duration of playlist entries that have none. Off by default, 300 s by default.
+        Nothing switches while the canvas is paused.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                interval: { type: integer, minimum: 1, maximum: 86400 }
+      responses:
+        "200":
+          description: The timer now.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EffectTimer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/playlists:
+    get:
+      tags: [playlists]
+      operationId: listPlaylists
+      summary: Effect playlists
+      responses:
+        "200":
+          description: Playlists by id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Playlist" }
+    post:
+      tags: [playlists]
+      operationId: createPlaylist
+      summary: Create a playlist (its id is made from the name)
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Playlist" }
+      responses:
+        "200": { $ref: "#/components/responses/PlaylistSaved" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/playlists/stop:
+    post:
+      tags: [playlists]
+      operationId: stopPlaylist
+      summary: Stop the playing playlist (the effect stays)
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Whether one was playing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stopped: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/playlists/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PlaylistId"
+    get:
+      tags: [playlists]
+      operationId: getPlaylist
+      summary: One playlist
+      responses:
+        "200":
+          description: The playlist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Playlist" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [playlists]
+      operationId: savePlaylist
+      summary: Create or replace the playlist with this id
+      description: Editing the playing playlist keeps the entry shown when it still exists.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Playlist" }
+      responses:
+        "200": { $ref: "#/components/responses/PlaylistSaved" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      tags: [playlists]
+      operationId: deletePlaylist
+      summary: Delete a playlist (it stops when it plays)
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Empty" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/playlists/{id}/play:
+    parameters:
+      - $ref: "#/components/parameters/PlaylistId"
+    post:
+      tags: [playlists]
+      operationId: playPlaylist
+      summary: Play a playlist
+      description: |
+        From its first entry (shuffled playlists: a random one), or from the entry showing `start`.
+        Each entry lasts its `duration`, else the timer's interval, and loads its preset and values
+        into the effect (stored, like applying a preset). Entries whose effect is not installed are
+        skipped. Choosing an effect or a preset, or shuffling, ends the playlist.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                start: { type: string, description: Effect id of the entry to start with. }
+      responses:
+        "200":
+          description: Playing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  playlist: { type: string }
+                  effect: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/layouts:
     get:
       tags: [layouts]
@@ -834,6 +990,11 @@ components:
       in: path
       required: true
       schema: { type: string, examples: ["huedeck:plasma"] }
+    PlaylistId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, examples: ["evening"] }
     PresetName:
       name: name
       in: path
@@ -867,6 +1028,11 @@ components:
             properties:
               effect: { type: string }
               preset: { type: string }
+    PlaylistSaved:
+      description: The playlist as stored (with its `id` and `updatedAt`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Playlist" }
     LayoutDone:
       description: Done.
       content:
@@ -924,6 +1090,7 @@ components:
         devices: { type: array, items: { $ref: "#/components/schemas/DeviceView" } }
         effects: { type: array, items: { $ref: "#/components/schemas/EffectView" } }
         layouts: { type: array, items: { type: string } }
+        playlists: { type: array, items: { $ref: "#/components/schemas/Playlist" } }
         settings: { $ref: "#/components/schemas/Settings" }
         network: { type: array, items: { $ref: "#/components/schemas/NetworkServiceView" } }
         conflicts: { type: array, items: { type: string }, description: Running software that holds the same devices (reported, never terminated). }
@@ -938,6 +1105,41 @@ components:
         layout: { type: string }
         layoutBrightness: { type: integer, minimum: 0, maximum: 100 }
         renderer: { $ref: "#/components/schemas/RendererView" }
+        playlist:
+          oneOf:
+            - $ref: "#/components/schemas/PlaylistPlayback"
+            - type: "null"
+          description: The playlist playing now.
+        timer: { $ref: "#/components/schemas/EffectTimer" }
+        nextSwitchMs: { type: [integer, "null"], description: "When the playlist or the timer shows the next effect (Unix time, ms); null when nothing switches by itself." }
+    EffectTimer:
+      type: object
+      properties:
+        enabled: { type: boolean, description: Advance through the library by itself (off by default). }
+        interval: { type: integer, minimum: 1, maximum: 86400, description: "Seconds per effect (300 by default)." }
+    Playlist:
+      type: object
+      required: [name]
+      properties:
+        id: { type: string, description: Stable id; made from the name on creation (ignored in request bodies). }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        shuffle: { type: boolean, description: Play the entries in a new random order every round. }
+        entries: { type: array, items: { $ref: "#/components/schemas/PlaylistEntry" } }
+        updatedAt: { type: string, description: Last change (RFC 3339); set by the daemon. }
+    PlaylistEntry:
+      type: object
+      required: [effect]
+      properties:
+        effect: { type: string, description: Effect id. }
+        preset: { type: string, description: A preset of the effect loaded when the entry starts. }
+        values: { $ref: "#/components/schemas/ControlValues" }
+        duration: { type: integer, minimum: 1, maximum: 86400, description: "Seconds; absent: the timer's interval." }
+    PlaylistPlayback:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        entry: { type: integer, description: Index into `entries` of the entry shown now. }
     RendererView:
       type: object
       properties:
@@ -965,8 +1167,21 @@ components:
         image: { type: [string, "null"] }
         parameters:
           type: array
-          description: "`ControllableParameters()` entries, each with its current `value`."
+          description: >-
+            The plugin's parameters, each with its current `value` (stored, else the default):
+            the `ControllableParameters()` entries, then as the running plugin changes them with
+            `device.addProperty` / `removeProperty`. Fields: `property`, `label`, `group`,
+            `description`, `tooltip`, `type` (color, combobox, number, boolean, hue, textfield,
+            keycode), `values`, `min`, `max`, `step`, `default`, `live` (false: apply on release /
+            commit only), `order`, `filter` (textfield regex), `value`. Numeric and boolean strings
+            of the plugin are coerced.
           items: { type: object, additionalProperties: true }
+        messages:
+          type: array
+          description: >-
+            Messages on the device card: `DeviceMessages()`, then as the running plugin changes
+            them with `device.addMessage` / `removeMessage` and `device.notify` / `denotify`.
+          items: { $ref: "#/components/schemas/DeviceMessageView" }
         endpoints: { type: array, items: { $ref: "#/components/schemas/Endpoint" } }
         channels: { type: array, items: { $ref: "#/components/schemas/ChannelView" } }
         battery:
@@ -1022,6 +1237,14 @@ components:
                 description: "What the plugin returned: `{effect, zones: [{name, color}], note}`."
                 additionalProperties: true
               error: { type: [string, "null"], description: Why it cannot be (or was not) stored. }
+    DeviceMessageView:
+      type: object
+      properties:
+        id: { type: string, description: "`DeviceMessages()` `property`, `addMessage` id, or the alert id `notify` returned." }
+        title: { type: [string, "null"], description: "`notify` title." }
+        message: { type: string }
+        tooltip: { type: [string, "null"] }
+        priority: { type: [integer, "null"], description: "`notify` priority: 0 info, 1 important, 2 and 3 errors; null for plain messages." }
     BatteryView:
       type: object
       properties:
@@ -1082,10 +1305,14 @@ components:
         title: { type: string }
         description: { type: string }
         publisher: { type: string }
-        source: { enum: [huedeck, user, signalrgb] }
+        source: { enum: [huedeck, user, signalrgb, developer] }
         controls: { type: array, items: { type: object, additionalProperties: true }, description: "`<meta property>` controls (schemas/effect-meta.schema.json shape)." }
         values: { $ref: "#/components/schemas/ControlValues" }
         presets: { type: array, items: { type: string } }
+        uses:
+          type: array
+          items: { enum: [audio, video, meters, engine, webgl, input] }
+          description: What the effect reads; effects with `meters` are game integrations.
     Settings:
       type: object
       properties:

@@ -56,6 +56,7 @@ fn channels_components_and_subdevices_reach_the_plugin() {
         SessionDevice {
             usb: None,
             smbus: None,
+            lamparray: None,
             key: "1234:7777:C".into(),
             vid: 0x1234,
             pid: 0x7777,
@@ -169,6 +170,7 @@ fn controls_apply_before_the_next_render_and_call_the_hooks() {
         SessionDevice {
             usb: None,
             smbus: None,
+            lamparray: None,
             key: "1234:4444:P".into(),
             vid: 0x1234,
             pid: 0x4444,
@@ -235,6 +237,7 @@ fn endpoints_are_published_and_child_placements_apply_live() {
         SessionDevice {
             usb: None,
             smbus: None,
+            lamparray: None,
             key: "1234:7777:C".into(),
             vid: 0x1234,
             pid: 0x7777,

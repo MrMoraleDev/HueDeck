@@ -19,10 +19,14 @@
 //! * [`device`]: the native backing of `device.*` for a real device (HID I/O
 //!   through huedeck-hal, canvas sampling, I/O statistics, dry-run writes).
 //! * [`battery`]: what a plugin reports through the `battery` feature global.
+//! * [`plugin_ui`]: a device plugin's parameters and messages as they change
+//!   at run time (`device.addProperty`, `device.addMessage`, `device.notify`).
 //! * [`children`]: subdevices and channels (with their component instances),
 //!   each placed and sampled on the canvas on its own.
 //! * [`session`]: one device session = one plugin thread running
 //!   Validate → Initialize → Render per frame → Shutdown.
+//! * [`lamparray`]: the built-in session of a LampArray of the OS backend
+//!   (Windows Dynamic Lighting), sampled like a plugin device.
 //! * [`manager`]: one session per present device, following hotplug
 //!   (stop on removal, restart behind a stale handle, start on arrival).
 //! * [`catalog`]: plugin discovery over plugin directories (VID:PID index).
@@ -47,10 +51,12 @@ pub mod device;
 pub mod discover;
 pub mod dryrun;
 pub mod exports;
+pub mod lamparray;
 pub mod loader;
 pub mod manager;
 pub mod meta;
 pub mod net;
+pub mod plugin_ui;
 pub mod resolve;
 pub mod runtime;
 pub mod save;

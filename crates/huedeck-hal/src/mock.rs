@@ -9,6 +9,8 @@
 //! * [`MockUsb`] is a scripted raw USB backend (bulk IN data per endpoint,
 //!   control IN answers, timeouts, unplug) that records every transfer.
 //! * [`MockNotifier`] keeps the system notifications it was asked to show.
+//! * [`MockLampArray`] is a fake LampArray provider (plug, unplug,
+//!   availability, recorded colour updates).
 //!
 //! Golden tests compare `recorder.snapshot()` (or just `recorder.writes()`)
 //! against checked-in fixtures.
@@ -1179,9 +1181,219 @@ impl crate::notify::Notifier for MockNotifier {
     }
 }
 
+#[derive(Debug)]
+struct LampState {
+    devices: Vec<crate::lamparray::LampArrayInfo>,
+    available: BTreeMap<String, bool>,
+    writes: BTreeMap<String, Vec<Vec<[u8; 4]>>>,
+    releases: BTreeMap<String, u32>,
+    containers: BTreeMap<String, String>,
+    generation: u64,
+    identity: bool,
+}
+
+/// A fake LampArray provider ([`crate::lamparray::LampArrayBackend`]): devices
+/// come and go, availability flips (another app took control) and every
+/// colour update is recorded per device id.
+#[derive(Clone, Debug)]
+pub struct MockLampArray {
+    state: Arc<Mutex<LampState>>,
+}
+
+impl Default for MockLampArray {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(LampState {
+                devices: Vec::new(),
+                available: BTreeMap::new(),
+                writes: BTreeMap::new(),
+                releases: BTreeMap::new(),
+                containers: BTreeMap::new(),
+                generation: 0,
+                identity: true,
+            })),
+        }
+    }
+}
+
+impl MockLampArray {
+    /// No devices, with package identity.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock(&self) -> MutexGuard<'_, LampState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A LampArray of `lamps` RGB lamps in a row, 10 mm apart, on a
+    /// `lamps * 10 mm` x 10 mm bounding box.
+    pub fn row(id: &str, vid: u16, pid: u16, lamps: u32) -> crate::lamparray::LampArrayInfo {
+        crate::lamparray::LampArrayInfo {
+            id: id.into(),
+            name: format!("Mock LampArray {id}"),
+            vid,
+            pid,
+            container_id: None,
+            kind: crate::lamparray::LampArrayKind::Peripheral,
+            bounding_box_um: [lamps.max(1) * 10_000, 10_000, 1_000],
+            min_update_interval_us: 0,
+            lamps: (0..lamps)
+                .map(|i| crate::lamparray::LampInfo {
+                    index: i,
+                    position_um: [(i * 10_000 + 5_000) as i32, 5_000, 0],
+                    is_rgb: true,
+                })
+                .collect(),
+        }
+    }
+
+    /// Plug a device in (replacing one with the same id).
+    pub fn add(&self, info: crate::lamparray::LampArrayInfo) {
+        let mut s = self.lock();
+        s.devices.retain(|d| d.id != info.id);
+        s.devices.push(info);
+        s.generation += 1;
+    }
+
+    /// Unplug a device.
+    pub fn remove(&self, id: &str) {
+        let mut s = self.lock();
+        s.devices.retain(|d| d.id != id);
+        s.generation += 1;
+    }
+
+    /// `IsAvailable` of a device (default `true`).
+    pub fn set_available(&self, id: &str, available: bool) {
+        self.lock().available.insert(id.into(), available);
+    }
+
+    /// Whether the process has package identity (default `true`).
+    pub fn set_identity(&self, identity: bool) {
+        self.lock().identity = identity;
+    }
+
+    /// The container id [`crate::lamparray::LampArrayBackend::container_of`]
+    /// returns for a HID interface path.
+    pub fn set_container(&self, interface_path: &str, container: &str) {
+        self.lock()
+            .containers
+            .insert(interface_path.to_ascii_lowercase(), container.into());
+    }
+
+    /// Every colour update sent to device `id`, oldest first.
+    pub fn writes(&self, id: &str) -> Vec<Vec<[u8; 4]>> {
+        self.lock().writes.get(id).cloned().unwrap_or_default()
+    }
+
+    /// How often device `id` was released.
+    pub fn releases(&self, id: &str) -> u32 {
+        self.lock().releases.get(id).copied().unwrap_or(0)
+    }
+}
+
+struct MockLampHandle {
+    state: Arc<Mutex<LampState>>,
+    info: crate::lamparray::LampArrayInfo,
+}
+
+impl MockLampHandle {
+    fn lock(&self) -> MutexGuard<'_, LampState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl crate::lamparray::LampArrayHandle for MockLampHandle {
+    fn info(&self) -> &crate::lamparray::LampArrayInfo {
+        &self.info
+    }
+
+    fn available(&self) -> bool {
+        self.lock().available.get(&self.info.id).copied().unwrap_or(true)
+    }
+
+    fn set_colors(&mut self, rgba: &[[u8; 4]]) -> HalResult<()> {
+        if rgba.len() != self.info.lamps.len() {
+            return Err(HalError::InvalidArgument(format!(
+                "{} colours for {} lamps",
+                rgba.len(),
+                self.info.lamps.len()
+            )));
+        }
+        let id = self.info.id.clone();
+        let mut s = self.lock();
+        if !s.devices.iter().any(|d| d.id == id) {
+            return Err(HalError::Disconnected);
+        }
+        s.writes.entry(id).or_default().push(rgba.to_vec());
+        Ok(())
+    }
+
+    fn release(&mut self) -> HalResult<()> {
+        let id = self.info.id.clone();
+        *self.lock().releases.entry(id).or_default() += 1;
+        Ok(())
+    }
+}
+
+impl crate::lamparray::LampArrayBackend for MockLampArray {
+    fn enumerate(&self) -> HalResult<Vec<crate::lamparray::LampArrayInfo>> {
+        Ok(self.lock().devices.clone())
+    }
+
+    fn open(&self, id: &str) -> HalResult<Box<dyn crate::lamparray::LampArrayHandle>> {
+        let info = self
+            .lock()
+            .devices
+            .iter()
+            .find(|d| d.id == id)
+            .cloned()
+            .ok_or_else(|| HalError::NotFound(id.into()))?;
+        Ok(Box::new(MockLampHandle {
+            state: Arc::clone(&self.state),
+            info,
+        }))
+    }
+
+    fn generation(&self) -> u64 {
+        self.lock().generation
+    }
+
+    fn has_identity(&self) -> bool {
+        self.lock().identity
+    }
+
+    fn container_of(&self, interface_path: &str) -> Option<String> {
+        self.lock()
+            .containers
+            .get(&interface_path.to_ascii_lowercase())
+            .cloned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mock_lamparray_records_and_follows_plugs() {
+        use crate::lamparray::LampArrayBackend;
+        let m = MockLampArray::new();
+        assert_eq!(m.generation(), 0);
+        m.add(MockLampArray::row("a", 1, 2, 3));
+        assert_eq!(m.generation(), 1);
+        let mut h = m.open("a").unwrap();
+        assert!(h.available());
+        h.set_colors(&[[1, 2, 3, 255]; 3]).unwrap();
+        assert!(h.set_colors(&[[0; 4]; 2]).is_err());
+        m.set_available("a", false);
+        assert!(!h.available());
+        m.remove("a");
+        assert!(matches!(h.set_colors(&[[0; 4]; 3]), Err(HalError::Disconnected)));
+        h.release().unwrap();
+        assert_eq!((m.writes("a").len(), m.releases("a")), (1, 1));
+        assert!(m.open("a").is_err());
+    }
 
     #[test]
     fn ddr4_spd_pages_switch_on_the_wire() {

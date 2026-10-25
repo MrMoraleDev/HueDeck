@@ -203,6 +203,38 @@ test("only address 0x68 is touched", async () => {
 
 const save = (plugin, effect, colors = [[0x12, 0x34, 0x56]]) => plugin.SaveToDevice({ action: "save", effect, colors });
 
+test("a startup read that fails once is retried", async () => {
+  const { mock, plugin, device, restore } = await setup();
+  try {
+    const real = mock.fixed.ReadByte.bind(mock.fixed);
+    let failures = 1;
+    mock.fixed.ReadByte = (reg) => (reg === 0x31 && failures-- > 0 ? -1 : real(reg));
+    plugin.Initialize();
+    assert.ok(!device.logs.some((l) => /ReadByte/.test(String(l))), "no failure logged");
+    mock.ops.length = 0;
+    plugin.Shutdown(false, "restore");
+    assert.deepEqual(writes(mock), pairs(expected.shutdown_restore));
+  } finally {
+    restore();
+  }
+});
+
+test("without a startup state, restore after a save shows what was saved, not the shutdown colour", async () => {
+  const { mock, plugin, restore } = await setup({ color: [0x00, 0x82, 0xba] });
+  try {
+    const real = mock.fixed.ReadByte.bind(mock.fixed);
+    mock.fixed.ReadByte = (reg) => (reg === 0x31 ? -1 : real(reg));
+    plugin.Initialize();
+    plugin.Render();
+    save(plugin, null);
+    mock.ops.length = 0;
+    plugin.Shutdown(false, "restore");
+    assert.deepEqual(writes(mock), [[0x36, 100], [0x26, 0], [0x30, 0x12], [0x31, 0x34], [0x32, 0x56], [0x22, 0x13]]);
+  } finally {
+    restore();
+  }
+});
+
 test("save static: DeviceUpdateMode, DeviceUpdateLEDs, then 0x3F <- 1, then Direct again", async () => {
   const { mock, plugin, restore } = await setup({ color: [0x12, 0x34, 0x56] });
   try {

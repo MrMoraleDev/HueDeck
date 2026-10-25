@@ -131,6 +131,7 @@ fn sleep_shuts_every_session_down_and_resume_starts_them_over() {
                 endpoints: vec![info],
                 network: None,
                 usb: None,
+                serial: None,
             }],
             smbus: vec![BusHandle::new(Box::new(bus))],
             lamparrays: None,

@@ -19,6 +19,7 @@ only, **[U]** unverified (inference, estimate, untested), **[D]** Lightloom desi
 | M6 | [m6-inputs-network.md](m6-inputs-network.md) | audio FFT, screen capture zones, mDNS/UDP/TCP, XHR, DTLS-PSK, ARP for network plugins |
 | M7 | [m7-linux-backend.md](m7-linux-backend.md) | hidraw/hidapi, nusb, i2c-dev SMBus, hwmon/SuperIO fans, CEF on Linux, PipeWire, udev, systemd |
 | Windows | [drivers.md](drivers.md) | which devices need a driver beyond what Windows ships: WinUSB/rawusb, AMD GPU I2C, Intel SMBus, SuperIO, runtime DLLs, Dynamic Lighting |
+| Plugins | [msi-gpu-perled.md](msi-gpu-perled.md) | MSI graphics cards at I2C 0x68: the per-LED stream (`0x2E` enable, `0x49` frame) found in Mystic Light, flash register, hardware test plan |
 | Plugins | [evision-v1.md](evision-v1.md) | EVision V1 keyboards (Sonix 320F:5064): stored vs volatile commands, a flash-safe mode, USB capture procedure |
 | Maintenance | [dependabot-2026-10.md](dependabot-2026-10.md) | review of the sha2 0.11, actions/cache v6 and actions/setup-python v7 updates |
 

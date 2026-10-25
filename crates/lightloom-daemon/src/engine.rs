@@ -99,6 +99,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, oneshot};
 
 mod actions;
+mod custom_leds;
 mod device_facts;
 mod macros;
 mod playlists;
@@ -697,6 +698,8 @@ struct Engine {
     lcd: Arc<crate::lcd::LcdFaces>,
     /// Sensor values go to the LCD faces (one of them reads sensors).
     lcd_sensors: bool,
+    /// Per-LED custom colours and zones ("custom LEDs" mode).
+    custom_leds: custom_leds::CustomLedsState,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -768,6 +771,7 @@ impl Engine {
         let mut e = Self {
             lcd,
             lcd_sensors: false,
+            custom_leds: custom_leds::CustomLedsState::default(),
             opts,
             store,
             shared,
@@ -966,6 +970,7 @@ impl Engine {
         d.parameters = rows.into_iter().map(|r| (r.key, r.parameters)).collect();
         drop(d);
         self.reload_channels();
+        self.reload_custom_leds();
         self.load_player();
         self.lcd.set_choices(
             self.store
@@ -1810,6 +1815,7 @@ impl Engine {
             }
             self.tick_player();
             self.tick_macros();
+            self.save_custom_leds(false);
             self.poll_services();
             if self.dirty {
                 self.publish();
@@ -1924,6 +1930,7 @@ impl Engine {
 
     fn shut_down(&mut self) {
         self.enter(LifecycleState::ShuttingDown);
+        self.save_custom_leds(true);
         self.macro_link.closing.store(true, Ordering::Release);
         self.macros.shutdown();
         for h in self.services.drain(..) {
@@ -2430,6 +2437,7 @@ impl Engine {
                         size: e.size,
                         leds: e.leds,
                         placement: e.placement.clone(),
+                        custom_leds: self.custom_leds.is_custom(&e.uid),
                     })
                     .collect();
                 view.channels = h
@@ -2698,6 +2706,10 @@ impl Engine {
                 }
                 Ok(json!({ "device": device, "channel": channel, "components": array }))
             }
+            Request::LedMap { key } => self.led_map(&key),
+            Request::SetLeds { key, uid, edit } => self.set_leds(&key, &uid, edit),
+            Request::SaveLedZone { key, uid, name, leds } => self.save_led_zone(&key, &uid, &name, &leds),
+            Request::DeleteLedZone { key, uid, name } => self.delete_led_zone(&key, &uid, &name),
             Request::SetLcd { key, face, framerate } => {
                 let choice = self.lcd.select(&key, face, framerate).map_err(|e| {
                     if e.starts_with("no LCD face") {
@@ -3022,7 +3034,10 @@ impl Engine {
                     })
                     .collect(),
             )),
-            Request::Export => serde_json::to_value(self.store.export().map_err(internal)?).map_err(internal),
+            Request::Export => {
+                self.save_custom_leds(true);
+                serde_json::to_value(self.store.export().map_err(internal)?).map_err(internal)
+            }
             Request::Import { state } => {
                 let state: StateExport = serde_json::from_value(state)
                     .map_err(|e| ApiError::bad_request(format!("not a Lightloom state export: {e}")))?;

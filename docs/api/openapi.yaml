@@ -207,6 +207,98 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/devices/{key}/leds:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+    get:
+      tags: [devices]
+      operationId: getLedMap
+      summary: The LED painter's view of a running device (its endpoints' LEDs, custom colours and zones)
+      description: |
+        Every endpoint of the device's session (the device, its subdevices and channel
+        components) with its LEDs at their cells (`LedPositions()`, `setSubdeviceLeds`,
+        `LedCoordinates`) and names, whether it shows custom colours, the custom colour of
+        every slot and the zones. Colours are kept per slot: the LED index for devices and
+        components, the grid cell (`y * width + x`) for subdevices. docs/custom-leds.md.
+      responses:
+        "200":
+          description: The device's LED map.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LedMapView" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/devices/{key}/leds/{uid}:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+      - $ref: "#/components/parameters/EndpointUid"
+    patch:
+      tags: [devices]
+      operationId: patchLeds
+      summary: Paint an endpoint's LEDs and switch it between "custom LEDs" and following the effect
+      description: |
+        Applied in this order: `colors` (slot 0 on), `fill`, `set`, `zones`, then `mode`.
+        The device shows the change from its next frame (brightness still applies); the
+        database gets it shortly after the last change of a burst. Refused as a whole when a
+        colour, a slot or a zone is wrong.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LedEdit" }
+      responses:
+        "200":
+          description: The endpoint's mode, and whether anything changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uid: { type: string }
+                  custom: { type: boolean }
+                  changed: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /v1/devices/{key}/leds/{uid}/zones/{name}:
+    parameters:
+      - $ref: "#/components/parameters/DeviceKey"
+      - $ref: "#/components/parameters/EndpointUid"
+      - name: name
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 64 }
+        description: Zone name.
+    put:
+      tags: [devices]
+      operationId: putLedZone
+      summary: Save a zone (a named set of LED slots) of an endpoint, replacing one of that name
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                leds: { type: array, items: { type: integer, minimum: 0 }, description: Slots. }
+      responses:
+        "200": { $ref: "#/components/responses/LedZones" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [devices]
+      operationId: deleteLedZone
+      summary: Delete a zone of an endpoint
+      security: [{ bearer: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/LedZones" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/lcd/faces:
     get:
       tags: [devices]
@@ -1442,6 +1534,12 @@ components:
       required: true
       schema: { type: string }
       description: "Device key: `vid:pid:serial` for USB devices, `smbus:<vendor>:<device>:<subvendor>:<subdevice>@<instance>:<addr>` for SMBus ones, `net:<plugin>:<controller id>` for network ones."
+    EndpointUid:
+      name: uid
+      in: path
+      required: true
+      schema: { type: string }
+      description: Endpoint uid (`Endpoint.uid`): the device key, `<device key>:<subdevice id>` or a component's id.
     EffectId:
       name: id
       in: path
@@ -1463,6 +1561,15 @@ components:
       required: true
       schema: { type: string }
   responses:
+    LedZones:
+      description: The endpoint's zones after the change.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              uid: { type: string }
+              zones: { type: object, additionalProperties: { type: array, items: { type: integer } } }
     Empty:
       description: Done.
       content:
@@ -1819,6 +1926,42 @@ components:
         size: { type: array, items: { type: integer }, minItems: 2, maxItems: 2 }
         leds: { type: integer }
         placement: { $ref: "#/components/schemas/Placement" }
+        customLeds: { type: boolean, description: Shows its custom per-LED colours instead of the effect. }
+    LedMapView:
+      type: object
+      properties:
+        key: { type: string }
+        deviceType: { type: string, description: "The plugin's `DeviceType()` (`keyboard` gets key caps in the painter)." }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/LedEndpointView" } }
+    LedEndpointView:
+      type: object
+      properties:
+        uid: { type: string }
+        kind: { enum: [device, subdevice, component] }
+        name: { type: string }
+        channel: { type: [string, "null"] }
+        size: { type: array, items: { type: integer }, minItems: 2, maxItems: 2 }
+        slots: { type: integer, description: Length of `colors`. }
+        leds:
+          type: array
+          items:
+            type: object
+            properties:
+              slot: { type: integer }
+              x: { type: integer }
+              y: { type: integer }
+              name: { type: string, description: Absent when the plugin named none. }
+        custom: { type: boolean }
+        colors: { type: array, items: { type: string, pattern: "^#[0-9a-f]{6}$" } }
+        zones: { type: object, additionalProperties: { type: array, items: { type: integer } } }
+    LedEdit:
+      type: object
+      properties:
+        mode: { enum: [custom, effect] }
+        colors: { type: array, items: { type: string }, description: "Colours from slot 0 on (`#rrggbb`)." }
+        fill: { type: string, description: One colour for every slot. }
+        set: { type: object, additionalProperties: { type: string }, description: "Slot -> colour." }
+        zones: { type: object, additionalProperties: { type: string }, description: "Zone name -> colour for all its slots." }
     ChannelView:
       type: object
       properties:

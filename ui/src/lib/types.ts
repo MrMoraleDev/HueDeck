@@ -21,6 +21,8 @@ export interface Endpoint {
   size: [number, number];
   leds: number;
   placement: Placement;
+  /** Shows its custom per-LED colours instead of the effect. */
+  customLeds?: boolean;
 }
 
 export interface ChannelView {
@@ -420,4 +422,42 @@ export interface LibraryComponent {
   ledCount: number;
   width: number;
   height: number;
+}
+
+/** One LED in the LED painter (GET /v1/devices/{key}/leds). */
+export interface LedSpot {
+  /** Index into the endpoint's colours. */
+  slot: number;
+  x: number;
+  y: number;
+  name?: string;
+}
+
+export interface LedEndpointView {
+  uid: string;
+  kind: "device" | "subdevice" | "component";
+  name: string;
+  channel?: string | null;
+  size: [number, number];
+  slots: number;
+  leds: LedSpot[];
+  custom: boolean;
+  /** "#rrggbb" per slot. */
+  colors: string[];
+  zones: Record<string, number[]>;
+}
+
+export interface LedMapView {
+  key: string;
+  deviceType: string;
+  endpoints: LedEndpointView[];
+}
+
+/** PATCH /v1/devices/{key}/leds/{uid}: applied as colors, fill, set, zones, then mode. */
+export interface LedEdit {
+  mode?: "custom" | "effect";
+  colors?: string[];
+  fill?: string;
+  set?: Record<number, string>;
+  zones?: Record<string, string>;
 }

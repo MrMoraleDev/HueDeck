@@ -272,6 +272,15 @@ fn endpoints_are_published_and_child_placements_apply_live() {
         (fan.kind, fan.channel.as_deref(), fan.leds),
         (EndpointKind::Component, Some("ARGB 2"), 3)
     );
+    // The LED painter gets every endpoint's LED cells and names.
+    assert_eq!(fan.led_names, ["Led 1", "Led 2", "Led 3"]);
+    assert_eq!(fan.led_positions, [[0, 0], [1, 0], [2, 0]]);
+    assert_eq!(
+        (views[0].led_names.as_slice(), views[0].led_positions.as_slice()),
+        (&["Body".to_string()][..], &[[0, 0]][..])
+    );
+    let logo = views.iter().find(|v| v.uid == "1234:7777:C:Logo").unwrap();
+    assert_eq!(logo.led_names, ["Led 1", "Led 2"]);
 
     let channels = handle.channels();
     let summary: Vec<_> = channels

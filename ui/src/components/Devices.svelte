@@ -8,6 +8,7 @@
   import BatteryBadge from "./BatteryBadge.svelte";
   import DeviceReport, { skipWorksPreview } from "./DeviceReport.svelte";
   import LcdFacePicker from "./LcdFacePicker.svelte";
+  import LedPainter from "./LedPainter.svelte";
   import { groupParameters, groupTitle } from "../lib/params";
   import { token } from "../lib/api";
   import { buildReport, type ReportResult } from "../lib/report";
@@ -16,6 +17,8 @@
   let library = $state<LibraryComponent[]>([]);
   let libraryError = $state<string | null>(null);
   let open = $state<string | null>(null);
+  /** The device whose LED painter is open. */
+  let painting = $state<string | null>(null);
   let pick = $state<Record<string, string>>({});
   let strip = $state<Record<string, number>>({});
   let saving = $state(false);
@@ -105,6 +108,9 @@
             >third-party plugin</span
           >{/if}
         {#if d.battery}<BatteryBadge battery={d.battery} />{/if}
+        {#if d.endpoints.some((e) => e.customLeds)}<span class="badge" title="Some of its LEDs show your own colours, not the effect"
+            >Custom LEDs</span
+          >{/if}
         {#if d.connected}
           <span class="muted stats"
             >{d.frames} frames · {d.renderErrors} render errors · {d.ioErrors} {d.bus ? (d.bus.startsWith("network") ? "network" : "bus") : "HID"} errors</span
@@ -117,6 +123,13 @@
             onchange={(e) => daemon.run(() => api.setDevice(d.key, { enabled: (e.target as HTMLInputElement).checked }))}
           /> Drive this device</label
         >
+        {#if d.connected && d.endpoints.some((e) => e.leds > 0)}
+          <button
+            title="Colour single LEDs (keys) yourself, instead of the effect"
+            onclick={() => (painting = painting === d.key ? null : d.key)}
+            >{painting === d.key ? "Close LEDs" : "Customise LEDs"}</button
+          >
+        {/if}
         {#if d.connected}
           <button
             onclick={() => {
@@ -156,6 +169,7 @@
           {m.message}
         </p>
       {/each}
+      {#if painting === d.key && d.connected}<LedPainter device={d} />{/if}
       {#if d.lcd}<LcdFacePicker device={d} faces={snapshot.lcdFaces ?? []} />{/if}
       {#if d.battery}
         <label class="check blink"

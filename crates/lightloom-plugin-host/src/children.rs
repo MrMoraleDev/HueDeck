@@ -249,6 +249,13 @@ pub struct EndpointView {
     pub leds: usize,
     /// Where it sits now.
     pub placement: Placement,
+    /// Cell of each LED: `LedPositions()` (device), `setSubdeviceLeds` (subdevice;
+    /// empty when the plugin named none: every cell is an LED), `LedCoordinates` (component).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub led_positions: Vec<[u32; 2]>,
+    /// Name of each LED, in the same order (may be shorter, or empty).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub led_names: Vec<String>,
 }
 
 /// A channel of a running session (component editor).
@@ -382,6 +389,8 @@ impl Children {
                 size: s.surface.geometry.size,
                 leds: s.surface.geometry.led_positions.len(),
                 placement: s.surface.placement.clone(),
+                led_positions: s.led_positions.clone(),
+                led_names: s.led_names.clone(),
             })
             .collect();
         for ch in &self.channels {
@@ -395,6 +404,8 @@ impl Children {
                     size: c.surface.geometry.size,
                     leds: c.instance.component.led_count as usize,
                     placement: c.surface.placement.clone(),
+                    led_positions: c.instance.component.led_coordinates.clone(),
+                    led_names: c.instance.component.led_names.clone(),
                 });
             }
         }

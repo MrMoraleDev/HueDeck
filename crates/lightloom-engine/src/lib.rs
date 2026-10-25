@@ -12,6 +12,8 @@
 //!   never allocates or does trigonometry on the hot path.
 //! * [`direct`]: [`DirectLeds`](direct::DirectLeds), per-endpoint colours set
 //!   from outside the canvas (the OpenRGB SDK server) that win over sampling.
+//! * [`custom`]: [`CustomLeds`](custom::CustomLeds), the per-LED colours of
+//!   the "custom LEDs" mode, and the LED painter's [`led_spots`](custom::led_spots).
 //! * [`components`]: component descriptors (SignalRGB component JSON), channel
 //!   instances and the descriptor library.
 //!
@@ -22,6 +24,7 @@
 
 pub mod color;
 pub mod components;
+pub mod custom;
 pub mod direct;
 pub mod frame;
 pub mod frame_store;
@@ -32,6 +35,7 @@ pub use color::{apply_brightness, effective_brightness, Rgb};
 pub use components::{
     parse_channel, Component, ComponentInstance, ComponentLibrary, LibraryEntry, LoadIssue,
 };
+pub use custom::{led_spots, CustomLeds, CustomLedsError, LedSpot, SlotLayout};
 pub use direct::DirectLeds;
 pub use frame::Frame;
 pub use frame_store::FrameStore;

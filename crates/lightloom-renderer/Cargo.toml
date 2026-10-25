@@ -50,3 +50,6 @@ sha2 = { workspace = true }
 memmap2 = { workspace = true }
 image = { workspace = true }
 cef = { workspace = true, optional = true }
+
+[build-dependencies]
+lightloom-winres = { path = "../lightloom-winres" }

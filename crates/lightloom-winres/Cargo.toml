@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+publish = false
+name = "lightloom-winres"
+description = "lightloom-winres: build-script helper embedding the Lightloom icon and version information into the Windows executables"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# Build scripts run on the host: only a Windows host compiles resources.
+[target.'cfg(windows)'.dependencies]
+winresource = { workspace = true }

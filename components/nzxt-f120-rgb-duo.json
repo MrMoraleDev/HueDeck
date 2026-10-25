@@ -1,0 +1,12 @@
+{
+  "ProductName": "Lightloom NZXT F120 RGB Duo",
+  "DisplayName": "F120 RGB Duo - 20 LED",
+  "Brand": "NZXT",
+  "Type": "Fan",
+  "LedCount": 20,
+  "Width": 7,
+  "Height": 7,
+  "LedMapping": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19],
+  "LedCoordinates": [[3,2],[4,2],[4,3],[4,4],[3,4],[2,4],[2,3],[2,2],[3,0],[5,0],[6,1],[6,3],[6,4],[5,6],[3,6],[2,6],[0,5],[0,3],[0,1],[1,0]],
+  "LedNames": ["Inner 1","Inner 2","Inner 3","Inner 4","Inner 5","Inner 6","Inner 7","Inner 8","Outer 1","Outer 2","Outer 3","Outer 4","Outer 5","Outer 6","Outer 7","Outer 8","Outer 9","Outer 10","Outer 11","Outer 12"]
+}

@@ -35,6 +35,60 @@ pub struct Snapshot {
     pub conflicts: Vec<String>,
     /// Problems worth showing (renderer missing, plugin directories empty, ...).
     pub warnings: Vec<String>,
+    /// PawnIO / RAM lighting (Settings).
+    pub pawnio: PawnIoView,
+}
+
+/// PawnIO and the Lightloom I/O broker: what RAM lighting needs (Windows).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PawnIoView {
+    /// The Install / Remove buttons can work: Windows, `lightloom-setup.exe`
+    /// next to `lightloomd.exe`, real hardware mode.
+    pub supported: bool,
+    /// PawnIO's uninstall entry exists.
+    pub installed: bool,
+    /// Its `DisplayVersion`.
+    pub version: Option<String>,
+    /// 2.2.0 or later.
+    pub version_ok: bool,
+    /// `official` / `unrestricted` / `unknown`, as the broker reported it
+    /// (`None` while Lightloom has not talked to the broker).
+    pub edition: Option<String>,
+    /// The `LightloomIoBroker` service: `notInstalled`, `stopped`, `pending`, `running`, `unknown`.
+    pub service: String,
+    /// The broker answered and Lightloom uses it.
+    pub broker_healthy: bool,
+    /// Chipset SMBus buses (RAM) in use.
+    pub ram_buses: usize,
+    /// One line for the user.
+    pub status: String,
+    /// The last Install / Remove run (running or ended).
+    pub job: Option<PawnIoJob>,
+}
+
+/// An Install / Remove run of the elevated helper.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PawnIoJob {
+    /// `install` / `remove`.
+    pub action: String,
+    /// Still running (or the UAC prompt still open).
+    pub running: bool,
+    /// How it ended; `None` while running.
+    pub ok: Option<bool>,
+    /// What to tell the user.
+    pub message: String,
+}
+
+/// What the PawnIO / RAM lighting buttons ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PawnIoAction {
+    /// Install PawnIO when needed (verified download) and (re)register the I/O broker.
+    Install,
+    /// Remove the I/O broker; PawnIO stays.
+    Remove,
 }
 
 /// One network plugin's discovery service.
@@ -260,6 +314,18 @@ pub struct DeviceView {
     pub battery: Option<BatteryView>,
     /// Pulse the device red while its battery is low (user setting).
     pub blink_low_battery: bool,
+    /// Driven by a third-party plugin read in place (a local SignalRGB
+    /// installation's), not by one Lightloom ships or the user wrote.
+    #[serde(default)]
+    pub third_party: bool,
+    /// Why the device cannot be driven (or only partly) as it is plugged in:
+    /// "needs WinUSB driver: ..." for a raw USB device Windows bound no
+    /// WinUSB driver to. Lightloom never installs one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_problem: Option<String>,
+    /// Where to read about [`DeviceView::driver_problem`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help_url: Option<String>,
 }
 
 /// What "Save to devices" can store in a device (the plugin's `SaveCapabilities()`).
@@ -368,6 +434,9 @@ pub struct EffectView {
     pub values: Map<String, Value>,
     /// Preset names.
     pub presets: Vec<String>,
+    /// A third-party effect read in place (`source` `signalrgb`).
+    #[serde(default)]
+    pub third_party: bool,
     /// What the effect reads (`audio`, `video`, `meters`, `input`, `webgl`,
     /// `engine`); effects with `meters` are game integrations.
     #[serde(default)]
@@ -385,7 +454,7 @@ pub struct Settings {
     pub signalrgb_available: bool,
     /// Composite effects on the GPU instead of in software.
     pub gpu_compositing: bool,
-    /// Drive SMBus devices (GPU RGB through NvAPI; RAM RGB through the I/O
+    /// Drive SMBus devices (GPU RGB through NvAPI and AMD ADL; RAM RGB through the I/O
     /// broker when it is installed and healthy); on unless turned off.
     pub smbus: bool,
     /// Network lights: run the network plugins' discovery and drive the LAN
@@ -612,8 +681,15 @@ pub enum Request {
         action: String,
     },
     /// Import the local SignalRGB setup (read in place): its canvas placements
-    /// as a layout, and the component arrays of its channels.
+    /// as a layout (with the layout and per-device brightness and enable), the
+    /// component arrays of its channels, effect control values and presets, the
+    /// selected effect, the global brightness and per-device enable.
     ImportSignalRgb {
+        /// Layout name (default `SignalRGB`).
+        name: Option<String>,
+    },
+    /// What [`Request::ImportSignalRgb`] would import, without changing anything.
+    PreviewSignalRgb {
         /// Layout name (default `SignalRGB`).
         name: Option<String>,
     },
@@ -630,6 +706,13 @@ pub enum Request {
     Import {
         /// The document.
         state: Value,
+    },
+    /// PawnIO / RAM lighting status, read again now (read-only).
+    PawnIoStatus,
+    /// Start the elevated helper for RAM lighting (Windows shows one UAC prompt).
+    PawnIoSetup {
+        /// Install or remove.
+        action: PawnIoAction,
     },
     /// Create (`id` absent) or replace a playlist; answers with it.
     SavePlaylist {
@@ -707,10 +790,13 @@ impl Request {
             Request::NetworkAdd { .. } => "networkAdd",
             Request::NetworkAction { .. } => "networkAction",
             Request::ImportSignalRgb { .. } => "importSignalRgb",
+            Request::PreviewSignalRgb { .. } => "previewSignalRgb",
             Request::GetLayout { .. } => "getLayout",
             Request::ListComponents => "listComponents",
             Request::Export => "export",
             Request::Import { .. } => "import",
+            Request::PawnIoStatus => "pawnIoStatus",
+            Request::PawnIoSetup { .. } => "pawnIoSetup",
             Request::SavePlaylist { .. } => "savePlaylist",
             Request::DeletePlaylist { .. } => "deletePlaylist",
             Request::PlayPlaylist { .. } => "playPlaylist",
@@ -841,6 +927,13 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Request::StepEffect { previous: true }).unwrap(),
             serde_json::json!({"op": "stepEffect", "previous": true})
+        );
+        assert_eq!(
+            serde_json::to_value(Request::PawnIoSetup {
+                action: PawnIoAction::Remove
+            })
+            .unwrap(),
+            serde_json::json!({"op": "pawnIoSetup", "action": "remove"})
         );
     }
 }

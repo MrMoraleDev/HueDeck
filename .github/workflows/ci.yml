@@ -9,6 +9,7 @@
 #   node     - prelude JS shims, first-party plugin and SDK tests under Node 24 (node:test), dashboard check + build, SDK typings
 #   schemas  - JSON Schema validation of the user-supplied corpus (skipped when absent),
 #              conformance runner unit tests
+#   msi      - the WiX MSI sources build (stand-in staged files), Windows
 #
 # Hardware conformance runs on a self-hosted runner in conformance-selfhosted.yml, not here.
 
@@ -196,3 +197,32 @@ jobs:
       # itself runs on the reference machine (conformance-selfhosted.yml).
       - name: Conformance runner unit tests
         run: python -I -m unittest discover -s tests/conformance -p "test_*.py"
+
+  # The WiX sources compile and pass ICE validation, on a stand-in staged build (empty
+  # programs, the real pinned PawnIO modules); the real MSI is built in release.yml.
+  msi:
+    name: MSI (WiX check)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the MSI from a stand-in stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:RUNNER_TEMP "stage"
+          New-Item -ItemType Directory -Force "$stage/ui", "$stage/plugins/sample", "$stage/locales" | Out-Null
+          foreach ($exe in "lightloomd", "lightloomw", "lightloom", "lightloom-renderer", "lightloom-setup", "lightloom-iobroker") {
+            Set-Content "$stage/$exe.exe" "stand-in"
+          }
+          Set-Content "$stage/ui/index.html" "<!doctype html>"
+          Set-Content "$stage/plugins/sample/manifest.json" "{}"
+          Set-Content "$stage/locales/en-US.pak" "stand-in"
+          Copy-Item LICENSE, LICENSE-EXCEPTION.md, docs/privacy.md $stage
+          tools/package/fetch-pawnio-modules.ps1 -Out "$stage/pawnio-modules"
+          packaging/wix/build.ps1 -Stage $stage -InstallWix -Out "$env:RUNNER_TEMP/check/Lightloom-check.msi"
+          packaging/wix/build.ps1 -Stage $stage -Culture it-IT -Out "$env:RUNNER_TEMP/check/Lightloom-check-it.msi"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msi-check
+          path: ${{ runner.temp }}/check/*.msi
+          retention-days: 3

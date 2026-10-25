@@ -1,15 +1,16 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Lightloom brand
 
-The Lightloom logo is an "H" made of three rows of light bars, filled with a hue gradient
-that runs diagonally from red through magenta, violet and cyan to green.
+The Lightloom logo is an "L" made of three parallel strands of light that bend together, like
+the threads of a loom or the lanes of an LED strip. The strands carry a hue gradient that runs
+diagonally from red through magenta, violet and cyan to green.
 
 | File | Use |
 |---|---|
 | `lightloom-icon.svg` | App icon: the mark with its neon glow on the dark tile (`#1b1c21`), 640×640. |
 | `lightloom-icon-512.png` | The same icon rendered at 512×512, for places that need a bitmap. |
 | `lightloom-mark.svg` | The mark alone, flat, transparent background (favicon, small sizes, any background). |
-| `lightloom-logotype.svg` | Mark plus "uedeck" in white, transparent background: for dark backgrounds. |
+| `lightloom-logotype.svg` | Mark as the "L" plus "ightloom" in white, transparent background: for dark backgrounds. |
 | `lightloom-logotype-light.svg` | The same with dark lettering (`#1b1c21`): for light backgrounds. |
 
 Copies in use elsewhere in the tree:
@@ -23,7 +24,7 @@ When the logo changes, update these files from here, which is the source.
 
 The gradient stops, in order: `#ff0a1a`, `#fe1121`, `#f61a86`, `#ee1be6`, `#aa48f7`,
 `#8f5ef8`, `#3ea7fa`, `#1bd8f8`, `#06fff8`, `#15ffa6`, `#15fe4a`, `#1cff3c`. The
-connectors between the bars use the same gradient at 42 % opacity.
+strands are 26 units wide on a 336-unit grid, 40 units apart, with round caps.
 
 ## Lettering
 

@@ -30,7 +30,7 @@ realfft = "3.5"
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 # Lock-free single-producer ring from the audio callback (MIT/Apache-2.0).
-rtrb = "0.3"
+rtrb = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 # WASAPI loopback of the default output device (Apache-2.0).
